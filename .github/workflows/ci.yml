@@ -74,7 +74,7 @@ jobs:
             target: x86_64-pc-windows-msvc
             bin: intervals_icu_mcp_x86_64_windows.exe
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Rust
         uses: actions-rs/toolchain@v1
@@ -87,7 +87,7 @@ jobs:
 
       - name: Build (cross for linux aarch64)
         if: matrix.target == 'aarch64-unknown-linux-gnu'
-        uses: houseabsolute/actions-rust-cross@main
+        uses: houseabsolute/actions-rust-cross@v1
         with:
           command: build
           target: ${{ matrix.target }}
@@ -115,7 +115,7 @@ jobs:
 
       - name: Create GitHub release assets
         if: github.event_name == 'release'
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2.5.0
         with:
           files: |
             app/${{ matrix.target }}/${{ matrix.bin }}
