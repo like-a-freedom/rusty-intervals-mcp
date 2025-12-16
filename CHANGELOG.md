@@ -38,6 +38,11 @@ All notable changes to this project will be documented in this file.
 ## [0.3.5] - 2025-12-16
 - Chore: Bump GitHub Actions to pinned, modern releases (actions/checkout@v6, docker actions v3/v5/v6 series, houseabsolute/actions-rust-cross@v1.0.5, softprops/action-gh-release@v2.5.0) to avoid 'unable to find version' errors and improve runner compatibility.
 
+## [0.3.6] - 2025-12-16
+- Fix: Temporarily remove `aarch64-unknown-linux-gnu` cross build from the release matrix to avoid OpenSSL system-dependency failures in the `cross` Docker images on GitHub Actions. Add follow-up TODO to either (a) vendor OpenSSL, (b) use custom cross image with `libssl-dev`, or (c) add an ARM runner job in future.
+
+**Note:** This is a temporary mitigation to restore green release builds; we should follow up to add a proper fix that allows aarch64 cross builds to succeed deterministically (e.g., vendor OpenSSL or use a custom Docker image that includes `libssl-dev`).
+
 ## [Unreleased]
 
 - No changes yet.
