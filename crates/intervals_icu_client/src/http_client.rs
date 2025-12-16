@@ -375,6 +375,9 @@ impl IntervalsClient for ReqwestIntervalsClient {
         query: &str,
         limit: Option<u32>,
     ) -> Result<Vec<crate::ActivitySummary>, IntervalsError> {
+        if query.trim().is_empty() {
+            return Err(IntervalsError::Config("query must not be empty".into()));
+        }
         let url = format!(
             "{}/api/v1/athlete/{}/activities/search",
             self.base_url, self.athlete_id
@@ -383,7 +386,7 @@ impl IntervalsClient for ReqwestIntervalsClient {
             .client
             .get(&url)
             .basic_auth("API_KEY", Some(self.api_key.expose_secret()));
-        req = req.query(&[("query", query)]);
+        req = req.query(&[("q", query)]);
         if let Some(l) = limit {
             req = req.query(&[("limit", l)]);
         }
@@ -403,6 +406,9 @@ impl IntervalsClient for ReqwestIntervalsClient {
         query: &str,
         limit: Option<u32>,
     ) -> Result<serde_json::Value, IntervalsError> {
+        if query.trim().is_empty() {
+            return Err(IntervalsError::Config("query must not be empty".into()));
+        }
         let url = format!(
             "{}/api/v1/athlete/{}/activities/search-full",
             self.base_url, self.athlete_id
@@ -411,7 +417,7 @@ impl IntervalsClient for ReqwestIntervalsClient {
             .client
             .get(&url)
             .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .query(&[("query", query)]);
+            .query(&[("q", query)]);
         if let Some(l) = limit {
             req = req.query(&[("limit", l)]);
         }

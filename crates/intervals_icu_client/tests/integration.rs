@@ -360,7 +360,7 @@ async fn search_activities_uses_search_endpoints() {
     let list_body = serde_json::json!([{ "id": "a1", "name": "Ride" }]);
     Mock::given(method("GET"))
         .and(path("/api/v1/athlete/ath/activities/search"))
-        .and(query_param("query", "run"))
+        .and(query_param("q", "run"))
         .respond_with(ResponseTemplate::new(200).set_body_json(&list_body))
         .mount(&server)
         .await;
@@ -368,7 +368,7 @@ async fn search_activities_uses_search_endpoints() {
     let full_body = serde_json::json!({ "items": [ {"id": "a2"} ] });
     Mock::given(method("GET"))
         .and(path("/api/v1/athlete/ath/activities/search-full"))
-        .and(query_param("query", "ride"))
+        .and(query_param("q", "ride"))
         .respond_with(ResponseTemplate::new(200).set_body_json(&full_body))
         .mount(&server)
         .await;
