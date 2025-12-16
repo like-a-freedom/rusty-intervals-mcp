@@ -1,5 +1,10 @@
 name: CI
 
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+
 on:
   push:
     branches: [ master ]
@@ -14,7 +19,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - name: Check for code changes
+        id: changes
+        run: |
+          set -e
+          # Fetch minimal history to compare
+          git fetch --no-tags --depth=2 origin ${{ github.ref }} || true
+          BASE=${{ github.event.before }}
+          if [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
+            # first commit on branch; treat as changed
+            echo "code_changed=true" >> $GITHUB_OUTPUT
+          else
+            CHANGED_FILES=$(git diff --name-only $BASE ${{ github.sha }} || true)
+            echo "changed_files=$CHANGED_FILES" >> $GITHUB_OUTPUT
+            if echo "$CHANGED_FILES" | grep -E '(^crates/|^src/|^Cargo.toml|\.rs$|\.toml$)' >/dev/null; then
+              echo "code_changed=true" >> $GITHUB_OUTPUT
+            else
+              echo "code_changed=false" >> $GITHUB_OUTPUT
+            fi
+          fi
       - name: Install Rust via rustup
+        if: always()
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
           source $HOME/.cargo/env
@@ -33,10 +58,13 @@ jobs:
             ~/.cargo/git
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
       - name: Run fmt check
+        if: steps.changes.outputs.code_changed == 'true'
         run: cargo fmt --all -- --check
       - name: Run clippy
+        if: steps.changes.outputs.code_changed == 'true'
         run: cargo clippy --all-targets --all-features -- -D warnings
       - name: Compile tests (no-run)
+        if: steps.changes.outputs.code_changed == 'true'
         run: cargo test --all --no-run
       - name: Check tests for hard-coded env usage (warn only)
         run: |
@@ -44,19 +72,20 @@ jobs:
           # warn if tests reference likely CI-only env vars that would break runs
           grep -R --line-number "INTERVALS_ICU_API_KEY\|INTERVALS_ICU_ATHLETE_ID" crates/*/tests || true
       - name: Run integration test target (verbose)
+        if: steps.changes.outputs.code_changed == 'true'
         env:
           RUST_BACKTRACE: full
         run: |
           # Run the specific integration target first to capture per-target failures
           cargo test -p intervals_icu_client --test integration -- --nocapture || (echo "Integration target failed; dumping expanded tests for diagnosis" && cargo test -p intervals_icu_client --test integration -- --nocapture --list || true; exit 1)
       - name: Run remaining tests
+        if: steps.changes.outputs.code_changed == 'true'
         run: cargo test --all --no-fail-fast -- --nocapture
 
   release-build:
     name: Build release artifacts
     needs: build
     runs-on: ${{ matrix.os }}
-    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
     strategy:
       matrix:
         include:
@@ -118,6 +147,7 @@ jobs:
       - name: Create GitHub release assets
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2.5.0
+        continue-on-error: true
         with:
           files: |
             app/${{ matrix.target }}/${{ matrix.bin }}

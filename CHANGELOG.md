@@ -46,6 +46,12 @@ All notable changes to this project will be documented in this file.
 ## [0.3.7] - 2025-12-16
 - Chore: Replace archived `actions-rs/toolchain@v1` with explicit `rustup` install steps in CI to avoid deprecated/archived action usage and the `set-output` deprecation warnings; improves reliability and control over installed components.
 
+## [0.3.8] - 2025-12-16
+- Chore: Run `release-build` on every `push` to `master` (remove `release`-only guard) so release artifacts are built on push for faster feedback; keep asset upload step gated to `github.event_name == 'release'` to avoid release API permission errors on non-release pushes.
+
+## [0.3.9] - 2025-12-16
+- Chore: Avoid running heavy checks (fmt/clippy/tests) when code hasn't changed by adding a code-change detection step; make release asset upload tolerant (continue-on-error) and set workflow permissions to allow release updates when available. This reduces flakiness and CI time on trivial pushes.
+
 ## [Unreleased]
 
 - No changes yet.
