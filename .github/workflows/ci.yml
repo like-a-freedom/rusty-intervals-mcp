@@ -14,15 +14,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install rustup components
-        run: |
-          rustup component add rustfmt --toolchain stable || true
-          rustup component add clippy --toolchain stable || true
       - name: Install Rust
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           profile: minimal
+      - name: Install rustup components
+        run: |
+          rustup component add rustfmt --toolchain stable || true
+          rustup component add clippy --toolchain stable || true
       - name: Cache cargo registry
         uses: actions/cache@v4
         with:
@@ -41,7 +41,13 @@ jobs:
           set -e
           # warn if tests reference likely CI-only env vars that would break runs
           grep -R --line-number "INTERVALS_ICU_API_KEY\|INTERVALS_ICU_ATHLETE_ID" crates/*/tests || true
-      - name: Run tests
+      - name: Run integration test target (verbose)
+        env:
+          RUST_BACKTRACE: full
+        run: |
+          # Run the specific integration target first to capture per-target failures
+          cargo test -p intervals_icu_client --test integration -- --nocapture || (echo "Integration target failed; dumping expanded tests for diagnosis" && cargo test -p intervals_icu_client --test integration -- --nocapture --list || true; exit 1)
+      - name: Run remaining tests
         run: cargo test --all --no-fail-fast -- --nocapture
 
   release-build:
