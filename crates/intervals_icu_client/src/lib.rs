@@ -141,6 +141,7 @@ pub trait IntervalsClient: Send + Sync + 'static {
     async fn get_power_curves(
         &self,
         days_back: Option<u32>,
+        sport: &str,
     ) -> Result<serde_json::Value, IntervalsError>;
     async fn get_gap_histogram(
         &self,
@@ -241,12 +242,14 @@ pub trait IntervalsClient: Send + Sync + 'static {
     async fn get_hr_curves(
         &self,
         days_back: Option<u32>,
+        sport: &str,
     ) -> Result<serde_json::Value, IntervalsError>;
 
     /// Get pace curves
     async fn get_pace_curves(
         &self,
         days_back: Option<u32>,
+        sport: &str,
     ) -> Result<serde_json::Value, IntervalsError>;
 
     // === Workout Library ===

@@ -588,6 +588,7 @@ impl IntervalsClient for ReqwestIntervalsClient {
     async fn get_power_curves(
         &self,
         days_back: Option<u32>,
+        sport: &str,
     ) -> Result<serde_json::Value, IntervalsError> {
         let url = format!(
             "{}/api/v1/athlete/{}/power-curves",
@@ -597,6 +598,8 @@ impl IntervalsClient for ReqwestIntervalsClient {
             .client
             .get(&url)
             .basic_auth("API_KEY", Some(self.api_key.expose_secret()));
+        // upstream API requires the sport type as `type` query parameter
+        req = req.query(&[("type", sport)]);
         if let Some(d) = days_back {
             let curve = format!("{}d", d);
             req = req.query(&[("curves", curve)]);
@@ -1023,6 +1026,7 @@ impl IntervalsClient for ReqwestIntervalsClient {
     async fn get_hr_curves(
         &self,
         days_back: Option<u32>,
+        sport: &str,
     ) -> Result<serde_json::Value, IntervalsError> {
         let url = format!(
             "{}/api/v1/athlete/{}/hr-curves",
@@ -1032,6 +1036,7 @@ impl IntervalsClient for ReqwestIntervalsClient {
             .client
             .get(&url)
             .basic_auth("API_KEY", Some(self.api_key.expose_secret()));
+        req = req.query(&[("type", sport)]);
         if let Some(d) = days_back {
             let curve = format!("{}d", d);
             req = req.query(&[("curves", curve)]);
@@ -1049,6 +1054,7 @@ impl IntervalsClient for ReqwestIntervalsClient {
     async fn get_pace_curves(
         &self,
         days_back: Option<u32>,
+        sport: &str,
     ) -> Result<serde_json::Value, IntervalsError> {
         let url = format!(
             "{}/api/v1/athlete/{}/pace-curves",
@@ -1058,6 +1064,7 @@ impl IntervalsClient for ReqwestIntervalsClient {
             .client
             .get(&url)
             .basic_auth("API_KEY", Some(self.api_key.expose_secret()));
+        req = req.query(&[("type", sport)]);
         if let Some(d) = days_back {
             let curve = format!("{}d", d);
             req = req.query(&[("curves", curve)]);

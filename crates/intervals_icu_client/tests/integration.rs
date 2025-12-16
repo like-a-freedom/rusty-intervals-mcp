@@ -1,7 +1,7 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use intervals_icu_client::{AthleteProfile, IntervalsClient};
 use secrecy::SecretString;
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[tokio::test]
@@ -322,6 +322,8 @@ async fn power_curves_and_histogram_ok() {
     let curves = serde_json::json!({"best": [100,200]});
     Mock::given(method("GET"))
         .and(path("/api/v1/athlete/ath/power-curves"))
+        .and(query_param("type", "Ride"))
+        .and(query_param("curves", "30d"))
         .respond_with(ResponseTemplate::new(200).set_body_json(&curves))
         .mount(&server)
         .await;
@@ -338,7 +340,10 @@ async fn power_curves_and_histogram_ok() {
         "ath",
         SecretString::new("tok".into()),
     );
-    let c = client.get_power_curves(Some(30)).await.expect("curves");
+    let c = client
+        .get_power_curves(Some(30), "Ride")
+        .await
+        .expect("curves");
     assert!(c.get("best").is_some());
     let h = client.get_gap_histogram("a1").await.expect("hist");
     assert!(h.get("bins").is_some());

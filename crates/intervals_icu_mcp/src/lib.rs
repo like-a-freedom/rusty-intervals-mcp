@@ -126,6 +126,8 @@ pub struct UpdateActivityParams {
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct PowerCurvesParams {
     pub days_back: Option<u32>,
+    #[serde(rename = "type")]
+    pub sport: String,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -587,7 +589,7 @@ impl IntervalsMcpHandler {
         let p = params.0;
         let v = self
             .client
-            .get_power_curves(p.days_back)
+            .get_power_curves(p.days_back, &p.sport)
             .await
             .map_err(|e| e.to_string())?;
         Ok(Json(ObjectResult { value: v }))
@@ -1192,7 +1194,7 @@ impl IntervalsMcpHandler {
         let p = params.0;
         let v = self
             .client
-            .get_hr_curves(p.days_back)
+            .get_hr_curves(p.days_back, &p.sport)
             .await
             .map_err(|e| e.to_string())?;
         Ok(Json(ObjectResult { value: v }))
@@ -1206,7 +1208,7 @@ impl IntervalsMcpHandler {
         let p = params.0;
         let v = self
             .client
-            .get_pace_curves(p.days_back)
+            .get_pace_curves(p.days_back, &p.sport)
             .await
             .map_err(|e| e.to_string())?;
         Ok(Json(ObjectResult { value: v }))
@@ -1810,6 +1812,7 @@ mod tests {
         async fn get_power_curves(
             &self,
             _days_back: Option<u32>,
+            _sport: &str,
         ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
             Ok(serde_json::json!({}))
         }
@@ -1948,12 +1951,14 @@ mod tests {
         async fn get_hr_curves(
             &self,
             _days_back: Option<u32>,
+            _sport: &str,
         ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
             Ok(serde_json::json!({}))
         }
         async fn get_pace_curves(
             &self,
             _days_back: Option<u32>,
+            _sport: &str,
         ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
             Ok(serde_json::json!({}))
         }
@@ -2118,6 +2123,7 @@ mod tests {
         let res = handler
             .get_power_curves(Parameters(PowerCurvesParams {
                 days_back: Some(30),
+                sport: "Ride".into(),
             }))
             .await;
         assert!(res.is_ok());

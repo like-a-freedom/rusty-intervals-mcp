@@ -136,6 +136,7 @@ impl IntervalsClient for LocalMockClient {
     async fn get_power_curves(
         &self,
         _days_back: Option<u32>,
+        _sport: &str,
     ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
         Ok(serde_json::json!({}))
     }
@@ -250,12 +251,14 @@ impl IntervalsClient for LocalMockClient {
     async fn get_hr_curves(
         &self,
         _days_back: Option<u32>,
+        _sport: &str,
     ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
         Ok(serde_json::json!({}))
     }
     async fn get_pace_curves(
         &self,
         _days_back: Option<u32>,
+        _sport: &str,
     ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
         Ok(serde_json::json!({}))
     }
