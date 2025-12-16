@@ -13,6 +13,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- Prepare for next release 0.3.11: bump crate versions.
+
+
 ## [0.3.0] - 2025-12-16
 - Fix: `get_event` now returns a descriptive decoding error (includes a short snippet of the response body) when the API returns a payload that doesn't match the `Event` schema (e.g., when an `activity_id` is passed by mistake). See `docs/SPEC.md` and `docs/OPENAPI_EVENT_FIX.md` for details.
 - Fix: include required `type` (sport) query parameter in `get_power_curves`, `get_hr_curves`, and `get_pace_curves` client methods and MCP tools to avoid 422 responses from the upstream API. Added tests asserting the `type` and `curves` query parameters are sent.
