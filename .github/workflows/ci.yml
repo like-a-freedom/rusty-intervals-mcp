@@ -127,8 +127,9 @@ jobs:
           cargo build -p intervals_icu_mcp --bin intervals_icu_mcp --target ${{ matrix.target }} --release
 
       - name: Prepare artifact directory
+        shell: bash
         run: |
-          mkdir -p app/${{ matrix.target }}
+          mkdir -p "app/${{ matrix.target }}"
           if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
             cp "target/${{ matrix.target }}/release/intervals_icu_mcp.exe" "app/${{ matrix.target }}/${{ matrix.bin }}" || true
           else
@@ -136,8 +137,24 @@ jobs:
           fi
 
       - name: Generate SHA-256
+        shell: bash
         run: |
-          shasum -a 256 app/${{ matrix.target }}/${{ matrix.bin }} | cut -d ' ' -f 1 > app/${{ matrix.target }}/${{ matrix.bin }}.sha256
+          # Prefer shasum/sha256sum if available, otherwise fall back to Python
+          if command -v shasum >/dev/null 2>&1; then
+            shasum -a 256 "app/${{ matrix.target }}/${{ matrix.bin }}" | cut -d ' ' -f 1 > "app/${{ matrix.target }}/${{ matrix.bin }}.sha256"
+          elif command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "app/${{ matrix.target }}/${{ matrix.bin }}" | cut -d ' ' -f 1 > "app/${{ matrix.target }}/${{ matrix.bin }}.sha256"
+          else
+            python - <<'PY'
+import hashlib,sys
+h=hashlib.sha256()
+with open(sys.argv[1],'rb') as f:
+    for chunk in iter(lambda: f.read(8192), b''):
+        h.update(chunk)
+print(h.hexdigest())
+PY
+ "app/${{ matrix.target }}/${{ matrix.bin }}" > "app/${{ matrix.target }}/${{ matrix.bin }}.sha256"
+
 
       - name: Create GitHub release assets
         if: github.event_name == 'release'
