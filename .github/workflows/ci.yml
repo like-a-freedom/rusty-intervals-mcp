@@ -45,7 +45,7 @@ jobs:
           command: build
           target: ${{ matrix.platform.target }}
           toolchain: stable
-          args: "--locked --release -p intervals_icu_mcp"
+          args: "--release -p intervals_icu_mcp"
           strip: true
 
       - name: Prepare artifact (Unix)
