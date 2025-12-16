@@ -6,7 +6,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates build-essential pkg-config libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 COPY . .
-RUN cargo build --release -p intervals_icu_mcp --locked
+RUN cargo build --release -p intervals_icu_mcp
 RUN strip target/release/server || true
 
 FROM gcr.io/distroless/cc-debian13

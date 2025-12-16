@@ -39,14 +39,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install target
+        run: rustup target add ${{ matrix.platform.target }} || true
+
       - name: Build binary
-        uses: houseabsolute/actions-rust-cross@v1
-        with:
-          command: build
-          target: ${{ matrix.platform.target }}
-          toolchain: stable
-          args: "--release -p intervals_icu_mcp"
-          strip: true
+        run: cargo build -p intervals_icu_mcp --release --target ${{ matrix.platform.target }}
 
       - name: Prepare artifact (Unix)
         if: matrix.platform.os != 'windows-latest'
