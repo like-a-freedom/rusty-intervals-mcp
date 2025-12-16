@@ -35,6 +35,9 @@ All notable changes to this project will be documented in this file.
 ## [0.3.4] - 2025-12-16
 - Fix: Update CI to use `houseabsolute/actions-rust-cross@v1` (instead of `main`) for cross builds to avoid action resolution errors on the Windows runner; add a note and ensure workflows reference an explicit stable action tag.
 
+## [0.3.5] - 2025-12-16
+- Chore: Bump GitHub Actions to pinned, modern releases (actions/checkout@v6, docker actions v3/v5/v6 series, houseabsolute/actions-rust-cross@v1.0.5, softprops/action-gh-release@v2.5.0) to avoid 'unable to find version' errors and improve runner compatibility.
+
 ## [Unreleased]
 
 - No changes yet.
