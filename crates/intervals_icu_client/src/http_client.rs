@@ -659,20 +659,25 @@ impl IntervalsClient for ReqwestIntervalsClient {
     async fn get_activities_around(
         &self,
         activity_id: &str,
-        count: Option<u32>,
+        limit: Option<u32>,
+        route_id: Option<i64>,
     ) -> Result<serde_json::Value, IntervalsError> {
         let url = format!(
             "{}/api/v1/athlete/{}/activities-around",
             self.base_url, self.athlete_id
         );
-        let cnt = count.unwrap_or(5);
-        let resp = self
+        let mut req = self
             .client
             .get(&url)
             .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .query(&[("around", activity_id), ("count", &cnt.to_string())])
-            .send()
-            .await?;
+            .query(&[("activity_id", activity_id)]);
+        if let Some(lim) = limit {
+            req = req.query(&[("limit", lim.to_string())]);
+        }
+        if let Some(r) = route_id {
+            req = req.query(&[("route_id", r.to_string())]);
+        }
+        let resp = req.send().await?;
         if !resp.status().is_success() {
             return Err(IntervalsError::Config(format!(
                 "unexpected status: {}",

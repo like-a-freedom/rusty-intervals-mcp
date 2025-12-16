@@ -161,7 +161,8 @@ pub struct DownloadStatusResult {
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct ActivitiesAroundParams {
     pub activity_id: String,
-    pub count: Option<u32>,
+    pub limit: Option<u32>,
+    pub route_id: Option<i64>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -986,7 +987,7 @@ impl IntervalsMcpHandler {
         let p = params.0;
         let v = self
             .client
-            .get_activities_around(&p.activity_id, p.count)
+            .get_activities_around(&p.activity_id, p.limit, p.route_id)
             .await
             .map_err(|e| e.to_string())?;
         Ok(Json(ObjectResult { value: v }))
@@ -1908,7 +1909,8 @@ mod tests {
         async fn get_activities_around(
             &self,
             _activity_id: &str,
-            _count: Option<u32>,
+            _limit: Option<u32>,
+            _route_id: Option<i64>,
         ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
             Ok(serde_json::json!({}))
         }

@@ -166,7 +166,8 @@ impl IntervalsClient for LocalMockClient {
     async fn get_activities_around(
         &self,
         _activity_id: &str,
-        _count: Option<u32>,
+        _limit: Option<u32>,
+        _route_id: Option<i64>,
     ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
         Ok(serde_json::json!({}))
     }

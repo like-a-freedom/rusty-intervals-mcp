@@ -72,7 +72,9 @@ where
         None => Ok(None),
         Some(serde_json::Value::String(s)) => Ok(Some(s)),
         Some(serde_json::Value::Number(n)) => Ok(n.to_string().into()),
-        Some(other) => Err(D::Error::custom(format!("expected string or number, got {other}"))),
+        Some(other) => Err(D::Error::custom(format!(
+            "expected string or number, got {other}"
+        ))),
     }
 }
 
@@ -172,7 +174,8 @@ pub trait IntervalsClient: Send + Sync + 'static {
     async fn get_activities_around(
         &self,
         activity_id: &str,
-        count: Option<u32>,
+        limit: Option<u32>,
+        route_id: Option<i64>,
     ) -> Result<serde_json::Value, IntervalsError>;
 
     /// Search intervals within activities

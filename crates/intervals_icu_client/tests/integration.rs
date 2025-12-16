@@ -439,7 +439,9 @@ async fn bulk_delete_events_hits_bulk_endpoint() {
         .and(wiremock::matchers::body_json(
             serde_json::json!([{ "id": "1" }]),
         ))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"eventsDeleted":1})))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"eventsDeleted":1})),
+        )
         .mount(&server)
         .await;
 

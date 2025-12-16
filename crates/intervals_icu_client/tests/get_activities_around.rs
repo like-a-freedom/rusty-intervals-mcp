@@ -14,7 +14,8 @@ async fn get_activities_around_uses_activities_around_path() {
             "/api/v1/athlete/{}/activities-around",
             athlete
         )))
-        .and(query_param("around", "a1"))
+        .and(query_param("activity_id", "a1"))
+        .and(query_param("limit", "5"))
         .respond_with(
             ResponseTemplate::new(200)
                 .set_body_json(serde_json::json!({"before": [], "after": []})),
@@ -24,6 +25,6 @@ async fn get_activities_around_uses_activities_around_path() {
 
     let client =
         ReqwestIntervalsClient::new(&mock_server.uri(), athlete, SecretString::new("key".into()));
-    let res = client.get_activities_around("a1", Some(5)).await;
+    let res = client.get_activities_around("a1", Some(5), None).await;
     assert!(res.is_ok());
 }
