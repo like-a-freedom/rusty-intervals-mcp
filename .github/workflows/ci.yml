@@ -31,7 +31,12 @@ jobs:
             echo "code_changed=true" >> $GITHUB_OUTPUT
           else
             CHANGED_FILES=$(git diff --name-only $BASE ${{ github.sha }} || true)
-            echo "changed_files=$CHANGED_FILES" >> $GITHUB_OUTPUT
+            # Safely write multi-line changed_files to GITHUB_OUTPUT using heredoc format
+            if [ -n "$CHANGED_FILES" ]; then
+              printf "changed_files<<EOF\n%s\nEOF\n" "$CHANGED_FILES" >> $GITHUB_OUTPUT
+            else
+              echo "changed_files=" >> $GITHUB_OUTPUT
+            fi
             if echo "$CHANGED_FILES" | grep -E '(^crates/|^src/|^Cargo.toml|\.rs$|\.toml$)' >/dev/null; then
               echo "code_changed=true" >> $GITHUB_OUTPUT
             else
