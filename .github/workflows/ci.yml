@@ -44,7 +44,7 @@ jobs:
             fi
           fi
       - name: Set up Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+        uses: actions-rust-lang/setup-rust-toolchain@v1.15.2
         with:
           toolchain: stable
           components: rustfmt,clippy
@@ -71,16 +71,14 @@ jobs:
           set -e
           # warn if tests reference likely CI-only env vars that would break runs
           grep -R --line-number "INTERVALS_ICU_API_KEY\|INTERVALS_ICU_ATHLETE_ID" crates/*/tests || true
-      - name: Run integration test target (verbose)
+      - name: Run integration tests
         if: steps.changes.outputs.code_changed == 'true'
-        env:
-          RUST_BACKTRACE: full
         run: |
-          # Run the specific integration target first to capture per-target failures
-          cargo test -p intervals_icu_client --test integration -- --nocapture || (echo "Integration target failed; dumping expanded tests for diagnosis" && cargo test -p intervals_icu_client --test integration -- --nocapture --list || true; exit 1)
+          # Run the package integration test target
+          cargo test -p intervals_icu_client --test integration
       - name: Run remaining tests
         if: steps.changes.outputs.code_changed == 'true'
-        run: cargo test --all --no-fail-fast -- --nocapture
+        run: cargo test --all --no-fail-fast
 
   release-build:
     name: Build release artifacts
