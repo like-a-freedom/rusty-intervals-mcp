@@ -32,7 +32,7 @@ Note on container publishing
 
 - The release workflow builds and pushes multi-architecture images to **GHCR** by
   default (using `GITHUB_TOKEN`). The image path is
-  `ghcr.io/<your-org-or-user>/rusty-intervals` and tagged with the release
+  `ghcr.io/<your-org-or-user>/rusty-intervals-mcp` and tagged with the release
   tag and `latest` as applicable.
 
 Security notes

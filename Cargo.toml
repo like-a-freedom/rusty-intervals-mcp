@@ -3,7 +3,7 @@ members = ["crates/intervals_icu_client", "crates/intervals_icu_mcp"]
 resolver = "3"
 
 [workspace.metadata]
-name = "rusty-intervals"
+name = "rusty-intervals-mcp"
 
 [profile.dev]
 opt-level = 1

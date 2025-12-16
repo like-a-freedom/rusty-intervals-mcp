@@ -60,8 +60,8 @@ Before installation, you need to obtain your Intervals.icu API key:
 
 ```sh
 # Clone the repository
-git clone https://github.com/yourusername/rusty-intervals.git
-cd rusty-intervals
+git clone https://github.com/yourusername/rusty-intervals-mcp.git
+cd rusty-intervals-mcp
 
 # Build the project
 cargo build --release
@@ -77,7 +77,7 @@ cp .env.example .env
 
 ```sh
 # Build the image
-docker build -t rusty-intervals:latest .
+docker build -t rusty-intervals-mcp:latest .
 
 # Create environment file
 cat > intervals-icu.env << EOF
@@ -90,7 +90,7 @@ EOF
 
 ### Quick Setup for VSCode with Copilot
 
-VSCode with GitHub Copilot supports MCP servers starting from version 1.x. Here's how to integrate rusty-intervals:
+VSCode with GitHub Copilot supports MCP servers starting from version 1.x. Here's how to integrate rusty-intervals-mcp:
 
 #### Step 1: Configure MCP Server
 
@@ -110,7 +110,7 @@ Create or edit your VSCode MCP configuration file:
       "args": [
         "run",
         "--manifest-path",
-        "/absolute/path/to/rusty-intervals/Cargo.toml",
+        "/absolute/path/to/rusty-intervals-mcp/Cargo.toml",
         "-p",
         "intervals_icu_mcp",
         "--bin",
@@ -131,7 +131,7 @@ Create or edit your VSCode MCP configuration file:
 {
   "mcpServers": {
     "intervals-icu": {
-      "command": "/absolute/path/to/rusty-intervals/target/release/intervals_icu_mcp",
+      "command": "/absolute/path/to/rusty-intervals-mcp/target/release/intervals_icu_mcp",
       "args": [],
       "env": {
         "INTERVALS_ICU_API_KEY": "your_api_key_here",
@@ -189,7 +189,7 @@ Instead of hardcoding credentials in the config, reference an `.env` file:
       "command": "bash",
       "args": [
         "-c",
-        "source /absolute/path/to/rusty-intervals/.env && /absolute/path/to/rusty-intervals/target/release/intervals_icu_mcp"
+        "source /absolute/path/to/rusty-intervals-mcp/.env && /absolute/path/to/rusty-intervals-mcp/target/release/intervals_icu_mcp"
       ]
     }
   }
@@ -239,7 +239,7 @@ Add to your Claude Desktop configuration file:
       "args": [
         "run",
         "--manifest-path",
-        "/ABSOLUTE/PATH/TO/rusty-intervals/Cargo.toml",
+        "/ABSOLUTE/PATH/TO/rusty-intervals-mcp/Cargo.toml",
         "-p",
         "intervals_icu_mcp",
         "--bin",
@@ -260,7 +260,7 @@ Add to your Claude Desktop configuration file:
 {
   "mcpServers": {
     "intervals-icu": {
-      "command": "/ABSOLUTE/PATH/TO/rusty-intervals/target/release/intervals_icu_mcp",
+      "command": "/ABSOLUTE/PATH/TO/rusty-intervals-mcp/target/release/intervals_icu_mcp",
       "env": {
         "INTERVALS_ICU_API_KEY": "your_api_key_here",
         "INTERVALS_ICU_ATHLETE_ID": "i123456"
