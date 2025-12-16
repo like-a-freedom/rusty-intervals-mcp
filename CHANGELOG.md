@@ -23,6 +23,9 @@ All notable changes to this project will be documented in this file.
 - Fix: gear reminder updates use singular endpoint `/gear/{gearId}/reminder/{reminderId}` and propagate `reset`/`snoozeDays` query flags; sport settings update requires `recalcHrZones`, and applying sport settings uses `PUT /sport-settings/{id}/apply` without `start_date`.
 - Fix: workout library now reads folders via `/athlete/{id}/folders` and workouts via `/athlete/{id}/workouts`, filtering by `folder_id` client-side to match the published API.
 
+## [0.3.1] - 2025-12-16
+- Fix: `search_activities` and `search_activities_full` now validate that the `q` parameter is non-empty and forward it as `q` (the upstream API expects `q`, not `query`), preventing 422 Unprocessable Entity responses; tests added to assert `q` is sent.
+
 ## [Unreleased]
 
 - No changes yet.
