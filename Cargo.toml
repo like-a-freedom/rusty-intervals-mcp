@@ -1,0 +1,24 @@
+[workspace]
+members = ["crates/intervals_icu_client", "crates/intervals_icu_mcp"]
+resolver = "3"
+
+[workspace.metadata]
+name = "rusty-intervals"
+
+[profile.dev]
+opt-level = 1
+debug = 1
+incremental = true
+codegen-units = 256
+
+[profile.test]
+debug = 1
+incremental = true
+codegen-units = 256
+opt-level = 0
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

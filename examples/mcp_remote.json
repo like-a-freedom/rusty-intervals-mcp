@@ -1,0 +1,12 @@
+{
+    "mcpServers": {
+        "intervals-icu-remote": {
+            "name": "intervals-icu-remote",
+            "url": "https://mcp.example.com/mcp",
+            "description": "Remote Intervals.icu MCP server",
+            "tls": {
+                "insecureSkipVerify": false
+            }
+        }
+    }
+}

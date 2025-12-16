@@ -1,0 +1,1336 @@
+use crate::{AthleteProfile, IntervalsClient, IntervalsError};
+use async_trait::async_trait;
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use chrono::{Duration, Utc};
+use futures_util::StreamExt;
+use secrecy::{ExposeSecret, SecretString};
+use std::path::PathBuf;
+use tokio::io::AsyncWriteExt;
+
+#[derive(Clone, Debug)]
+pub struct ReqwestIntervalsClient {
+    base_url: String,
+    athlete_id: String,
+    api_key: SecretString,
+    client: reqwest::Client,
+}
+
+impl ReqwestIntervalsClient {
+    pub fn new(base_url: &str, athlete_id: impl Into<String>, api_key: SecretString) -> Self {
+        let client = reqwest::Client::builder().build().expect("reqwest build");
+        Self {
+            base_url: base_url.trim_end_matches('/').to_string(),
+            athlete_id: athlete_id.into(),
+            api_key,
+            client,
+        }
+    }
+
+    async fn download_file(
+        &self,
+        url: String,
+        output_path: Option<PathBuf>,
+    ) -> Result<Option<String>, IntervalsError> {
+        let resp = self
+            .client
+            .get(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(IntervalsError::Config(format!(
+                "unexpected status: {}",
+                resp.status()
+            )));
+        }
+
+        if let Some(path) = output_path {
+            let mut stream = resp.bytes_stream();
+            let mut file = tokio::fs::File::create(&path)
+                .await
+                .map_err(|e| IntervalsError::Config(e.to_string()))?;
+            while let Some(chunk) = stream.next().await {
+                let bytes = chunk.map_err(IntervalsError::Http)?;
+                file.write_all(&bytes)
+                    .await
+                    .map_err(|e| IntervalsError::Config(e.to_string()))?;
+            }
+            return Ok(None);
+        }
+
+        let bytes = resp.bytes().await?;
+        if bytes.len() <= 1024 * 1024 {
+            return Ok(Some(STANDARD.encode(&bytes)));
+        }
+        Ok(Some(STANDARD.encode(&bytes)))
+    }
+}
+
+#[async_trait]
+impl IntervalsClient for ReqwestIntervalsClient {
+    async fn get_athlete_profile(&self) -> Result<AthleteProfile, IntervalsError> {
+        let url = format!(
+            "{}/api/v1/athlete/{}/profile",
+            self.base_url, self.athlete_id
+        );
+        let resp = self
+            .client
+            .get(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .send()
+            .await?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(IntervalsError::Config(format!(
+                "unexpected status: {}",
+                status
+            )));
+        }
+        #[derive(serde::Deserialize)]
+        struct ProfilePayload {
+            athlete: Option<ProfileAthlete>,
+        }
+        #[derive(serde::Deserialize)]
+        struct ProfileAthlete {
+            id: Option<String>,
+            name: Option<String>,
+        }
+        let payload: ProfilePayload = resp.json().await?;
+        if let Some(a) = payload.athlete {
+            let id = a.id.unwrap_or_default();
+            return Ok(AthleteProfile { id, name: a.name });
+        }
+        Err(IntervalsError::Config(
+            "missing athlete profile data".into(),
+        ))
+    }
+
+    async fn get_recent_activities(
+        &self,
+        limit: Option<u32>,
+        days_back: Option<u32>,
+    ) -> Result<Vec<crate::ActivitySummary>, IntervalsError> {
+        let url = format!(
+            "{}/api/v1/athlete/{}/activities",
+            self.base_url, self.athlete_id
+        );
+        let today = Utc::now().date_naive();
+        let oldest = if let Some(days) = days_back {
+            today - Duration::days(days as i64)
+        } else {
+            today - Duration::days(7)
+        };
+        let newest = today;
+        let mut req = self
+            .client
+            .get(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()));
+        req = req.query(&[
+            ("oldest", oldest.to_string()),
+            ("newest", newest.to_string()),
+        ]);
+        if let Some(limit) = limit {
+            req = req.query(&[("limit", limit)]);
+        }
+        let resp = req.send().await?;
+        if !resp.status().is_success() {
+            return Err(IntervalsError::Config(format!(
+                "unexpected status: {}",
+                resp.status()
+            )));
+        }
+        let acts: Vec<crate::ActivitySummary> = resp.json().await?;
+        Ok(acts)
+    }
+
+    async fn create_event(&self, event: crate::Event) -> Result<crate::Event, IntervalsError> {
+        // basic date validation: YYYY-MM-DD
+        let re = regex::Regex::new(r"^\d{4}-\d{2}-\d{2}$").unwrap();
+        if !re.is_match(&event.start_date_local) {
+            return Err(IntervalsError::Config("invalid date format".into()));
+        }
+        let url = format!(
+            "{}/api/v1/athlete/{}/events",
+            self.base_url, self.athlete_id
+        );
+        let resp = self
+            .client
+            .post(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .json(&event)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(IntervalsError::Config(format!(
+                "unexpected status: {}",
+                resp.status()
+            )));
+        }
+        let created: crate::Event = resp.json().await?;
+        Ok(created)
+    }
+
+    async fn get_event(&self, event_id: &str) -> Result<crate::Event, IntervalsError> {
+        let url = format!(
+            "{}/api/v1/athlete/{}/events/{}",
+            self.base_url, self.athlete_id, event_id
+        );
+        let resp = self
+            .client
+            .get(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(IntervalsError::Config(format!(
+                "unexpected status: {}",
+                resp.status()
+            )));
+        }
+        // Read body as text first so we can provide a helpful error message
+        // when the returned JSON doesn't match the expected `Event` shape.
+        let text = resp.text().await?;
+        match serde_json::from_str::<crate::Event>(&text) {
+            Ok(ev) => Ok(ev),
+            Err(e) => {
+                // Truncate body to avoid huge error messages
+                let body_snippet: String = text.chars().take(512).collect();
+                return Err(IntervalsError::Config(format!(
+                    "decoding event: {} - body: {}",
+                    e, body_snippet
+                )));
+            }
+        }
+    }
+
+    async fn delete_event(&self, event_id: &str) -> Result<(), IntervalsError> {
+        let url = format!(
+            "{}/api/v1/athlete/{}/events/{}",
+            self.base_url, self.athlete_id, event_id
+        );
+        let resp = self
+            .client
+            .delete(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .send()
+            .await?;
+        if resp.status().is_success() {
+            Ok(())
+        } else {
+            Err(IntervalsError::Config(format!(
+                "unexpected status: {}",
+                resp.status()
+            )))
+        }
+    }
+
+    async fn get_events(
+        &self,
+        days_back: Option<u32>,
+        limit: Option<u32>,
+    ) -> Result<Vec<crate::Event>, IntervalsError> {
+        let url = format!(
+            "{}/api/v1/athlete/{}/events",
+            self.base_url, self.athlete_id
+        );
+        let mut req = self
+            .client
+            .get(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()));
+        if let Some(d) = days_back {
+            // API may support query params; use 'days_back' as example param
+            req = req.query(&[("days_back", d)]);
+        }
+        if let Some(l) = limit {
+            req = req.query(&[("limit", l)]);
+        }
+        let resp = req.send().await?;
+        if !resp.status().is_success() {
+            return Err(IntervalsError::Config(format!(
+                "unexpected status: {}",
+                resp.status()
+            )));
+        }
+        let evs: Vec<crate::Event> = resp.json().await?;
+        Ok(evs)
+    }
+
+    async fn bulk_create_events(
+        &self,
+        events: Vec<crate::Event>,
+    ) -> Result<Vec<crate::Event>, IntervalsError> {
+        let url = format!(
+            "{}/api/v1/athlete/{}/events/bulk",
+            self.base_url, self.athlete_id
+        );
+        let resp = self
+            .client
+            .post(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .json(&events)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(IntervalsError::Config(format!(
+                "unexpected status: {}",
+                resp.status()
+            )));
+        }
+        let created: Vec<crate::Event> = resp.json().await?;
+        Ok(created)
+    }
+
+    async fn get_activity_streams(
+        &self,
+        activity_id: &str,
+        streams: Option<Vec<String>>,
+    ) -> Result<serde_json::Value, IntervalsError> {
+        let url = format!("{}/api/v1/activity/{}/streams", self.base_url, activity_id);
+        let mut req = self
+            .client
+            .get(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()));
+        if let Some(s) = streams {
+            req = req.query(&[("streams", s.join(","))]);
+        }
+        let resp = req.send().await?;
+        if !resp.status().is_success() {
+            return Err(IntervalsError::Config(format!(
+                "unexpected status: {}",
+                resp.status()
+            )));
+        }
+        let v = resp.json().await?;
+        Ok(v)
+    }
+
+    async fn get_activity_intervals(
+        &self,
+        activity_id: &str,
+    ) -> Result<serde_json::Value, IntervalsError> {
+        let url = format!(
+            "{}/api/v1/activity/{}/intervals",
+            self.base_url, activity_id
+        );
+        let resp = self
+            .client
+            .get(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(IntervalsError::Config(format!(
+                "unexpected status: {}",
+                resp.status()
+            )));
+        }
+        Ok(resp.json().await?)
+    }
+
+    async fn get_best_efforts(
+        &self,
+        activity_id: &str,
+    ) -> Result<serde_json::Value, IntervalsError> {
+        let url = format!(
+            "{}/api/v1/activity/{}/best-efforts",
+            self.base_url, activity_id
+        );
+        let resp = self
+            .client
+            .get(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(IntervalsError::Config(format!(
+                "unexpected status: {}",
+                resp.status()
+            )));
+        }
+        Ok(resp.json().await?)
+    }
+
+    async fn get_activity_details(
+        &self,
+        activity_id: &str,
+    ) -> Result<serde_json::Value, IntervalsError> {
+        let url = format!("{}/api/v1/activity/{}", self.base_url, activity_id);
+        let resp = self
+            .client
+            .get(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(IntervalsError::Config(format!(
+                "unexpected status: {}",
+                resp.status()
+            )));
+        }
+        Ok(resp.json().await?)
+    }
+
+    async fn search_activities(
+        &self,
+        query: &str,
+        limit: Option<u32>,
+    ) -> Result<Vec<crate::ActivitySummary>, IntervalsError> {
+        let url = format!(
+            "{}/api/v1/athlete/{}/activities",
+            self.base_url, self.athlete_id
+        );
+        let mut req = self
+            .client
+            .get(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()));
+        req = req.query(&[("query", query)]);
+        if let Some(l) = limit {
+            req = req.query(&[("limit", l)]);
+        }
+        let resp = req.send().await?;
+        if !resp.status().is_success() {
+            return Err(IntervalsError::Config(format!(
+                "unexpected status: {}",
+                resp.status()
+            )));
+        }
+        let acts: Vec<crate::ActivitySummary> = resp.json().await?;
+        Ok(acts)
+    }
+
+    async fn search_activities_full(
+        &self,
+        query: &str,
+        limit: Option<u32>,
+    ) -> Result<serde_json::Value, IntervalsError> {
+        let url = format!(
+            "{}/api/v1/athlete/{}/activities",
+            self.base_url, self.athlete_id
+        );
+        let mut req = self
+            .client
+            .get(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .query(&[("query", query), ("full", "true")]);
+        if let Some(l) = limit {
+            req = req.query(&[("limit", l)]);
+        }
+        let resp = req.send().await?;
+        if !resp.status().is_success() {
+            return Err(IntervalsError::Config(format!(
+                "unexpected status: {}",
+                resp.status()
+            )));
+        }
+        Ok(resp.json().await?)
+    }
+
+    async fn update_activity(
+        &self,
+        activity_id: &str,
+        fields: &serde_json::Value,
+    ) -> Result<serde_json::Value, IntervalsError> {
+        let url = format!("{}/api/v1/activity/{}", self.base_url, activity_id);
+        let resp = self
+            .client
+            .put(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .json(fields)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(IntervalsError::Config(format!(
+                "unexpected status: {}",
+                resp.status()
+            )));
+        }
+        Ok(resp.json().await?)
+    }
+
+    async fn download_activity_file(
+        &self,
+        activity_id: &str,
+        output_path: Option<std::path::PathBuf>,
+    ) -> Result<Option<String>, IntervalsError> {
+        let url = format!("{}/api/v1/activity/{}/file", self.base_url, activity_id);
+        self.download_file(url, output_path).await
+    }
+
+    async fn download_activity_file_with_progress(
+        &self,
+        activity_id: &str,
+        output_path: Option<std::path::PathBuf>,
+        progress_tx: tokio::sync::mpsc::Sender<crate::DownloadProgress>,
+        mut cancel_rx: tokio::sync::watch::Receiver<bool>,
+    ) -> Result<Option<String>, IntervalsError> {
+        let url = format!("{}/api/v1/activity/{}/file", self.base_url, activity_id);
+        let resp = self
+            .client
+            .get(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(IntervalsError::Config(format!(
+                "unexpected status: {}",
+                resp.status()
+            )));
+        }
+
+        let total = resp
+            .headers()
+            .get(reqwest::header::CONTENT_LENGTH)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<u64>().ok());
+
+        // If output_path provided, stream to file and send progress
+        if let Some(path) = output_path {
+            let mut stream = resp.bytes_stream();
+            let mut file = tokio::fs::File::create(&path)
+                .await
+                .map_err(|e| IntervalsError::Config(e.to_string()))?;
+            let mut downloaded: u64 = 0;
+            while let Some(chunk) = tokio::select! {
+                biased;
+                _ = cancel_rx.changed() => {
+                    // check cancel flag
+                    if *cancel_rx.borrow() {
+                        None
+                    } else {
+                        stream.next().await
+                    }
+                }
+                c = stream.next() => c,
+            } {
+                let bytes = chunk.map_err(IntervalsError::Http)?;
+                file.write_all(&bytes)
+                    .await
+                    .map_err(|e| IntervalsError::Config(e.to_string()))?;
+                downloaded = downloaded.saturating_add(bytes.len() as u64);
+                // best-effort notify
+                let _ = progress_tx.try_send(crate::DownloadProgress {
+                    bytes_downloaded: downloaded,
+                    total_bytes: total,
+                });
+                // check cancellation
+                if *cancel_rx.borrow() {
+                    return Err(IntervalsError::Config("download cancelled".into()));
+                }
+            }
+            Ok(Some(path.to_string_lossy().to_string()))
+        } else {
+            // read into memory and send a single progress update
+            let bytes = resp.bytes().await?;
+            let len = bytes.len() as u64;
+            let _ = progress_tx.try_send(crate::DownloadProgress {
+                bytes_downloaded: len,
+                total_bytes: Some(len),
+            });
+            Ok(Some(STANDARD.encode(&bytes)))
+        }
+    }
+
+    async fn download_fit_file(
+        &self,
+        activity_id: &str,
+        output_path: Option<PathBuf>,
+    ) -> Result<Option<String>, IntervalsError> {
+        let url = format!("{}/api/v1/activity/{}/fit-file", self.base_url, activity_id);
+        self.download_file(url, output_path).await
+    }
+
+    async fn download_gpx_file(
+        &self,
+        activity_id: &str,
+        output_path: Option<PathBuf>,
+    ) -> Result<Option<String>, IntervalsError> {
+        let url = format!("{}/api/v1/activity/{}/gpx-file", self.base_url, activity_id);
+        self.download_file(url, output_path).await
+    }
+
+    async fn get_gear_list(&self) -> Result<serde_json::Value, IntervalsError> {
+        let url = format!("{}/api/v1/athlete/{}/gear", self.base_url, self.athlete_id);
+        let resp = self
+            .client
+            .get(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(IntervalsError::Config(format!(
+                "unexpected status: {}",
+                resp.status()
+            )));
+        }
+        Ok(resp.json().await?)
+    }
+
+    async fn get_sport_settings(&self) -> Result<serde_json::Value, IntervalsError> {
+        let url = format!(
+            "{}/api/v1/athlete/{}/sport-settings",
+            self.base_url, self.athlete_id
+        );
+        let resp = self
+            .client
+            .get(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(IntervalsError::Config(format!(
+                "unexpected status: {}",
+                resp.status()
+            )));
+        }
+        Ok(resp.json().await?)
+    }
+
+    async fn get_power_curves(
+        &self,
+        days_back: Option<u32>,
+    ) -> Result<serde_json::Value, IntervalsError> {
+        let url = format!(
+            "{}/api/v1/athlete/{}/power-curves",
+            self.base_url, self.athlete_id
+        );
+        let mut req = self
+            .client
+            .get(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()));
+        if let Some(d) = days_back {
+            let curve = format!("{}d", d);
+            req = req.query(&[("curves", curve)]);
+        }
+        let resp = req.send().await?;
+        if !resp.status().is_success() {
+            return Err(IntervalsError::Config(format!(
+                "unexpected status: {}",
+                resp.status()
+            )));
+        }
+        Ok(resp.json().await?)
+    }
+
+    async fn get_gap_histogram(
+        &self,
+        activity_id: &str,
+    ) -> Result<serde_json::Value, IntervalsError> {
+        let url = format!(
+            "{}/api/v1/activity/{}/gap-histogram",
+            self.base_url, activity_id
+        );
+        let resp = self
+            .client
+            .get(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(IntervalsError::Config(format!(
+                "unexpected status: {}",
+                resp.status()
+            )));
+        }
+        Ok(resp.json().await?)
+    }
+
+    // === Activities: Missing Methods ===
+
+    async fn delete_activity(&self, activity_id: &str) -> Result<(), IntervalsError> {
+        let url = format!("{}/api/v1/activity/{}", self.base_url, activity_id);
+        let resp = self
+            .client
+            .delete(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(IntervalsError::Config(format!(
+                "unexpected status: {}",
+                resp.status()
+            )));
+        }
+        Ok(())
+    }
+
+    async fn get_activities_around(
+        &self,
+        activity_id: &str,
+        count: Option<u32>,
+    ) -> Result<serde_json::Value, IntervalsError> {
+        let url = format!(
+            "{}/api/v1/athlete/{}/activities-around",
+            self.base_url, self.athlete_id
+        );
+        let cnt = count.unwrap_or(5);
+        let resp = self
+            .client
+            .get(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .query(&[("around", activity_id), ("count", &cnt.to_string())])
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(IntervalsError::Config(format!(
+                "unexpected status: {}",
+                resp.status()
+            )));
+        }
+        Ok(resp.json().await?)
+    }
+
+    async fn search_intervals(
+        &self,
+        min_secs: Option<u32>,
+        max_secs: Option<u32>,
+        min_intensity: Option<u32>,
+        max_intensity: Option<u32>,
+        limit: Option<u32>,
+    ) -> Result<serde_json::Value, IntervalsError> {
+        let url = format!(
+            "{}/api/v1/athlete/{}/activities/interval-search",
+            self.base_url, self.athlete_id
+        );
+        let mut req = self
+            .client
+            .get(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()));
+        if let Some(ms) = min_secs {
+            req = req.query(&[("minSecs", ms.to_string())]);
+        }
+        if let Some(ms) = max_secs {
+            req = req.query(&[("maxSecs", ms.to_string())]);
+        }
+        if let Some(mi) = min_intensity {
+            req = req.query(&[("minIntensity", mi.to_string())]);
+        }
+        if let Some(mi) = max_intensity {
+            req = req.query(&[("maxIntensity", mi.to_string())]);
+        }
+        if let Some(l) = limit {
+            req = req.query(&[("limit", l.to_string())]);
+        }
+        let resp = req.send().await?;
+        if !resp.status().is_success() {
+            return Err(IntervalsError::Config(format!(
+                "unexpected status: {}",
+                resp.status()
+            )));
+        }
+        Ok(resp.json().await?)
+    }
+
+    async fn get_power_histogram(
+        &self,
+        activity_id: &str,
+    ) -> Result<serde_json::Value, IntervalsError> {
+        let url = format!(
+            "{}/api/v1/activity/{}/power-histogram",
+            self.base_url, activity_id
+        );
+        let resp = self
+            .client
+            .get(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(IntervalsError::Config(format!(
+                "unexpected status: {}",
+                resp.status()
+            )));
+        }
+        Ok(resp.json().await?)
+    }
+
+    async fn get_hr_histogram(
+        &self,
+        activity_id: &str,
+    ) -> Result<serde_json::Value, IntervalsError> {
+        let url = format!(
+            "{}/api/v1/activity/{}/hr-histogram",
+            self.base_url, activity_id
+        );
+        let resp = self
+            .client
+            .get(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(IntervalsError::Config(format!(
+                "unexpected status: {}",
+                resp.status()
+            )));
+        }
+        Ok(resp.json().await?)
+    }
+
+    async fn get_pace_histogram(
+        &self,
+        activity_id: &str,
+    ) -> Result<serde_json::Value, IntervalsError> {
+        let url = format!(
+            "{}/api/v1/activity/{}/pace-histogram",
+            self.base_url, activity_id
+        );
+        let resp = self
+            .client
+            .get(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(IntervalsError::Config(format!(
+                "unexpected status: {}",
+                resp.status()
+            )));
+        }
+        Ok(resp.json().await?)
+    }
+
+    // === Fitness Summary ===
+
+    async fn get_fitness_summary(&self) -> Result<serde_json::Value, IntervalsError> {
+        // The API exposes fitness-related fields on the athlete object (GET /api/v1/athlete/{id}).
+        // Historically there was a dedicated /fitness endpoint; use the athlete endpoint to avoid 404s.
+        let url = format!("{}/api/v1/athlete/{}", self.base_url, self.athlete_id);
+        let resp = self
+            .client
+            .get(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(IntervalsError::Config(format!(
+                "unexpected status: {}",
+                resp.status()
+            )));
+        }
+        // Return raw JSON so callers can extract fitness/form/tsb fields.
+        Ok(resp.json().await?)
+    }
+
+    // === Wellness ===
+
+    async fn get_wellness(
+        &self,
+        days_back: Option<u32>,
+    ) -> Result<serde_json::Value, IntervalsError> {
+        let url = format!(
+            "{}/api/v1/athlete/{}/wellness",
+            self.base_url, self.athlete_id
+        );
+        let mut req = self
+            .client
+            .get(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()));
+        if let Some(d) = days_back {
+            let oldest = chrono::Utc::now()
+                .checked_sub_signed(chrono::Duration::days(d as i64))
+                .map(|dt| dt.format("%Y-%m-%d").to_string());
+            if let Some(o) = oldest {
+                req = req.query(&[("oldest", o)]);
+            }
+        }
+        let resp = req.send().await?;
+        if !resp.status().is_success() {
+            return Err(IntervalsError::Config(format!(
+                "unexpected status: {}",
+                resp.status()
+            )));
+        }
+        Ok(resp.json().await?)
+    }
+
+    async fn get_wellness_for_date(&self, date: &str) -> Result<serde_json::Value, IntervalsError> {
+        let url = format!(
+            "{}/api/v1/athlete/{}/wellness/{}",
+            self.base_url, self.athlete_id, date
+        );
+        let resp = self
+            .client
+            .get(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(IntervalsError::Config(format!(
+                "unexpected status: {}",
+                resp.status()
+            )));
+        }
+        Ok(resp.json().await?)
+    }
+
+    async fn update_wellness(
+        &self,
+        date: &str,
+        data: &serde_json::Value,
+    ) -> Result<serde_json::Value, IntervalsError> {
+        let url = format!(
+            "{}/api/v1/athlete/{}/wellness/{}",
+            self.base_url, self.athlete_id, date
+        );
+        let resp = self
+            .client
+            .put(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .json(data)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(IntervalsError::Config(format!(
+                "unexpected status: {}",
+                resp.status()
+            )));
+        }
+        Ok(resp.json().await?)
+    }
+
+    // === Events/Calendar: Missing Methods ===
+
+    async fn get_upcoming_workouts(
+        &self,
+        days_ahead: Option<u32>,
+    ) -> Result<serde_json::Value, IntervalsError> {
+        let url = format!(
+            "{}/api/v1/athlete/{}/events",
+            self.base_url, self.athlete_id
+        );
+        let newest = chrono::Utc::now()
+            .checked_add_signed(chrono::Duration::days(days_ahead.unwrap_or(14) as i64))
+            .map(|dt| dt.format("%Y-%m-%d").to_string())
+            .unwrap_or_default();
+        let oldest = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let resp = self
+            .client
+            .get(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .query(&[("oldest", oldest), ("newest", newest)])
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(IntervalsError::Config(format!(
+                "unexpected status: {}",
+                resp.status()
+            )));
+        }
+        Ok(resp.json().await?)
+    }
+
+    async fn update_event(
+        &self,
+        event_id: &str,
+        fields: &serde_json::Value,
+    ) -> Result<serde_json::Value, IntervalsError> {
+        let url = format!(
+            "{}/api/v1/athlete/{}/events/{}",
+            self.base_url, self.athlete_id, event_id
+        );
+        let resp = self
+            .client
+            .put(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .json(fields)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(IntervalsError::Config(format!(
+                "unexpected status: {}",
+                resp.status()
+            )));
+        }
+        Ok(resp.json().await?)
+    }
+
+    async fn bulk_delete_events(&self, event_ids: Vec<String>) -> Result<(), IntervalsError> {
+        for event_id in event_ids {
+            let url = format!(
+                "{}/api/v1/athlete/{}/events/{}",
+                self.base_url, self.athlete_id, event_id
+            );
+            let resp = self
+                .client
+                .delete(&url)
+                .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+                .send()
+                .await?;
+            if !resp.status().is_success() {
+                return Err(IntervalsError::Config(format!(
+                    "failed to delete event {}: {}",
+                    event_id,
+                    resp.status()
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    async fn duplicate_event(
+        &self,
+        event_id: &str,
+        target_date: &str,
+    ) -> Result<serde_json::Value, IntervalsError> {
+        // First get the event, then create a copy with new date
+        let get_url = format!(
+            "{}/api/v1/athlete/{}/events/{}",
+            self.base_url, self.athlete_id, event_id
+        );
+        let get_resp = self
+            .client
+            .get(&get_url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .send()
+            .await?;
+        if !get_resp.status().is_success() {
+            return Err(IntervalsError::Config(format!(
+                "unexpected status: {}",
+                get_resp.status()
+            )));
+        }
+        let mut event: serde_json::Value = get_resp.json().await?;
+
+        // Update date and remove id
+        event["start_date_local"] = serde_json::json!(target_date);
+        if let Some(obj) = event.as_object_mut() {
+            obj.remove("id");
+        }
+
+        // Create new event
+        let create_url = format!(
+            "{}/api/v1/athlete/{}/events",
+            self.base_url, self.athlete_id
+        );
+        let create_resp = self
+            .client
+            .post(&create_url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .json(&event)
+            .send()
+            .await?;
+        if !create_resp.status().is_success() {
+            return Err(IntervalsError::Config(format!(
+                "unexpected status: {}",
+                create_resp.status()
+            )));
+        }
+        Ok(create_resp.json().await?)
+    }
+
+    // === Performance Curves ===
+
+    async fn get_hr_curves(
+        &self,
+        days_back: Option<u32>,
+    ) -> Result<serde_json::Value, IntervalsError> {
+        let url = format!(
+            "{}/api/v1/athlete/{}/hr-curves",
+            self.base_url, self.athlete_id
+        );
+        let mut req = self
+            .client
+            .get(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()));
+        if let Some(d) = days_back {
+            let curve = format!("{}d", d);
+            req = req.query(&[("curves", curve)]);
+        }
+        let resp = req.send().await?;
+        if !resp.status().is_success() {
+            return Err(IntervalsError::Config(format!(
+                "unexpected status: {}",
+                resp.status()
+            )));
+        }
+        Ok(resp.json().await?)
+    }
+
+    async fn get_pace_curves(
+        &self,
+        days_back: Option<u32>,
+    ) -> Result<serde_json::Value, IntervalsError> {
+        let url = format!(
+            "{}/api/v1/athlete/{}/pace-curves",
+            self.base_url, self.athlete_id
+        );
+        let mut req = self
+            .client
+            .get(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()));
+        if let Some(d) = days_back {
+            let curve = format!("{}d", d);
+            req = req.query(&[("curves", curve)]);
+        }
+        let resp = req.send().await?;
+        if !resp.status().is_success() {
+            return Err(IntervalsError::Config(format!(
+                "unexpected status: {}",
+                resp.status()
+            )));
+        }
+        Ok(resp.json().await?)
+    }
+
+    // === Workout Library ===
+
+    async fn get_workout_library(&self) -> Result<serde_json::Value, IntervalsError> {
+        let url = format!(
+            "{}/api/v1/athlete/{}/workout-folders",
+            self.base_url, self.athlete_id
+        );
+        let resp = self
+            .client
+            .get(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(IntervalsError::Config(format!(
+                "unexpected status: {}",
+                resp.status()
+            )));
+        }
+        Ok(resp.json().await?)
+    }
+
+    async fn get_workouts_in_folder(
+        &self,
+        folder_id: &str,
+    ) -> Result<serde_json::Value, IntervalsError> {
+        let url = format!(
+            "{}/api/v1/athlete/{}/workout-folders/{}/workouts",
+            self.base_url, self.athlete_id, folder_id
+        );
+        let resp = self
+            .client
+            .get(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(IntervalsError::Config(format!(
+                "unexpected status: {}",
+                resp.status()
+            )));
+        }
+        Ok(resp.json().await?)
+    }
+
+    // === Gear Management ===
+
+    async fn create_gear(
+        &self,
+        gear: &serde_json::Value,
+    ) -> Result<serde_json::Value, IntervalsError> {
+        let url = format!("{}/api/v1/athlete/{}/gear", self.base_url, self.athlete_id);
+        let resp = self
+            .client
+            .post(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .json(gear)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(IntervalsError::Config(format!(
+                "unexpected status: {}",
+                resp.status()
+            )));
+        }
+        Ok(resp.json().await?)
+    }
+
+    async fn update_gear(
+        &self,
+        gear_id: &str,
+        fields: &serde_json::Value,
+    ) -> Result<serde_json::Value, IntervalsError> {
+        let url = format!(
+            "{}/api/v1/athlete/{}/gear/{}",
+            self.base_url, self.athlete_id, gear_id
+        );
+        let resp = self
+            .client
+            .put(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .json(fields)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(IntervalsError::Config(format!(
+                "unexpected status: {}",
+                resp.status()
+            )));
+        }
+        Ok(resp.json().await?)
+    }
+
+    async fn delete_gear(&self, gear_id: &str) -> Result<(), IntervalsError> {
+        let url = format!(
+            "{}/api/v1/athlete/{}/gear/{}",
+            self.base_url, self.athlete_id, gear_id
+        );
+        let resp = self
+            .client
+            .delete(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(IntervalsError::Config(format!(
+                "unexpected status: {}",
+                resp.status()
+            )));
+        }
+        Ok(())
+    }
+
+    async fn create_gear_reminder(
+        &self,
+        gear_id: &str,
+        reminder: &serde_json::Value,
+    ) -> Result<serde_json::Value, IntervalsError> {
+        let url = format!(
+            "{}/api/v1/athlete/{}/gear/{}/reminders",
+            self.base_url, self.athlete_id, gear_id
+        );
+        let resp = self
+            .client
+            .post(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .json(reminder)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(IntervalsError::Config(format!(
+                "unexpected status: {}",
+                resp.status()
+            )));
+        }
+        Ok(resp.json().await?)
+    }
+
+    async fn update_gear_reminder(
+        &self,
+        gear_id: &str,
+        reminder_id: &str,
+        fields: &serde_json::Value,
+    ) -> Result<serde_json::Value, IntervalsError> {
+        let url = format!(
+            "{}/api/v1/athlete/{}/gear/{}/reminders/{}",
+            self.base_url, self.athlete_id, gear_id, reminder_id
+        );
+        let resp = self
+            .client
+            .put(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .json(fields)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(IntervalsError::Config(format!(
+                "unexpected status: {}",
+                resp.status()
+            )));
+        }
+        Ok(resp.json().await?)
+    }
+
+    // === Sport Settings Management ===
+
+    async fn update_sport_settings(
+        &self,
+        sport_type: &str,
+        fields: &serde_json::Value,
+    ) -> Result<serde_json::Value, IntervalsError> {
+        let url = format!(
+            "{}/api/v1/athlete/{}/sport-settings/{}",
+            self.base_url, self.athlete_id, sport_type
+        );
+        let resp = self
+            .client
+            .put(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .json(fields)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(IntervalsError::Config(format!(
+                "unexpected status: {}",
+                resp.status()
+            )));
+        }
+        Ok(resp.json().await?)
+    }
+
+    async fn apply_sport_settings(
+        &self,
+        sport_type: &str,
+        start_date: Option<&str>,
+    ) -> Result<serde_json::Value, IntervalsError> {
+        let url = format!(
+            "{}/api/v1/athlete/{}/sport-settings/{}/apply",
+            self.base_url, self.athlete_id, sport_type
+        );
+        // Per API spec this is a PUT endpoint (apply settings). Use PUT to avoid 405 errors.
+        let mut req = self
+            .client
+            .put(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()));
+        if let Some(date) = start_date {
+            req = req.query(&[("startDate", date)]);
+        }
+        let resp = req.send().await?;
+        if !resp.status().is_success() {
+            return Err(IntervalsError::Config(format!(
+                "unexpected status: {}",
+                resp.status()
+            )));
+        }
+        Ok(resp.json().await?)
+    }
+
+    async fn create_sport_settings(
+        &self,
+        settings: &serde_json::Value,
+    ) -> Result<serde_json::Value, IntervalsError> {
+        let url = format!(
+            "{}/api/v1/athlete/{}/sport-settings",
+            self.base_url, self.athlete_id
+        );
+        let resp = self
+            .client
+            .post(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .json(settings)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(IntervalsError::Config(format!(
+                "unexpected status: {}",
+                resp.status()
+            )));
+        }
+        Ok(resp.json().await?)
+    }
+
+    async fn delete_sport_settings(&self, sport_type: &str) -> Result<(), IntervalsError> {
+        let url = format!(
+            "{}/api/v1/athlete/{}/sport-settings/{}",
+            self.base_url, self.athlete_id, sport_type
+        );
+        let resp = self
+            .client
+            .delete(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(IntervalsError::Config(format!(
+                "unexpected status: {}",
+                resp.status()
+            )));
+        }
+        Ok(())
+    }
+}

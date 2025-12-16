@@ -1,0 +1,27 @@
+# Ignore Cargo build artifacts and local editor/project files to speed up Docker builds
+target/
+**/target/
+
+# VCS
+.git
+.gitignore
+
+# Editor directories
+.vscode/
+.idea/
+
+# Local env and logs
+.env
+*.log
+.DS_Store
+
+# Node/npm artifacts (if present)
+node_modules/
+dist/
+coverage/
+
+# Misc
+tmp/
+.dockerignore
+docs/
+dev/
