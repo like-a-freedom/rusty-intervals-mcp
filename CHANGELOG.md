@@ -43,6 +43,9 @@ All notable changes to this project will be documented in this file.
 
 **Note:** This is a temporary mitigation to restore green release builds; we should follow up to add a proper fix that allows aarch64 cross builds to succeed deterministically (e.g., vendor OpenSSL or use a custom Docker image that includes `libssl-dev`).
 
+## [0.3.7] - 2025-12-16
+- Chore: Replace archived `actions-rs/toolchain@v1` with explicit `rustup` install steps in CI to avoid deprecated/archived action usage and the `set-output` deprecation warnings; improves reliability and control over installed components.
+
 ## [Unreleased]
 
 - No changes yet.

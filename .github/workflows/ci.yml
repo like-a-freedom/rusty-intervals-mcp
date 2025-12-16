@@ -14,11 +14,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - name: Install Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          profile: minimal
+      - name: Install Rust via rustup
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
+          source $HOME/.cargo/env
+          rustup toolchain install stable || true
+          rustup default stable
+          rustup component add rustfmt clippy || true
       - name: Install rustup components
         run: |
           rustup component add rustfmt --toolchain stable || true
@@ -74,11 +76,13 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Set up Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          profile: minimal
+      - name: Set up Rust via rustup
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
+          source $HOME/.cargo/env
+          rustup toolchain install stable || true
+          rustup default stable
+          rustup component add rustfmt clippy || true
 
       - name: Add target
         run: rustup target add ${{ matrix.target }} || true
