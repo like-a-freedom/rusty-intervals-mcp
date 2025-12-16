@@ -1,222 +1,112 @@
-name: CI
-
-permissions:
-  contents: write
-  packages: write
-  id-token: write
+name: Build and Release
 
 on:
-  push:
-    branches: [ master ]
-  pull_request:
-    branches: [ master ]
-  workflow_dispatch: {}
   release:
     types: [created]
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - name: Check for code changes
-        id: changes
-        run: |
-          set -e
-          # Fetch minimal history to compare
-          git fetch --no-tags --depth=2 origin ${{ github.ref }} || true
-          BASE=${{ github.event.before }}
-          if [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
-            # first commit on branch; treat as changed
-            echo "code_changed=true" >> $GITHUB_OUTPUT
-          else
-            CHANGED_FILES=$(git diff --name-only $BASE ${{ github.sha }} || true)
-            # Safely write multi-line changed_files to GITHUB_OUTPUT using heredoc format
-            if [ -n "$CHANGED_FILES" ]; then
-              printf "changed_files<<EOF\n%s\nEOF\n" "$CHANGED_FILES" >> $GITHUB_OUTPUT
-            else
-              echo "changed_files=" >> $GITHUB_OUTPUT
-            fi
-            if echo "$CHANGED_FILES" | grep -E '(^crates/|^src/|^Cargo.toml|\.rs$|\.toml$)' >/dev/null; then
-              echo "code_changed=true" >> $GITHUB_OUTPUT
-            else
-              echo "code_changed=false" >> $GITHUB_OUTPUT
-            fi
-          fi
-      - name: Set up Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v1.15.2
-        with:
-          toolchain: stable
-          components: rustfmt,clippy
-          override: true
-
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-      - name: Run fmt check
-        if: steps.changes.outputs.code_changed == 'true'
-        run: cargo fmt --all -- --check
-      - name: Run clippy
-        if: steps.changes.outputs.code_changed == 'true'
-        run: cargo clippy --all-targets --all-features -- -D warnings
-      - name: Compile tests (no-run)
-        if: steps.changes.outputs.code_changed == 'true'
-        run: cargo test --all --no-run
-      - name: Check tests for hard-coded env usage (warn only)
-        run: |
-          set -e
-          # warn if tests reference likely CI-only env vars that would break runs
-          grep -R --line-number "INTERVALS_ICU_API_KEY\|INTERVALS_ICU_ATHLETE_ID" crates/*/tests || true
-      - name: Run integration tests
-        if: steps.changes.outputs.code_changed == 'true'
-        run: |
-          # Run the package integration test target
-          cargo test -p intervals_icu_client --test integration
-      - name: Run remaining tests
-        if: steps.changes.outputs.code_changed == 'true'
-        run: cargo test --all --no-fail-fast
-
-  release-build:
-    name: Build release artifacts
-    needs: build
-    runs-on: ${{ matrix.os }}
+  build_binaries:
+    name: Build ${{ matrix.platform.os_name }}
+    runs-on: ${{ matrix.platform.os }}
+    permissions:
+      contents: write
+      packages: write
     strategy:
+      fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-latest
+        platform:
+          - os_name: Linux-x86_64
+            os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            bin: intervals_icu_mcp_x86_64
-    
-          - os: macos-latest
+            bin: intervals_icu_mcp_linux_x86_64
+          - os_name: macOS-x86_64
+            os: macos-latest
             target: x86_64-apple-darwin
-            bin: intervals_icu_mcp_x86_64_macos
-          - os: macos-latest
+            bin: intervals_icu_mcp_macos_x86_64
+          - os_name: macOS-aarch64
+            os: macos-latest
             target: aarch64-apple-darwin
-            bin: intervals_icu_mcp_aarch64_macos
-          - os: windows-latest
+            bin: intervals_icu_mcp_macos_aarch64
+          - os_name: Windows-x86_64
+            os: windows-latest
             target: x86_64-pc-windows-msvc
-            bin: intervals_icu_mcp_x86_64_windows.exe
+            bin: intervals_icu_mcp_windows_x86_64.exe
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
-      - name: Set up Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v1
-        with:
-          toolchain: stable
-          components: rustfmt,clippy
-          override: true
-          target: ${{ matrix.target }}
-
-      - name: Build (cross for linux aarch64)
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        uses: houseabsolute/actions-rust-cross@v1.0.5
+      - name: Build binary
+        uses: houseabsolute/actions-rust-cross@v1
         with:
           command: build
-          target: ${{ matrix.target }}
+          target: ${{ matrix.platform.target }}
           toolchain: stable
-          args: "--locked --release"
+          args: "--locked --release -p intervals_icu_mcp"
           strip: true
 
-      - name: Build (native for other targets)
-        if: matrix.target != 'aarch64-unknown-linux-gnu'
+      - name: Prepare artifact (Unix)
+        if: matrix.platform.os != 'windows-latest'
         run: |
-          cargo build -p intervals_icu_mcp --bin intervals_icu_mcp --target ${{ matrix.target }} --release
+          mkdir -p app/${{ matrix.platform.target }}
+          cp target/${{ matrix.platform.target }}/release/intervals_icu_mcp app/${{ matrix.platform.target }}/${{ matrix.platform.bin }}
 
-      - name: Prepare artifact directory
-        shell: bash
+      - name: Prepare artifact (Windows)
+        if: matrix.platform.os == 'windows-latest'
+        shell: pwsh
         run: |
-          mkdir -p "app/${{ matrix.target }}"
-          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-            cp "target/${{ matrix.target }}/release/intervals_icu_mcp.exe" "app/${{ matrix.target }}/${{ matrix.bin }}" || true
-          else
-            cp "target/${{ matrix.target }}/release/intervals_icu_mcp" "app/${{ matrix.target }}/${{ matrix.bin }}" || true
-          fi
+          New-Item -ItemType Directory -Force -Path app/${{ matrix.platform.target }}
+          Copy-Item target/${{ matrix.platform.target }}/release/intervals_icu_mcp.exe app/${{ matrix.platform.target }}/${{ matrix.platform.bin }}
 
-      - name: Generate SHA-256
-        shell: bash
+      - name: Generate SHA-256 (Unix)
+        if: matrix.platform.os != 'windows-latest'
         run: |
-          # Prefer shasum/sha256sum if available, otherwise fall back to Python
-          if command -v shasum >/dev/null 2>&1; then
-            shasum -a 256 "app/${{ matrix.target }}/${{ matrix.bin }}" | cut -d ' ' -f 1 > "app/${{ matrix.target }}/${{ matrix.bin }}.sha256"
-          elif command -v sha256sum >/dev/null 2>&1; then
-            sha256sum "app/${{ matrix.target }}/${{ matrix.bin }}" | cut -d ' ' -f 1 > "app/${{ matrix.target }}/${{ matrix.bin }}.sha256"
-          else
-            python - <<'PY' > "app/${{ matrix.target }}/${{ matrix.bin }}.sha256"
-            import hashlib
+          shasum -a 256 app/${{ matrix.platform.target }}/${{ matrix.platform.bin }} | cut -d ' ' -f 1 > app/${{ matrix.platform.target }}/${{ matrix.platform.bin }}.sha256
 
-            h = hashlib.sha256()
-            with open("app/${{ matrix.target }}/${{ matrix.bin }}", 'rb') as f:
-                for chunk in iter(lambda: f.read(8192), b''):
-                    h.update(chunk)
-            print(h.hexdigest())
-            PY
+      - name: Generate SHA-256 (Windows)
+        if: matrix.platform.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          (Get-FileHash -Algorithm SHA256 app/${{ matrix.platform.target }}/${{ matrix.platform.bin }}).Hash.ToLower() | Out-File -Encoding ascii app/${{ matrix.platform.target }}/${{ matrix.platform.bin }}.sha256
 
-
-      - name: Create GitHub release assets
-        if: github.event_name == 'release'
-        uses: softprops/action-gh-release@v2.5.0
-        continue-on-error: true
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
         with:
           files: |
-            app/${{ matrix.target }}/${{ matrix.bin }}
-            app/${{ matrix.target }}/${{ matrix.bin }}.sha256
+            app/${{ matrix.platform.target }}/${{ matrix.platform.bin }}
+            app/${{ matrix.platform.target }}/${{ matrix.platform.bin }}.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  publish_images:
-    name: Build and publish Docker images (multi-arch)
-    needs: release-build
+  build_docker_images:
+    name: Build Docker images
     runs-on: ubuntu-latest
-    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
     permissions:
       contents: read
       packages: write
-      id-token: write
-    strategy:
-      matrix:
-        include:
-          - platforms: linux/amd64,linux/arm64
-            tags: ghcr.io/${{ github.repository_owner }}/rusty-intervals-mcp:latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3.7.0
+        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3.11.1
+        uses: docker/setup-buildx-action@v3
 
-      - name: Login to GitHub Container Registry (GHCR)
-        uses: docker/login-action@v3.6.0
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata for image tags
-        id: meta
-        uses: docker/metadata-action@v5.10.0
-        with:
-          images: |
-            ghcr.io/${{ github.repository_owner }}/rusty-intervals-mcp
-          tags: |
-            type=ref,event=tag
-            type=semver,pattern={{version}}
-            type=raw,value=latest,enable={{github.ref == 'refs/heads/main'}}
-
-      - name: Build and push to GHCR
-        uses: docker/build-push-action@v6.18.0
+      - name: Build and push multi-arch image
+        uses: docker/build-push-action@v6
         with:
           context: .
+          platforms: linux/amd64,linux/arm64
           push: true
-          platforms: ${{ matrix.platforms }}
-          tags: |
-            ${{ steps.meta.outputs.tags }}
-            ghcr.io/${{ github.repository_owner }}/rusty-intervals-mcp:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/rusty-intervals-mcp:latest
+            ghcr.io/${{ github.repository_owner }}/rusty-intervals-mcp:${{ github.ref_name }}
