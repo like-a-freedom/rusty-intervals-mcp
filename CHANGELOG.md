@@ -29,6 +29,9 @@ All notable changes to this project will be documented in this file.
 ## [0.3.2] - 2025-12-16
 - Fix: Make integration `download_activity_file_returns_base64_and_writes_file` test robust against transient empty responses on CI by adding short retries and better diagnostics; prevents spurious CI failures. Updated CI to run the specific integration target with verbose output for clearer diagnostics.
 
+## [0.3.3] - 2025-12-16
+- Fix: Address clippy lint `expect_fun_call` in integration test by avoiding function calls inside `expect`. This cleans up the test and satisfies `cargo clippy` in CI.
+
 ## [Unreleased]
 
 - No changes yet.

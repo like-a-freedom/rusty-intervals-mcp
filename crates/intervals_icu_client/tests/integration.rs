@@ -286,11 +286,15 @@ async fn download_activity_file_returns_base64_and_writes_file() {
         // allow a short delay for the mock server
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
-    let b64 = ok_b64.expect(&format!(
-        "download returned empty body after retries; last response={:?}; received_requests={:?}",
-        last,
-        server.received_requests().await.unwrap_or_default()
-    ));
+    let b64 = if let Some(s) = ok_b64 {
+        s
+    } else {
+        let received = server.received_requests().await.unwrap_or_default();
+        panic!(
+            "download returned empty body after retries; last response={:?}; received_requests={:?}",
+            last, received
+        );
+    };
     assert_eq!(STANDARD.decode(&b64).unwrap(), body);
 
     let dir = tempfile::tempdir().unwrap();
