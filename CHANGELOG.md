@@ -13,6 +13,7 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.3.0] - 2025-12-16
 - Fix: `get_event` now returns a descriptive decoding error (includes a short snippet of the response body) when the API returns a payload that doesn't match the `Event` schema (e.g., when an `activity_id` is passed by mistake). See `docs/SPEC.md` and `docs/OPENAPI_EVENT_FIX.md` for details.
 - Fix: include required `type` (sport) query parameter in `get_power_curves`, `get_hr_curves`, and `get_pace_curves` client methods and MCP tools to avoid 422 responses from the upstream API. Added tests asserting the `type` and `curves` query parameters are sent.
 - Fix: event tools now accept numeric event IDs (as required by the Intervals.icu API) and normalize them to strings, preventing MCP parameter deserialization errors for `update_event`, `duplicate_event`, and `bulk_delete_events`.
@@ -21,6 +22,10 @@ All notable changes to this project will be documented in this file.
 - Fix: calendar bulk delete uses `PUT /events/bulk-delete` with `{id|external_id}` items; event duplication uses `POST /duplicate-events` with `numCopies` and `weeksBetween` and returns the created events list.
 - Fix: gear reminder updates use singular endpoint `/gear/{gearId}/reminder/{reminderId}` and propagate `reset`/`snoozeDays` query flags; sport settings update requires `recalcHrZones`, and applying sport settings uses `PUT /sport-settings/{id}/apply` without `start_date`.
 - Fix: workout library now reads folders via `/athlete/{id}/folders` and workouts via `/athlete/{id}/workouts`, filtering by `folder_id` client-side to match the published API.
+
+## [Unreleased]
+
+- No changes yet.
 
 ## [0.1.0] - 2025-12-15
 - Initial MCP-compatible Intervals.icu client in Rust.
