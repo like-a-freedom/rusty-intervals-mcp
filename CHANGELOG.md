@@ -26,6 +26,9 @@ All notable changes to this project will be documented in this file.
 ## [0.3.1] - 2025-12-16
 - Fix: `search_activities` and `search_activities_full` now validate that the `q` parameter is non-empty and forward it as `q` (the upstream API expects `q`, not `query`), preventing 422 Unprocessable Entity responses; tests added to assert `q` is sent.
 
+## [0.3.2] - 2025-12-16
+- Fix: Make integration `download_activity_file_returns_base64_and_writes_file` test robust against transient empty responses on CI by adding short retries and better diagnostics; prevents spurious CI failures. Updated CI to run the specific integration target with verbose output for clearer diagnostics.
+
 ## [Unreleased]
 
 - No changes yet.
