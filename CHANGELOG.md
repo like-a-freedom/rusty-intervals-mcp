@@ -32,6 +32,9 @@ All notable changes to this project will be documented in this file.
 ## [0.3.3] - 2025-12-16
 - Fix: Address clippy lint `expect_fun_call` in integration test by avoiding function calls inside `expect`. This cleans up the test and satisfies `cargo clippy` in CI.
 
+## [0.3.4] - 2025-12-16
+- Fix: Update CI to use `houseabsolute/actions-rust-cross@v1` (instead of `main`) for cross builds to avoid action resolution errors on the Windows runner; add a note and ensure workflows reference an explicit stable action tag.
+
 ## [Unreleased]
 
 - No changes yet.
