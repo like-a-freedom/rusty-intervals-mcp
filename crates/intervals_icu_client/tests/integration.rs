@@ -393,6 +393,19 @@ async fn search_activities_uses_search_endpoints() {
 }
 
 #[tokio::test]
+async fn search_activities_rejects_empty_query() {
+    let mock_server = MockServer::start().await;
+    let client = intervals_icu_client::http_client::ReqwestIntervalsClient::new(
+        &mock_server.uri(),
+        "ath",
+        SecretString::new("tok".into()),
+    );
+
+    let err = client.search_activities("", None).await;
+    assert!(err.is_err());
+}
+
+#[tokio::test]
 async fn search_intervals_sends_required_params() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
