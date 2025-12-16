@@ -436,6 +436,8 @@ Use built-in prompt templates for common queries:
 
 ### Events/Calendar (9 tools)
 
+Note: Intervals.icu event IDs are numeric; the MCP tools accept either numbers or strings and forward them as required by the API.
+
 | Tool | Description |
 |------|-------------|
 | `get_events` | Get planned events and workouts from calendar |

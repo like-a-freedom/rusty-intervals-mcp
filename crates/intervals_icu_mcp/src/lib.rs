@@ -18,6 +18,7 @@ use rmcp::{ErrorData, RoleServer};
 use rmcp::{prompt, prompt_handler, prompt_router, tool, tool_handler, tool_router};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 
 use intervals_icu_client::{ActivitySummary, IntervalsClient};
 
@@ -175,20 +176,36 @@ pub struct DaysAheadParams {
     pub days_ahead: Option<u32>,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(untagged)]
+pub enum EventId {
+    Int(i64),
+    Str(String),
+}
+
+impl EventId {
+    fn as_cow(&self) -> Cow<'_, str> {
+        match self {
+            EventId::Int(v) => Cow::Owned(v.to_string()),
+            EventId::Str(s) => Cow::Borrowed(s),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct UpdateEventParams {
-    pub event_id: String,
+    pub event_id: EventId,
     pub fields: serde_json::Value,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct BulkDeleteEventsParams {
-    pub event_ids: Vec<String>,
+    pub event_ids: Vec<EventId>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct DuplicateEventParams {
-    pub event_id: String,
+    pub event_id: EventId,
     pub target_date: String,
 }
 
@@ -1138,9 +1155,10 @@ impl IntervalsMcpHandler {
         params: Parameters<UpdateEventParams>,
     ) -> Result<Json<ObjectResult>, String> {
         let p = params.0;
+        let event_id = p.event_id.as_cow().into_owned();
         let v = self
             .client
-            .update_event(&p.event_id, &p.fields)
+            .update_event(&event_id, &p.fields)
             .await
             .map_err(|e| e.to_string())?;
         Ok(Json(ObjectResult { value: v }))
@@ -1155,8 +1173,13 @@ impl IntervalsMcpHandler {
         params: Parameters<BulkDeleteEventsParams>,
     ) -> Result<Json<ObjectResult>, String> {
         let p = params.0;
+        let ids: Vec<String> = p
+            .event_ids
+            .iter()
+            .map(|id| id.as_cow().into_owned())
+            .collect();
         self.client
-            .bulk_delete_events(p.event_ids)
+            .bulk_delete_events(ids)
             .await
             .map_err(|e| e.to_string())?;
         Ok(Json(ObjectResult {
@@ -1173,9 +1196,10 @@ impl IntervalsMcpHandler {
         params: Parameters<DuplicateEventParams>,
     ) -> Result<Json<ObjectResult>, String> {
         let p = params.0;
+        let event_id = p.event_id.as_cow().into_owned();
         let v = self
             .client
-            .duplicate_event(&p.event_id, &p.target_date)
+            .duplicate_event(&event_id, &p.target_date)
             .await
             .map_err(|e| e.to_string())?;
         Ok(Json(ObjectResult { value: v }))
@@ -2177,6 +2201,28 @@ mod tests {
             res2.0.value.get("duplicate").and_then(|v| v.as_bool()),
             Some(true)
         );
+    }
+
+    #[test]
+    fn update_event_accepts_numeric_id() {
+        let json = serde_json::json!({
+            "event_id": 82024747,
+            "fields": serde_json::json!({"name": "test"})
+        });
+        let params: UpdateEventParams = serde_json::from_value(json).expect("parse numeric id");
+        assert_eq!(params.event_id.as_cow(), "82024747");
+
+        let bulk_json = serde_json::json!({
+            "event_ids": [1, "2"],
+        });
+        let bulk: BulkDeleteEventsParams =
+            serde_json::from_value(bulk_json).expect("parse mixed ids");
+        let collected: Vec<String> = bulk
+            .event_ids
+            .iter()
+            .map(|id| id.as_cow().into_owned())
+            .collect();
+        assert_eq!(collected, vec!["1", "2"]);
     }
 
     #[tokio::test]
