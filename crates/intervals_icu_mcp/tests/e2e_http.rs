@@ -172,10 +172,13 @@ impl IntervalsClient for LocalMockClient {
     }
     async fn search_intervals(
         &self,
-        _min_secs: Option<u32>,
-        _max_secs: Option<u32>,
-        _min_intensity: Option<u32>,
-        _max_intensity: Option<u32>,
+        _min_secs: u32,
+        _max_secs: u32,
+        _min_intensity: u32,
+        _max_intensity: u32,
+        _interval_type: Option<String>,
+        _min_reps: Option<u32>,
+        _max_reps: Option<u32>,
         _limit: Option<u32>,
     ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
         Ok(serde_json::json!({}))
@@ -244,9 +247,10 @@ impl IntervalsClient for LocalMockClient {
     async fn duplicate_event(
         &self,
         _event_id: &str,
-        _target_date: &str,
-    ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
-        Ok(serde_json::json!({}))
+        _num_copies: Option<u32>,
+        _weeks_between: Option<u32>,
+    ) -> Result<Vec<intervals_icu_client::Event>, intervals_icu_client::IntervalsError> {
+        Ok(vec![])
     }
     async fn get_hr_curves(
         &self,
@@ -303,6 +307,8 @@ impl IntervalsClient for LocalMockClient {
         &self,
         _gear_id: &str,
         _reminder_id: &str,
+        _reset: bool,
+        _snooze_days: u32,
         _fields: &serde_json::Value,
     ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
         Ok(serde_json::json!({}))
@@ -310,6 +316,7 @@ impl IntervalsClient for LocalMockClient {
     async fn update_sport_settings(
         &self,
         _sport_type: &str,
+        _recalc_hr_zones: bool,
         _fields: &serde_json::Value,
     ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
         Ok(serde_json::json!({}))
@@ -317,7 +324,6 @@ impl IntervalsClient for LocalMockClient {
     async fn apply_sport_settings(
         &self,
         _sport_type: &str,
-        _start_date: Option<&str>,
     ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
         Ok(serde_json::json!({}))
     }

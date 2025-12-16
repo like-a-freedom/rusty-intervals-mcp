@@ -376,7 +376,7 @@ impl IntervalsClient for ReqwestIntervalsClient {
         limit: Option<u32>,
     ) -> Result<Vec<crate::ActivitySummary>, IntervalsError> {
         let url = format!(
-            "{}/api/v1/athlete/{}/activities",
+            "{}/api/v1/athlete/{}/activities/search",
             self.base_url, self.athlete_id
         );
         let mut req = self
@@ -404,14 +404,14 @@ impl IntervalsClient for ReqwestIntervalsClient {
         limit: Option<u32>,
     ) -> Result<serde_json::Value, IntervalsError> {
         let url = format!(
-            "{}/api/v1/athlete/{}/activities",
+            "{}/api/v1/athlete/{}/activities/search-full",
             self.base_url, self.athlete_id
         );
         let mut req = self
             .client
             .get(&url)
             .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .query(&[("query", query), ("full", "true")]);
+            .query(&[("query", query)]);
         if let Some(l) = limit {
             req = req.query(&[("limit", l)]);
         }
@@ -684,10 +684,13 @@ impl IntervalsClient for ReqwestIntervalsClient {
 
     async fn search_intervals(
         &self,
-        min_secs: Option<u32>,
-        max_secs: Option<u32>,
-        min_intensity: Option<u32>,
-        max_intensity: Option<u32>,
+        min_secs: u32,
+        max_secs: u32,
+        min_intensity: u32,
+        max_intensity: u32,
+        interval_type: Option<String>,
+        min_reps: Option<u32>,
+        max_reps: Option<u32>,
         limit: Option<u32>,
     ) -> Result<serde_json::Value, IntervalsError> {
         let url = format!(
@@ -697,18 +700,21 @@ impl IntervalsClient for ReqwestIntervalsClient {
         let mut req = self
             .client
             .get(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()));
-        if let Some(ms) = min_secs {
-            req = req.query(&[("minSecs", ms.to_string())]);
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .query(&[
+                ("minSecs", min_secs.to_string()),
+                ("maxSecs", max_secs.to_string()),
+                ("minIntensity", min_intensity.to_string()),
+                ("maxIntensity", max_intensity.to_string()),
+            ]);
+        if let Some(kind) = interval_type {
+            req = req.query(&[("type", kind)]);
         }
-        if let Some(ms) = max_secs {
-            req = req.query(&[("maxSecs", ms.to_string())]);
+        if let Some(reps) = min_reps {
+            req = req.query(&[("minReps", reps.to_string())]);
         }
-        if let Some(mi) = min_intensity {
-            req = req.query(&[("minIntensity", mi.to_string())]);
-        }
-        if let Some(mi) = max_intensity {
-            req = req.query(&[("maxIntensity", mi.to_string())]);
+        if let Some(reps) = max_reps {
+            req = req.query(&[("maxReps", reps.to_string())]);
         }
         if let Some(l) = limit {
             req = req.query(&[("limit", l.to_string())]);
@@ -948,24 +954,28 @@ impl IntervalsClient for ReqwestIntervalsClient {
     }
 
     async fn bulk_delete_events(&self, event_ids: Vec<String>) -> Result<(), IntervalsError> {
-        for event_id in event_ids {
-            let url = format!(
-                "{}/api/v1/athlete/{}/events/{}",
-                self.base_url, self.athlete_id, event_id
-            );
-            let resp = self
-                .client
-                .delete(&url)
-                .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-                .send()
-                .await?;
-            if !resp.status().is_success() {
-                return Err(IntervalsError::Config(format!(
-                    "failed to delete event {}: {}",
-                    event_id,
-                    resp.status()
-                )));
-            }
+        let url = format!(
+            "{}/api/v1/athlete/{}/events/bulk-delete",
+            self.base_url, self.athlete_id
+        );
+        let payload: Vec<serde_json::Value> = event_ids
+            .into_iter()
+            .map(|id| serde_json::json!({ "id": id }))
+            .collect();
+
+        let resp = self
+            .client
+            .put(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .json(&payload)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            return Err(IntervalsError::Config(format!(
+                "unexpected status: {}",
+                resp.status()
+            )));
         }
         Ok(())
     }
@@ -973,52 +983,33 @@ impl IntervalsClient for ReqwestIntervalsClient {
     async fn duplicate_event(
         &self,
         event_id: &str,
-        target_date: &str,
-    ) -> Result<serde_json::Value, IntervalsError> {
-        // First get the event, then create a copy with new date
-        let get_url = format!(
-            "{}/api/v1/athlete/{}/events/{}",
-            self.base_url, self.athlete_id, event_id
-        );
-        let get_resp = self
-            .client
-            .get(&get_url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .send()
-            .await?;
-        if !get_resp.status().is_success() {
-            return Err(IntervalsError::Config(format!(
-                "unexpected status: {}",
-                get_resp.status()
-            )));
-        }
-        let mut event: serde_json::Value = get_resp.json().await?;
-
-        // Update date and remove id
-        event["start_date_local"] = serde_json::json!(target_date);
-        if let Some(obj) = event.as_object_mut() {
-            obj.remove("id");
-        }
-
-        // Create new event
-        let create_url = format!(
-            "{}/api/v1/athlete/{}/events",
+        num_copies: Option<u32>,
+        weeks_between: Option<u32>,
+    ) -> Result<Vec<crate::Event>, IntervalsError> {
+        let url = format!(
+            "{}/api/v1/athlete/{}/duplicate-events",
             self.base_url, self.athlete_id
         );
-        let create_resp = self
+        let payload = serde_json::json!({
+            "eventIds": [event_id],
+            "numCopies": num_copies.unwrap_or(1),
+            "weeksBetween": weeks_between.unwrap_or(1),
+        });
+
+        let resp = self
             .client
-            .post(&create_url)
+            .post(&url)
             .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .json(&event)
+            .json(&payload)
             .send()
             .await?;
-        if !create_resp.status().is_success() {
+        if !resp.status().is_success() {
             return Err(IntervalsError::Config(format!(
                 "unexpected status: {}",
-                create_resp.status()
+                resp.status()
             )));
         }
-        Ok(create_resp.json().await?)
+        Ok(resp.json().await?)
     }
 
     // === Performance Curves ===
@@ -1083,7 +1074,7 @@ impl IntervalsClient for ReqwestIntervalsClient {
 
     async fn get_workout_library(&self) -> Result<serde_json::Value, IntervalsError> {
         let url = format!(
-            "{}/api/v1/athlete/{}/workout-folders",
+            "{}/api/v1/athlete/{}/folders",
             self.base_url, self.athlete_id
         );
         let resp = self
@@ -1106,8 +1097,8 @@ impl IntervalsClient for ReqwestIntervalsClient {
         folder_id: &str,
     ) -> Result<serde_json::Value, IntervalsError> {
         let url = format!(
-            "{}/api/v1/athlete/{}/workout-folders/{}/workouts",
-            self.base_url, self.athlete_id, folder_id
+            "{}/api/v1/athlete/{}/workouts",
+            self.base_url, self.athlete_id
         );
         let resp = self
             .client
@@ -1121,7 +1112,26 @@ impl IntervalsClient for ReqwestIntervalsClient {
                 resp.status()
             )));
         }
-        Ok(resp.json().await?)
+        let workouts: serde_json::Value = resp.json().await?;
+        if folder_id.is_empty() {
+            return Ok(workouts);
+        }
+
+        let target_id = folder_id.parse::<i64>().ok();
+        if let Some(arr) = workouts.as_array() {
+            let filtered: Vec<serde_json::Value> = arr
+                .iter()
+                .filter(|item| match (target_id, item.get("folder_id")) {
+                    (Some(fid), Some(val)) => val.as_i64() == Some(fid),
+                    (_, Some(val)) => val.as_str() == Some(folder_id),
+                    _ => false,
+                })
+                .cloned()
+                .collect();
+            return Ok(serde_json::Value::Array(filtered));
+        }
+
+        Ok(workouts)
     }
 
     // === Gear Management ===
@@ -1198,7 +1208,7 @@ impl IntervalsClient for ReqwestIntervalsClient {
         reminder: &serde_json::Value,
     ) -> Result<serde_json::Value, IntervalsError> {
         let url = format!(
-            "{}/api/v1/athlete/{}/gear/{}/reminders",
+            "{}/api/v1/athlete/{}/gear/{}/reminder",
             self.base_url, self.athlete_id, gear_id
         );
         let resp = self
@@ -1221,16 +1231,22 @@ impl IntervalsClient for ReqwestIntervalsClient {
         &self,
         gear_id: &str,
         reminder_id: &str,
+        reset: bool,
+        snooze_days: u32,
         fields: &serde_json::Value,
     ) -> Result<serde_json::Value, IntervalsError> {
         let url = format!(
-            "{}/api/v1/athlete/{}/gear/{}/reminders/{}",
+            "{}/api/v1/athlete/{}/gear/{}/reminder/{}",
             self.base_url, self.athlete_id, gear_id, reminder_id
         );
         let resp = self
             .client
             .put(&url)
             .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .query(&[
+                ("reset", reset.to_string()),
+                ("snoozeDays", snooze_days.to_string()),
+            ])
             .json(fields)
             .send()
             .await?;
@@ -1248,6 +1264,7 @@ impl IntervalsClient for ReqwestIntervalsClient {
     async fn update_sport_settings(
         &self,
         sport_type: &str,
+        recalc_hr_zones: bool,
         fields: &serde_json::Value,
     ) -> Result<serde_json::Value, IntervalsError> {
         let url = format!(
@@ -1258,6 +1275,7 @@ impl IntervalsClient for ReqwestIntervalsClient {
             .client
             .put(&url)
             .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .query(&[("recalcHrZones", recalc_hr_zones)])
             .json(fields)
             .send()
             .await?;
@@ -1273,21 +1291,18 @@ impl IntervalsClient for ReqwestIntervalsClient {
     async fn apply_sport_settings(
         &self,
         sport_type: &str,
-        start_date: Option<&str>,
     ) -> Result<serde_json::Value, IntervalsError> {
         let url = format!(
             "{}/api/v1/athlete/{}/sport-settings/{}/apply",
             self.base_url, self.athlete_id, sport_type
         );
         // Per API spec this is a PUT endpoint (apply settings). Use PUT to avoid 405 errors.
-        let mut req = self
+        let resp = self
             .client
             .put(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()));
-        if let Some(date) = start_date {
-            req = req.query(&[("startDate", date)]);
-        }
-        let resp = req.send().await?;
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .send()
+            .await?;
         if !resp.status().is_success() {
             return Err(IntervalsError::Config(format!(
                 "unexpected status: {}",

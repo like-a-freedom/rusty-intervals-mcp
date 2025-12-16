@@ -21,7 +21,7 @@ async fn apply_sport_settings_uses_put() {
 
     let client =
         ReqwestIntervalsClient::new(&mock_server.uri(), athlete, SecretString::new("key".into()));
-    let res = client.apply_sport_settings(sport, Some("2025-12-15")).await;
+    let res = client.apply_sport_settings(sport).await;
     assert!(res.is_ok());
     let v = res.unwrap();
     assert_eq!(v.get("status").and_then(|s| s.as_str()), Some("ok"));

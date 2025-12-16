@@ -108,13 +108,17 @@ pub struct SearchParams {
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct IntervalSearchParams {
     /// Minimum time for interval (seconds)
-    pub min_secs: Option<u32>,
+    pub min_secs: u32,
     /// Maximum time for interval (seconds)
-    pub max_secs: Option<u32>,
+    pub max_secs: u32,
     /// Minimum intensity percentage (0-100)
-    pub min_intensity: Option<u32>,
+    pub min_intensity: u32,
     /// Maximum intensity percentage (0-100)
-    pub max_intensity: Option<u32>,
+    pub max_intensity: u32,
+    #[serde(rename = "type")]
+    pub interval_type: Option<String>,
+    pub min_reps: Option<u32>,
+    pub max_reps: Option<u32>,
     pub limit: Option<u32>,
 }
 
@@ -206,7 +210,8 @@ pub struct BulkDeleteEventsParams {
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct DuplicateEventParams {
     pub event_id: EventId,
-    pub target_date: String,
+    pub num_copies: Option<u32>,
+    pub weeks_between: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -240,6 +245,8 @@ pub struct CreateGearReminderParams {
 pub struct UpdateGearReminderParams {
     pub gear_id: String,
     pub reminder_id: String,
+    pub reset: bool,
+    pub snooze_days: u32,
     pub fields: serde_json::Value,
 }
 
@@ -251,13 +258,13 @@ pub struct SportTypeParam {
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct UpdateSportSettingsParams {
     pub sport_type: String,
+    pub recalc_hr_zones: bool,
     pub fields: serde_json::Value,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct ApplySportSettingsParams {
     pub sport_type: String,
-    pub start_date: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -1001,6 +1008,9 @@ impl IntervalsMcpHandler {
                 p.max_secs,
                 p.min_intensity,
                 p.max_intensity,
+                p.interval_type,
+                p.min_reps,
+                p.max_reps,
                 p.limit,
             )
             .await
@@ -1199,10 +1209,12 @@ impl IntervalsMcpHandler {
         let event_id = p.event_id.as_cow().into_owned();
         let v = self
             .client
-            .duplicate_event(&event_id, &p.target_date)
+            .duplicate_event(&event_id, p.num_copies, p.weeks_between)
             .await
             .map_err(|e| e.to_string())?;
-        Ok(Json(ObjectResult { value: v }))
+        Ok(Json(ObjectResult {
+            value: serde_json::to_value(v).map_err(|e| e.to_string())?,
+        }))
     }
 
     // === Performance Curves ===
@@ -1343,7 +1355,13 @@ impl IntervalsMcpHandler {
         let p = params.0;
         let v = self
             .client
-            .update_gear_reminder(&p.gear_id, &p.reminder_id, &p.fields)
+            .update_gear_reminder(
+                &p.gear_id,
+                &p.reminder_id,
+                p.reset,
+                p.snooze_days,
+                &p.fields,
+            )
             .await
             .map_err(|e| e.to_string())?;
         Ok(Json(ObjectResult { value: v }))
@@ -1362,7 +1380,7 @@ impl IntervalsMcpHandler {
         let p = params.0;
         let v = self
             .client
-            .update_sport_settings(&p.sport_type, &p.fields)
+            .update_sport_settings(&p.sport_type, p.recalc_hr_zones, &p.fields)
             .await
             .map_err(|e| e.to_string())?;
         Ok(Json(ObjectResult { value: v }))
@@ -1379,7 +1397,7 @@ impl IntervalsMcpHandler {
         let p = params.0;
         let v = self
             .client
-            .apply_sport_settings(&p.sport_type, p.start_date.as_deref())
+            .apply_sport_settings(&p.sport_type)
             .await
             .map_err(|e| e.to_string())?;
         Ok(Json(ObjectResult { value: v }))
@@ -1896,10 +1914,13 @@ mod tests {
         }
         async fn search_intervals(
             &self,
-            _min_secs: Option<u32>,
-            _max_secs: Option<u32>,
-            _min_intensity: Option<u32>,
-            _max_intensity: Option<u32>,
+            _min_secs: u32,
+            _max_secs: u32,
+            _min_intensity: u32,
+            _max_intensity: u32,
+            _interval_type: Option<String>,
+            _min_reps: Option<u32>,
+            _max_reps: Option<u32>,
             _limit: Option<u32>,
         ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
             Ok(serde_json::json!({}))
@@ -1968,9 +1989,11 @@ mod tests {
         async fn duplicate_event(
             &self,
             _event_id: &str,
-            _target_date: &str,
-        ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
-            Ok(serde_json::json!({}))
+            _num_copies: Option<u32>,
+            _weeks_between: Option<u32>,
+        ) -> Result<Vec<intervals_icu_client::Event>, intervals_icu_client::IntervalsError>
+        {
+            Ok(vec![])
         }
         async fn get_hr_curves(
             &self,
@@ -2027,6 +2050,8 @@ mod tests {
             &self,
             _gear_id: &str,
             _reminder_id: &str,
+            _reset: bool,
+            _snooze_days: u32,
             _fields: &serde_json::Value,
         ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
             Ok(serde_json::json!({}))
@@ -2034,6 +2059,7 @@ mod tests {
         async fn update_sport_settings(
             &self,
             _sport_type: &str,
+            _recalc_hr_zones: bool,
             _fields: &serde_json::Value,
         ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
             Ok(serde_json::json!({}))
@@ -2041,7 +2067,6 @@ mod tests {
         async fn apply_sport_settings(
             &self,
             _sport_type: &str,
-            _start_date: Option<&str>,
         ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
             Ok(serde_json::json!({}))
         }

@@ -486,6 +486,15 @@ Note: Intervals.icu event IDs are numeric; the MCP tools accept either numbers o
 | `create_sport_settings` | Create new sport-specific settings |
 | `delete_sport_settings` | Delete sport-specific settings |
 
+### API Compliance Notes
+
+- Activity search calls `/activities/search` and `/activities/search-full`.
+- Interval search requires `minSecs`, `maxSecs`, `minIntensity`, and `maxIntensity`; optional `type`, `minReps`, and `maxReps` are supported.
+- Bulk event deletion uses `PUT /events/bulk-delete`; event duplication uses `/duplicate-events` with `numCopies` and `weeksBetween`.
+- Gear reminders use `/gear/{gearId}/reminder` endpoints; updates require `reset` and `snoozeDays` query parameters.
+- Sport settings updates require `recalcHrZones`; apply is a `PUT` with no start date parameter.
+- Workout library endpoints use `/folders` and `/workouts` (folder filtering is applied client-side).
+
 ## MCP Resources
 
 Resources provide ongoing context to the LLM without requiring explicit tool calls:

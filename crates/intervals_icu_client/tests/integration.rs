@@ -348,3 +348,234 @@ async fn power_curves_and_histogram_ok() {
     let h = client.get_gap_histogram("a1").await.expect("hist");
     assert!(h.get("bins").is_some());
 }
+
+#[tokio::test]
+async fn search_activities_uses_search_endpoints() {
+    let server = MockServer::start().await;
+
+    let list_body = serde_json::json!([{ "id": "a1", "name": "Ride" }]);
+    Mock::given(method("GET"))
+        .and(path("/api/v1/athlete/ath/activities/search"))
+        .and(query_param("query", "run"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&list_body))
+        .mount(&server)
+        .await;
+
+    let full_body = serde_json::json!({ "items": [ {"id": "a2"} ] });
+    Mock::given(method("GET"))
+        .and(path("/api/v1/athlete/ath/activities/search-full"))
+        .and(query_param("query", "ride"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&full_body))
+        .mount(&server)
+        .await;
+
+    let client = intervals_icu_client::http_client::ReqwestIntervalsClient::new(
+        &server.uri(),
+        "ath",
+        SecretString::new("tok".into()),
+    );
+
+    let res = client
+        .search_activities("run", None)
+        .await
+        .expect("search list");
+    assert_eq!(res.len(), 1);
+
+    let full = client
+        .search_activities_full("ride", None)
+        .await
+        .expect("search full");
+    assert!(full.get("items").is_some());
+}
+
+#[tokio::test]
+async fn search_intervals_sends_required_params() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/athlete/ath/activities/interval-search"))
+        .and(query_param("minSecs", "30"))
+        .and(query_param("maxSecs", "60"))
+        .and(query_param("minIntensity", "90"))
+        .and(query_param("maxIntensity", "110"))
+        .and(query_param("type", "POWER"))
+        .and(query_param("minReps", "2"))
+        .and(query_param("maxReps", "4"))
+        .and(query_param("limit", "5"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true})))
+        .mount(&server)
+        .await;
+
+    let client = intervals_icu_client::http_client::ReqwestIntervalsClient::new(
+        &server.uri(),
+        "ath",
+        SecretString::new("tok".into()),
+    );
+
+    let res = client
+        .search_intervals(
+            30,
+            60,
+            90,
+            110,
+            Some("POWER".into()),
+            Some(2),
+            Some(4),
+            Some(5),
+        )
+        .await
+        .expect("search intervals");
+    assert!(res.get("ok").is_some());
+}
+
+#[tokio::test]
+async fn bulk_delete_events_hits_bulk_endpoint() {
+    let server = MockServer::start().await;
+    Mock::given(method("PUT"))
+        .and(path("/api/v1/athlete/ath/events/bulk-delete"))
+        .and(wiremock::matchers::body_json(
+            serde_json::json!([{ "id": "1" }]),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"eventsDeleted":1})))
+        .mount(&server)
+        .await;
+
+    let client = intervals_icu_client::http_client::ReqwestIntervalsClient::new(
+        &server.uri(),
+        "ath",
+        SecretString::new("tok".into()),
+    );
+
+    client
+        .bulk_delete_events(vec!["1".into()])
+        .await
+        .expect("bulk delete");
+}
+
+#[tokio::test]
+async fn duplicate_event_uses_duplicate_events_api() {
+    let server = MockServer::start().await;
+    let response = serde_json::json!([{
+        "id": "2",
+        "start_date_local": "2025-12-22",
+        "name": "Copy",
+        "category": "NOTE"
+    }]);
+
+    Mock::given(method("POST"))
+        .and(path("/api/v1/athlete/ath/duplicate-events"))
+        .and(wiremock::matchers::body_json(serde_json::json!({
+            "eventIds": ["1"],
+            "numCopies": 2,
+            "weeksBetween": 1
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&response))
+        .mount(&server)
+        .await;
+
+    let client = intervals_icu_client::http_client::ReqwestIntervalsClient::new(
+        &server.uri(),
+        "ath",
+        SecretString::new("tok".into()),
+    );
+
+    let out = client
+        .duplicate_event("1", Some(2), Some(1))
+        .await
+        .expect("duplicate");
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].id.as_deref(), Some("2"));
+}
+
+#[tokio::test]
+async fn workout_library_and_folder_paths_match_spec() {
+    let server = MockServer::start().await;
+    let folders = serde_json::json!([{ "id": 10, "name": "Base" }]);
+    Mock::given(method("GET"))
+        .and(path("/api/v1/athlete/ath/folders"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&folders))
+        .mount(&server)
+        .await;
+
+    let workouts = serde_json::json!([
+        { "id": 1, "folder_id": 10 },
+        { "id": 2, "folder_id": 20 }
+    ]);
+    Mock::given(method("GET"))
+        .and(path("/api/v1/athlete/ath/workouts"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&workouts))
+        .mount(&server)
+        .await;
+
+    let client = intervals_icu_client::http_client::ReqwestIntervalsClient::new(
+        &server.uri(),
+        "ath",
+        SecretString::new("tok".into()),
+    );
+
+    let lib = client.get_workout_library().await.expect("folders");
+    assert_eq!(lib.as_array().map(|a| a.len()), Some(1));
+
+    let filtered = client.get_workouts_in_folder("10").await.expect("workouts");
+    let arr = filtered.as_array().cloned().unwrap_or_default();
+    assert_eq!(arr.len(), 1);
+    assert_eq!(arr[0].get("id").and_then(|v| v.as_i64()), Some(1));
+}
+
+#[tokio::test]
+async fn gear_reminder_update_sends_required_query() {
+    let server = MockServer::start().await;
+    Mock::given(method("PUT"))
+        .and(path("/api/v1/athlete/ath/gear/g1/reminder/5"))
+        .and(query_param("reset", "true"))
+        .and(query_param("snoozeDays", "7"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"id": 5})))
+        .mount(&server)
+        .await;
+
+    let client = intervals_icu_client::http_client::ReqwestIntervalsClient::new(
+        &server.uri(),
+        "ath",
+        SecretString::new("tok".into()),
+    );
+
+    let out = client
+        .update_gear_reminder("g1", "5", true, 7, &serde_json::json!({"note": "hi"}))
+        .await
+        .expect("update reminder");
+    assert!(out.get("id").is_some());
+}
+
+#[tokio::test]
+async fn sport_settings_update_includes_recalc_flag() {
+    let server = MockServer::start().await;
+    Mock::given(method("PUT"))
+        .and(path("/api/v1/athlete/ath/sport-settings/Run"))
+        .and(query_param("recalcHrZones", "true"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true})))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("PUT"))
+        .and(path("/api/v1/athlete/ath/sport-settings/Run/apply"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true})))
+        .mount(&server)
+        .await;
+
+    let client = intervals_icu_client::http_client::ReqwestIntervalsClient::new(
+        &server.uri(),
+        "ath",
+        SecretString::new("tok".into()),
+    );
+
+    let v = client
+        .update_sport_settings("Run", true, &serde_json::json!({"ftp": 250}))
+        .await
+        .expect("update settings");
+    assert!(v.get("ok").is_some());
+
+    let applied = client
+        .apply_sport_settings("Run")
+        .await
+        .expect("apply settings");
+    assert!(applied.get("ok").is_some());
+}

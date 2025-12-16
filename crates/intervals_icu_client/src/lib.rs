@@ -161,12 +161,16 @@ pub trait IntervalsClient: Send + Sync + 'static {
     ) -> Result<serde_json::Value, IntervalsError>;
 
     /// Search intervals within activities
+    #[allow(clippy::too_many_arguments)]
     async fn search_intervals(
         &self,
-        min_secs: Option<u32>,
-        max_secs: Option<u32>,
-        min_intensity: Option<u32>,
-        max_intensity: Option<u32>,
+        min_secs: u32,
+        max_secs: u32,
+        min_intensity: u32,
+        max_intensity: u32,
+        interval_type: Option<String>,
+        min_reps: Option<u32>,
+        max_reps: Option<u32>,
         limit: Option<u32>,
     ) -> Result<serde_json::Value, IntervalsError>;
 
@@ -233,8 +237,9 @@ pub trait IntervalsClient: Send + Sync + 'static {
     async fn duplicate_event(
         &self,
         event_id: &str,
-        target_date: &str,
-    ) -> Result<serde_json::Value, IntervalsError>;
+        num_copies: Option<u32>,
+        weeks_between: Option<u32>,
+    ) -> Result<Vec<Event>, IntervalsError>;
 
     // === Performance Curves ===
 
@@ -293,6 +298,8 @@ pub trait IntervalsClient: Send + Sync + 'static {
         &self,
         gear_id: &str,
         reminder_id: &str,
+        reset: bool,
+        snooze_days: u32,
         fields: &serde_json::Value,
     ) -> Result<serde_json::Value, IntervalsError>;
 
@@ -302,6 +309,7 @@ pub trait IntervalsClient: Send + Sync + 'static {
     async fn update_sport_settings(
         &self,
         sport_type: &str,
+        recalc_hr_zones: bool,
         fields: &serde_json::Value,
     ) -> Result<serde_json::Value, IntervalsError>;
 
@@ -309,7 +317,6 @@ pub trait IntervalsClient: Send + Sync + 'static {
     async fn apply_sport_settings(
         &self,
         sport_type: &str,
-        start_date: Option<&str>,
     ) -> Result<serde_json::Value, IntervalsError>;
 
     /// Create new sport settings
