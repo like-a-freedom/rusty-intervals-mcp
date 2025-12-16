@@ -127,8 +127,12 @@ async fn best_efforts_returns_payload() {
 #[tokio::test]
 async fn create_event_validates_date_and_posts() {
     let server = MockServer::start().await;
-    let input =
-        serde_json::json!({"start_date_local":"2025-12-15","name":"Test","category":"NOTE"});
+    let input = serde_json::json!({
+        "id": "evt-1",
+        "start_date_local":"2025-12-15",
+        "name":"Test",
+        "category":"NOTE"
+    });
     Mock::given(method("POST"))
         .and(path("/api/v1/athlete/ath/events"))
         .respond_with(ResponseTemplate::new(201).set_body_json(&input))

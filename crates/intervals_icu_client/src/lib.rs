@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
 
 pub mod config;
@@ -53,12 +53,27 @@ pub enum EventCategory {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, JsonSchema)]
 pub struct Event {
+    #[serde(default, deserialize_with = "deserialize_opt_string")]
     pub id: Option<String>,
     #[serde(rename = "start_date_local")]
     pub start_date_local: String, // YYYY-MM-DD
     pub name: String,
     pub category: EventCategory,
     pub description: Option<String>,
+}
+
+fn deserialize_opt_string<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use serde::de::Error;
+    let value: Option<serde_json::Value> = Option::deserialize(deserializer)?;
+    match value {
+        None => Ok(None),
+        Some(serde_json::Value::String(s)) => Ok(Some(s)),
+        Some(serde_json::Value::Number(n)) => Ok(n.to_string().into()),
+        Some(other) => Err(D::Error::custom(format!("expected string or number, got {other}"))),
+    }
 }
 
 #[async_trait]
