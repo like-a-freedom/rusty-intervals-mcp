@@ -35,6 +35,24 @@ jobs:
       - name: Run tests
         run: cargo test --all --no-fail-fast
 
+      - name: Install cargo-tarpaulin
+        if: runner.os == 'Linux'
+        run: cargo install cargo-tarpaulin --version 0.34.1
+
+      - name: Run coverage (tarpaulin)
+        if: runner.os == 'Linux'
+        run: cargo tarpaulin --out Xml --ciserver github --run-types Tests --timeout 120
+
+      - name: Upload coverage to Codecov
+        if: runner.os == 'Linux'
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./cobertura.xml
+          flags: coverage
+          verbose: true
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
   build_binaries:
     name: Build ${{ matrix.platform.os_name }}
     if: github.event_name == 'release'
