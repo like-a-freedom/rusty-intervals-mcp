@@ -101,7 +101,8 @@ pub struct ActivityIdParam {
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct SearchParams {
-    pub query: String,
+    #[serde(rename = "q")]
+    pub q: String,
     pub limit: Option<u32>,
 }
 
@@ -494,7 +495,7 @@ impl IntervalsMcpHandler {
         let p = params.0;
         let acts = self
             .client
-            .search_activities(&p.query, p.limit)
+            .search_activities(&p.q, p.limit)
             .await
             .map_err(|e| e.to_string())?;
         let out = acts
@@ -518,7 +519,7 @@ impl IntervalsMcpHandler {
         let p = params.0;
         let v = self
             .client
-            .search_activities_full(&p.query, p.limit)
+            .search_activities_full(&p.q, p.limit)
             .await
             .map_err(|e| e.to_string())?;
         Ok(Json(ObjectResult { value: v }))
