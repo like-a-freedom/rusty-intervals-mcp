@@ -10,6 +10,9 @@ use wiremock::{
 
 #[tokio::test]
 async fn e2e_stdio_lists_tools_and_calls_profile() {
+    const TEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
+
+    tokio::time::timeout(TEST_TIMEOUT, async {
     // Start a mock Intervals API
     let mock = MockServer::start().await;
 
@@ -108,4 +111,7 @@ async fn e2e_stdio_lists_tools_and_calls_profile() {
     assert!(v.get("id").is_some());
 
     service.cancel().await.expect("cancel");
+    })
+    .await
+    .unwrap_or_else(|_| panic!("e2e_stdio_lists_tools_and_calls_profile timed out after {TEST_TIMEOUT:?}"));
 }
