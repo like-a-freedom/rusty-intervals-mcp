@@ -41,7 +41,7 @@ jobs:
 
       - name: Run coverage (tarpaulin)
         if: runner.os == 'Linux'
-        run: cargo tarpaulin --out Xml --ciserver github --run-types Tests --timeout 120
+        run: cargo tarpaulin --out Xml --ciserver github --run-types Tests --timeout 300
 
       - name: Upload coverage to Codecov
         if: runner.os == 'Linux'
