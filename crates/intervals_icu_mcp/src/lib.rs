@@ -2349,7 +2349,11 @@ mod tests {
         // training plan review prompt contains upcoming/workouts hints
         let review = crate::prompts::training_plan_review_prompt("2025-02-01");
         let s_review = serde_json::to_string(&review).unwrap().to_lowercase();
-        assert!(s_review.contains("upcoming") || s_review.contains("workout") || s_review.contains("training plan"));
+        assert!(
+            s_review.contains("upcoming")
+                || s_review.contains("workout")
+                || s_review.contains("training plan")
+        );
 
         // analyze recent training prompt contains analysis wording
         let ar = crate::prompts::analyze_recent_training_prompt(14);

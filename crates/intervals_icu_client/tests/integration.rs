@@ -276,7 +276,10 @@ async fn get_activities_around_includes_route_and_limit_query() {
         SecretString::new("tok".into()),
     );
 
-    let res = client.get_activities_around("a1", Some(5), Some(42)).await.expect("ok");
+    let res = client
+        .get_activities_around("a1", Some(5), Some(42))
+        .await
+        .expect("ok");
     assert!(res.get("items").is_some());
 }
 
@@ -331,7 +334,9 @@ async fn download_activity_file_in_memory_sends_progress_and_returns_base64() {
     assert_eq!(msg.bytes_downloaded, body.len() as u64);
 
     // Result should be base64-encoded bytes
-    let decoded = base64::engine::general_purpose::STANDARD.decode(res.unwrap()).unwrap();
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(res.unwrap())
+        .unwrap();
     assert_eq!(decoded, body);
     // cancel channel should not be triggered
     let _ = cancel_tx;
@@ -450,7 +455,9 @@ async fn download_activity_file_with_progress_writes_file_and_sends_progress() {
 
     // Expect at least one progress update and that total_bytes is reported
     let mut got_progress = false;
-    while let Ok(Some(msg)) = tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await {
+    while let Ok(Some(msg)) =
+        tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await
+    {
         if msg.bytes_downloaded > 0 {
             got_progress = true;
             assert!(msg.total_bytes.is_some());
@@ -868,7 +875,11 @@ async fn get_athlete_profile_handles_non_success() {
         .mount(&server)
         .await;
 
-    let client = intervals_icu_client::http_client::ReqwestIntervalsClient::new(&server.uri(), "ath", SecretString::new("tok".into()));
+    let client = intervals_icu_client::http_client::ReqwestIntervalsClient::new(
+        &server.uri(),
+        "ath",
+        SecretString::new("tok".into()),
+    );
     let res = client.get_athlete_profile().await;
     assert!(res.is_err());
     match res.err().unwrap() {
@@ -889,7 +900,11 @@ async fn create_event_handles_non_success() {
         .mount(&server)
         .await;
 
-    let client = intervals_icu_client::http_client::ReqwestIntervalsClient::new(&server.uri(), "ath", SecretString::new("tok".into()));
+    let client = intervals_icu_client::http_client::ReqwestIntervalsClient::new(
+        &server.uri(),
+        "ath",
+        SecretString::new("tok".into()),
+    );
     let event = intervals_icu_client::Event {
         id: None,
         start_date_local: "2025-12-15".into(),
@@ -916,7 +931,11 @@ async fn download_activity_file_with_progress_sends_progress() {
         .mount(&server)
         .await;
 
-    let client = intervals_icu_client::http_client::ReqwestIntervalsClient::new(&server.uri(), "ath", SecretString::new("tok".into()));
+    let client = intervals_icu_client::http_client::ReqwestIntervalsClient::new(
+        &server.uri(),
+        "ath",
+        SecretString::new("tok".into()),
+    );
     let (tx, mut rx) = tokio::sync::mpsc::channel(2);
     let (_cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
 
@@ -1027,7 +1046,10 @@ async fn download_activity_file_large_body_returns_base64() {
         SecretString::new("tok".into()),
     );
 
-    let res = client.download_activity_file("a1", None).await.expect("download");
+    let res = client
+        .download_activity_file("a1", None)
+        .await
+        .expect("download");
     assert!(res.is_some());
     let encoded = res.unwrap();
     let decoded = STANDARD.decode(encoded.as_bytes()).expect("base64 decode");
@@ -1050,7 +1072,10 @@ async fn download_activity_file_small_body_returns_base64() {
         SecretString::new("tok".into()),
     );
 
-    let res = client.download_activity_file("a1", None).await.expect("download");
+    let res = client
+        .download_activity_file("a1", None)
+        .await
+        .expect("download");
     assert!(res.is_some());
     let encoded = res.unwrap();
     let decoded = STANDARD.decode(encoded.as_bytes()).expect("base64 decode");
@@ -1142,7 +1167,10 @@ async fn get_workouts_in_folder_handles_string_folder_id() {
         SecretString::new("tok".into()),
     );
 
-    let filtered = client.get_workouts_in_folder("fav").await.expect("workouts");
+    let filtered = client
+        .get_workouts_in_folder("fav")
+        .await
+        .expect("workouts");
     let arr = filtered.as_array().cloned().unwrap_or_default();
     assert_eq!(arr.len(), 1);
     assert_eq!(arr[0].get("id").and_then(|v| v.as_i64()), Some(1));
@@ -1195,7 +1223,11 @@ async fn delete_event_handles_non_success() {
         .mount(&server)
         .await;
 
-    let client = intervals_icu_client::http_client::ReqwestIntervalsClient::new(&server.uri(), "ath", SecretString::new("tok".into()));
+    let client = intervals_icu_client::http_client::ReqwestIntervalsClient::new(
+        &server.uri(),
+        "ath",
+        SecretString::new("tok".into()),
+    );
     let res = client.delete_event("evt1").await;
     assert!(res.is_err());
 }
@@ -1259,7 +1291,11 @@ async fn download_activity_file_with_progress_can_be_cancelled() {
         let client = client.clone();
         let path = path.clone();
         let tx = tx.clone();
-        async move { client.download_activity_file_with_progress("a1", Some(path), tx, cancel_rx).await }
+        async move {
+            client
+                .download_activity_file_with_progress("a1", Some(path), tx, cancel_rx)
+                .await
+        }
     });
 
     // wait for first progress (produced after first chunk is written)
@@ -1396,4 +1432,3 @@ async fn get_workouts_in_folder_empty_folder_id_returns_all() {
     let arr = all.as_array().cloned().unwrap_or_default();
     assert_eq!(arr.len(), 2);
 }
-
