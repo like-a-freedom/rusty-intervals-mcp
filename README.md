@@ -10,9 +10,9 @@ A high-performance Model Context Protocol (MCP) server for Intervals.icu written
 
 ## Overview
 
-This MCP server provides **53 tools** to interact with your Intervals.icu account, organized into 9 categories:
+This MCP server provides **54 tools** to interact with your Intervals.icu account, organized into 9 categories:
 
-- **Activities** (10 tools) - Query, search, update, delete, and download activities
+- **Activities** (11 tools) - Query, search, update, delete, and download activities
 - **Activity Analysis** (8 tools) - Deep dive into streams, intervals, best efforts, and histograms
 - **Athlete** (2 tools) - Access profile, fitness metrics, and training load
 - **Wellness** (3 tools) - Track and update recovery, HRV, sleep, and health metrics
@@ -402,6 +402,7 @@ Use built-in prompt templates for common queries:
 | `get_activity_details` | Get comprehensive details for a specific activity |
 | `search_activities` | Search activities by name or tag |
 | `search_activities_full` | Search activities with full details |
+| `get_activities_csv` | Download activities as CSV |
 | `get_activities_around` | Get activities before and after a specific one |
 | `update_activity` | Update activity name, description, or metadata |
 | `delete_activity` | Delete an activity |

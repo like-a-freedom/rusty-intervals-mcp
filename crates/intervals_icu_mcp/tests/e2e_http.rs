@@ -95,6 +95,9 @@ impl IntervalsClient for LocalMockClient {
     ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
         Ok(serde_json::json!([]))
     }
+    async fn get_activities_csv(&self) -> Result<String, intervals_icu_client::IntervalsError> {
+        Ok("id,start_date_local,name\n1,2025-10-18,Run".into())
+    }
     async fn update_activity(
         &self,
         _activity_id: &str,
@@ -190,6 +193,8 @@ impl IntervalsClient for LocalMockClient {
     ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
         Ok(serde_json::json!({}))
     }
+
+
     async fn get_hr_histogram(
         &self,
         _activity_id: &str,
@@ -414,3 +419,5 @@ async fn e2e_webhook_and_profile() {
         .unwrap();
     assert!(res.status().is_success());
 }
+
+

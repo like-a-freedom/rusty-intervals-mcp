@@ -431,6 +431,26 @@ impl IntervalsClient for ReqwestIntervalsClient {
         Ok(resp.json().await?)
     }
 
+    async fn get_activities_csv(&self) -> Result<String, IntervalsError> {
+        let url = format!(
+            "{}/api/v1/athlete/{}/activities.csv",
+            self.base_url, self.athlete_id
+        );
+        let resp = self
+            .client
+            .get(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(IntervalsError::Config(format!(
+                "unexpected status: {}",
+                resp.status()
+            )));
+        }
+        Ok(resp.text().await?)
+    }
+
     async fn update_activity(
         &self,
         activity_id: &str,

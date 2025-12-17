@@ -525,6 +525,21 @@ impl IntervalsMcpHandler {
         Ok(Json(ObjectResult { value: v }))
     }
 
+    #[tool(
+        name = "get_activities_csv",
+        description = "Download activities as CSV"
+    )]
+    async fn get_activities_csv(&self) -> Result<Json<ObjectResult>, String> {
+        let v = self
+            .client
+            .get_activities_csv()
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(Json(ObjectResult {
+            value: serde_json::json!({ "csv": v }),
+        }))
+    }
+
     #[tool(name = "update_activity", description = "Update activity fields")]
     async fn update_activity(
         &self,
@@ -1709,6 +1724,7 @@ mod tests {
         assert!(tools.iter().any(|t| t.name == "get_power_histogram"));
         assert!(tools.iter().any(|t| t.name == "get_hr_histogram"));
         assert!(tools.iter().any(|t| t.name == "get_pace_histogram"));
+        assert!(tools.iter().any(|t| t.name == "get_activities_csv"));
         assert!(tools.iter().any(|t| t.name == "get_fitness_summary"));
         assert!(tools.iter().any(|t| t.name == "get_wellness"));
         assert!(tools.iter().any(|t| t.name == "get_wellness_for_date"));
@@ -1731,7 +1747,7 @@ mod tests {
         assert!(tools.iter().any(|t| t.name == "create_sport_settings"));
         assert!(tools.iter().any(|t| t.name == "delete_sport_settings"));
         // Ensure the number of registered tools matches the documented implementation
-        assert_eq!(handler.tool_count(), 53, "Should register 53 tools");
+        assert_eq!(handler.tool_count(), 54, "Should register 54 tools");
     }
 
     use async_trait::async_trait;
@@ -1933,6 +1949,10 @@ mod tests {
             _activity_id: &str,
         ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
             Ok(serde_json::json!({}))
+        }
+
+        async fn get_activities_csv(&self) -> Result<String, intervals_icu_client::IntervalsError> {
+            Ok("id,start_date_local,name\n1,2025-10-18,Run".into())
         }
         async fn get_hr_histogram(
             &self,

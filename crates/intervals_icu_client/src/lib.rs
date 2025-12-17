@@ -122,6 +122,8 @@ pub trait IntervalsClient: Send + Sync + 'static {
         query: &str,
         limit: Option<u32>,
     ) -> Result<serde_json::Value, IntervalsError>;
+    /// Download activities as CSV
+    async fn get_activities_csv(&self) -> Result<String, IntervalsError>;
     async fn update_activity(
         &self,
         activity_id: &str,

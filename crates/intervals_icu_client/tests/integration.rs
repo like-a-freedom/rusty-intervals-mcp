@@ -638,6 +638,19 @@ async fn search_activities_uses_search_endpoints() {
         .await
         .expect("search full");
     assert!(full.get("items").is_some());
+
+    // activities.csv
+    Mock::given(method("GET"))
+        .and(path("/api/v1/athlete/ath/activities.csv"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string("id,start_date_local,name\n1,2025-10-18,Run"),
+        )
+        .mount(&server)
+        .await;
+
+    let csv = client.get_activities_csv().await.expect("csv");
+    assert!(csv.contains("start_date_local"));
 }
 
 #[tokio::test]

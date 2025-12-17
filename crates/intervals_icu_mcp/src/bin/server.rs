@@ -205,6 +205,9 @@ mod test_helpers {
         ) -> Result<Option<String>, intervals_icu_client::IntervalsError> {
             Ok(None)
         }
+        async fn get_activities_csv(&self) -> Result<String, intervals_icu_client::IntervalsError> {
+            Ok("id,start_date_local,name\n1,2025-10-18,Run".into())
+        }
         async fn search_intervals(
             &self,
             _min_secs: u32,
@@ -654,6 +657,11 @@ mod tests {
                 _limit: Option<u32>,
             ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
                 Ok(serde_json::json!([]))
+            }
+            async fn get_activities_csv(
+                &self,
+            ) -> Result<String, intervals_icu_client::IntervalsError> {
+                Ok("id,start_date_local,name\n1,2025-10-18,Run".into())
             }
             async fn update_activity(
                 &self,
