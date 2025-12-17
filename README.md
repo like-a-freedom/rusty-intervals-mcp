@@ -538,8 +538,6 @@ and Windows (x86_64). Release artifacts are attached to GitHub releases.
 
 See `.github/workflows/ci.yml` for workflow details and `CONTRIBUTING.md` for how to run checks locally.
 
-This repository uploads coverage reports to Codecov when tests run on Linux runners. To enable uploading coverage to Codecov, add a `CODECOV_TOKEN` secret in **Settings → Secrets and variables → Actions** (or set an organization-level secret). Tarpaulin still runs and produces the coverage report even if no token is configured.
-
 ### Running Examples
 
 ```sh
