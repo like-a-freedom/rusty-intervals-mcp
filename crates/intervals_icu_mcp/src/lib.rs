@@ -2310,13 +2310,62 @@ mod tests {
         assert!(pd.description.unwrap().contains("activity act1"));
     }
 
+    #[test]
+    fn performance_and_plan_prompts_cover_branches() {
+        // performance-analysis: power family
+        let p_power = crate::prompts::performance_analysis_prompt("ride", 14);
+        let s_power = serde_json::to_string(&p_power).unwrap().to_lowercase();
+        assert!(s_power.contains("power") || s_power.contains("power curve"));
+
+        // performance-analysis: hr family
+        let p_hr = crate::prompts::performance_analysis_prompt("hr", 7);
+        let s_hr = serde_json::to_string(&p_hr).unwrap().to_lowercase();
+        assert!(s_hr.contains("hr") || s_hr.contains("get_hr_curves"));
+
+        // performance-analysis: default (pace)
+        let p_pace = crate::prompts::performance_analysis_prompt("run", 30);
+        let s_pace = serde_json::to_string(&p_pace).unwrap().to_lowercase();
+        assert!(s_pace.contains("pace") || s_pace.contains("get_pace_curves"));
+
+        // plan training week prompt contains focus and create_event hint
+        let plan = crate::prompts::plan_training_week_prompt("2025-01-01", "endurance");
+        let s_plan = serde_json::to_string(&plan).unwrap().to_lowercase();
+        assert!(s_plan.contains("endurance"));
+        assert!(s_plan.contains("create_event") || s_plan.contains("create events"));
+
+        // analyze and adapt plan prompt mentions period label and focus
+        let adapt = crate::prompts::analyze_and_adapt_plan_prompt("last month", "strength");
+        let s_adapt = serde_json::to_string(&adapt).unwrap().to_lowercase();
+        assert!(s_adapt.contains("last month") && s_adapt.contains("strength"));
+    }
+
+    #[test]
+    fn recovery_and_plan_review_prompts_cover_branches() {
+        // recovery check prompt mentions recovery/wellness/HRV
+        let rec = crate::prompts::recovery_check_prompt(7);
+        let s_rec = serde_json::to_string(&rec).unwrap().to_lowercase();
+        assert!(s_rec.contains("recovery") || s_rec.contains("hrv") || s_rec.contains("wellness"));
+
+        // training plan review prompt contains upcoming/workouts hints
+        let review = crate::prompts::training_plan_review_prompt("2025-02-01");
+        let s_review = serde_json::to_string(&review).unwrap().to_lowercase();
+        assert!(s_review.contains("upcoming") || s_review.contains("workout") || s_review.contains("training plan"));
+
+        // analyze recent training prompt contains analysis wording
+        let ar = crate::prompts::analyze_recent_training_prompt(14);
+        let s_ar = serde_json::to_string(&ar).unwrap().to_lowercase();
+        assert!(s_ar.contains("training analysis") || s_ar.contains("analyze my intervals"));
+    }
+
     #[tokio::test]
     async fn process_webhook_happy_and_duplicate_paths() {
         let client = MockClient;
         let handler = IntervalsMcpHandler::new(Arc::new(client));
 
         // missing secret -> error
-        let res = handler.process_webhook("deadbeef", serde_json::json!({ "id": "x" })).await;
+        let res = handler
+            .process_webhook("deadbeef", serde_json::json!({ "id": "x" }))
+            .await;
         assert!(res.is_err());
 
         handler.set_webhook_secret_value("s3cr3t").await;
@@ -2328,12 +2377,35 @@ mod tests {
         mac.update(&body);
         let sig = hex::encode(mac.finalize().into_bytes());
 
-        let r = handler.process_webhook(&sig, payload.clone()).await.expect("should succeed");
+        let r = handler
+            .process_webhook(&sig, payload.clone())
+            .await
+            .expect("should succeed");
         assert_eq!(r.value.get("ok").and_then(|v| v.as_bool()), Some(true));
 
         // duplicate should return duplicate:true
-        let r2 = handler.process_webhook(&sig, payload.clone()).await.expect("should return duplicate");
-        assert_eq!(r2.value.get("duplicate").and_then(|v| v.as_bool()), Some(true));
+        let r2 = handler
+            .process_webhook(&sig, payload.clone())
+            .await
+            .expect("should return duplicate");
+        assert_eq!(
+            r2.value.get("duplicate").and_then(|v| v.as_bool()),
+            Some(true)
+        );
+    }
+
+    #[tokio::test]
+    async fn process_webhook_signature_mismatch() {
+        let client = MockClient;
+        let handler = IntervalsMcpHandler::new(Arc::new(client));
+
+        // set secret, then call with an invalid signature to exercise the
+        // signature-mismatch branch
+        handler.set_webhook_secret_value("s3cr3t").await;
+        let payload = serde_json::json!({ "id": "x" });
+        let res = handler.process_webhook("deadbeef", payload).await;
+        assert!(res.is_err());
+        assert_eq!(res.unwrap_err(), "signature mismatch".to_string());
     }
 
     #[tokio::test]
@@ -2342,8 +2414,12 @@ mod tests {
         let handler = IntervalsMcpHandler::new(Arc::new(client));
 
         // cancel an unknown download id
-        let params = rmcp::handler::server::wrapper::Parameters(Box::new(DownloadIdParam { download_id: "missing".into() }));
-        let err = handler.cancel_download(params).await.unwrap_err();
+        let params = rmcp::handler::server::wrapper::Parameters(DownloadIdParam {
+            download_id: "missing".into(),
+        });
+        let res = handler.cancel_download(params).await;
+        assert!(res.is_err());
+        let err = res.err().unwrap();
         assert!(err.contains("not found"));
 
         // insert a canceller and download entry and then cancel
@@ -2356,13 +2432,28 @@ mod tests {
             let mut dl = handler.downloads.lock().await;
             dl.insert(
                 "d1".to_string(),
-                DownloadStatus { id: "d1".into(), activity_id: "a1".into(), state: DownloadState::InProgress, bytes_downloaded: 0, total_bytes: None, path: None },
+                DownloadStatus {
+                    id: "d1".into(),
+                    activity_id: "a1".into(),
+                    state: DownloadState::InProgress,
+                    bytes_downloaded: 0,
+                    total_bytes: None,
+                    path: None,
+                },
             );
         }
 
-        let params_ok = rmcp::handler::server::wrapper::Parameters(Box::new(DownloadIdParam { download_id: "d1".into() }));
-        let ok = handler.cancel_download(params_ok).await.expect("cancel succeeds");
-        assert_eq!(ok.value.get("cancelled").and_then(|v| v.as_bool()), Some(true));
+        let params_ok = rmcp::handler::server::wrapper::Parameters(DownloadIdParam {
+            download_id: "d1".into(),
+        });
+        let ok = handler
+            .cancel_download(params_ok)
+            .await
+            .expect("cancel succeeds");
+        assert_eq!(
+            ok.0.value.get("cancelled").and_then(|v| v.as_bool()),
+            Some(true)
+        );
         let dl = handler.downloads.lock().await;
         let s = dl.get("d1").unwrap();
         match s.state {

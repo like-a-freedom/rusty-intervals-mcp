@@ -499,9 +499,9 @@ impl IntervalsClient for ReqwestIntervalsClient {
             while let Some(chunk) = tokio::select! {
                 biased;
                 _ = cancel_rx.changed() => {
-                    // check cancel flag
+                    // check cancel flag and return error if cancelled
                     if *cancel_rx.borrow() {
-                        None
+                        return Err(IntervalsError::Config("download cancelled".into()));
                     } else {
                         stream.next().await
                     }

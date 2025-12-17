@@ -69,4 +69,71 @@ mod tests {
         assert_eq!(result.unwrap(), 42);
         assert_eq!(calls.load(Ordering::SeqCst), 3);
     }
+
+    #[tokio::test]
+    async fn retry_gives_up_after_max_retries() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        // Use small delays so test finishes quickly; place an overall timeout on the task to avoid hangs.
+
+        let policy = RetryPolicy {
+            max_retries: 2,
+            base_delay: Duration::from_millis(1),
+        };
+
+        let calls = Arc::new(AtomicU32::new(0));
+        let c = calls.clone();
+
+        // Run the retry and timeout the entire operation to avoid hangs.
+        let res = tokio::time::timeout(
+            Duration::from_secs(1),
+            policy.retry_async(move || {
+                let c = c.clone();
+                async move {
+                    c.fetch_add(1, Ordering::SeqCst);
+                    Err::<(), _>("permanent")
+                }
+            }),
+        )
+        .await
+        .expect("retry task timed out");
+        assert!(res.is_err());
+        // Calls should be max_retries + 1
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn retry_returns_immediately_on_success() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        let policy = RetryPolicy {
+            max_retries: 5,
+            base_delay: Duration::from_millis(100),
+        };
+
+        let calls = Arc::new(AtomicU32::new(0));
+        let c = calls.clone();
+
+        let result = policy
+            .retry_async(move || {
+                let c = c.clone();
+                async move {
+                    c.fetch_add(1, Ordering::SeqCst);
+                    Ok::<u32, &str>(7)
+                }
+            })
+            .await;
+
+        assert_eq!(result.unwrap(), 7);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn default_retry_policy_values() {
+        let d = RetryPolicy::default();
+        assert_eq!(d.max_retries, 3);
+        assert!(d.base_delay.as_millis() >= 1);
+    }
 }

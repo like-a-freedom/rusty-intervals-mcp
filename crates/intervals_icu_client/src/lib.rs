@@ -78,6 +78,7 @@ where
     }
 }
 
+
 #[async_trait]
 pub trait IntervalsClient: Send + Sync + 'static {
     async fn get_athlete_profile(&self) -> Result<AthleteProfile, IntervalsError>;
@@ -356,6 +357,7 @@ pub struct DownloadProgress {
 #[cfg(test)]
 mod tests {
     use crate::http_client::ReqwestIntervalsClient;
+    use serde_json::json;
 
     #[tokio::test]
     async fn client_new_and_basic() {
@@ -365,5 +367,27 @@ mod tests {
             secrecy::SecretString::new("key".into()),
         );
         let _ = client;
+    }
+
+    #[test]
+    fn deserialize_opt_string_from_number() {
+        let payload = json!({"id": 123, "start_date_local": "2025-12-15", "name": "x", "category": "NOTE"});
+        let e: super::Event = serde_json::from_value(payload).expect("deserialize number id");
+        assert_eq!(e.id.unwrap(), "123");
+    }
+
+    #[test]
+    fn deserialize_opt_string_invalid_type_errors() {
+        let payload = json!({"id": {"nested": true}, "start_date_local": "2025-12-15", "name": "x", "category": "NOTE"});
+        let res: Result<super::Event, _> = serde_json::from_value(payload);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn deserialize_event_category_unknown_maps_to_unknown() {
+        // Unknown enum variants should deserialize to `EventCategory::Unknown` due to `#[serde(other)]`.
+        let payload = json!({"id": "1", "start_date_local": "2025-12-15", "name": "x", "category": "NOT_A_KIND"});
+        let ev: super::Event = serde_json::from_value(payload).expect("deserialize event");
+        assert_eq!(ev.category, super::EventCategory::Unknown);
     }
 }
