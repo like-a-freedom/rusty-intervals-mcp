@@ -11,7 +11,6 @@ on:
 jobs:
   checks:
     name: Checks (fmt, clippy, tests)
-    if: github.event_name != 'release'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
