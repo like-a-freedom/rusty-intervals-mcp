@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: intervals_icu_mcp:local
+    image: ghcr.io/like-a-freedom/rusty-intervals-mcp:latest
     container_name: intervals_icu_mcp
     ports:
       - "8080:8080"
