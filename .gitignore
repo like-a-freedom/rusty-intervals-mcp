@@ -16,3 +16,6 @@ AGENTS.md
 
 # cargo-mutants outputs (mutation testing)
 **/mutants.out*/
+
+# other
+tarpaulin-report.html

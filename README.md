@@ -1,10 +1,10 @@
-# Intervals.icu MCP Server (Rust)
+# Intervals.icu MCP Server
 
 A high-performance Model Context Protocol (MCP) server for Intervals.icu written in Rust. Access your training data, wellness metrics, and performance analysis through Claude, VSCode Copilot, and other MCP-compatible LLMs.
 
 [![.github/workflows/ci.yml](https://github.com/like-a-freedom/rusty-intervals/actions/workflows/ci.yml/badge.svg)](https://github.com/like-a-freedom/rusty-intervals/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/like-a-freedom/rusty-intervals?label=release)](https://github.com/like-a-freedom/rusty-intervals/releases)
-[![codecov](https://codecov.io/gh/like-a-freedom/rusty-intervals/branch/master/graph/badge.svg)](https://codecov.io/gh/like-a-freedom/rusty-intervals)
+[![codecov](https://codecov.io/gh/like-a-freedom/rusty-intervals-mcp/graph/badge.svg?token=I47UV16VY5)](https://codecov.io/gh/like-a-freedom/rusty-intervals-mcp)
 ![Rust](https://img.shields.io/badge/rust-1.81+-orange.svg)
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 
