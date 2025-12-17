@@ -9,9 +9,35 @@ on:
     branches: [main, master]
 
 jobs:
+  checks:
+    name: Checks (fmt, clippy, tests)
+    if: github.event_name != 'release'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - name: Set up Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt,clippy
+          cache: true
+      - name: Run fmt check
+        run: cargo fmt --all -- --check
+      - name: Run clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: Run tests
+        run: cargo test --all --no-fail-fast
+
   build_binaries:
     name: Build ${{ matrix.platform.os_name }}
-    # Always build on push/PR/release; asset upload is gated to releases below
+    if: github.event_name == 'release'
     runs-on: ${{ matrix.platform.os }}
     permissions:
       contents: write
@@ -48,7 +74,7 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Set up Rust toolchain (with cache)
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+        uses: actions-rust-lang/setup-rust-toolchain@v1.15.2
         with:
           toolchain: stable
           components: clippy
