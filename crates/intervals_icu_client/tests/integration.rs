@@ -1017,7 +1017,7 @@ async fn download_activity_file_stream_invalid_content_length_progress_total_non
 
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("out_invalid_len.bin");
-    let (tx, mut rx) = tokio::sync::mpsc::channel(2);
+    let (tx, _rx) = tokio::sync::mpsc::channel(2);
     let (_cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
 
     let res = client
@@ -1205,9 +1205,8 @@ async fn download_activity_file_zero_length_creates_empty_file_no_progress() {
 
     // No progress updates should have been sent for an empty stream
     // No progress should have been sent; any TryRecvError is fine for this assertion
-    match rx.try_recv() {
-        Ok(p) => panic!("unexpected progress: {:?}", p),
-        Err(_) => {}
+    if let Ok(p) = rx.try_recv() {
+        panic!("unexpected progress: {:?}", p)
     }
 
     let metadata = std::fs::metadata(&path).expect("file exists");

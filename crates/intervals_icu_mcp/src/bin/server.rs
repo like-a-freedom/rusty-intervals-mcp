@@ -31,7 +31,6 @@ use secrecy::SecretString;
 
 #[cfg(test)]
 mod test_helpers {
-    use super::*;
     use async_trait::async_trait;
 
     pub(crate) struct MockClient;

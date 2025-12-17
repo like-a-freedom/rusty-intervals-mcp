@@ -78,7 +78,6 @@ where
     }
 }
 
-
 #[async_trait]
 pub trait IntervalsClient: Send + Sync + 'static {
     async fn get_athlete_profile(&self) -> Result<AthleteProfile, IntervalsError>;
@@ -371,7 +370,8 @@ mod tests {
 
     #[test]
     fn deserialize_opt_string_from_number() {
-        let payload = json!({"id": 123, "start_date_local": "2025-12-15", "name": "x", "category": "NOTE"});
+        let payload =
+            json!({"id": 123, "start_date_local": "2025-12-15", "name": "x", "category": "NOTE"});
         let e: super::Event = serde_json::from_value(payload).expect("deserialize number id");
         assert_eq!(e.id.unwrap(), "123");
     }
