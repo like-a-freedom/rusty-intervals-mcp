@@ -84,14 +84,14 @@ pub trait IntervalsClient: Send + Sync + 'static {
     async fn get_recent_activities(
         &self,
         limit: Option<u32>,
-        days_back: Option<u32>,
+        days_back: Option<i32>,
     ) -> Result<Vec<ActivitySummary>, IntervalsError>;
     async fn create_event(&self, event: Event) -> Result<Event, IntervalsError>;
     async fn get_event(&self, event_id: &str) -> Result<Event, IntervalsError>;
     async fn delete_event(&self, event_id: &str) -> Result<(), IntervalsError>;
     async fn get_events(
         &self,
-        days_back: Option<u32>,
+        days_back: Option<i32>,
         limit: Option<u32>,
     ) -> Result<Vec<Event>, IntervalsError>;
     async fn bulk_create_events(&self, events: Vec<Event>) -> Result<Vec<Event>, IntervalsError>;
@@ -159,7 +159,7 @@ pub trait IntervalsClient: Send + Sync + 'static {
     async fn get_sport_settings(&self) -> Result<serde_json::Value, IntervalsError>;
     async fn get_power_curves(
         &self,
-        days_back: Option<u32>,
+        days_back: Option<i32>,
         sport: &str,
     ) -> Result<serde_json::Value, IntervalsError>;
     async fn get_gap_histogram(
@@ -222,7 +222,7 @@ pub trait IntervalsClient: Send + Sync + 'static {
     /// Get wellness data for recent days
     async fn get_wellness(
         &self,
-        days_back: Option<u32>,
+        days_back: Option<i32>,
     ) -> Result<serde_json::Value, IntervalsError>;
 
     /// Get wellness data for a specific date
@@ -266,14 +266,14 @@ pub trait IntervalsClient: Send + Sync + 'static {
     /// Get heart rate curves
     async fn get_hr_curves(
         &self,
-        days_back: Option<u32>,
+        days_back: Option<i32>,
         sport: &str,
     ) -> Result<serde_json::Value, IntervalsError>;
 
     /// Get pace curves
     async fn get_pace_curves(
         &self,
-        days_back: Option<u32>,
+        days_back: Option<i32>,
         sport: &str,
     ) -> Result<serde_json::Value, IntervalsError>;
 

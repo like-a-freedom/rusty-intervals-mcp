@@ -108,7 +108,7 @@ impl IntervalsClient for ReqwestIntervalsClient {
     async fn get_recent_activities(
         &self,
         limit: Option<u32>,
-        days_back: Option<u32>,
+        days_back: Option<i32>,
     ) -> Result<Vec<crate::ActivitySummary>, IntervalsError> {
         let url = format!(
             "{}/api/v1/athlete/{}/activities",
@@ -226,7 +226,7 @@ impl IntervalsClient for ReqwestIntervalsClient {
 
     async fn get_events(
         &self,
-        days_back: Option<u32>,
+        days_back: Option<i32>,
         limit: Option<u32>,
     ) -> Result<Vec<crate::Event>, IntervalsError> {
         let url = format!(
@@ -613,7 +613,7 @@ impl IntervalsClient for ReqwestIntervalsClient {
 
     async fn get_power_curves(
         &self,
-        days_back: Option<u32>,
+        days_back: Option<i32>,
         sport: &str,
     ) -> Result<serde_json::Value, IntervalsError> {
         let url = format!(
@@ -855,7 +855,7 @@ impl IntervalsClient for ReqwestIntervalsClient {
 
     async fn get_wellness(
         &self,
-        days_back: Option<u32>,
+        days_back: Option<i32>,
     ) -> Result<serde_json::Value, IntervalsError> {
         let url = format!(
             "{}/api/v1/athlete/{}/wellness",
@@ -1047,7 +1047,7 @@ impl IntervalsClient for ReqwestIntervalsClient {
 
     async fn get_hr_curves(
         &self,
-        days_back: Option<u32>,
+        days_back: Option<i32>,
         sport: &str,
     ) -> Result<serde_json::Value, IntervalsError> {
         let url = format!(
@@ -1075,7 +1075,7 @@ impl IntervalsClient for ReqwestIntervalsClient {
 
     async fn get_pace_curves(
         &self,
-        days_back: Option<u32>,
+        days_back: Option<i32>,
         sport: &str,
     ) -> Result<serde_json::Value, IntervalsError> {
         let url = format!(

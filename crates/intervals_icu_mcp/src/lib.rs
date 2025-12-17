@@ -64,7 +64,7 @@ pub struct WebhookEvent {
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct RecentParams {
     pub limit: Option<u32>,
-    pub days_back: Option<u32>,
+    pub days_back: Option<i32>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -131,7 +131,7 @@ pub struct UpdateActivityParams {
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct PowerCurvesParams {
-    pub days_back: Option<u32>,
+    pub days_back: Option<i32>,
     #[serde(rename = "type")]
     pub sport: String,
 }
@@ -283,12 +283,12 @@ pub struct DownloadListResult {
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct AnalyzeRecentTrainingParams {
-    pub days_back: Option<u32>,
+    pub days_back: Option<i32>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct PerformanceAnalysisParams {
-    pub days_back: Option<u32>,
+    pub days_back: Option<i32>,
     pub metric: Option<String>,
     pub sport_type: Option<String>,
 }
@@ -300,7 +300,7 @@ pub struct ActivityDeepDiveParams {
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct RecoveryCheckParams {
-    pub days_back: Option<u32>,
+    pub days_back: Option<i32>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -317,7 +317,7 @@ pub struct PlanTrainingWeekParams {
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct AnalyzeAdaptPlanParams {
     pub period: Option<String>,
-    pub days_back: Option<u32>,
+    pub days_back: Option<i32>,
     pub focus: Option<String>,
 }
 
@@ -1466,7 +1466,12 @@ impl IntervalsMcpHandler {
         &self,
         params: Parameters<AnalyzeRecentTrainingParams>,
     ) -> GetPromptResult {
-        let days_back = params.0.days_back.unwrap_or(30);
+        let days_back_i = params.0.days_back.unwrap_or(30);
+        let days_back = if days_back_i < 0 {
+            0
+        } else {
+            days_back_i as u32
+        };
 
         prompts::analyze_recent_training_prompt(days_back)
     }
@@ -1480,7 +1485,12 @@ impl IntervalsMcpHandler {
         &self,
         params: Parameters<PerformanceAnalysisParams>,
     ) -> GetPromptResult {
-        let days_back = params.0.days_back.unwrap_or(90);
+        let days_back_i = params.0.days_back.unwrap_or(90);
+        let days_back = if days_back_i < 0 {
+            0
+        } else {
+            days_back_i as u32
+        };
         let metric = params
             .0
             .metric
@@ -1510,7 +1520,12 @@ impl IntervalsMcpHandler {
         description = "Assess recovery status and readiness to train"
     )]
     async fn recovery_check(&self, params: Parameters<RecoveryCheckParams>) -> GetPromptResult {
-        let days_back = params.0.days_back.unwrap_or(7);
+        let days_back_i = params.0.days_back.unwrap_or(7);
+        let days_back = if days_back_i < 0 {
+            0
+        } else {
+            days_back_i as u32
+        };
 
         prompts::recovery_check_prompt(days_back)
     }
@@ -1780,7 +1795,7 @@ mod tests {
         async fn get_recent_activities(
             &self,
             _limit: Option<u32>,
-            _days_back: Option<u32>,
+            _days_back: Option<i32>,
         ) -> Result<Vec<intervals_icu_client::ActivitySummary>, intervals_icu_client::IntervalsError>
         {
             Ok(vec![])
@@ -1883,7 +1898,7 @@ mod tests {
         }
         async fn get_power_curves(
             &self,
-            _days_back: Option<u32>,
+            _days_back: Option<i32>,
             _sport: &str,
         ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
             Ok(serde_json::json!({}))
@@ -1896,7 +1911,7 @@ mod tests {
         }
         async fn get_events(
             &self,
-            _days_back: Option<u32>,
+            _days_back: Option<i32>,
             _limit: Option<u32>,
         ) -> Result<Vec<intervals_icu_client::Event>, intervals_icu_client::IntervalsError>
         {
@@ -1985,7 +2000,7 @@ mod tests {
         }
         async fn get_wellness(
             &self,
-            _days_back: Option<u32>,
+            _days_back: Option<i32>,
         ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
             Ok(serde_json::json!({}))
         }
@@ -2032,14 +2047,14 @@ mod tests {
         }
         async fn get_hr_curves(
             &self,
-            _days_back: Option<u32>,
+            _days_back: Option<i32>,
             _sport: &str,
         ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
             Ok(serde_json::json!({}))
         }
         async fn get_pace_curves(
             &self,
-            _days_back: Option<u32>,
+            _days_back: Option<i32>,
             _sport: &str,
         ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
             Ok(serde_json::json!({}))

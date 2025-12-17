@@ -49,7 +49,7 @@ mod test_helpers {
         async fn get_recent_activities(
             &self,
             _limit: Option<u32>,
-            _days_back: Option<u32>,
+            _days_back: Option<i32>,
         ) -> Result<Vec<intervals_icu_client::ActivitySummary>, intervals_icu_client::IntervalsError>
         {
             Ok(vec![intervals_icu_client::ActivitySummary {
@@ -78,7 +78,7 @@ mod test_helpers {
         }
         async fn get_events(
             &self,
-            _days_back: Option<u32>,
+            _days_back: Option<i32>,
             _limit: Option<u32>,
         ) -> Result<Vec<intervals_icu_client::Event>, intervals_icu_client::IntervalsError>
         {
@@ -171,7 +171,7 @@ mod test_helpers {
         }
         async fn get_power_curves(
             &self,
-            _days_back: Option<u32>,
+            _days_back: Option<i32>,
             _sport: &str,
         ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
             Ok(serde_json::json!({}))
@@ -246,7 +246,7 @@ mod test_helpers {
         }
         async fn get_wellness(
             &self,
-            _days_back: Option<u32>,
+            _days_back: Option<i32>,
         ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
             Ok(serde_json::json!({}))
         }
@@ -293,14 +293,14 @@ mod test_helpers {
         }
         async fn get_hr_curves(
             &self,
-            _days_back: Option<u32>,
+            _days_back: Option<i32>,
             _sport: &str,
         ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
             Ok(serde_json::json!({}))
         }
         async fn get_pace_curves(
             &self,
-            _days_back: Option<u32>,
+            _days_back: Option<i32>,
             _sport: &str,
         ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
             Ok(serde_json::json!({}))
@@ -415,7 +415,7 @@ async fn get_activities(
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Result<Json<Vec<ActivitySummaryDto>>, (StatusCode, String)> {
     let limit = params.get("limit").and_then(|s| s.parse::<u32>().ok());
-    let days_back = params.get("days_back").and_then(|s| s.parse::<u32>().ok());
+    let days_back = params.get("days_back").and_then(|s| s.parse::<i32>().ok());
     let acts = state
         .client
         .get_recent_activities(limit, days_back)
@@ -571,7 +571,7 @@ mod tests {
             async fn get_recent_activities(
                 &self,
                 _limit: Option<u32>,
-                _days_back: Option<u32>,
+                _days_back: Option<i32>,
             ) -> Result<
                 Vec<intervals_icu_client::ActivitySummary>,
                 intervals_icu_client::IntervalsError,
@@ -603,7 +603,7 @@ mod tests {
             }
             async fn get_events(
                 &self,
-                _days_back: Option<u32>,
+                _days_back: Option<i32>,
                 _limit: Option<u32>,
             ) -> Result<Vec<intervals_icu_client::Event>, intervals_icu_client::IntervalsError>
             {
@@ -703,7 +703,7 @@ mod tests {
             }
             async fn get_power_curves(
                 &self,
-                _days_back: Option<u32>,
+                _days_back: Option<i32>,
                 _sport: &str,
             ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
                 Ok(serde_json::json!({}))
@@ -775,7 +775,7 @@ mod tests {
             }
             async fn get_wellness(
                 &self,
-                _days_back: Option<u32>,
+                _days_back: Option<i32>,
             ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
                 Ok(serde_json::json!({}))
             }
@@ -822,14 +822,14 @@ mod tests {
             }
             async fn get_hr_curves(
                 &self,
-                _days_back: Option<u32>,
+                _days_back: Option<i32>,
                 _sport: &str,
             ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
                 Ok(serde_json::json!({}))
             }
             async fn get_pace_curves(
                 &self,
-                _days_back: Option<u32>,
+                _days_back: Option<i32>,
                 _sport: &str,
             ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
                 Ok(serde_json::json!({}))
