@@ -2294,4 +2294,80 @@ mod tests {
         let sport_settings = _handler.client.get_sport_settings().await;
         assert!(sport_settings.is_ok());
     }
+
+    // ------------------------------------------------------------------
+    // Additional unit tests to improve coverage on handler logic
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn prompts_have_expected_content() {
+        // Call internal prompt generators directly (crate tests can access private module)
+        let p = crate::prompts::analyze_recent_training_prompt(7);
+        assert!(p.description.unwrap().contains("7 days"));
+        let pa = crate::prompts::performance_analysis_prompt("power", 14);
+        assert!(pa.description.unwrap().to_lowercase().contains("power"));
+        let pd = crate::prompts::activity_deep_dive_prompt("act1");
+        assert!(pd.description.unwrap().contains("activity act1"));
+    }
+
+    #[tokio::test]
+    async fn process_webhook_happy_and_duplicate_paths() {
+        let client = MockClient;
+        let handler = IntervalsMcpHandler::new(Arc::new(client));
+
+        // missing secret -> error
+        let res = handler.process_webhook("deadbeef", serde_json::json!({ "id": "x" })).await;
+        assert!(res.is_err());
+
+        handler.set_webhook_secret_value("s3cr3t").await;
+
+        // prepare valid signature
+        let payload = serde_json::json!({ "id": "evt1", "x": 1 });
+        let body = serde_json::to_vec(&payload).unwrap();
+        let mut mac: Hmac<Sha256> = Hmac::new_from_slice(b"s3cr3t").unwrap();
+        mac.update(&body);
+        let sig = hex::encode(mac.finalize().into_bytes());
+
+        let r = handler.process_webhook(&sig, payload.clone()).await.expect("should succeed");
+        assert_eq!(r.value.get("ok").and_then(|v| v.as_bool()), Some(true));
+
+        // duplicate should return duplicate:true
+        let r2 = handler.process_webhook(&sig, payload.clone()).await.expect("should return duplicate");
+        assert_eq!(r2.value.get("duplicate").and_then(|v| v.as_bool()), Some(true));
+    }
+
+    #[tokio::test]
+    async fn cancel_download_paths() {
+        let client = MockClient;
+        let handler = IntervalsMcpHandler::new(Arc::new(client));
+
+        // cancel an unknown download id
+        let params = rmcp::handler::server::wrapper::Parameters(Box::new(DownloadIdParam { download_id: "missing".into() }));
+        let err = handler.cancel_download(params).await.unwrap_err();
+        assert!(err.contains("not found"));
+
+        // insert a canceller and download entry and then cancel
+        let (tx, _rx) = watch::channel(false);
+        {
+            let mut canc = handler.cancel_senders.lock().await;
+            canc.insert("d1".to_string(), tx);
+        }
+        {
+            let mut dl = handler.downloads.lock().await;
+            dl.insert(
+                "d1".to_string(),
+                DownloadStatus { id: "d1".into(), activity_id: "a1".into(), state: DownloadState::InProgress, bytes_downloaded: 0, total_bytes: None, path: None },
+            );
+        }
+
+        let params_ok = rmcp::handler::server::wrapper::Parameters(Box::new(DownloadIdParam { download_id: "d1".into() }));
+        let ok = handler.cancel_download(params_ok).await.expect("cancel succeeds");
+        assert_eq!(ok.value.get("cancelled").and_then(|v| v.as_bool()), Some(true));
+        let dl = handler.downloads.lock().await;
+        let s = dl.get("d1").unwrap();
+        match s.state {
+            DownloadState::Cancelled => {}
+            _ => panic!("expected cancelled"),
+        }
+    }
 }
