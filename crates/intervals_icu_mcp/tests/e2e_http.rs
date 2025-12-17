@@ -194,7 +194,6 @@ impl IntervalsClient for LocalMockClient {
         Ok(serde_json::json!({}))
     }
 
-
     async fn get_hr_histogram(
         &self,
         _activity_id: &str,
@@ -419,5 +418,3 @@ async fn e2e_webhook_and_profile() {
         .unwrap();
     assert!(res.status().is_success());
 }
-
-
