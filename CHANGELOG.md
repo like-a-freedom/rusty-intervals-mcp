@@ -11,10 +11,14 @@ All notable changes to this project will be documented in this file.
 - Add unit tests asserting tool registration and update documented tool count to 53 across `README.md`, `docs/SPEC.md`, and `docs/IMPLEMENTATION_PLAN.md`.
 - Ensure full test suite passes locally after changes.
 
+## [0.3.12] - 2025-12-17
+- Chore: Bump crate versions to 0.3.12 and prepare release artifacts.
+- Fix: Address clippy warnings and formatting; inline webhook tests and remove duplicate external test files.
+
 ## [Unreleased]
 
 ### Added
-- Prepare for next release 0.3.11: bump crate versions.
+- Prepare for next release.
 
 
 ## [0.3.0] - 2025-12-16
