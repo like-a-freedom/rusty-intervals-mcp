@@ -3,8 +3,6 @@ name: Build and Release
 on:
   release:
     types: [created]
-  push:
-    branches: [main, master]
   pull_request:
     branches: [main, master]
 
@@ -55,6 +53,7 @@ jobs:
   build_binaries:
     name: Build ${{ matrix.platform.os_name }}
     if: github.event_name == 'release'
+    needs: checks
     runs-on: ${{ matrix.platform.os }}
     permissions:
       contents: write
@@ -146,6 +145,7 @@ jobs:
   build_docker_images:
     name: Build Docker images
     if: github.event_name == 'release'
+    needs: checks
     runs-on: ubuntu-latest
     permissions:
       contents: read
