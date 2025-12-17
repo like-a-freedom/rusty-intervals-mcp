@@ -101,7 +101,7 @@ pub struct ActivityIdParam {
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct SearchParams {
-    #[serde(rename = "q")]
+    #[serde(rename = "q", alias = "query")]
     pub q: String,
     pub limit: Option<u32>,
 }
@@ -1687,6 +1687,7 @@ mod tests {
     use super::*;
     use intervals_icu_client::http_client::ReqwestIntervalsClient;
     use secrecy::SecretString;
+    use serde_json::json;
     use std::sync::Arc;
 
     #[tokio::test]
@@ -1748,6 +1749,17 @@ mod tests {
         assert!(tools.iter().any(|t| t.name == "delete_sport_settings"));
         // Ensure the number of registered tools matches the documented implementation
         assert_eq!(handler.tool_count(), 54, "Should register 54 tools");
+    }
+
+    #[test]
+    fn search_params_accepts_q_and_query() {
+        let p: SearchParams = serde_json::from_value(json!({"q": "ride", "limit": 10})).unwrap();
+        assert_eq!(p.q, "ride");
+        assert_eq!(p.limit, Some(10));
+
+        let p2: SearchParams = serde_json::from_value(json!({"query": "run", "limit": 5})).unwrap();
+        assert_eq!(p2.q, "run");
+        assert_eq!(p2.limit, Some(5));
     }
 
     use async_trait::async_trait;
