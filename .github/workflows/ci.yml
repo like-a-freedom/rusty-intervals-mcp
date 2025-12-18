@@ -29,8 +29,24 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Run clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
-      - name: Run tests
-        run: cargo test --all --no-fail-fast
+      - name: Run tests (capture logs)
+        run: |
+          set -o pipefail
+          mkdir -p test-logs
+          cargo test --all --no-fail-fast 2>&1 | tee test-logs/test-output.txt
+          # preserve exit code
+          test_exit_code=${PIPESTATUS[0]}
+          if [ "$test_exit_code" -ne 0 ]; then
+            echo "Tests failed with exit code $test_exit_code"
+            exit $test_exit_code
+          fi
+
+      - name: Upload test logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-logs
+          path: test-logs/
 
       - name: Install cargo-tarpaulin
         if: runner.os == 'Linux'
