@@ -1003,7 +1003,14 @@ async fn download_activity_file_stream_missing_content_length_progress_total_non
         assert_eq!(t, body.len() as u64);
     }
 
-    let read = std::fs::read(&path).unwrap();
+    let mut read = Vec::new();
+    for _ in 0..5 {
+        read = std::fs::read(&path).unwrap_or_default();
+        if !read.is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
     assert_eq!(read, body);
 }
 

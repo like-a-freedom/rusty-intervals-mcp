@@ -55,6 +55,9 @@ impl ReqwestIntervalsClient {
                     .await
                     .map_err(|e| IntervalsError::Config(e.to_string()))?;
             }
+            file.sync_all()
+                .await
+                .map_err(|e| IntervalsError::Config(e.to_string()))?;
             return Ok(None);
         }
 
@@ -516,18 +519,23 @@ impl IntervalsClient for ReqwestIntervalsClient {
                 .await
                 .map_err(|e| IntervalsError::Config(e.to_string()))?;
             let mut downloaded: u64 = 0;
-            while let Some(chunk) = tokio::select! {
-                biased;
-                _ = cancel_rx.changed() => {
-                    // check cancel flag and return error if cancelled
-                    if *cancel_rx.borrow() {
-                        return Err(IntervalsError::Config("download cancelled".into()));
-                    } else {
-                        stream.next().await
+            loop {
+                let chunk = tokio::select! {
+                    biased;
+                    _ = cancel_rx.changed() => {
+                        // check cancel flag and return error if cancelled
+                        if *cancel_rx.borrow() {
+                            return Err(IntervalsError::Config("download cancelled".into()));
+                        }
+                        continue;
                     }
-                }
-                c = stream.next() => c,
-            } {
+                    c = stream.next() => c,
+                };
+
+                let Some(chunk) = chunk else {
+                    break;
+                };
+
                 let bytes = chunk.map_err(IntervalsError::Http)?;
                 file.write_all(&bytes)
                     .await
@@ -543,6 +551,9 @@ impl IntervalsClient for ReqwestIntervalsClient {
                     return Err(IntervalsError::Config("download cancelled".into()));
                 }
             }
+            file.sync_all()
+                .await
+                .map_err(|e| IntervalsError::Config(e.to_string()))?;
             Ok(Some(path.to_string_lossy().to_string()))
         } else {
             // read into memory and send a single progress update
