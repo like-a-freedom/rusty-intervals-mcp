@@ -69,6 +69,87 @@ impl ReqwestIntervalsClient {
     }
 }
 
+impl ReqwestIntervalsClient {
+    /// Map case-insensitive sport names to their canonical API form.
+    pub fn normalize_sport(s: &str) -> String {
+        // These values are taken from the intervals.icu API enum for sport `type`.
+        const SPORTS: &[&str] = &[
+            "Ride",
+            "Run",
+            "Swim",
+            "WeightTraining",
+            "Hike",
+            "Walk",
+            "AlpineSki",
+            "BackcountrySki",
+            "Badminton",
+            "Canoeing",
+            "Crossfit",
+            "EBikeRide",
+            "EMountainBikeRide",
+            "Elliptical",
+            "Golf",
+            "GravelRide",
+            "TrackRide",
+            "Handcycle",
+            "HighIntensityIntervalTraining",
+            "Hockey",
+            "IceSkate",
+            "InlineSkate",
+            "Kayaking",
+            "Kitesurf",
+            "MountainBikeRide",
+            "NordicSki",
+            "OpenWaterSwim",
+            "Padel",
+            "Pilates",
+            "Pickleball",
+            "Racquetball",
+            "Rugby",
+            "RockClimbing",
+            "RollerSki",
+            "Rowing",
+            "Sail",
+            "Skateboard",
+            "Snowboard",
+            "Snowshoe",
+            "Soccer",
+            "Squash",
+            "StairStepper",
+            "StandUpPaddling",
+            "Surfing",
+            "TableTennis",
+            "Tennis",
+            "TrailRun",
+            "Transition",
+            "Velomobile",
+            "VirtualRide",
+            "VirtualRow",
+            "VirtualRun",
+            "VirtualSki",
+            "WaterSport",
+            "Wheelchair",
+            "Windsurf",
+            "Workout",
+            "Yoga",
+            "Other",
+        ];
+        let lowered = s.to_lowercase();
+        for &c in SPORTS {
+            if c.to_lowercase() == lowered {
+                return c.to_string();
+            }
+        }
+        // Fallback: capitalize first char and keep rest as-is (best-effort)
+        if s.is_empty() {
+            return s.to_string();
+        }
+        let mut chrs = s.chars();
+        let first = chrs.next().unwrap().to_uppercase().collect::<String>();
+        format!("{}{}", first, chrs.as_str())
+    }
+}
+
 #[async_trait]
 impl IntervalsClient for ReqwestIntervalsClient {
     async fn get_athlete_profile(&self) -> Result<AthleteProfile, IntervalsError> {
@@ -333,24 +414,226 @@ impl IntervalsClient for ReqwestIntervalsClient {
     async fn get_best_efforts(
         &self,
         activity_id: &str,
+        options: Option<crate::BestEffortsOptions>,
     ) -> Result<serde_json::Value, IntervalsError> {
         let url = format!(
             "{}/api/v1/activity/{}/best-efforts",
             self.base_url, activity_id
         );
-        let resp = self
-            .client
-            .get(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            return Err(IntervalsError::Config(format!(
-                "unexpected status: {}",
-                resp.status()
-            )));
+
+        // If caller provided explicit options, treat them as authoritative
+        if let Some(opts) = options {
+            if let Some(s) = opts.stream.as_deref() {
+                // require at least one of duration or distance per API contract
+                if opts.duration.is_none() && opts.distance.is_none() {
+                    return Err(IntervalsError::Config(
+                        "missing duration or distance in best-efforts options".into(),
+                    ));
+                }
+                let mut q: Vec<(&str, String)> = Vec::new();
+                q.push(("stream", s.to_string()));
+                if let Some(dur) = opts.duration {
+                    q.push(("duration", dur.to_string()));
+                }
+                if let Some(dist) = opts.distance {
+                    q.push(("distance", dist.to_string()));
+                }
+                if let Some(cnt) = opts.count {
+                    q.push(("count", cnt.to_string()));
+                }
+                if let Some(minv) = opts.min_value {
+                    q.push(("minValue", minv.to_string()));
+                }
+                if let Some(ex) = opts.exclude_intervals {
+                    q.push((
+                        "excludeIntervals",
+                        (if ex { "true" } else { "false" }).to_string(),
+                    ));
+                }
+                if let Some(si) = opts.start_index {
+                    q.push(("startIndex", si.to_string()));
+                }
+                if let Some(ei) = opts.end_index {
+                    q.push(("endIndex", ei.to_string()));
+                }
+
+                let req = self
+                    .client
+                    .get(&url)
+                    .basic_auth("API_KEY", Some(self.api_key.expose_secret()));
+                // convert q into tuples of &str
+                let q2: Vec<(&str, String)> = q;
+                let req = req;
+                // reqwest query expects (&str,&str) or serializable; build vec of tuples
+                let params: Vec<(&str, &str)> = q2.iter().map(|(k, v)| (*k, v.as_str())).collect();
+                let resp = req.query(&params[..]).send().await?;
+                if !resp.status().is_success() {
+                    return Err(IntervalsError::Config(format!(
+                        "unexpected status: {}",
+                        resp.status()
+                    )));
+                }
+                return Ok(resp.json().await?);
+            } else {
+                return Err(IntervalsError::Config(
+                    "missing stream in best-efforts options".into(),
+                ));
+            }
         }
-        Ok(resp.json().await?)
+
+        // Try a sequence of sensible default parameter combinations when callers
+        // only provide the activity id. Some activities (or upstream validation)
+        // may accept duration-based efforts, others distance-based; try both to
+        // avoid surfacing 422 errors for the common quick-lookup case.
+        let attempts = [
+            vec![("stream", "power"), ("duration", "60")],
+            vec![("stream", "power"), ("distance", "1000")],
+            vec![("stream", "power"), ("duration", "300")],
+        ];
+
+        for params in attempts.iter() {
+            let resp = self
+                .client
+                .get(&url)
+                .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+                .query(&params[..])
+                .send()
+                .await?;
+
+            if resp.status().is_success() {
+                return Ok(resp.json().await?);
+            }
+
+            if resp.status().as_u16() != 422 {
+                // Unexpected non-validation error -> return immediately
+                return Err(IntervalsError::Config(format!(
+                    "unexpected status: {}",
+                    resp.status()
+                )));
+            }
+
+            // otherwise it's a 422 -> try next fallback
+        }
+
+        // All fallbacks yielded 422 — attempt to detect available streams on the activity
+        let streams_payload = self.get_activity_streams(activity_id, None).await;
+        match streams_payload {
+            Ok(json) => {
+                // extract the stream keys if present at json.streams
+                let mut available_streams: Vec<String> = Vec::new();
+                // Streams may be returned as:
+                // - top-level object with keys for each stream: { "time": [...], "power": [...] }
+                // - nested under "streams": { "streams": { "time": [...], "speed": [...] } }
+                // - array under "streams": { "streams": [ {"name": "power"}, {"name": "speed"} ] }
+                if let Some(sv) = json.get("streams") {
+                    if let Some(obj) = sv.as_object() {
+                        for k in obj.keys() {
+                            available_streams.push(k.clone());
+                        }
+                    } else if let Some(arr) = sv.as_array() {
+                        for item in arr.iter() {
+                            if let Some(obj) = item.as_object() {
+                                if let Some(name) = obj.get("name").and_then(|n| n.as_str()) {
+                                    available_streams.push(name.to_string());
+                                } else if let Some(t) = obj.get("type").and_then(|n| n.as_str()) {
+                                    available_streams.push(t.to_string());
+                                }
+                            }
+                        }
+                    }
+                } else if let Some(obj) = json.as_object() {
+                    // Top-level streams object: treat keys whose values are arrays/numbers as stream names
+                    for (k, v) in obj.iter() {
+                        if v.is_array() {
+                            available_streams.push(k.clone());
+                        }
+                    }
+                }
+
+                // candidate stream preference
+                let candidates = ["power", "speed", "pace", "distance", "hr", "watts"];
+
+                // Build ordered list: candidate matches first, then remaining available streams
+                let mut ordered_streams: Vec<String> = Vec::new();
+                for &cand in &candidates {
+                    if available_streams.contains(&cand.to_string()) {
+                        ordered_streams.push(cand.to_string());
+                    }
+                }
+                for s in available_streams.iter() {
+                    if !ordered_streams.contains(s) {
+                        ordered_streams.push(s.clone());
+                    }
+                }
+
+                for cand in ordered_streams.iter() {
+                    // try duration then distance for each available stream
+                    let param_sets = [
+                        vec![("stream", cand.as_str()), ("duration", "60")],
+                        vec![("stream", cand.as_str()), ("distance", "1000")],
+                        vec![("stream", cand.as_str()), ("duration", "300")],
+                    ];
+                    // Also try with `count=8` and without additional params in case upstream accepts defaults
+                    let mut param_sets_extended: Vec<Vec<(&str, &str)>> = param_sets.to_vec();
+                    param_sets_extended.push(vec![("stream", cand.as_str()), ("count", "8")]);
+                    param_sets_extended.push(vec![("stream", cand.as_str())]);
+
+                    for params in param_sets.iter().chain(param_sets_extended.iter()) {
+                        let resp = self
+                            .client
+                            .get(&url)
+                            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+                            .query(&params[..])
+                            .send()
+                            .await?;
+                        if resp.status().is_success() {
+                            return Ok(resp.json().await?);
+                        }
+                        // for debugging, capture body on 422 or 404 and continue trying
+                        let status_code = resp.status().as_u16();
+                        if status_code == 422 || status_code == 404 {
+                            if let Ok(text) = resp.text().await {
+                                tracing::trace!(
+                                    "best-efforts returned {} for stream={} params={:?} body={}",
+                                    status_code,
+                                    cand,
+                                    params,
+                                    text
+                                );
+                            } else {
+                                tracing::trace!(
+                                    "best-efforts returned {} for stream={} params={:?} (no body)",
+                                    status_code,
+                                    cand,
+                                    params
+                                );
+                            }
+                            continue;
+                        }
+                        // Unexpected non-validation/non-404 error -> return immediately
+                        return Err(IntervalsError::Config(format!(
+                            "unexpected status: {}",
+                            resp.status()
+                        )));
+                    }
+                }
+
+                // nothing worked
+                Err(IntervalsError::Config("unexpected status: 422".into()))
+            }
+            Err(e) => {
+                // couldn't fetch streams — if upstream returned 404 Not Found then
+                // treat as "no streams" and return a config 422 to match the
+                // validation semantics (caller expects 422 when no suitable params).
+                if let IntervalsError::Config(msg) = &e
+                    && (msg.contains("404") || msg.to_lowercase().contains("not found"))
+                {
+                    return Err(IntervalsError::Config("unexpected status: 422".into()));
+                }
+                // otherwise return the original error
+                Err(e)
+            }
+        }
     }
 
     async fn get_activity_details(
@@ -636,7 +919,8 @@ impl IntervalsClient for ReqwestIntervalsClient {
             .get(&url)
             .basic_auth("API_KEY", Some(self.api_key.expose_secret()));
         // upstream API requires the sport type as `type` query parameter
-        req = req.query(&[("type", sport)]);
+        let sport_val = Self::normalize_sport(sport);
+        req = req.query(&[("type", sport_val.as_str())]);
         if let Some(d) = days_back {
             let curve = format!("{}d", d);
             req = req.query(&[("curves", curve)]);

@@ -112,6 +112,8 @@ async fn best_efforts_returns_payload() {
 
     Mock::given(method("GET"))
         .and(path("/api/v1/activity/act1/best-efforts"))
+        .and(query_param("stream", "power"))
+        .and(query_param("duration", "60"))
         .respond_with(ResponseTemplate::new(200).set_body_json(&body))
         .mount(&server)
         .await;
@@ -122,8 +124,189 @@ async fn best_efforts_returns_payload() {
         SecretString::new("tok".into()),
     );
 
-    let efforts = client.get_best_efforts("act1").await.expect("best efforts");
+    let efforts = client
+        .get_best_efforts("act1", None)
+        .await
+        .expect("best efforts");
     assert!(efforts.get("best_efforts").is_some());
+}
+
+#[tokio::test]
+async fn best_efforts_fallback_to_distance_when_duration_unaccepted() {
+    let server = MockServer::start().await;
+    let body = serde_json::json!({"best_efforts": [{"distance": 1000, "power": 350}]});
+
+    // First request with duration=60 -> return 422
+    Mock::given(method("GET"))
+        .and(path("/api/v1/activity/act2/best-efforts"))
+        .and(query_param("stream", "power"))
+        .and(query_param("duration", "60"))
+        .respond_with(ResponseTemplate::new(422))
+        .mount(&server)
+        .await;
+
+    // Second request with distance=1000 -> return 200
+    Mock::given(method("GET"))
+        .and(path("/api/v1/activity/act2/best-efforts"))
+        .and(query_param("stream", "power"))
+        .and(query_param("distance", "1000"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&body))
+        .mount(&server)
+        .await;
+
+    let client = intervals_icu_client::http_client::ReqwestIntervalsClient::new(
+        &server.uri(),
+        "ath",
+        SecretString::new("tok".into()),
+    );
+
+    let efforts = client
+        .get_best_efforts("act2", None)
+        .await
+        .expect("best efforts via fallback");
+    assert!(efforts.get("best_efforts").is_some());
+}
+
+#[tokio::test]
+async fn best_efforts_all_fallbacks_422_returns_error() {
+    let server = MockServer::start().await;
+
+    // Make all expected attempts return 422
+    for _ in 0..3 {
+        Mock::given(method("GET"))
+            .and(path("/api/v1/activity/act3/best-efforts"))
+            .respond_with(ResponseTemplate::new(422))
+            .mount(&server)
+            .await;
+    }
+
+    // Also return empty streams when client tries to inspect available streams
+    Mock::given(method("GET"))
+        .and(path("/api/v1/activity/act3/streams"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({ "streams": {} })),
+        )
+        .mount(&server)
+        .await;
+
+    let client = intervals_icu_client::http_client::ReqwestIntervalsClient::new(
+        &server.uri(),
+        "ath",
+        SecretString::new("tok".into()),
+    );
+
+    let err = client.get_best_efforts("act3", None).await.unwrap_err();
+    assert_eq!(
+        format!("{}", err),
+        "configuration error: unexpected status: 422"
+    );
+}
+
+#[tokio::test]
+async fn best_efforts_detects_available_stream_and_uses_it() {
+    let server = MockServer::start().await;
+
+    // initial power attempts -> 422
+    Mock::given(method("GET"))
+        .and(path("/api/v1/activity/act4/best-efforts"))
+        .and(query_param("stream", "power"))
+        .respond_with(ResponseTemplate::new(422))
+        .mount(&server)
+        .await;
+
+    // streams endpoint returns speed but not power
+    Mock::given(method("GET"))
+        .and(path("/api/v1/activity/act4/streams"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "streams": { "time": [0,1,2], "speed": [2.5,3.0,3.5] }
+        })))
+        .mount(&server)
+        .await;
+
+    // expect best-efforts call with stream=speed & duration=60 -> return 200
+    let body = serde_json::json!({"best_efforts": [{"duration": 60, "speed": 3.5}]});
+    Mock::given(method("GET"))
+        .and(path("/api/v1/activity/act4/best-efforts"))
+        .and(query_param("stream", "speed"))
+        .and(query_param("duration", "60"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&body))
+        .mount(&server)
+        .await;
+
+    let client = intervals_icu_client::http_client::ReqwestIntervalsClient::new(
+        &server.uri(),
+        "ath",
+        SecretString::new("tok".into()),
+    );
+
+    let efforts = client
+        .get_best_efforts("act4", None)
+        .await
+        .expect("best efforts via detected stream");
+    assert!(efforts.get("best_efforts").is_some());
+}
+
+#[tokio::test]
+async fn best_efforts_stream_lookup_without_candidates_returns_error() {
+    let server = MockServer::start().await;
+
+    // power attempts -> 422 (duration=60, distance=1000, duration=300)
+    Mock::given(method("GET"))
+        .and(path("/api/v1/activity/act5/best-efforts"))
+        .and(query_param("stream", "power"))
+        .and(query_param("duration", "60"))
+        .respond_with(ResponseTemplate::new(422))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/activity/act5/best-efforts"))
+        .and(query_param("stream", "power"))
+        .and(query_param("distance", "1000"))
+        .respond_with(ResponseTemplate::new(422))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/activity/act5/best-efforts"))
+        .and(query_param("stream", "power"))
+        .and(query_param("duration", "300"))
+        .respond_with(ResponseTemplate::new(422))
+        .mount(&server)
+        .await;
+    // also mock count and bare stream attempts (we try these as extended fallbacks)
+    Mock::given(method("GET"))
+        .and(path("/api/v1/activity/act5/best-efforts"))
+        .and(query_param("stream", "power"))
+        .and(query_param("count", "8"))
+        .respond_with(ResponseTemplate::new(422))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/activity/act5/best-efforts"))
+        .and(query_param("stream", "power"))
+        .respond_with(ResponseTemplate::new(422))
+        .mount(&server)
+        .await;
+
+    // streams endpoint returns only time (no candidate streams)
+    Mock::given(method("GET"))
+        .and(path("/api/v1/activity/act5/streams"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "streams": { "time": [0,1,2] }
+        })))
+        .mount(&server)
+        .await;
+
+    let client = intervals_icu_client::http_client::ReqwestIntervalsClient::new(
+        &server.uri(),
+        "ath",
+        SecretString::new("tok".into()),
+    );
+
+    let err = client.get_best_efforts("act5", None).await.unwrap_err();
+    assert_eq!(
+        format!("{}", err),
+        "configuration error: unexpected status: 422"
+    );
 }
 
 #[tokio::test]

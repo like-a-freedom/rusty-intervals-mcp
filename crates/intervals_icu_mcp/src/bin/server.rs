@@ -107,6 +107,7 @@ mod test_helpers {
         async fn get_best_efforts(
             &self,
             _activity_id: &str,
+            _options: Option<intervals_icu_client::BestEffortsOptions>,
         ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
             Ok(serde_json::json!({}))
         }
@@ -632,6 +633,7 @@ mod tests {
             async fn get_best_efforts(
                 &self,
                 _activity_id: &str,
+                _options: Option<intervals_icu_client::BestEffortsOptions>,
             ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
                 Ok(serde_json::json!({}))
             }

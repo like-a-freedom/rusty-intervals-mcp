@@ -10,6 +10,18 @@ pub mod http_client;
 pub mod observability;
 pub mod retry;
 
+#[derive(Clone, Debug)]
+pub struct BestEffortsOptions {
+    pub stream: Option<String>,
+    pub duration: Option<i32>,
+    pub distance: Option<f64>,
+    pub count: Option<i32>,
+    pub min_value: Option<f64>,
+    pub exclude_intervals: Option<bool>,
+    pub start_index: Option<i32>,
+    pub end_index: Option<i32>,
+}
+
 #[derive(Debug, Error)]
 pub enum IntervalsError {
     #[error("http error: {0}")]
@@ -104,10 +116,16 @@ pub trait IntervalsClient: Send + Sync + 'static {
         &self,
         activity_id: &str,
     ) -> Result<serde_json::Value, IntervalsError>;
+    /// Find best efforts in an activity.
+    ///
+    /// If `options` is `Some` it is treated as an explicit query; `stream` must be supplied
+    /// and at least one of `duration` or `distance` must be supplied per API contract.
     async fn get_best_efforts(
         &self,
         activity_id: &str,
+        options: Option<BestEffortsOptions>,
     ) -> Result<serde_json::Value, IntervalsError>;
+
     async fn get_activity_details(
         &self,
         activity_id: &str,

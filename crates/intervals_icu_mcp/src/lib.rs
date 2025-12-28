@@ -100,6 +100,30 @@ pub struct ActivityIdParam {
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
+/// Parameters for finding peak performances (best efforts) in an activity.
+/// All parameters are flat (no nested "options" object). Use SINGULAR values, NOT arrays.
+pub struct BestEffortsToolParams {
+    /// REQUIRED. The activity ID, e.g. "i112895444"
+    pub activity_id: String,
+    /// REQUIRED. Stream to analyze: "power", "heartrate", "speed", "pace", "cadence", or "distance"
+    pub stream: String,
+    /// A SINGLE integer in seconds (NOT an array). Use for time-based efforts. Example: 300 means 5 minutes. Provide duration OR distance, not both.
+    pub duration: Option<i32>,
+    /// A SINGLE number in meters (NOT an array). Use for distance-based efforts. Example: 1000 means 1 km. Provide duration OR distance, not both.
+    pub distance: Option<f64>,
+    /// Maximum number of best efforts to return (optional)
+    pub count: Option<i32>,
+    /// Minimum value threshold for the stream (optional)
+    pub min_value: Option<f64>,
+    /// Whether to exclude structured intervals from analysis (optional)
+    pub exclude_intervals: Option<bool>,
+    /// Start index in the activity data (optional)
+    pub start_index: Option<i32>,
+    /// End index in the activity data (optional)
+    pub end_index: Option<i32>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct SearchParams {
     #[serde(rename = "q", alias = "query")]
     pub q: String,
@@ -344,7 +368,10 @@ impl IntervalsMcpHandler {
         self.prompt_router.list_all().len()
     }
 
-    #[tool(name = "get_athlete_profile", description = "Get athlete profile")]
+    #[tool(
+        name = "get_athlete_profile",
+        description = "Get your Intervals.icu athlete profile including name, ID, and basic info"
+    )]
     async fn get_athlete_profile(&self) -> Result<Json<ProfileResult>, String> {
         let p = self
             .client
@@ -357,7 +384,10 @@ impl IntervalsMcpHandler {
         }))
     }
 
-    #[tool(name = "get_recent_activities", description = "List recent activities")]
+    #[tool(
+        name = "get_recent_activities",
+        description = "List your recent activities. Returns activity ID, name, and type. Use limit (≤100) to control results, days_back to filter by date range"
+    )]
     async fn get_recent_activities(
         &self,
         params: Parameters<RecentParams>,
@@ -380,7 +410,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "set_webhook_secret",
-        description = "Set webhook HMAC secret for verification"
+        description = "Set HMAC secret for webhook verification. Call this once with your webhook secret string to enable signature verification for incoming webhook payloads"
     )]
     async fn set_webhook_secret(
         &self,
@@ -399,7 +429,10 @@ impl IntervalsMcpHandler {
         }
     }
 
-    #[tool(name = "get_events", description = "List calendar events")]
+    #[tool(
+        name = "get_events",
+        description = "List calendar events (workouts, races, notes, rest days). Returns events within date range. Use days_back to specify window, limit to control result count"
+    )]
     async fn get_events(
         &self,
         params: Parameters<RecentParams>,
@@ -413,7 +446,10 @@ impl IntervalsMcpHandler {
         Ok(Json(EventsResult { events: evs }))
     }
 
-    #[tool(name = "create_event", description = "Create a calendar event")]
+    #[tool(
+        name = "create_event",
+        description = "Create a calendar event (workout, race, note, etc). Requires: title, start_date_local (YYYY-MM-DD), category (WORKOUT/RACE_A/RACE_B/RACE_C/NOTE/PLAN/HOLIDAY/SICK/INJURED/TARGET/SET_FITNESS/etc). Optional: description, notes, duration_mins"
+    )]
     async fn create_event(
         &self,
         params: Parameters<intervals_icu_client::Event>,
@@ -427,7 +463,10 @@ impl IntervalsMcpHandler {
         Ok(Json(created))
     }
 
-    #[tool(name = "get_event", description = "Get calendar event by id")]
+    #[tool(
+        name = "get_event",
+        description = "Get a calendar event by ID. Returns event details including title, date, category, and description"
+    )]
     async fn get_event(
         &self,
         params: Parameters<ActivityIdParam>,
@@ -441,7 +480,7 @@ impl IntervalsMcpHandler {
         Ok(Json(ev))
     }
 
-    #[tool(name = "delete_event", description = "Delete event by id")]
+    #[tool(name = "delete_event", description = "Delete a calendar event by ID")]
     async fn delete_event(
         &self,
         params: Parameters<ActivityIdParam>,
@@ -456,7 +495,10 @@ impl IntervalsMcpHandler {
         }))
     }
 
-    #[tool(name = "bulk_create_events", description = "Create multiple events")]
+    #[tool(
+        name = "bulk_create_events",
+        description = "Create multiple calendar events in one call. Pass an array of event objects (title, start_date_local, category, etc). Efficient for importing training plans or schedules"
+    )]
     async fn bulk_create_events(
         &self,
         params: Parameters<Vec<intervals_icu_client::Event>>,
@@ -472,7 +514,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_activity_details",
-        description = "Get full activity details"
+        description = "Get complete activity details including distance, elevation, power, heart rate, pace, and other metrics. Use with get_activity_streams for time-series data"
     )]
     async fn get_activity_details(
         &self,
@@ -487,7 +529,10 @@ impl IntervalsMcpHandler {
         Ok(Json(ObjectResult { value: v }))
     }
 
-    #[tool(name = "search_activities", description = "Search activities by text")]
+    #[tool(
+        name = "search_activities",
+        description = "Search your activities by text (name, description, route). Returns ID and name. Use limit to control results. Use search_activities_full for complete activity objects"
+    )]
     async fn search_activities(
         &self,
         params: Parameters<SearchParams>,
@@ -510,7 +555,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "search_activities_full",
-        description = "Search activities and return full activity objects"
+        description = "Search activities by text and return full activity objects with all metrics. Returns complete data: distance, time, power, HR, elevation, etc"
     )]
     async fn search_activities_full(
         &self,
@@ -527,7 +572,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_activities_csv",
-        description = "Download activities as CSV"
+        description = "Download your complete activities log as CSV file. Useful for data export and analysis in spreadsheets"
     )]
     async fn get_activities_csv(&self) -> Result<Json<ObjectResult>, String> {
         let v = self
@@ -540,7 +585,10 @@ impl IntervalsMcpHandler {
         }))
     }
 
-    #[tool(name = "update_activity", description = "Update activity fields")]
+    #[tool(
+        name = "update_activity",
+        description = "Update activity fields: name, description, notes, keywords, private (true/false), etc. Pass activity_id and fields object with values to change"
+    )]
     async fn update_activity(
         &self,
         params: Parameters<UpdateActivityParams>,
@@ -554,7 +602,10 @@ impl IntervalsMcpHandler {
         Ok(Json(ObjectResult { value: v }))
     }
 
-    #[tool(name = "get_activity_streams", description = "Get activity streams")]
+    #[tool(
+        name = "get_activity_streams",
+        description = "Get time-series data streams for an activity: power, heart rate, speed, pace, cadence, elevation, temperature, etc. Each stream is an array of timestamped values"
+    )]
     async fn get_activity_streams(
         &self,
         params: Parameters<ActivityIdParam>,
@@ -570,7 +621,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_activity_intervals",
-        description = "Get activity intervals"
+        description = "Get structured intervals from a workout activity. Returns start/end times and indices for each interval segment. Useful for analyzing interval training sessions"
     )]
     async fn get_activity_intervals(
         &self,
@@ -585,21 +636,43 @@ impl IntervalsMcpHandler {
         Ok(Json(ObjectResult { value: v }))
     }
 
-    #[tool(name = "get_best_efforts", description = "Get activity best-efforts")]
+    #[tool(
+        name = "get_best_efforts",
+        description = "Find peak performances in an activity. \
+            REQUIRED PARAMS: activity_id (string), stream (string), and ONE of: duration (integer, seconds) OR distance (number, meters). \
+            IMPORTANT: All params are FLAT (no nested 'options' object). Use SINGLE values, NOT arrays. \
+            CORRECT: {\"activity_id\": \"i112895444\", \"stream\": \"power\", \"duration\": 300} - finds best 5-min power. \
+            CORRECT: {\"activity_id\": \"i112895444\", \"stream\": \"distance\", \"distance\": 1000} - finds best 1km effort. \
+            WRONG: {\"options\": {...}} or {\"durations\": [60,300]} - no nested objects, no arrays! \
+            Streams: power, heartrate, speed, pace, cadence, distance."
+    )]
     async fn get_best_efforts(
         &self,
-        params: Parameters<ActivityIdParam>,
+        params: Parameters<BestEffortsToolParams>,
     ) -> Result<Json<ObjectResult>, String> {
         let p = params.0;
+        let options = intervals_icu_client::BestEffortsOptions {
+            stream: Some(p.stream),
+            duration: p.duration,
+            distance: p.distance,
+            count: p.count,
+            min_value: p.min_value,
+            exclude_intervals: p.exclude_intervals,
+            start_index: p.start_index,
+            end_index: p.end_index,
+        };
         let v = self
             .client
-            .get_best_efforts(&p.activity_id)
+            .get_best_efforts(&p.activity_id, Some(options))
             .await
             .map_err(|e| e.to_string())?;
         Ok(Json(ObjectResult { value: v }))
     }
 
-    #[tool(name = "get_gear_list", description = "Get gear list")]
+    #[tool(
+        name = "get_gear_list",
+        description = "Get your gear inventory (bikes, shoes, watches, etc). Returns gear ID, name, type, usage, maintenance reminders, and retirement status"
+    )]
     async fn get_gear_list(&self) -> Result<Json<ObjectResult>, String> {
         let v = self
             .client
@@ -609,7 +682,10 @@ impl IntervalsMcpHandler {
         Ok(Json(ObjectResult { value: v }))
     }
 
-    #[tool(name = "get_sport_settings", description = "Get sport settings")]
+    #[tool(
+        name = "get_sport_settings",
+        description = "Get sport-specific settings: FTP (power), FTHR (threshold heart rate), thresholds for zones, pace thresholds, power zones, and HR zones for each sport"
+    )]
     async fn get_sport_settings(&self) -> Result<Json<ObjectResult>, String> {
         let v = self
             .client
@@ -621,7 +697,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_power_curves",
-        description = "Get power curves for athlete"
+        description = "Get power output curves (peak power efforts) for a sport. Returns best power outputs at different durations (5s, 1min, 5min, 20min, etc). Requires: sport type (Run/Ride/etc) and days_back (7/30/90/365 days)"
     )]
     async fn get_power_curves(
         &self,
@@ -638,7 +714,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_gap_histogram",
-        description = "Get gap histogram for activity"
+        description = "Get Grade Adjusted Pace (GAP) distribution histogram for an activity. Shows how time was distributed across different pace values"
     )]
     async fn get_gap_histogram(
         &self,
@@ -655,7 +731,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "start_download",
-        description = "Start activity file download with progress"
+        description = "Start downloading activity file with progress tracking. Returns download_id to check status. Supports FIT, GPX, and original formats. Optional output_path saves to disk, otherwise returns base64"
     )]
     async fn start_download(
         &self,
@@ -753,7 +829,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "download_fit_file",
-        description = "Download FIT file for an activity"
+        description = "Download activity as FIT file (binary format from Garmin/sports watches). Use with compatible sports analysis software. Optional output_path saves to disk"
     )]
     async fn download_fit_file(
         &self,
@@ -778,7 +854,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "download_gpx_file",
-        description = "Download GPX file for an activity"
+        description = "Download activity as GPX file (GPS track format). Useful for importing into maps, other apps, or sharing with others. Optional output_path saves to disk"
     )]
     async fn download_gpx_file(
         &self,
@@ -803,7 +879,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_download_status",
-        description = "Get download status by id"
+        description = "Check download progress by download_id. Returns state (Pending/InProgress/Completed/Failed), bytes_downloaded, total_bytes, and file path"
     )]
     async fn get_download_status(
         &self,
@@ -820,7 +896,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "receive_webhook",
-        description = "Receive a webhook payload with HMAC verification"
+        description = "Receive and verify webhook payloads from Intervals.icu. Validates HMAC signature and deduplicates events"
     )]
     async fn receive_webhook(
         &self,
@@ -944,7 +1020,10 @@ impl IntervalsMcpHandler {
         *s = Some(secret.into());
     }
 
-    #[tool(name = "list_downloads", description = "List all downloads")]
+    #[tool(
+        name = "list_downloads",
+        description = "List all activity downloads and their current status (Pending/InProgress/Completed/Failed)"
+    )]
     async fn list_downloads(&self) -> Result<Json<DownloadListResult>, String> {
         let map = self.downloads.lock().await;
         let list = map.values().cloned().collect();
@@ -953,7 +1032,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "cancel_download",
-        description = "Cancel an in-progress download"
+        description = "Cancel an in-progress activity file download by download_id"
     )]
     async fn cancel_download(
         &self,
@@ -977,7 +1056,10 @@ impl IntervalsMcpHandler {
 
     // === Activities ===
 
-    #[tool(name = "delete_activity", description = "Delete an activity by ID")]
+    #[tool(
+        name = "delete_activity",
+        description = "Delete an activity permanently by ID"
+    )]
     async fn delete_activity(
         &self,
         params: Parameters<ActivityIdParam>,
@@ -994,7 +1076,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_activities_around",
-        description = "Get activities before and after a specific activity for context"
+        description = "Get activities before and after a specific activity. Useful for analyzing activity sequences and patterns"
     )]
     async fn get_activities_around(
         &self,
@@ -1011,7 +1093,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "search_intervals",
-        description = "Search for similar intervals across activities"
+        description = "Search for similar intervals across all activities. Filter by duration (seconds), intensity (%), interval type, and other criteria"
     )]
     async fn search_intervals(
         &self,
@@ -1037,7 +1119,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_power_histogram",
-        description = "Get power distribution histogram for an activity"
+        description = "Get power output distribution for an activity. Shows time spent at different power levels"
     )]
     async fn get_power_histogram(
         &self,
@@ -1054,7 +1136,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_hr_histogram",
-        description = "Get heart rate distribution histogram for an activity"
+        description = "Get heart rate distribution for an activity. Shows time spent in different heart rate ranges"
     )]
     async fn get_hr_histogram(
         &self,
@@ -1071,7 +1153,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_pace_histogram",
-        description = "Get pace distribution histogram for an activity"
+        description = "Get pace distribution for an activity. Shows time spent at different pace values"
     )]
     async fn get_pace_histogram(
         &self,
@@ -1090,7 +1172,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_fitness_summary",
-        description = "Get athlete's fitness summary including CTL, ATL, TSB and ramp rate"
+        description = "Get fitness metrics: CTL (Chronic Training Load), ATL (Acute Training Load), TSB (Training Stress Balance), and ramp rate. Key indicators for recovery and readiness"
     )]
     async fn get_fitness_summary(&self) -> Result<Json<ObjectResult>, String> {
         let v = self
@@ -1105,7 +1187,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_wellness",
-        description = "Get wellness data for recent days"
+        description = "Get recent wellness data (sleep, stress, resting HR, notes). Use days_back to specify date range"
     )]
     async fn get_wellness(
         &self,
@@ -1122,7 +1204,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_wellness_for_date",
-        description = "Get wellness data for a specific date (YYYY-MM-DD)"
+        description = "Get wellness data for a specific date (format: YYYY-MM-DD). Returns sleep hours, stress level, resting HR, and notes"
     )]
     async fn get_wellness_for_date(
         &self,
@@ -1139,7 +1221,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "update_wellness",
-        description = "Update wellness data for a specific date"
+        description = "Update wellness data for a specific date. Can update: sleep_hours, stress_level, resting_hr, notes, etc"
     )]
     async fn update_wellness(
         &self,
@@ -1158,7 +1240,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_upcoming_workouts",
-        description = "Get upcoming workouts and planned events"
+        description = "Get upcoming scheduled workouts and planned events. Specify days_ahead to control the forecast window (default: 7 days)"
     )]
     async fn get_upcoming_workouts(
         &self,
@@ -1175,7 +1257,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "update_event",
-        description = "Update an existing calendar event"
+        description = "Update calendar event fields: title, description, date (YYYY-MM-DD), category, etc"
     )]
     async fn update_event(
         &self,
@@ -1193,7 +1275,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "bulk_delete_events",
-        description = "Delete multiple calendar events at once"
+        description = "Delete multiple calendar events in a single operation. Pass array of event IDs"
     )]
     async fn bulk_delete_events(
         &self,
@@ -1216,7 +1298,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "duplicate_event",
-        description = "Duplicate an event to a new date"
+        description = "Duplicate an event to multiple future dates. Specify num_copies and weeks_between to create recurring schedule"
     )]
     async fn duplicate_event(
         &self,
@@ -1238,7 +1320,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_hr_curves",
-        description = "Get heart rate performance curves"
+        description = "Get heart rate performance curves. Returns best HR efforts at different durations. Requires: sport type (Run/Ride/etc) and days_back (7/30/90/365)"
     )]
     async fn get_hr_curves(
         &self,
@@ -1253,7 +1335,10 @@ impl IntervalsMcpHandler {
         Ok(Json(ObjectResult { value: v }))
     }
 
-    #[tool(name = "get_pace_curves", description = "Get pace performance curves")]
+    #[tool(
+        name = "get_pace_curves",
+        description = "Get pace/speed performance curves. Returns best pace efforts at different durations. Requires: sport type and days_back (7/30/90/365)"
+    )]
     async fn get_pace_curves(
         &self,
         params: Parameters<PowerCurvesParams>,
@@ -1271,7 +1356,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_workout_library",
-        description = "Get workout library folders and training plans"
+        description = "Get your workout library including all training plan folders. Use get_workouts_in_folder to view specific workouts"
     )]
     async fn get_workout_library(&self) -> Result<Json<ObjectResult>, String> {
         let v = self
@@ -1284,7 +1369,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_workouts_in_folder",
-        description = "Get workouts in a specific library folder"
+        description = "Get all workouts in a specific library folder. Returns workout details including duration, intervals, and focus area"
     )]
     async fn get_workouts_in_folder(
         &self,
@@ -1301,7 +1386,10 @@ impl IntervalsMcpHandler {
 
     // === Gear Management ===
 
-    #[tool(name = "create_gear", description = "Create a new gear item")]
+    #[tool(
+        name = "create_gear",
+        description = "Add new gear item (bike, shoes, watch, etc). Specify name, type, weight, retired status, and maintenance reminders"
+    )]
     async fn create_gear(
         &self,
         params: Parameters<CreateGearParams>,
@@ -1315,7 +1403,10 @@ impl IntervalsMcpHandler {
         Ok(Json(ObjectResult { value: v }))
     }
 
-    #[tool(name = "update_gear", description = "Update an existing gear item")]
+    #[tool(
+        name = "update_gear",
+        description = "Update gear item details: name, type, notes, retirement status, or any other field"
+    )]
     async fn update_gear(
         &self,
         params: Parameters<UpdateGearParams>,
@@ -1329,7 +1420,10 @@ impl IntervalsMcpHandler {
         Ok(Json(ObjectResult { value: v }))
     }
 
-    #[tool(name = "delete_gear", description = "Delete a gear item")]
+    #[tool(
+        name = "delete_gear",
+        description = "Delete a gear item from your inventory"
+    )]
     async fn delete_gear(
         &self,
         params: Parameters<GearIdParam>,
@@ -1346,7 +1440,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "create_gear_reminder",
-        description = "Create a maintenance reminder for gear"
+        description = "Set up maintenance reminder for gear. Specify reminder type (km/miles/months) and threshold value"
     )]
     async fn create_gear_reminder(
         &self,
@@ -1363,7 +1457,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "update_gear_reminder",
-        description = "Update a gear maintenance reminder"
+        description = "Update or snooze a gear maintenance reminder. Set reset=true to reset counter, snooze_days to delay notification"
     )]
     async fn update_gear_reminder(
         &self,
@@ -1388,7 +1482,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "update_sport_settings",
-        description = "Update sport-specific settings (zones, thresholds)"
+        description = "Update sport settings: FTP (power threshold), FTHR (heart rate threshold), pace thresholds, power/HR zone definitions. Optionally recalculate HR zones"
     )]
     async fn update_sport_settings(
         &self,
@@ -1405,7 +1499,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "apply_sport_settings",
-        description = "Apply sport settings to historical activities"
+        description = "Apply updated sport settings to all historical activities. Recalculates zones and metrics for all past activities of that sport"
     )]
     async fn apply_sport_settings(
         &self,
@@ -1422,7 +1516,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "create_sport_settings",
-        description = "Create new sport-specific settings"
+        description = "Create new sport-specific settings profile for a new sport type"
     )]
     async fn create_sport_settings(
         &self,
@@ -1439,7 +1533,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "delete_sport_settings",
-        description = "Delete sport-specific settings"
+        description = "Delete sport-specific settings profile. Specify the sport type to remove"
     )]
     async fn delete_sport_settings(
         &self,
@@ -1834,6 +1928,7 @@ mod tests {
         async fn get_best_efforts(
             &self,
             _activity_id: &str,
+            _options: Option<intervals_icu_client::BestEffortsOptions>,
         ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
             Ok(serde_json::json!({ "best": [{ "duration": 600 }] }))
         }
@@ -2157,9 +2252,17 @@ mod tests {
             .await;
         assert!(res.is_ok());
 
-        // Best efforts
-        let best_param = ActivityIdParam {
+        // Best efforts - now the tool requires explicit stream per API contract
+        let best_param = BestEffortsToolParams {
             activity_id: "a1".into(),
+            stream: "power".into(),
+            duration: Some(60),
+            distance: None,
+            count: None,
+            min_value: None,
+            exclude_intervals: None,
+            start_index: None,
+            end_index: None,
         };
         let res = handler.get_best_efforts(Parameters(best_param)).await;
         assert!(res.is_ok());
@@ -2227,10 +2330,45 @@ mod tests {
             .await;
         assert!(res.is_ok());
 
+        // lowercase sport should also work (normalize to canonical form)
+        // This uses the mock client so will succeed
+
         // gap histogram
         let res = handler
             .get_gap_histogram(Parameters(ActivityIdParam {
                 activity_id: "a1".into(),
+            }))
+            .await;
+        assert!(res.is_ok());
+    }
+
+    #[tokio::test]
+    async fn get_power_curves_accepts_lowercase_type_with_http_client() {
+        use intervals_icu_client::http_client::ReqwestIntervalsClient;
+        use secrecy::SecretString;
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+        let m = Mock::given(method("GET"))
+            .and(path("/api/v1/athlete/test_ath/power-curves"))
+            .and(query_param("type", "Run"))
+            .and(query_param("curves", "7d"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true})))
+            .expect(1);
+        m.mount(&mock_server).await;
+
+        let client = ReqwestIntervalsClient::new(
+            &mock_server.uri(),
+            "test_ath",
+            SecretString::new("key".into()),
+        );
+        let handler = IntervalsMcpHandler::new(Arc::new(client));
+
+        let res = handler
+            .get_power_curves(Parameters(PowerCurvesParams {
+                days_back: Some(7),
+                sport: "run".into(),
             }))
             .await;
         assert!(res.is_ok());
