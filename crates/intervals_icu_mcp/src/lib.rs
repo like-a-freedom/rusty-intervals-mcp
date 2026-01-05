@@ -100,6 +100,12 @@ pub struct ActivityIdParam {
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct BulkCreateEventsToolParams {
+    /// Array of calendar events to create (title, start_date_local, category, etc.)
+    pub events: Vec<intervals_icu_client::Event>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
 /// Parameters for finding peak performances (best efforts) in an activity.
 /// All parameters are flat (no nested "options" object). Use SINGULAR values, NOT arrays.
 pub struct BestEffortsToolParams {
@@ -497,13 +503,13 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "bulk_create_events",
-        description = "Create multiple calendar events in one call. Pass an array of event objects (title, start_date_local, category, etc). Efficient for importing training plans or schedules"
+        description = "Create multiple calendar events in one call. Payload must be an object with 'events': [ ...event objects... ]. Fields per event: title, start_date_local (YYYY-MM-DD), category (WORKOUT/RACE/NOTE/etc). Efficient for importing plans"
     )]
     async fn bulk_create_events(
         &self,
-        params: Parameters<Vec<intervals_icu_client::Event>>,
+        params: Parameters<BulkCreateEventsToolParams>,
     ) -> Result<Json<EventsResult>, String> {
-        let events = params.0;
+        let events = params.0.events;
         let created = self
             .client
             .bulk_create_events(events)
@@ -1858,6 +1864,28 @@ mod tests {
         assert!(tools.iter().any(|t| t.name == "delete_sport_settings"));
         // Ensure the number of registered tools matches the documented implementation
         assert_eq!(handler.tool_count(), 54, "Should register 54 tools");
+    }
+
+    #[test]
+    fn bulk_create_events_params_require_object() {
+        let payload = json!({
+            "events": [
+                {
+                    "start_date_local": "2024-01-01",
+                    "name": "Test Workout",
+                    "category": "WORKOUT",
+                    "description": null
+                }
+            ]
+        });
+
+        let params: Parameters<BulkCreateEventsToolParams> =
+            serde_json::from_value(payload.clone()).expect("payload should deserialize");
+        assert_eq!(params.0.events.len(), 1);
+
+        let serialized = serde_json::to_value(params).expect("serialize to value");
+        assert!(serialized.is_object());
+        assert!(serialized.get("events").is_some());
     }
 
     #[test]
