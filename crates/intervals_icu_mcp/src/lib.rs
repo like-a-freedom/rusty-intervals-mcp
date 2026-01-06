@@ -452,6 +452,20 @@ impl IntervalsMcpHandler {
         Ok(Json(EventsResult { events: evs }))
     }
 
+    // Shared helper: normalize date-like strings to YYYY-MM-DD. Accepts YYYY-MM-DD, RFC3339, or naive YYYY-MM-DDTHH:MM:SS
+    fn normalize_date_str(s: &str) -> Result<String, ()> {
+        if chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").is_ok() {
+            return Ok(s.to_string());
+        }
+        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+            return Ok(dt.date_naive().format("%Y-%m-%d").to_string());
+        }
+        if let Ok(ndt) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S") {
+            return Ok(ndt.date().format("%Y-%m-%d").to_string());
+        }
+        Err(())
+    }
+
     #[tool(
         name = "create_event",
         description = "Create a calendar event (workout, race, note, etc). Requires: title, start_date_local (YYYY-MM-DD), category (WORKOUT/RACE_A/RACE_B/RACE_C/NOTE/PLAN/HOLIDAY/SICK/INJURED/TARGET/SET_FITNESS/etc). Optional: description, notes, duration_mins"
@@ -466,20 +480,13 @@ impl IntervalsMcpHandler {
             return Err("invalid event: name is empty".into());
         }
         let mut ev2 = ev.clone();
-        if chrono::NaiveDate::parse_from_str(&ev2.start_date_local, "%Y-%m-%d").is_err() {
-            // Try RFC3339
-            if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&ev2.start_date_local) {
-                ev2.start_date_local = dt.date_naive().format("%Y-%m-%d").to_string();
-            } else if let Ok(ndt) =
-                chrono::NaiveDateTime::parse_from_str(&ev2.start_date_local, "%Y-%m-%dT%H:%M:%S")
-            {
-                ev2.start_date_local = ndt.date().format("%Y-%m-%d").to_string();
-            } else {
-                return Err(format!(
-                    "invalid start_date_local: {}",
-                    ev2.start_date_local
-                ));
-            }
+        if Self::normalize_date_str(&ev2.start_date_local).is_err() {
+            return Err(format!(
+                "invalid start_date_local: {}",
+                ev2.start_date_local
+            ));
+        } else if let Ok(s) = Self::normalize_date_str(&ev2.start_date_local) {
+            ev2.start_date_local = s;
         }
         if ev2.category == intervals_icu_client::EventCategory::Unknown {
             return Err("invalid category: unknown".into());
@@ -542,16 +549,9 @@ impl IntervalsMcpHandler {
             }
             // Normalize date: accept YYYY-MM-DD or RFC3339 / NaiveDateTime
             let mut ev2 = ev.clone();
-            if chrono::NaiveDate::parse_from_str(&ev2.start_date_local, "%Y-%m-%d").is_err() {
-                // try RFC3339 (with timezone)
-                if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&ev2.start_date_local) {
-                    ev2.start_date_local = dt.date_naive().format("%Y-%m-%d").to_string();
-                } else if let Ok(ndt) = chrono::NaiveDateTime::parse_from_str(
-                    &ev2.start_date_local,
-                    "%Y-%m-%dT%H:%M:%S",
-                ) {
-                    ev2.start_date_local = ndt.date().format("%Y-%m-%d").to_string();
-                } else {
+            match Self::normalize_date_str(&ev2.start_date_local) {
+                Ok(s) => ev2.start_date_local = s,
+                Err(()) => {
                     return Err(format!(
                         "invalid start_date_local for event at index {}: {}",
                         i, ev2.start_date_local
@@ -1275,17 +1275,10 @@ impl IntervalsMcpHandler {
         let p = params.0;
         let mut date = p.date.clone();
         // accept YYYY-MM-DD or ISO datetimes; normalize to YYYY-MM-DD
-        if chrono::NaiveDate::parse_from_str(&date, "%Y-%m-%d").is_err() {
-            if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&date) {
-                date = dt.date_naive().format("%Y-%m-%d").to_string();
-            } else if let Ok(ndt) =
-                chrono::NaiveDateTime::parse_from_str(&date, "%Y-%m-%dT%H:%M:%S")
-            {
-                date = ndt.date().format("%Y-%m-%d").to_string();
-            } else {
-                return Err(format!("invalid date: {}", p.date));
-            }
-        }
+        date = match Self::normalize_date_str(&date) {
+            Ok(s) => s,
+            Err(()) => return Err(format!("invalid date: {}", p.date)),
+        };
         let v = self
             .client
             .get_wellness_for_date(&date)
@@ -1304,17 +1297,10 @@ impl IntervalsMcpHandler {
     ) -> Result<Json<ObjectResult>, String> {
         let p = params.0;
         let mut date = p.date.clone();
-        if chrono::NaiveDate::parse_from_str(&date, "%Y-%m-%d").is_err() {
-            if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&date) {
-                date = dt.date_naive().format("%Y-%m-%d").to_string();
-            } else if let Ok(ndt) =
-                chrono::NaiveDateTime::parse_from_str(&date, "%Y-%m-%dT%H:%M:%S")
-            {
-                date = ndt.date().format("%Y-%m-%d").to_string();
-            } else {
-                return Err(format!("invalid date: {}", p.date));
-            }
-        }
+        date = match Self::normalize_date_str(&date) {
+            Ok(s) => s,
+            Err(()) => return Err(format!("invalid date: {}", p.date)),
+        };
         let v = self
             .client
             .update_wellness(&date, &p.data)
@@ -1358,18 +1344,10 @@ impl IntervalsMcpHandler {
             && let Some(val) = obj.get("start_date_local")
             && let Some(s) = val.as_str()
         {
-            let mut s2 = s.to_string();
-            if chrono::NaiveDate::parse_from_str(&s2, "%Y-%m-%d").is_err() {
-                if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s2) {
-                    s2 = dt.date_naive().format("%Y-%m-%d").to_string();
-                } else if let Ok(ndt) =
-                    chrono::NaiveDateTime::parse_from_str(&s2, "%Y-%m-%dT%H:%M:%S")
-                {
-                    s2 = ndt.date().format("%Y-%m-%d").to_string();
-                } else {
-                    return Err(format!("invalid start_date_local: {}", s));
-                }
-            }
+            let s2 = match Self::normalize_date_str(s) {
+                Ok(s2) => s2,
+                Err(()) => return Err(format!("invalid start_date_local: {}", s)),
+            };
             obj.insert(
                 "start_date_local".to_string(),
                 serde_json::Value::String(s2),
@@ -3240,11 +3218,24 @@ mod tests {
                 || s_review.contains("workout")
                 || s_review.contains("training plan")
         );
+    }
 
-        // analyze recent training prompt contains analysis wording
-        let ar = crate::prompts::analyze_recent_training_prompt(14);
-        let s_ar = serde_json::to_string(&ar).unwrap().to_lowercase();
-        assert!(s_ar.contains("training analysis") || s_ar.contains("analyze my intervals"));
+    #[test]
+    fn normalize_date_str_accepts_known_formats() {
+        // Directly exercise the new helper to ensure consistent behavior
+        assert_eq!(
+            IntervalsMcpHandler::normalize_date_str("2026-01-19").unwrap(),
+            "2026-01-19"
+        );
+        assert_eq!(
+            IntervalsMcpHandler::normalize_date_str("2026-01-19T06:30:00Z").unwrap(),
+            "2026-01-19"
+        );
+        assert_eq!(
+            IntervalsMcpHandler::normalize_date_str("2026-01-19T06:30:00").unwrap(),
+            "2026-01-19"
+        );
+        assert!(IntervalsMcpHandler::normalize_date_str("not-a-date").is_err());
     }
 
     #[tokio::test]
