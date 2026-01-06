@@ -510,6 +510,24 @@ impl IntervalsMcpHandler {
         params: Parameters<BulkCreateEventsToolParams>,
     ) -> Result<Json<EventsResult>, String> {
         let events = params.0.events;
+        // Validate input early to provide clearer errors and avoid 422 from the API
+        for (i, ev) in events.iter().enumerate() {
+            if ev.name.trim().is_empty() {
+                return Err(format!("invalid event at index {}: name is empty", i));
+            }
+            if chrono::NaiveDate::parse_from_str(&ev.start_date_local, "%Y-%m-%d").is_err() {
+                return Err(format!(
+                    "invalid start_date_local for event at index {}: {}",
+                    i, ev.start_date_local
+                ));
+            }
+            if ev.category == intervals_icu_client::EventCategory::Unknown {
+                return Err(format!(
+                    "invalid category for event at index {}: unknown category",
+                    i
+                ));
+            }
+        }
         let created = self
             .client
             .bulk_create_events(events)
@@ -1914,6 +1932,70 @@ mod tests {
         assert!(serialized.get("events").is_some());
     }
 
+    #[tokio::test]
+    async fn bulk_create_events_rejects_invalid_date() {
+        let client = MockClient;
+        let handler = IntervalsMcpHandler::new(Arc::new(client));
+        let payload = json!({
+            "events": [
+                {
+                    "name": "Test Workout",
+                    "start_date_local": "2026-13-01",
+                    "category": "WORKOUT",
+                    "description": null
+                }
+            ]
+        });
+        let params: Parameters<BulkCreateEventsToolParams> =
+            serde_json::from_value(payload).expect("payload should deserialize");
+        let res = handler.bulk_create_events(params).await;
+        assert!(res.is_err());
+        let err = res.err().unwrap();
+        assert!(err.contains("invalid start_date_local"));
+    }
+
+    #[tokio::test]
+    async fn bulk_create_events_rejects_unknown_category() {
+        let client = MockClient;
+        let handler = IntervalsMcpHandler::new(Arc::new(client));
+        let payload = json!({
+            "events": [
+                {
+                    "name": "Test Workout",
+                    "start_date_local": "2026-01-01",
+                    "category": "NOT_A_CATEGORY",
+                    "description": null
+                }
+            ]
+        });
+        let params: Parameters<BulkCreateEventsToolParams> =
+            serde_json::from_value(payload).expect("payload should deserialize");
+        let res = handler.bulk_create_events(params).await;
+        assert!(res.is_err());
+        let err = res.err().unwrap();
+        assert!(err.contains("invalid category"));
+    }
+
+    #[tokio::test]
+    async fn bulk_create_events_accepts_valid_payload() {
+        let client = MockClient;
+        let handler = IntervalsMcpHandler::new(Arc::new(client));
+        let payload = json!({
+            "events": [
+                {
+                    "name": "Test Workout",
+                    "start_date_local": "2026-01-01",
+                    "category": "WORKOUT",
+                    "description": null
+                }
+            ]
+        });
+        let params: Parameters<BulkCreateEventsToolParams> =
+            serde_json::from_value(payload).expect("payload should deserialize");
+        let res = handler.bulk_create_events(params).await;
+        assert!(res.is_ok());
+    }
+
     #[test]
     fn search_params_accepts_q_and_query() {
         let p: SearchParams = serde_json::from_value(json!({"q": "ride", "limit": 10})).unwrap();
@@ -2073,6 +2155,7 @@ mod tests {
         {
             Ok(vec![])
         }
+
         async fn download_activity_file_with_progress(
             &self,
             _activity_id: &str,

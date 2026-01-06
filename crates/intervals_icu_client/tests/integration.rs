@@ -915,6 +915,48 @@ async fn bulk_delete_events_hits_bulk_endpoint() {
 }
 
 #[tokio::test]
+async fn bulk_create_events_propagates_error_body() {
+    let server = MockServer::start().await;
+    let event = serde_json::json!({
+        "name": "Test Workout",
+        "start_date_local": "2026-13-01",
+        "category": "WORKOUT",
+        "description": null
+    });
+
+    Mock::given(method("POST"))
+        .and(path("/api/v1/athlete/ath/events/bulk"))
+        .and(wiremock::matchers::body_json(serde_json::json!([
+            event.clone()
+        ])))
+        .respond_with(ResponseTemplate::new(422).set_body_json(serde_json::json!({
+            "error": "invalid date"
+        })))
+        .mount(&server)
+        .await;
+
+    let client = intervals_icu_client::http_client::ReqwestIntervalsClient::new(
+        &server.uri(),
+        "ath",
+        SecretString::new("tok".into()),
+    );
+
+    let ev = intervals_icu_client::Event {
+        id: None,
+        name: "Test Workout".into(),
+        start_date_local: "2026-13-01".into(),
+        category: intervals_icu_client::EventCategory::Workout,
+        description: None,
+    };
+
+    let res = client.bulk_create_events(vec![ev]).await;
+    assert!(res.is_err());
+    let err = format!("{}", res.err().unwrap());
+    assert!(err.contains("422") || err.contains("unprocessable"));
+    assert!(err.contains("invalid date"));
+}
+
+#[tokio::test]
 async fn duplicate_event_uses_duplicate_events_api() {
     let server = MockServer::start().await;
     let response = serde_json::json!([{
