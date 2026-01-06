@@ -149,10 +149,10 @@ impl ReqwestIntervalsClient {
         format!("{}{}", first, chrs.as_str())
     }
 
-    // Normalize start_date_local for events: preserve time when provided; accept date-only.
+    // Normalize start_date_local for events: preserve time when provided; if only date is given, set time to 00:00:00.
     fn normalize_event_start(s: &str) -> Result<String, ()> {
         if chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").is_ok() {
-            return Ok(s.to_string());
+            return Ok(format!("{}T00:00:00", s));
         }
         if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
             return Ok(dt.naive_local().format("%Y-%m-%dT%H:%M:%S").to_string());

@@ -466,10 +466,10 @@ impl IntervalsMcpHandler {
         Err(())
     }
 
-    // Normalize start_date_local for events: keep full datetime when provided, otherwise accept date-only.
+    // Normalize start_date_local for events: return ISO datetime. Keep provided time; if only a date is given, set time to 00:00:00.
     fn normalize_event_start(s: &str) -> Result<String, ()> {
         if chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").is_ok() {
-            return Ok(s.to_string());
+            return Ok(format!("{}T00:00:00", s));
         }
         if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
             return Ok(dt.naive_local().format("%Y-%m-%dT%H:%M:%S").to_string());
@@ -489,7 +489,7 @@ impl IntervalsMcpHandler {
         params: Parameters<intervals_icu_client::Event>,
     ) -> Result<Json<intervals_icu_client::Event>, String> {
         let ev = params.0;
-        // Validate and normalize input: accept YYYY-MM-DD or ISO 8601 datetimes and preserve time when provided
+        // Validate and normalize input: accept YYYY-MM-DD or ISO 8601 datetimes; preserve time when provided, default to 00:00:00 when only date is supplied
         if ev.name.trim().is_empty() {
             return Err("invalid event: name is empty".into());
         }
@@ -567,7 +567,7 @@ impl IntervalsMcpHandler {
     ) -> Result<Json<EventsResult>, String> {
         let events = params.0.events;
         // Normalize and validate input early to provide clearer errors and avoid 422 from the API.
-        // Accept either YYYY-MM-DD or ISO 8601 datetimes; preserve time when provided.
+        // Accept either YYYY-MM-DD or ISO 8601 datetimes; preserve time when provided, default to 00:00:00 for date-only input.
         let mut norm_events: Vec<intervals_icu_client::Event> = Vec::with_capacity(events.len());
         for (i, ev) in events.into_iter().enumerate() {
             if ev.name.trim().is_empty() {
@@ -2482,6 +2482,7 @@ mod tests {
         let stored = captured.lock().await;
         let evs = stored.as_ref().unwrap();
         assert_eq!(evs[0].r#type.as_deref(), Some("Run"));
+        assert_eq!(evs[0].start_date_local, "2026-01-01T00:00:00");
     }
 
     #[tokio::test]
@@ -2562,6 +2563,7 @@ mod tests {
         assert!(res.is_ok());
         let created = res.unwrap().0;
         assert_eq!(created.r#type, Some("Run".into()));
+        assert_eq!(created.start_date_local, "2026-01-19T00:00:00");
     }
 
     #[tokio::test]
