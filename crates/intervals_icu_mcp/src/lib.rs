@@ -500,7 +500,8 @@ impl IntervalsMcpHandler {
                 .unwrap_or("")
                 .is_empty()
         {
-            return Err("invalid event: 'type' is required for WORKOUT".into());
+            tracing::debug!("create_event: missing type for WORKOUT - defaulting to Run");
+            ev2.r#type = Some("Run".into());
         }
         let created = self
             .client
@@ -575,6 +576,7 @@ impl IntervalsMcpHandler {
                     i
                 ));
             }
+            // If type is missing for WORKOUT events, default to Run to avoid upstream 422s
             if ev2.category == intervals_icu_client::EventCategory::Workout
                 && ev2
                     .r#type
@@ -583,10 +585,11 @@ impl IntervalsMcpHandler {
                     .unwrap_or("")
                     .is_empty()
             {
-                return Err(format!(
-                    "invalid event at index {}: 'type' is required for WORKOUT",
+                tracing::debug!(
+                    "bulk_create_events: missing type for WORKOUT at index {} - defaulting to Run",
                     i
-                ));
+                );
+                ev2.r#type = Some("Run".into());
             }
             norm_events.push(ev2);
         }
@@ -2066,7 +2069,387 @@ mod tests {
 
     #[tokio::test]
     async fn bulk_create_events_accepts_valid_payload() {
-        let client = MockClient;
+        use std::sync::Arc;
+        struct CapturingBulkClient {
+            captured: std::sync::Arc<tokio::sync::Mutex<Option<Vec<intervals_icu_client::Event>>>>,
+        }
+        #[async_trait::async_trait]
+        impl intervals_icu_client::IntervalsClient for CapturingBulkClient {
+            async fn get_athlete_profile(
+                &self,
+            ) -> Result<intervals_icu_client::AthleteProfile, intervals_icu_client::IntervalsError>
+            {
+                unimplemented!()
+            }
+            async fn get_recent_activities(
+                &self,
+                _limit: Option<u32>,
+                _days_back: Option<i32>,
+            ) -> Result<
+                Vec<intervals_icu_client::ActivitySummary>,
+                intervals_icu_client::IntervalsError,
+            > {
+                Ok(vec![])
+            }
+            async fn create_event(
+                &self,
+                _event: intervals_icu_client::Event,
+            ) -> Result<intervals_icu_client::Event, intervals_icu_client::IntervalsError>
+            {
+                unimplemented!()
+            }
+            async fn get_event(
+                &self,
+                _event_id: &str,
+            ) -> Result<intervals_icu_client::Event, intervals_icu_client::IntervalsError>
+            {
+                unimplemented!()
+            }
+            async fn delete_event(
+                &self,
+                _event_id: &str,
+            ) -> Result<(), intervals_icu_client::IntervalsError> {
+                Ok(())
+            }
+            async fn get_activity_streams(
+                &self,
+                _activity_id: &str,
+                _streams: Option<Vec<String>>,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(serde_json::json!({}))
+            }
+            async fn get_activity_intervals(
+                &self,
+                _activity_id: &str,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(serde_json::json!({}))
+            }
+            async fn get_best_efforts(
+                &self,
+                _activity_id: &str,
+                _options: Option<intervals_icu_client::BestEffortsOptions>,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(serde_json::json!({}))
+            }
+            async fn get_activity_details(
+                &self,
+                _activity_id: &str,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(serde_json::json!({}))
+            }
+            async fn search_activities(
+                &self,
+                _query: &str,
+                _limit: Option<u32>,
+            ) -> Result<
+                Vec<intervals_icu_client::ActivitySummary>,
+                intervals_icu_client::IntervalsError,
+            > {
+                Ok(vec![])
+            }
+            async fn search_activities_full(
+                &self,
+                _query: &str,
+                _limit: Option<u32>,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(serde_json::json!([]))
+            }
+            async fn update_activity(
+                &self,
+                _activity_id: &str,
+                _fields: &serde_json::Value,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(serde_json::json!({}))
+            }
+            async fn download_activity_file(
+                &self,
+                _activity_id: &str,
+                _output_path: Option<std::path::PathBuf>,
+            ) -> Result<Option<String>, intervals_icu_client::IntervalsError> {
+                Ok(None)
+            }
+            async fn download_fit_file(
+                &self,
+                _activity_id: &str,
+                _output_path: Option<std::path::PathBuf>,
+            ) -> Result<Option<String>, intervals_icu_client::IntervalsError> {
+                Ok(None)
+            }
+            async fn download_gpx_file(
+                &self,
+                _activity_id: &str,
+                _output_path: Option<std::path::PathBuf>,
+            ) -> Result<Option<String>, intervals_icu_client::IntervalsError> {
+                Ok(None)
+            }
+            async fn get_gear_list(
+                &self,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(serde_json::json!({}))
+            }
+            async fn get_sport_settings(
+                &self,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(serde_json::json!({}))
+            }
+            async fn get_power_curves(
+                &self,
+                _days_back: Option<i32>,
+                _sport: &str,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(serde_json::json!({}))
+            }
+            async fn get_gap_histogram(
+                &self,
+                _activity_id: &str,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(serde_json::json!({}))
+            }
+            async fn get_events(
+                &self,
+                _days_back: Option<i32>,
+                _limit: Option<u32>,
+            ) -> Result<Vec<intervals_icu_client::Event>, intervals_icu_client::IntervalsError>
+            {
+                Ok(vec![])
+            }
+            async fn bulk_create_events(
+                &self,
+                events: Vec<intervals_icu_client::Event>,
+            ) -> Result<Vec<intervals_icu_client::Event>, intervals_icu_client::IntervalsError>
+            {
+                let mut cap = self.captured.lock().await;
+                *cap = Some(events.clone());
+                Ok(events)
+            }
+            async fn download_activity_file_with_progress(
+                &self,
+                _activity_id: &str,
+                _output_path: Option<std::path::PathBuf>,
+                _progress_tx: tokio::sync::mpsc::Sender<intervals_icu_client::DownloadProgress>,
+                _cancel_rx: tokio::sync::watch::Receiver<bool>,
+            ) -> Result<Option<String>, intervals_icu_client::IntervalsError> {
+                Ok(Some("/tmp/a1.fit".into()))
+            }
+            async fn delete_activity(
+                &self,
+                _activity_id: &str,
+            ) -> Result<(), intervals_icu_client::IntervalsError> {
+                Ok(())
+            }
+            async fn update_event(
+                &self,
+                _event_id: &str,
+                _fields: &serde_json::Value,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(serde_json::json!({}))
+            }
+            async fn get_activities_around(
+                &self,
+                _activity_id: &str,
+                _limit: Option<u32>,
+                _route_id: Option<i64>,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(serde_json::json!({}))
+            }
+            async fn search_intervals(
+                &self,
+                _min_secs: u32,
+                _max_secs: u32,
+                _min_intensity: u32,
+                _max_intensity: u32,
+                _interval_type: Option<String>,
+                _min_reps: Option<u32>,
+                _max_reps: Option<u32>,
+                _limit: Option<u32>,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(serde_json::json!({}))
+            }
+
+            async fn get_activities_csv(
+                &self,
+            ) -> Result<String, intervals_icu_client::IntervalsError> {
+                Ok("id,start_date_local,name\n1,2025-10-18,Run".into())
+            }
+
+            async fn get_power_histogram(
+                &self,
+                _activity_id: &str,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(serde_json::json!({}))
+            }
+
+            async fn get_hr_histogram(
+                &self,
+                _activity_id: &str,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(serde_json::json!({}))
+            }
+
+            async fn get_pace_histogram(
+                &self,
+                _activity_id: &str,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(serde_json::json!({}))
+            }
+
+            async fn get_fitness_summary(
+                &self,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(serde_json::json!({}))
+            }
+
+            async fn get_wellness(
+                &self,
+                _days_back: Option<i32>,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(serde_json::json!({}))
+            }
+
+            async fn get_wellness_for_date(
+                &self,
+                _date: &str,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(serde_json::json!({}))
+            }
+
+            async fn update_wellness(
+                &self,
+                _date: &str,
+                _data: &serde_json::Value,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(serde_json::json!({}))
+            }
+
+            async fn get_upcoming_workouts(
+                &self,
+                _days_ahead: Option<u32>,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(serde_json::json!({}))
+            }
+
+            async fn bulk_delete_events(
+                &self,
+                _event_ids: Vec<String>,
+            ) -> Result<(), intervals_icu_client::IntervalsError> {
+                Ok(())
+            }
+
+            async fn duplicate_event(
+                &self,
+                _event_id: &str,
+                _num_copies: Option<u32>,
+                _weeks_between: Option<u32>,
+            ) -> Result<Vec<intervals_icu_client::Event>, intervals_icu_client::IntervalsError>
+            {
+                Ok(vec![])
+            }
+
+            async fn get_hr_curves(
+                &self,
+                _days_back: Option<i32>,
+                _sport: &str,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(serde_json::json!({}))
+            }
+
+            async fn get_pace_curves(
+                &self,
+                _days_back: Option<i32>,
+                _sport: &str,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(serde_json::json!({}))
+            }
+
+            async fn get_workout_library(
+                &self,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(serde_json::json!({}))
+            }
+
+            async fn get_workouts_in_folder(
+                &self,
+                _folder_id: &str,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(serde_json::json!({}))
+            }
+
+            async fn create_gear(
+                &self,
+                _gear: &serde_json::Value,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(serde_json::json!({}))
+            }
+
+            async fn update_gear(
+                &self,
+                _gear_id: &str,
+                _fields: &serde_json::Value,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(serde_json::json!({}))
+            }
+
+            async fn delete_gear(
+                &self,
+                _gear_id: &str,
+            ) -> Result<(), intervals_icu_client::IntervalsError> {
+                Ok(())
+            }
+
+            async fn create_gear_reminder(
+                &self,
+                _gear_id: &str,
+                _reminder: &serde_json::Value,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(serde_json::json!({}))
+            }
+
+            async fn update_gear_reminder(
+                &self,
+                _gear_id: &str,
+                _reminder_id: &str,
+                _reset: bool,
+                _snooze_days: u32,
+                _fields: &serde_json::Value,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(serde_json::json!({}))
+            }
+
+            async fn update_sport_settings(
+                &self,
+                _sport_type: &str,
+                _recalc_hr_zones: bool,
+                _fields: &serde_json::Value,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(serde_json::json!({}))
+            }
+
+            async fn apply_sport_settings(
+                &self,
+                _sport_type: &str,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(serde_json::json!({}))
+            }
+
+            async fn create_sport_settings(
+                &self,
+                _settings: &serde_json::Value,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(serde_json::json!({}))
+            }
+
+            async fn delete_sport_settings(
+                &self,
+                _sport_type: &str,
+            ) -> Result<(), intervals_icu_client::IntervalsError> {
+                Ok(())
+            }
+        }
+
+        let captured = std::sync::Arc::new(tokio::sync::Mutex::new(None));
+        let client = CapturingBulkClient {
+            captured: captured.clone(),
+        };
         let handler = IntervalsMcpHandler::new(Arc::new(client));
         let payload = json!({
             "events": [
@@ -2074,7 +2457,6 @@ mod tests {
                     "name": "Test Workout",
                     "start_date_local": "2026-01-01",
                     "category": "WORKOUT",
-                    "type": "Run",
                     "description": null
                 }
             ]
@@ -2083,6 +2465,9 @@ mod tests {
             serde_json::from_value(payload).expect("payload should deserialize");
         let res = handler.bulk_create_events(params).await;
         assert!(res.is_ok());
+        let stored = captured.lock().await;
+        let evs = stored.as_ref().unwrap();
+        assert_eq!(evs[0].r#type.as_deref(), Some("Run"));
     }
 
     #[tokio::test]
@@ -2156,8 +2541,9 @@ mod tests {
         let params: Parameters<intervals_icu_client::Event> =
             serde_json::from_value(payload).expect("payload should deserialize");
         let res = handler.create_event(params).await;
-        assert!(res.is_err());
-        assert!(res.err().unwrap().contains("type"));
+        assert!(res.is_ok());
+        let created = res.unwrap().0;
+        assert_eq!(created.r#type, Some("Run".into()));
     }
 
     #[tokio::test]
