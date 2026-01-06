@@ -354,6 +354,46 @@ async fn create_event_validates_date_and_posts() {
 }
 
 #[tokio::test]
+async fn create_event_accepts_iso_and_normalizes() {
+    let server = MockServer::start().await;
+    let mock_created = serde_json::json!({
+        "id": "evt-iso",
+        "start_date_local": "2026-01-19",
+        "name": "ISO test",
+        "category": "NOTE",
+        "description": null
+    });
+    Mock::given(method("POST"))
+        .and(path("/api/v1/athlete/ath/events"))
+        .and(wiremock::matchers::body_json(serde_json::json!({
+            "start_date_local": "2026-01-19",
+            "name": "ISO test",
+            "category": "NOTE",
+            "description": null
+        })))
+        .respond_with(ResponseTemplate::new(201).set_body_json(&mock_created))
+        .mount(&server)
+        .await;
+
+    let client = intervals_icu_client::http_client::ReqwestIntervalsClient::new(
+        &server.uri(),
+        "ath",
+        SecretString::new("tok".into()),
+    );
+
+    let ev2 = intervals_icu_client::Event {
+        id: None,
+        start_date_local: "2026-01-19T06:30:00".into(),
+        name: "ISO test".into(),
+        category: intervals_icu_client::EventCategory::Note,
+        description: None,
+        r#type: None,
+    };
+    let created2 = client.create_event(ev2).await.expect("create iso");
+    assert_eq!(created2.start_date_local, "2026-01-19");
+}
+
+#[tokio::test]
 async fn get_event_fetches_by_id() {
     let server = MockServer::start().await;
     let body = serde_json::json!({
