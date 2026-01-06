@@ -505,7 +505,7 @@ impl IntervalsMcpHandler {
         name = "bulk_create_events",
         description = "Create multiple calendar events in one call. Payload must be an object with 'events': [ ...event objects... ]. Fields per event: title, start_date_local (YYYY-MM-DD), category (WORKOUT/RACE/NOTE/etc). Efficient for importing plans"
     )]
-    async fn bulk_create_events(
+    pub async fn bulk_create_events(
         &self,
         params: Parameters<BulkCreateEventsToolParams>,
     ) -> Result<Json<EventsResult>, String> {
@@ -1864,6 +1864,32 @@ mod tests {
         assert!(tools.iter().any(|t| t.name == "delete_sport_settings"));
         // Ensure the number of registered tools matches the documented implementation
         assert_eq!(handler.tool_count(), 54, "Should register 54 tools");
+    }
+
+    #[test]
+    fn bulk_create_events_schema_is_object() {
+        let client =
+            ReqwestIntervalsClient::new("http://localhost", "ath", SecretString::new("key".into()));
+        let handler = IntervalsMcpHandler::new(Arc::new(client));
+        let tools = handler.tool_router.list_all();
+        let bulk = tools
+            .into_iter()
+            .find(|t| t.name == "bulk_create_events")
+            .expect("bulk_create_events tool present");
+
+        let val = serde_json::to_value(&bulk).expect("serialize tool");
+        let params = val
+            .get("inputSchema")
+            .or_else(|| val.get("parameters"))
+            .expect("input schema present");
+        assert_eq!(
+            params.get("type"),
+            Some(&serde_json::Value::String("object".into()))
+        );
+        assert!(
+            params.get("properties").is_some(),
+            "properties should exist on input schema"
+        );
     }
 
     #[test]
