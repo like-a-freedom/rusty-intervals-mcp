@@ -354,11 +354,11 @@ async fn create_event_validates_date_and_posts() {
 }
 
 #[tokio::test]
-async fn create_event_accepts_iso_and_normalizes() {
+async fn create_event_accepts_iso_and_preserves_time() {
     let server = MockServer::start().await;
     let mock_created = serde_json::json!({
         "id": "evt-iso",
-        "start_date_local": "2026-01-19",
+        "start_date_local": "2026-01-19T06:30:00",
         "name": "ISO test",
         "category": "NOTE",
         "description": null
@@ -366,7 +366,7 @@ async fn create_event_accepts_iso_and_normalizes() {
     Mock::given(method("POST"))
         .and(path("/api/v1/athlete/ath/events"))
         .and(wiremock::matchers::body_json(serde_json::json!({
-            "start_date_local": "2026-01-19",
+            "start_date_local": "2026-01-19T06:30:00",
             "name": "ISO test",
             "category": "NOTE",
             "description": null
@@ -390,7 +390,7 @@ async fn create_event_accepts_iso_and_normalizes() {
         r#type: None,
     };
     let created2 = client.create_event(ev2).await.expect("create iso");
-    assert_eq!(created2.start_date_local, "2026-01-19");
+    assert_eq!(created2.start_date_local, "2026-01-19T06:30:00");
 }
 
 #[tokio::test]

@@ -149,16 +149,16 @@ impl ReqwestIntervalsClient {
         format!("{}{}", first, chrs.as_str())
     }
 
-    // Normalize date-like strings to YYYY-MM-DD. Accepts YYYY-MM-DD, RFC3339, or naive YYYY-MM-DDTHH:MM:SS
-    fn normalize_date_str(s: &str) -> Result<String, ()> {
+    // Normalize start_date_local for events: preserve time when provided; accept date-only.
+    fn normalize_event_start(s: &str) -> Result<String, ()> {
         if chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").is_ok() {
             return Ok(s.to_string());
         }
         if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
-            return Ok(dt.date_naive().format("%Y-%m-%d").to_string());
+            return Ok(dt.naive_local().format("%Y-%m-%dT%H:%M:%S").to_string());
         }
         if let Ok(ndt) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S") {
-            return Ok(ndt.date().format("%Y-%m-%d").to_string());
+            return Ok(ndt.format("%Y-%m-%dT%H:%M:%S").to_string());
         }
         Err(())
     }
@@ -249,8 +249,8 @@ impl IntervalsClient for ReqwestIntervalsClient {
             "{}/api/v1/athlete/{}/events",
             self.base_url, self.athlete_id
         );
-        // Normalize/validate date locally to catch common mistakes and normalize to YYYY-MM-DD
-        match Self::normalize_date_str(&event.start_date_local) {
+        // Normalize/validate start_date_local locally to catch common mistakes and preserve time when present
+        match Self::normalize_event_start(&event.start_date_local) {
             Ok(s) => {
                 let mut ev = event;
                 ev.start_date_local = s;

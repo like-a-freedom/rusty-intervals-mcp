@@ -452,7 +452,7 @@ impl IntervalsMcpHandler {
         Ok(Json(EventsResult { events: evs }))
     }
 
-    // Shared helper: normalize date-like strings to YYYY-MM-DD. Accepts YYYY-MM-DD, RFC3339, or naive YYYY-MM-DDTHH:MM:SS
+    // Shared helper: normalize date-only strings to YYYY-MM-DD. Accepts YYYY-MM-DD, RFC3339, or naive YYYY-MM-DDTHH:MM:SS
     fn normalize_date_str(s: &str) -> Result<String, ()> {
         if chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").is_ok() {
             return Ok(s.to_string());
@@ -466,26 +466,40 @@ impl IntervalsMcpHandler {
         Err(())
     }
 
+    // Normalize start_date_local for events: keep full datetime when provided, otherwise accept date-only.
+    fn normalize_event_start(s: &str) -> Result<String, ()> {
+        if chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").is_ok() {
+            return Ok(s.to_string());
+        }
+        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+            return Ok(dt.naive_local().format("%Y-%m-%dT%H:%M:%S").to_string());
+        }
+        if let Ok(ndt) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S") {
+            return Ok(ndt.format("%Y-%m-%dT%H:%M:%S").to_string());
+        }
+        Err(())
+    }
+
     #[tool(
         name = "create_event",
-        description = "Create a calendar event (workout, race, note, etc). Requires: title, start_date_local (YYYY-MM-DD), category (WORKOUT/RACE_A/RACE_B/RACE_C/NOTE/PLAN/HOLIDAY/SICK/INJURED/TARGET/SET_FITNESS/etc). Optional: description, notes, duration_mins"
+        description = "Create a calendar event (workout, race, note, etc). Requires: title, start_date_local (YYYY-MM-DD or ISO datetime), category (WORKOUT/RACE_A/RACE_B/RACE_C/NOTE/PLAN/HOLIDAY/SICK/INJURED/TARGET/SET_FITNESS/etc). Optional: description, notes, duration_mins"
     )]
     async fn create_event(
         &self,
         params: Parameters<intervals_icu_client::Event>,
     ) -> Result<Json<intervals_icu_client::Event>, String> {
         let ev = params.0;
-        // Validate and normalize input: accept YYYY-MM-DD or ISO 8601 datetimes and normalize to YYYY-MM-DD
+        // Validate and normalize input: accept YYYY-MM-DD or ISO 8601 datetimes and preserve time when provided
         if ev.name.trim().is_empty() {
             return Err("invalid event: name is empty".into());
         }
         let mut ev2 = ev.clone();
-        if Self::normalize_date_str(&ev2.start_date_local).is_err() {
+        if Self::normalize_event_start(&ev2.start_date_local).is_err() {
             return Err(format!(
                 "invalid start_date_local: {}",
                 ev2.start_date_local
             ));
-        } else if let Ok(s) = Self::normalize_date_str(&ev2.start_date_local) {
+        } else if let Ok(s) = Self::normalize_event_start(&ev2.start_date_local) {
             ev2.start_date_local = s;
         }
         if ev2.category == intervals_icu_client::EventCategory::Unknown {
@@ -545,7 +559,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "bulk_create_events",
-        description = "Create multiple calendar events in one call. Payload must be an object with 'events': [ ...event objects... ]. Fields per event: title, start_date_local (YYYY-MM-DD), category (WORKOUT/RACE/NOTE/etc). Efficient for importing plans"
+        description = "Create multiple calendar events in one call. Payload must be an object with 'events': [ ...event objects... ]. Fields per event: title, start_date_local (YYYY-MM-DD or ISO datetime), category (WORKOUT/RACE/NOTE/etc). Efficient for importing plans"
     )]
     pub async fn bulk_create_events(
         &self,
@@ -553,15 +567,15 @@ impl IntervalsMcpHandler {
     ) -> Result<Json<EventsResult>, String> {
         let events = params.0.events;
         // Normalize and validate input early to provide clearer errors and avoid 422 from the API.
-        // Accept either YYYY-MM-DD or ISO 8601 datetimes (we normalize to YYYY-MM-DD).
+        // Accept either YYYY-MM-DD or ISO 8601 datetimes; preserve time when provided.
         let mut norm_events: Vec<intervals_icu_client::Event> = Vec::with_capacity(events.len());
         for (i, ev) in events.into_iter().enumerate() {
             if ev.name.trim().is_empty() {
                 return Err(format!("invalid event at index {}: name is empty", i));
             }
-            // Normalize date: accept YYYY-MM-DD or RFC3339 / NaiveDateTime
+            // Normalize date/time: accept YYYY-MM-DD or RFC3339 / NaiveDateTime, preserve time when provided
             let mut ev2 = ev.clone();
-            match Self::normalize_date_str(&ev2.start_date_local) {
+            match Self::normalize_event_start(&ev2.start_date_local) {
                 Ok(s) => ev2.start_date_local = s,
                 Err(()) => {
                     return Err(format!(
@@ -1357,7 +1371,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "update_event",
-        description = "Update calendar event fields: title, description, date (YYYY-MM-DD), category, etc"
+        description = "Update calendar event fields: title, description, date/time (YYYY-MM-DD or ISO datetime), category, etc"
     )]
     async fn update_event(
         &self,
@@ -1365,13 +1379,13 @@ impl IntervalsMcpHandler {
     ) -> Result<Json<ObjectResult>, String> {
         let p = params.0;
         let event_id = p.event_id.as_cow().into_owned();
-        // If fields contain start_date_local, normalize it to YYYY-MM-DD
+        // If fields contain start_date_local, normalize it (preserve time when present)
         let mut fields = p.fields.clone();
         if let Some(obj) = fields.as_object_mut()
             && let Some(val) = obj.get("start_date_local")
             && let Some(s) = val.as_str()
         {
-            let s2 = match Self::normalize_date_str(s) {
+            let s2 = match Self::normalize_event_start(s) {
                 Ok(s2) => s2,
                 Err(()) => return Err(format!("invalid start_date_local: {}", s)),
             };
@@ -2487,8 +2501,11 @@ mod tests {
         });
         let params: Parameters<BulkCreateEventsToolParams> =
             serde_json::from_value(payload).expect("payload should deserialize");
-        let res = handler.bulk_create_events(params).await;
-        assert!(res.is_ok());
+        let res = handler
+            .bulk_create_events(params)
+            .await
+            .expect("bulk create");
+        assert_eq!(res.0.events[0].start_date_local, "2026-01-19T06:30:00");
     }
 
     #[tokio::test]
@@ -2505,7 +2522,8 @@ mod tests {
         let params: Parameters<intervals_icu_client::Event> =
             serde_json::from_value(payload).expect("payload should deserialize");
         let res = handler.create_event(params).await;
-        assert!(res.is_ok());
+        let created = res.expect("create event should succeed");
+        assert_eq!(created.0.start_date_local, "2026-01-19T06:30:00");
     }
 
     #[tokio::test]
@@ -2717,10 +2735,10 @@ mod tests {
         }
         async fn bulk_create_events(
             &self,
-            _events: Vec<intervals_icu_client::Event>,
+            events: Vec<intervals_icu_client::Event>,
         ) -> Result<Vec<intervals_icu_client::Event>, intervals_icu_client::IntervalsError>
         {
-            Ok(vec![])
+            Ok(events)
         }
 
         async fn download_activity_file_with_progress(
@@ -3542,7 +3560,7 @@ mod tests {
         let obj = stored.as_ref().unwrap();
         assert_eq!(
             obj.get("start_date_local").and_then(|v| v.as_str()),
-            Some("2026-01-19")
+            Some("2026-01-19T06:30:00")
         );
     }
 
