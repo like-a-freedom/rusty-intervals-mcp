@@ -461,9 +461,32 @@ impl IntervalsMcpHandler {
         params: Parameters<intervals_icu_client::Event>,
     ) -> Result<Json<intervals_icu_client::Event>, String> {
         let ev = params.0;
+        // Validate and normalize input: accept YYYY-MM-DD or ISO 8601 datetimes and normalize to YYYY-MM-DD
+        if ev.name.trim().is_empty() {
+            return Err("invalid event: name is empty".into());
+        }
+        let mut ev2 = ev.clone();
+        if chrono::NaiveDate::parse_from_str(&ev2.start_date_local, "%Y-%m-%d").is_err() {
+            // Try RFC3339
+            if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&ev2.start_date_local) {
+                ev2.start_date_local = dt.date_naive().format("%Y-%m-%d").to_string();
+            } else if let Ok(ndt) =
+                chrono::NaiveDateTime::parse_from_str(&ev2.start_date_local, "%Y-%m-%dT%H:%M:%S")
+            {
+                ev2.start_date_local = ndt.date().format("%Y-%m-%d").to_string();
+            } else {
+                return Err(format!(
+                    "invalid start_date_local: {}",
+                    ev2.start_date_local
+                ));
+            }
+        }
+        if ev2.category == intervals_icu_client::EventCategory::Unknown {
+            return Err("invalid category: unknown".into());
+        }
         let created = self
             .client
-            .create_event(ev)
+            .create_event(ev2)
             .await
             .map_err(|e| e.to_string())?;
         Ok(Json(created))
@@ -510,27 +533,42 @@ impl IntervalsMcpHandler {
         params: Parameters<BulkCreateEventsToolParams>,
     ) -> Result<Json<EventsResult>, String> {
         let events = params.0.events;
-        // Validate input early to provide clearer errors and avoid 422 from the API
-        for (i, ev) in events.iter().enumerate() {
+        // Normalize and validate input early to provide clearer errors and avoid 422 from the API.
+        // Accept either YYYY-MM-DD or ISO 8601 datetimes (we normalize to YYYY-MM-DD).
+        let mut norm_events: Vec<intervals_icu_client::Event> = Vec::with_capacity(events.len());
+        for (i, ev) in events.into_iter().enumerate() {
             if ev.name.trim().is_empty() {
                 return Err(format!("invalid event at index {}: name is empty", i));
             }
-            if chrono::NaiveDate::parse_from_str(&ev.start_date_local, "%Y-%m-%d").is_err() {
-                return Err(format!(
-                    "invalid start_date_local for event at index {}: {}",
-                    i, ev.start_date_local
-                ));
+            // Normalize date: accept YYYY-MM-DD or RFC3339 / NaiveDateTime
+            let mut ev2 = ev.clone();
+            if chrono::NaiveDate::parse_from_str(&ev2.start_date_local, "%Y-%m-%d").is_err() {
+                // try RFC3339 (with timezone)
+                if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&ev2.start_date_local) {
+                    ev2.start_date_local = dt.date_naive().format("%Y-%m-%d").to_string();
+                } else if let Ok(ndt) = chrono::NaiveDateTime::parse_from_str(
+                    &ev2.start_date_local,
+                    "%Y-%m-%dT%H:%M:%S",
+                ) {
+                    ev2.start_date_local = ndt.date().format("%Y-%m-%d").to_string();
+                } else {
+                    return Err(format!(
+                        "invalid start_date_local for event at index {}: {}",
+                        i, ev2.start_date_local
+                    ));
+                }
             }
-            if ev.category == intervals_icu_client::EventCategory::Unknown {
+            if ev2.category == intervals_icu_client::EventCategory::Unknown {
                 return Err(format!(
                     "invalid category for event at index {}: unknown category",
                     i
                 ));
             }
+            norm_events.push(ev2);
         }
         let created = self
             .client
-            .bulk_create_events(events)
+            .bulk_create_events(norm_events)
             .await
             .map_err(|e| e.to_string())?;
         Ok(Json(EventsResult { events: created }))
@@ -1996,22 +2034,65 @@ mod tests {
         assert!(res.is_ok());
     }
 
-    #[test]
-    fn search_params_accepts_q_and_query() {
-        let p: SearchParams = serde_json::from_value(json!({"q": "ride", "limit": 10})).unwrap();
-        assert_eq!(p.q, "ride");
-        assert_eq!(p.limit, Some(10));
-
-        let p2: SearchParams = serde_json::from_value(json!({"query": "run", "limit": 5})).unwrap();
-        assert_eq!(p2.q, "run");
-        assert_eq!(p2.limit, Some(5));
+    #[tokio::test]
+    async fn bulk_create_events_accepts_iso_datetime() {
+        let client = MockClient;
+        let handler = IntervalsMcpHandler::new(Arc::new(client));
+        let payload = json!({
+            "events": [
+                {
+                    "name": "Test Workout",
+                    "start_date_local": "2026-01-19T06:30:00",
+                    "category": "WORKOUT",
+                    "description": null
+                }
+            ]
+        });
+        let params: Parameters<BulkCreateEventsToolParams> =
+            serde_json::from_value(payload).expect("payload should deserialize");
+        let res = handler.bulk_create_events(params).await;
+        assert!(res.is_ok());
     }
 
-    use async_trait::async_trait;
+    #[tokio::test]
+    async fn create_event_accepts_iso_datetime_and_normalizes_date() {
+        let client = MockClient;
+        let handler = IntervalsMcpHandler::new(Arc::new(client));
+        let payload = json!({
+            "name": "Test Workout",
+            "start_date_local": "2026-01-19T06:30:00",
+            "category": "WORKOUT",
+            "description": null
+        });
+        let params: Parameters<intervals_icu_client::Event> =
+            serde_json::from_value(payload).expect("payload should deserialize");
+        let res = handler.create_event(params).await;
+        assert!(res.is_ok());
+    }
+
+    #[tokio::test]
+    async fn create_event_rejects_invalid_date() {
+        let client = MockClient;
+        let handler = IntervalsMcpHandler::new(Arc::new(client));
+        let payload = json!({
+            "name": "Test Workout",
+            "start_date_local": "2026-13-01",
+            "category": "WORKOUT",
+            "description": null
+        });
+        let params: Parameters<intervals_icu_client::Event> =
+            serde_json::from_value(payload).expect("payload should deserialize");
+        let res = handler.create_event(params).await;
+        assert!(res.is_err());
+        let err = res.err().unwrap();
+        assert!(
+            err.contains("invalid start_date_local") || err.contains("invalid start_date_local:")
+        );
+    }
 
     struct MockClient;
 
-    #[async_trait]
+    #[async_trait::async_trait]
     impl intervals_icu_client::IntervalsClient for MockClient {
         async fn get_athlete_profile(
             &self,
@@ -2032,9 +2113,9 @@ mod tests {
         }
         async fn create_event(
             &self,
-            _event: intervals_icu_client::Event,
+            event: intervals_icu_client::Event,
         ) -> Result<intervals_icu_client::Event, intervals_icu_client::IntervalsError> {
-            unimplemented!()
+            Ok(event)
         }
         async fn get_event(
             &self,

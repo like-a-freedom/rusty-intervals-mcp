@@ -1152,6 +1152,8 @@ async fn create_event_handles_non_success() {
     };
     let res = client.create_event(event).await;
     assert!(res.is_err());
+    let err = format!("{}", res.err().unwrap());
+    assert!(err.contains("400") || err.contains("bad"));
 }
 
 #[tokio::test]

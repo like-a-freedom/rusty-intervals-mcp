@@ -231,11 +231,6 @@ impl IntervalsClient for ReqwestIntervalsClient {
     }
 
     async fn create_event(&self, event: crate::Event) -> Result<crate::Event, IntervalsError> {
-        // basic date validation: YYYY-MM-DD
-        let re = regex::Regex::new(r"^\d{4}-\d{2}-\d{2}$").unwrap();
-        if !re.is_match(&event.start_date_local) {
-            return Err(IntervalsError::Config("invalid date format".into()));
-        }
         let url = format!(
             "{}/api/v1/athlete/{}/events",
             self.base_url, self.athlete_id
@@ -248,9 +243,11 @@ impl IntervalsClient for ReqwestIntervalsClient {
             .send()
             .await?;
         if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
             return Err(IntervalsError::Config(format!(
-                "unexpected status: {}",
-                resp.status()
+                "unexpected status: {} {}",
+                status, body
             )));
         }
         let created: crate::Event = resp.json().await?;
