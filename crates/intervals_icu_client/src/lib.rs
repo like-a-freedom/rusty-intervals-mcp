@@ -66,12 +66,17 @@ pub enum EventCategory {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, JsonSchema)]
 pub struct Event {
     #[serde(default, deserialize_with = "deserialize_opt_string")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
     #[serde(rename = "start_date_local")]
     pub start_date_local: String, // YYYY-MM-DD
     pub name: String,
     pub category: EventCategory,
     pub description: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "type")]
+    pub r#type: Option<String>,
 }
 
 fn deserialize_opt_string<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>

@@ -235,6 +235,18 @@ impl IntervalsClient for ReqwestIntervalsClient {
             "{}/api/v1/athlete/{}/events",
             self.base_url, self.athlete_id
         );
+        // Validate date locally to catch common mistakes before sending to server
+        if chrono::NaiveDate::parse_from_str(&event.start_date_local, "%Y-%m-%d").is_err()
+            && chrono::DateTime::parse_from_rfc3339(&event.start_date_local).is_err()
+            && chrono::NaiveDateTime::parse_from_str(&event.start_date_local, "%Y-%m-%dT%H:%M:%S")
+                .is_err()
+        {
+            return Err(IntervalsError::Config(format!(
+                "invalid start_date_local: {}",
+                event.start_date_local
+            )));
+        }
+
         let resp = self
             .client
             .post(&url)
@@ -588,12 +600,14 @@ impl IntervalsClient for ReqwestIntervalsClient {
                     param_sets_extended.push(vec![("stream", cand.as_str())]);
 
                     for params in param_sets.iter().chain(param_sets_extended.iter()) {
+                        let qp: Vec<(&str, &str)> = params.iter().map(|(k, v)| (*k, *v)).collect();
                         let resp = self
                             .client
                             .get(&url)
                             .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+                            .query(&qp)
                             .send()
-                            .await?; // handled by building url earlier
+                            .await?;
                         if resp.status().is_success() {
                             return Ok(resp.json().await?);
                         }

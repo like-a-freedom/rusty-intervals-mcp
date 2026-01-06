@@ -491,6 +491,17 @@ impl IntervalsMcpHandler {
         if ev2.category == intervals_icu_client::EventCategory::Unknown {
             return Err("invalid category: unknown".into());
         }
+        // For WORKOUT events, `type` (sport) is required by the upstream API
+        if ev2.category == intervals_icu_client::EventCategory::Workout
+            && ev2
+                .r#type
+                .as_ref()
+                .map(|s| s.trim())
+                .unwrap_or("")
+                .is_empty()
+        {
+            return Err("invalid event: 'type' is required for WORKOUT".into());
+        }
         let created = self
             .client
             .create_event(ev2)
@@ -561,6 +572,19 @@ impl IntervalsMcpHandler {
             if ev2.category == intervals_icu_client::EventCategory::Unknown {
                 return Err(format!(
                     "invalid category for event at index {}: unknown category",
+                    i
+                ));
+            }
+            if ev2.category == intervals_icu_client::EventCategory::Workout
+                && ev2
+                    .r#type
+                    .as_ref()
+                    .map(|s| s.trim())
+                    .unwrap_or("")
+                    .is_empty()
+            {
+                return Err(format!(
+                    "invalid event at index {}: 'type' is required for WORKOUT",
                     i
                 ));
             }
@@ -2050,6 +2074,7 @@ mod tests {
                     "name": "Test Workout",
                     "start_date_local": "2026-01-01",
                     "category": "WORKOUT",
+                    "type": "Run",
                     "description": null
                 }
             ]
@@ -2070,6 +2095,7 @@ mod tests {
                     "name": "Test Workout",
                     "start_date_local": "2026-01-19T06:30:00",
                     "category": "WORKOUT",
+                    "type": "Run",
                     "description": null
                 }
             ]
@@ -2088,6 +2114,7 @@ mod tests {
             "name": "Test Workout",
             "start_date_local": "2026-01-19T06:30:00",
             "category": "WORKOUT",
+            "type": "Run",
             "description": null
         });
         let params: Parameters<intervals_icu_client::Event> =
@@ -2114,6 +2141,23 @@ mod tests {
         assert!(
             err.contains("invalid start_date_local") || err.contains("invalid start_date_local:")
         );
+    }
+
+    #[tokio::test]
+    async fn create_event_rejects_missing_type_for_workout() {
+        let client = MockClient;
+        let handler = IntervalsMcpHandler::new(Arc::new(client));
+        let payload = json!({
+            "name": "Test Workout",
+            "start_date_local": "2026-01-19",
+            "category": "WORKOUT",
+            "description": null
+        });
+        let params: Parameters<intervals_icu_client::Event> =
+            serde_json::from_value(payload).expect("payload should deserialize");
+        let res = handler.create_event(params).await;
+        assert!(res.is_err());
+        assert!(res.err().unwrap().contains("type"));
     }
 
     #[tokio::test]

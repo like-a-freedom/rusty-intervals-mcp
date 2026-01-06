@@ -335,6 +335,7 @@ async fn create_event_validates_date_and_posts() {
         name: "Test".into(),
         category: intervals_icu_client::EventCategory::Note,
         description: None,
+        r#type: None,
     };
     let created = client.create_event(ev).await.expect("create");
     assert_eq!(created.start_date_local, "2025-12-15");
@@ -346,6 +347,7 @@ async fn create_event_validates_date_and_posts() {
         name: "Bad".into(),
         category: intervals_icu_client::EventCategory::Note,
         description: None,
+        r#type: None,
     };
     let err = client.create_event(bad).await;
     assert!(err.is_err());
@@ -947,6 +949,7 @@ async fn bulk_create_events_propagates_error_body() {
         start_date_local: "2026-13-01".into(),
         category: intervals_icu_client::EventCategory::Workout,
         description: None,
+        r#type: None,
     };
 
     let res = client.bulk_create_events(vec![ev]).await;
@@ -1149,6 +1152,7 @@ async fn create_event_handles_non_success() {
         name: "X".into(),
         category: intervals_icu_client::EventCategory::Note,
         description: None,
+        r#type: None,
     };
     let res = client.create_event(event).await;
     assert!(res.is_err());
