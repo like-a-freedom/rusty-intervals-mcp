@@ -205,18 +205,21 @@ impl IntervalsClient for ReqwestIntervalsClient {
             today - Duration::days(7)
         };
         let newest = today;
-        let mut req = self
-            .client
-            .get(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()));
-        req = req.query(&[
+        let mut pairs: Vec<(&str, String)> = vec![
             ("oldest", oldest.to_string()),
             ("newest", newest.to_string()),
-        ]);
+        ];
         if let Some(limit) = limit {
-            req = req.query(&[("limit", limit)]);
+            pairs.push(("limit", limit.to_string()));
         }
-        let resp = req.send().await?;
+        let qp: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        let resp = self
+            .client
+            .get(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .query(&qp)
+            .send()
+            .await?;
         if !resp.status().is_success() {
             return Err(IntervalsError::Config(format!(
                 "unexpected status: {}",
@@ -317,18 +320,22 @@ impl IntervalsClient for ReqwestIntervalsClient {
             "{}/api/v1/athlete/{}/events",
             self.base_url, self.athlete_id
         );
-        let mut req = self
-            .client
-            .get(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()));
+        let mut pairs: Vec<(&str, String)> = vec![];
         if let Some(d) = days_back {
             // API may support query params; use 'days_back' as example param
-            req = req.query(&[("days_back", d)]);
+            pairs.push(("days_back", d.to_string()));
         }
         if let Some(l) = limit {
-            req = req.query(&[("limit", l)]);
+            pairs.push(("limit", l.to_string()));
         }
-        let resp = req.send().await?;
+        let qp: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        let resp = self
+            .client
+            .get(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .query(&qp)
+            .send()
+            .await?;
         if !resp.status().is_success() {
             return Err(IntervalsError::Config(format!(
                 "unexpected status: {}",
@@ -370,14 +377,18 @@ impl IntervalsClient for ReqwestIntervalsClient {
         streams: Option<Vec<String>>,
     ) -> Result<serde_json::Value, IntervalsError> {
         let url = format!("{}/api/v1/activity/{}/streams", self.base_url, activity_id);
-        let mut req = self
+        let mut pairs: Vec<(&str, String)> = vec![];
+        if let Some(s) = streams {
+            pairs.push(("streams", s.join(",")));
+        }
+        let qp: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        let resp = self
             .client
             .get(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()));
-        if let Some(s) = streams {
-            req = req.query(&[("streams", s.join(","))]);
-        }
-        let resp = req.send().await?;
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .query(&qp)
+            .send()
+            .await?;
         if !resp.status().is_success() {
             return Err(IntervalsError::Config(format!(
                 "unexpected status: {}",
@@ -457,16 +468,14 @@ impl IntervalsClient for ReqwestIntervalsClient {
                     q.push(("endIndex", ei.to_string()));
                 }
 
-                let req = self
+                let params = q;
+                let resp = self
                     .client
                     .get(&url)
-                    .basic_auth("API_KEY", Some(self.api_key.expose_secret()));
-                // convert q into tuples of &str
-                let q2: Vec<(&str, String)> = q;
-                let req = req;
-                // reqwest query expects (&str,&str) or serializable; build vec of tuples
-                let params: Vec<(&str, &str)> = q2.iter().map(|(k, v)| (*k, v.as_str())).collect();
-                let resp = req.query(&params[..]).send().await?;
+                    .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+                    .query(&params)
+                    .send()
+                    .await?;
                 if !resp.status().is_success() {
                     return Err(IntervalsError::Config(format!(
                         "unexpected status: {}",
@@ -492,11 +501,12 @@ impl IntervalsClient for ReqwestIntervalsClient {
         ];
 
         for params in attempts.iter() {
+            let qp: Vec<(&str, &str)> = params.iter().map(|(k, v)| (*k, *v)).collect();
             let resp = self
                 .client
                 .get(&url)
                 .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-                .query(&params[..])
+                .query(&qp)
                 .send()
                 .await?;
 
@@ -583,9 +593,8 @@ impl IntervalsClient for ReqwestIntervalsClient {
                             .client
                             .get(&url)
                             .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-                            .query(&params[..])
                             .send()
-                            .await?;
+                            .await?; // handled by building url earlier
                         if resp.status().is_success() {
                             return Ok(resp.json().await?);
                         }
@@ -668,15 +677,18 @@ impl IntervalsClient for ReqwestIntervalsClient {
             "{}/api/v1/athlete/{}/activities/search",
             self.base_url, self.athlete_id
         );
-        let mut req = self
+        let mut pairs: Vec<(&str, String)> = vec![("q", query.to_string())];
+        if let Some(l) = limit {
+            pairs.push(("limit", l.to_string()));
+        }
+        let qp: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        let resp = self
             .client
             .get(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()));
-        req = req.query(&[("q", query)]);
-        if let Some(l) = limit {
-            req = req.query(&[("limit", l)]);
-        }
-        let resp = req.send().await?;
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .query(&qp)
+            .send()
+            .await?;
         if !resp.status().is_success() {
             return Err(IntervalsError::Config(format!(
                 "unexpected status: {}",
@@ -699,15 +711,18 @@ impl IntervalsClient for ReqwestIntervalsClient {
             "{}/api/v1/athlete/{}/activities/search-full",
             self.base_url, self.athlete_id
         );
-        let mut req = self
+        let mut pairs: Vec<(&str, String)> = vec![("q", query.to_string())];
+        if let Some(l) = limit {
+            pairs.push(("limit", l.to_string()));
+        }
+        let qp: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        let resp = self
             .client
             .get(&url)
             .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .query(&[("q", query)]);
-        if let Some(l) = limit {
-            req = req.query(&[("limit", l)]);
-        }
-        let resp = req.send().await?;
+            .query(&qp)
+            .send()
+            .await?;
         if !resp.status().is_success() {
             return Err(IntervalsError::Config(format!(
                 "unexpected status: {}",
@@ -914,18 +929,19 @@ impl IntervalsClient for ReqwestIntervalsClient {
             "{}/api/v1/athlete/{}/power-curves",
             self.base_url, self.athlete_id
         );
-        let mut req = self
-            .client
-            .get(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()));
-        // upstream API requires the sport type as `type` query parameter
-        let sport_val = Self::normalize_sport(sport);
-        req = req.query(&[("type", sport_val.as_str())]);
+        let mut pairs: Vec<(&str, String)> = vec![("type", Self::normalize_sport(sport))];
         if let Some(d) = days_back {
             let curve = format!("{}d", d);
-            req = req.query(&[("curves", curve)]);
+            pairs.push(("curves", curve));
         }
-        let resp = req.send().await?;
+        let qp: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        let resp = self
+            .client
+            .get(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .query(&qp)
+            .send()
+            .await?;
         if !resp.status().is_success() {
             return Err(IntervalsError::Config(format!(
                 "unexpected status: {}",
@@ -987,18 +1003,21 @@ impl IntervalsClient for ReqwestIntervalsClient {
             "{}/api/v1/athlete/{}/activities-around",
             self.base_url, self.athlete_id
         );
-        let mut req = self
+        let mut pairs: Vec<(&str, String)> = vec![("activity_id", activity_id.to_string())];
+        if let Some(lim) = limit {
+            pairs.push(("limit", lim.to_string()));
+        }
+        if let Some(r) = route_id {
+            pairs.push(("route_id", r.to_string()));
+        }
+        let qp: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        let resp = self
             .client
             .get(&url)
             .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .query(&[("activity_id", activity_id)]);
-        if let Some(lim) = limit {
-            req = req.query(&[("limit", lim.to_string())]);
-        }
-        if let Some(r) = route_id {
-            req = req.query(&[("route_id", r.to_string())]);
-        }
-        let resp = req.send().await?;
+            .query(&qp)
+            .send()
+            .await?;
         if !resp.status().is_success() {
             return Err(IntervalsError::Config(format!(
                 "unexpected status: {}",
@@ -1023,29 +1042,31 @@ impl IntervalsClient for ReqwestIntervalsClient {
             "{}/api/v1/athlete/{}/activities/interval-search",
             self.base_url, self.athlete_id
         );
-        let mut req = self
-            .client
-            .get(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .query(&[
-                ("minSecs", min_secs.to_string()),
-                ("maxSecs", max_secs.to_string()),
-                ("minIntensity", min_intensity.to_string()),
-                ("maxIntensity", max_intensity.to_string()),
-            ]);
+        let mut pairs: Vec<(&str, String)> = vec![
+            ("minSecs", min_secs.to_string()),
+            ("maxSecs", max_secs.to_string()),
+            ("minIntensity", min_intensity.to_string()),
+            ("maxIntensity", max_intensity.to_string()),
+        ];
         if let Some(kind) = interval_type {
-            req = req.query(&[("type", kind)]);
+            pairs.push(("type", kind));
         }
         if let Some(reps) = min_reps {
-            req = req.query(&[("minReps", reps.to_string())]);
+            pairs.push(("minReps", reps.to_string()));
         }
         if let Some(reps) = max_reps {
-            req = req.query(&[("maxReps", reps.to_string())]);
+            pairs.push(("maxReps", reps.to_string()));
         }
         if let Some(l) = limit {
-            req = req.query(&[("limit", l.to_string())]);
+            pairs.push(("limit", l.to_string()));
         }
-        let resp = req.send().await?;
+        let resp = self
+            .client
+            .get(&url)
+            .query(&pairs)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .send()
+            .await?;
         if !resp.status().is_success() {
             return Err(IntervalsError::Config(format!(
                 "unexpected status: {}",
@@ -1165,7 +1186,8 @@ impl IntervalsClient for ReqwestIntervalsClient {
                 .checked_sub_signed(chrono::Duration::days(d as i64))
                 .map(|dt| dt.format("%Y-%m-%d").to_string());
             if let Some(o) = oldest {
-                req = req.query(&[("oldest", o)]);
+                let qp = [("oldest", o)];
+                req = req.query(&qp);
             }
         }
         let resp = req.send().await?;
@@ -1238,11 +1260,12 @@ impl IntervalsClient for ReqwestIntervalsClient {
             .map(|dt| dt.format("%Y-%m-%d").to_string())
             .unwrap_or_default();
         let oldest = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let pairs = [("oldest", oldest), ("newest", newest)];
         let resp = self
             .client
             .get(&url)
             .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .query(&[("oldest", oldest), ("newest", newest)])
+            .query(&pairs)
             .send()
             .await?;
         if !resp.status().is_success() {
@@ -1349,16 +1372,18 @@ impl IntervalsClient for ReqwestIntervalsClient {
             "{}/api/v1/athlete/{}/hr-curves",
             self.base_url, self.athlete_id
         );
-        let mut req = self
-            .client
-            .get(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()));
-        req = req.query(&[("type", sport)]);
+        let mut pairs: Vec<(&str, String)> = vec![("type", sport.to_string())];
         if let Some(d) = days_back {
             let curve = format!("{}d", d);
-            req = req.query(&[("curves", curve)]);
+            pairs.push(("curves", curve));
         }
-        let resp = req.send().await?;
+        let resp = self
+            .client
+            .get(&url)
+            .query(&pairs)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .send()
+            .await?;
         if !resp.status().is_success() {
             return Err(IntervalsError::Config(format!(
                 "unexpected status: {}",
@@ -1377,16 +1402,18 @@ impl IntervalsClient for ReqwestIntervalsClient {
             "{}/api/v1/athlete/{}/pace-curves",
             self.base_url, self.athlete_id
         );
-        let mut req = self
-            .client
-            .get(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()));
-        req = req.query(&[("type", sport)]);
+        let mut pairs: Vec<(&str, String)> = vec![("type", sport.to_string())];
         if let Some(d) = days_back {
             let curve = format!("{}d", d);
-            req = req.query(&[("curves", curve)]);
+            pairs.push(("curves", curve));
         }
-        let resp = req.send().await?;
+        let resp = self
+            .client
+            .get(&url)
+            .query(&pairs)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .send()
+            .await?;
         if !resp.status().is_success() {
             return Err(IntervalsError::Config(format!(
                 "unexpected status: {}",
@@ -1565,14 +1592,15 @@ impl IntervalsClient for ReqwestIntervalsClient {
             "{}/api/v1/athlete/{}/gear/{}/reminder/{}",
             self.base_url, self.athlete_id, gear_id, reminder_id
         );
+        let pairs = [
+            ("reset", reset.to_string()),
+            ("snoozeDays", snooze_days.to_string()),
+        ];
         let resp = self
             .client
             .put(&url)
             .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .query(&[
-                ("reset", reset.to_string()),
-                ("snoozeDays", snooze_days.to_string()),
-            ])
+            .query(&pairs)
             .json(fields)
             .send()
             .await?;
@@ -1597,11 +1625,12 @@ impl IntervalsClient for ReqwestIntervalsClient {
             "{}/api/v1/athlete/{}/sport-settings/{}",
             self.base_url, self.athlete_id, sport_type
         );
+        let pairs = [("recalcHrZones", recalc_hr_zones.to_string())];
         let resp = self
             .client
             .put(&url)
             .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .query(&[("recalcHrZones", recalc_hr_zones)])
+            .query(&pairs)
             .json(fields)
             .send()
             .await?;
