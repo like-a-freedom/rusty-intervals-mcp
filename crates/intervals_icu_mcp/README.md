@@ -21,6 +21,22 @@ export INTERVALS_ICU_ATHLETE_ID=...
 cargo run -p intervals_icu_mcp --bin server
 ```
 
+Or install the binary locally using `cargo install --path` and run it directly:
+
+```sh
+# From inside the crate directory
+cargo install --path .
+# Or from the repository root
+cargo install --path crates/intervals_icu_mcp
+
+# The binary will be installed to $CARGO_HOME/bin (usually ~/.cargo/bin)
+# Run the installed server:
+export INTERVALS_ICU_API_KEY=...
+export INTERVALS_ICU_ATHLETE_ID=...
+intervals_icu_mcp
+```
+
+(Use `--bin <name>` if you need to select a specific binary.)
 - Run MCP server for stdio or other transports:
 
 The crate supports RMCP transports (stdio, streamable HTTP). To run the server in a stdio/child-process mode, use the SDK examples (see top-level `examples/` or the RMCP SDK examples) or run the compiled binary as a child process. For HTTP usage, the server mounts the RMCP service at `/mcp`.
