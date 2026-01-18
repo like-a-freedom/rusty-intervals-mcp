@@ -74,6 +74,25 @@ cp .env.example .env
 # Edit .env and add your credentials:
 # INTERVALS_ICU_API_KEY=your_api_key_here
 # INTERVALS_ICU_ATHLETE_ID=i123456
+
+### Option 1b: Install via `cargo install`
+
+If you prefer to install the binary into your Cargo bin (typically `~/.cargo/bin`), use `cargo install --path`:
+
+```sh
+# Install from the repository root
+cargo install --path crates/intervals_icu_mcp
+
+# The binary will be installed to $CARGO_HOME/bin (default: ~/.cargo/bin).
+# Make sure $CARGO_HOME/bin is in your PATH.
+
+# After installation, run the server:
+export INTERVALS_ICU_API_KEY=your_api_key_here
+export INTERVALS_ICU_ATHLETE_ID=i123456
+intervals_icu_mcp
+```
+
+> Note: if the package provides multiple binaries, select one with `--bin intervals_icu_mcp`.
 ```
 
 ### Option 2: Using Docker
