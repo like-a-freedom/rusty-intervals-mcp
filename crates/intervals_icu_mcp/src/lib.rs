@@ -227,9 +227,9 @@ pub struct BestEffortsCompactParams {
     pub activity_id: String,
     /// Stream to analyze: power, heartrate, speed, pace, cadence, distance
     pub stream: String,
-    /// Duration in seconds (use duration OR distance, not both)
+    /// Duration in seconds (REQUIRED: provide duration OR distance, not both)
     pub duration: Option<i32>,
-    /// Distance in meters (use duration OR distance, not both)
+    /// Distance in meters (REQUIRED: provide duration OR distance, not both)
     pub distance: Option<f64>,
     /// Max results (default: 5)
     pub count: Option<i32>,
@@ -1322,6 +1322,12 @@ impl IntervalsMcpHandler {
         params: Parameters<BestEffortsCompactParams>,
     ) -> Result<Json<ObjectResult>, String> {
         let p = params.0;
+        
+        // Validate that at least one of duration or distance is provided
+        if p.duration.is_none() && p.distance.is_none() {
+            return Err("Must provide either 'duration' (seconds) or 'distance' (meters) for best efforts analysis".to_string());
+        }
+        
         let summary_mode = p.summary.unwrap_or(true);
         let options = intervals_icu_client::BestEffortsOptions {
             stream: Some(p.stream.clone()),
@@ -7569,6 +7575,32 @@ mod tests {
             efforts[0].get("extra").is_none(),
             "extra should be excluded"
         );
+    }
+
+    #[tokio::test]
+    async fn get_best_efforts_requires_duration_or_distance() {
+        let client = MockClient;
+        let handler = IntervalsMcpHandler::new(Arc::new(client));
+        
+        // Test without duration or distance - should fail
+        let params = BestEffortsCompactParams {
+            activity_id: "a1".into(),
+            stream: "power".into(),
+            duration: None,
+            distance: None,
+            count: Some(5),
+            summary: Some(true),
+            min_value: None,
+            exclude_intervals: None,
+            start_index: None,
+            end_index: None,
+        };
+        
+        let res = handler.get_best_efforts(Parameters(params)).await;
+        match res {
+            Err(e) => assert!(e.contains("Must provide either 'duration'")),
+            Ok(_) => panic!("Expected error for missing duration/distance"),
+        }
     }
 
     #[test]
