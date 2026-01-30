@@ -411,6 +411,52 @@ Use built-in prompt templates for common queries:
 "Apply my new threshold settings to historical activities"
 ```
 
+## Token Efficiency
+
+This MCP server is optimized for minimal token consumption while maintaining quality:
+
+### Compact Tool Responses
+
+Several tools support **compact mode** to reduce token usage:
+
+#### `get_activity_streams`
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `activity_id` | string | Activity ID (required) |
+| `max_points` | integer | Downsample arrays to this size (e.g., 100) |
+| `summary` | boolean | Return stats (min/max/avg/p10/p50/p90) instead of arrays |
+| `streams` | array | Filter to specific streams (e.g., `["power", "heartrate"]`) |
+
+**Example - Summary mode (saves ~95% tokens for long activities):**
+```json
+{"activity_id": "i123", "summary": true, "streams": ["power"]}
+```
+
+#### `get_activity_details`
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `activity_id` | string | Activity ID (required) |
+| `expand` | boolean | Return full payload (default: false = compact summary) |
+| `fields` | array | Specific fields to return (e.g., `["id", "distance", "moving_time"]`) |
+
+**Example - Compact mode (default, saves ~70% tokens):**
+```json
+{"activity_id": "i123"}
+```
+
+**Example - Full mode when needed:**
+```json
+{"activity_id": "i123", "expand": true}
+```
+
+### Best Practices for Token Efficiency
+
+1. **Start with compact** - Use default (compact) responses first, expand only when needed
+2. **Filter streams** - Request only the streams you need (e.g., just `power` and `heartrate`)
+3. **Use summary for analysis** - For trend analysis, use `summary: true` to get statistics without raw data
+4. **Limit recent activities** - Use `limit` parameter to control result count
+5. **Use specific fields** - Request only the fields you need with `fields` parameter
+
 ## Available Tools
 
 ### Activities (10 tools)
@@ -418,7 +464,7 @@ Use built-in prompt templates for common queries:
 | Tool | Description |
 |------|-------------|
 | `get_recent_activities` | List recent activities with summary metrics |
-| `get_activity_details` | Get comprehensive details for a specific activity |
+| `get_activity_details` | Get activity details (compact by default, use `expand=true` for full) |
 | `search_activities` | Search activities by name or tag |
 | `search_activities_full` | Search activities with full details |
 | `get_activities_csv` | Download activities as CSV |
@@ -433,7 +479,7 @@ Use built-in prompt templates for common queries:
 
 | Tool | Description |
 |------|-------------|
-| `get_activity_streams` | Get time-series data (power, HR, cadence, altitude, GPS) |
+| `get_activity_streams` | Get time-series data with compact options (`max_points`, `summary`, `streams`) |
 | `get_activity_intervals` | Get structured workout intervals with targets and performance |
 | `get_best_efforts` | Find peak performances across all durations in an activity |
 | `search_intervals` | Find similar intervals across activity history |
