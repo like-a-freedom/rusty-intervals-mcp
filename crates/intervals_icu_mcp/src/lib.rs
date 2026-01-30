@@ -1322,12 +1322,12 @@ impl IntervalsMcpHandler {
         params: Parameters<BestEffortsCompactParams>,
     ) -> Result<Json<ObjectResult>, String> {
         let p = params.0;
-        
+
         // Validate that at least one of duration or distance is provided
         if p.duration.is_none() && p.distance.is_none() {
             return Err("Must provide either 'duration' (seconds) or 'distance' (meters) for best efforts analysis".to_string());
         }
-        
+
         let summary_mode = p.summary.unwrap_or(true);
         let options = intervals_icu_client::BestEffortsOptions {
             stream: Some(p.stream.clone()),
@@ -7581,7 +7581,7 @@ mod tests {
     async fn get_best_efforts_requires_duration_or_distance() {
         let client = MockClient;
         let handler = IntervalsMcpHandler::new(Arc::new(client));
-        
+
         // Test without duration or distance - should fail
         let params = BestEffortsCompactParams {
             activity_id: "a1".into(),
@@ -7595,7 +7595,7 @@ mod tests {
             start_index: None,
             end_index: None,
         };
-        
+
         let res = handler.get_best_efforts(Parameters(params)).await;
         match res {
             Err(e) => assert!(e.contains("Must provide either 'duration'")),
