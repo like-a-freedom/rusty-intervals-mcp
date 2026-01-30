@@ -48,6 +48,24 @@ mod tests {
         };
         let res = Config::from_env_with(get);
         assert!(res.is_err());
+        if let Err(IntervalsError::Config(msg)) = res {
+            assert!(msg.contains("API_KEY"));
+        }
+    }
+
+    #[test]
+    fn from_env_missing_athlete_id() {
+        let get = |k: &str| match k {
+            "INTERVALS_ICU_API_KEY" => Some("sekrit".into()),
+            "INTERVALS_ICU_ATHLETE_ID" => None,
+            "INTERVALS_ICU_BASE_URL" => Some("http://localhost".into()),
+            _ => None,
+        };
+        let res = Config::from_env_with(get);
+        assert!(res.is_err());
+        if let Err(IntervalsError::Config(msg)) = res {
+            assert!(msg.contains("ATHLETE_ID"));
+        }
     }
 
     #[test]
