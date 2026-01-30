@@ -125,9 +125,11 @@ async fn e2e_stdio_lists_tools_and_calls_profile() {
 
     // Call get_athlete_profile
     let res = service
-        .call_tool(rmcp::model::CallToolRequestParam {
+        .call_tool(rmcp::model::CallToolRequestParams {
             name: "get_athlete_profile".into(),
             arguments: None,
+            meta: None,
+            task: None,
         })
         .await
         .expect("call_tool");
