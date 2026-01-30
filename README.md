@@ -1,12 +1,21 @@
-# Intervals.icu MCP Server
+# Token-Efficient Intervals.icu MCP Server
 
-A high-performance Model Context Protocol (MCP) server for Intervals.icu written in Rust. Access your training data, wellness metrics, and performance analysis through Claude, VSCode Copilot, and other MCP-compatible LLMs.
+A high-performance, **token-efficient** Model Context Protocol (MCP) server for Intervals.icu written in Rust. Optimized for LLMs to minimize context window pressure while providing deep access to training data, wellness metrics, and performance analysis.
 
 [![.github/workflows/ci.yml](https://github.com/like-a-freedom/rusty-intervals/actions/workflows/ci.yml/badge.svg)](https://github.com/like-a-freedom/rusty-intervals/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/like-a-freedom/rusty-intervals?label=release)](https://github.com/like-a-freedom/rusty-intervals/releases)
 [![codecov](https://codecov.io/gh/like-a-freedom/rusty-intervals-mcp/graph/badge.svg?token=I47UV16VY5)](https://codecov.io/gh/like-a-freedom/rusty-intervals-mcp)
 ![Rust](https://img.shields.io/badge/rust-1.92+-orange.svg)
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
+
+## Token Efficiency: The LLM-First Advantage
+
+Standard MCP servers often overwhelm LLMs with raw, verbose data, consuming thousands of tokens and degrading reasoning performance. This server is built with a **Token-First** philosophy:
+
+- **Server-Side Data Compression**: Intelligently downsamples high-resolution stream data (heart rate, power, etc.) using configurable sampling, reducing payload size by up to 90% while preserving critical trends.
+- **Pre-computed Summaries**: Calculates statistical insights (min/max/average/total) on the server, saving the LLM from expensive and error-prone numerical computations within the context.
+- **Smart Field Filtering**: Tools default to compact summaries, with opt-in expansion for specific fields, ensuring the LLM only receives what is necessary for the task.
+- **Concise Definitions**: Tool and prompt descriptions are optimized for brevity to minimize the static overhead in every LLM turn.
 
 ## Overview
 
