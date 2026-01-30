@@ -180,6 +180,129 @@ pub struct IntervalSearchParams {
     pub limit: Option<u32>,
 }
 
+// === Token-Efficient Parameters ===
+
+/// Parameters for get_activities_csv with optional filtering
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct ActivitiesCsvParams {
+    /// Limit number of rows (default: 100, max: 1000)
+    pub limit: Option<u32>,
+    /// Number of days back to include (default: 90)
+    pub days_back: Option<i32>,
+    /// Specific columns to include (default: id,start_date_local,name,type,moving_time,distance)
+    pub columns: Option<Vec<String>>,
+}
+
+/// Parameters for search_activities_full with compact mode
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct SearchActivitiesFullParams {
+    /// Search query
+    #[serde(rename = "q", alias = "query")]
+    pub q: String,
+    /// Maximum results (default: 10)
+    pub limit: Option<u32>,
+    /// Return compact summaries (default: true)
+    pub compact: Option<bool>,
+    /// Specific fields to return when compact=false
+    pub fields: Option<Vec<String>>,
+}
+
+/// Parameters for get_activity_intervals with compact mode
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct ActivityIntervalsParams {
+    /// Activity ID
+    pub activity_id: String,
+    /// Return summary statistics only (default: true)
+    pub summary: Option<bool>,
+    /// Maximum intervals to return (default: 20)
+    pub max_intervals: Option<u32>,
+    /// Specific fields per interval (default: type,start_index,end_index,duration,distance)
+    pub fields: Option<Vec<String>>,
+}
+
+/// Parameters for get_best_efforts with compact mode
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct BestEffortsCompactParams {
+    /// Activity ID
+    pub activity_id: String,
+    /// Stream to analyze: power, heartrate, speed, pace, cadence, distance
+    pub stream: String,
+    /// Duration in seconds (use duration OR distance, not both)
+    pub duration: Option<i32>,
+    /// Distance in meters (use duration OR distance, not both)
+    pub distance: Option<f64>,
+    /// Max results (default: 5)
+    pub count: Option<i32>,
+    /// Return summary only (default: true)
+    pub summary: Option<bool>,
+    /// Minimum value threshold
+    pub min_value: Option<f64>,
+    /// Exclude structured intervals
+    pub exclude_intervals: Option<bool>,
+    /// Start index
+    pub start_index: Option<i32>,
+    /// End index
+    pub end_index: Option<i32>,
+}
+
+/// Parameters for power/hr/pace curves with compact mode
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct CurvesParams {
+    /// Sport type (e.g., "Ride", "Run")
+    #[serde(rename = "type")]
+    pub sport: String,
+    /// Days back to analyze (default: 90)
+    pub days_back: Option<i32>,
+    /// Specific durations in seconds to return (e.g., [5, 60, 300, 1200, 3600])
+    pub durations: Option<Vec<u32>>,
+    /// Return summary with key durations only (default: true)
+    pub summary: Option<bool>,
+}
+
+/// Parameters for get_workouts_in_folder with compact mode
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct WorkoutsInFolderParams {
+    /// Folder ID
+    pub folder_id: String,
+    /// Return compact summaries (default: true)
+    pub compact: Option<bool>,
+    /// Max workouts to return (default: 20)
+    pub limit: Option<u32>,
+    /// Specific fields to return
+    pub fields: Option<Vec<String>>,
+}
+
+/// Parameters for get_gear_list with compact mode
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct GearListParams {
+    /// Return compact summaries (default: true)
+    pub compact: Option<bool>,
+    /// Specific fields to return (default: id,name,type,distance)
+    pub fields: Option<Vec<String>>,
+}
+
+/// Parameters for histogram tools with compact mode
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct HistogramParams {
+    /// Activity ID
+    pub activity_id: String,
+    /// Return summary statistics only (default: true)
+    pub summary: Option<bool>,
+    /// Number of bins (default: 10, max: 50)
+    pub bins: Option<u32>,
+}
+
+/// Parameters for get_wellness with compact mode
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct WellnessParams {
+    /// Days back (default: 7)
+    pub days_back: Option<i32>,
+    /// Return summary/trends only (default: true)
+    pub summary: Option<bool>,
+    /// Specific fields to return (default: all)
+    pub fields: Option<Vec<String>>,
+}
+
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct UpdateActivityParams {
     pub activity_id: String,
@@ -766,34 +889,192 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "search_activities_full",
-        description = "Search activities by text, return full objects with all metrics."
+        description = "Search activities. Params: q (query), limit, compact (default true), fields (filter)."
     )]
     async fn search_activities_full(
         &self,
-        params: Parameters<SearchParams>,
+        params: Parameters<SearchActivitiesFullParams>,
     ) -> Result<Json<ObjectResult>, String> {
         let p = params.0;
         let v = self
             .client
-            .search_activities_full(&p.q, p.limit)
+            .search_activities_full(&p.q, p.limit.or(Some(10)))
             .await
             .map_err(|e| e.to_string())?;
-        Ok(Json(ObjectResult { value: v }))
+
+        // Apply compact mode (default: true)
+        let result = if p.compact.unwrap_or(true) {
+            Self::compact_activities_array(&v, p.fields.as_deref())
+        } else if let Some(ref fields) = p.fields {
+            Self::filter_array_fields(&v, fields)
+        } else {
+            v
+        };
+
+        Ok(Json(ObjectResult { value: result }))
+    }
+
+    /// Compact an array of activities to essential fields only
+    fn compact_activities_array(
+        value: &serde_json::Value,
+        custom_fields: Option<&[String]>,
+    ) -> serde_json::Value {
+        let default_fields = [
+            "id",
+            "name",
+            "start_date_local",
+            "type",
+            "moving_time",
+            "distance",
+            "total_elevation_gain",
+            "average_watts",
+            "average_heartrate",
+            "icu_training_load",
+        ];
+
+        let fields: Vec<&str> = custom_fields
+            .map(|f| f.iter().map(|s| s.as_str()).collect())
+            .unwrap_or_else(|| default_fields.to_vec());
+
+        let Some(arr) = value.as_array() else {
+            return value.clone();
+        };
+
+        let compacted: Vec<serde_json::Value> = arr
+            .iter()
+            .map(|item| {
+                let Some(obj) = item.as_object() else {
+                    return item.clone();
+                };
+                let mut result = serde_json::Map::new();
+                for field in &fields {
+                    if let Some(val) = obj.get(*field) {
+                        result.insert(field.to_string(), val.clone());
+                    }
+                }
+                serde_json::Value::Object(result)
+            })
+            .collect();
+
+        serde_json::Value::Array(compacted)
+    }
+
+    /// Filter each object in an array to only include specified fields
+    fn filter_array_fields(value: &serde_json::Value, fields: &[String]) -> serde_json::Value {
+        let Some(arr) = value.as_array() else {
+            return value.clone();
+        };
+
+        let filtered: Vec<serde_json::Value> = arr
+            .iter()
+            .map(|item| Self::filter_fields(item, fields))
+            .collect();
+
+        serde_json::Value::Array(filtered)
     }
 
     #[tool(
         name = "get_activities_csv",
-        description = "Download activities log as CSV for export/analysis."
+        description = "Download activities as CSV. Params: limit (default 100), days_back (default 90), columns (filter)."
     )]
-    async fn get_activities_csv(&self) -> Result<Json<ObjectResult>, String> {
-        let v = self
+    async fn get_activities_csv(
+        &self,
+        params: Parameters<ActivitiesCsvParams>,
+    ) -> Result<Json<ObjectResult>, String> {
+        let p = params.0;
+        let csv_full = self
             .client
             .get_activities_csv()
             .await
             .map_err(|e| e.to_string())?;
+
+        // Apply filtering
+        let result = Self::filter_csv(
+            &csv_full,
+            p.limit.unwrap_or(100).min(1000) as usize,
+            p.days_back.unwrap_or(90),
+            p.columns.as_deref(),
+        );
+
         Ok(Json(ObjectResult {
-            value: serde_json::json!({ "csv": v }),
+            value: serde_json::json!({ "csv": result }),
         }))
+    }
+
+    /// Filter CSV to limit rows and columns
+    fn filter_csv(
+        csv: &str,
+        max_rows: usize,
+        _days_back: i32,
+        columns: Option<&[String]>,
+    ) -> String {
+        let mut lines = csv.lines();
+        let Some(header) = lines.next() else {
+            return csv.to_string();
+        };
+
+        let header_cols: Vec<&str> = header.split(',').collect();
+
+        // Determine which column indices to keep
+        let col_indices: Vec<usize> = if let Some(cols) = columns {
+            header_cols
+                .iter()
+                .enumerate()
+                .filter_map(|(i, h)| {
+                    if cols.iter().any(|c| c.eq_ignore_ascii_case(h)) {
+                        Some(i)
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        } else {
+            // Default columns for compact mode
+            let defaults = [
+                "id",
+                "start_date_local",
+                "name",
+                "type",
+                "moving_time",
+                "distance",
+            ];
+            header_cols
+                .iter()
+                .enumerate()
+                .filter_map(|(i, h)| {
+                    if defaults.iter().any(|d| d.eq_ignore_ascii_case(h)) {
+                        Some(i)
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        };
+
+        // If no columns matched, return all columns
+        let col_indices = if col_indices.is_empty() {
+            (0..header_cols.len()).collect()
+        } else {
+            col_indices
+        };
+
+        let mut result = Vec::with_capacity(max_rows + 1);
+
+        // Build filtered header
+        let filtered_header: Vec<&str> = col_indices.iter().map(|&i| header_cols[i]).collect();
+        result.push(filtered_header.join(","));
+
+        // Filter rows
+        for line in lines.take(max_rows) {
+            let cols: Vec<&str> = line.split(',').collect();
+            let filtered: Vec<&str> = col_indices
+                .iter()
+                .filter_map(|&i| cols.get(i).copied())
+                .collect();
+            result.push(filtered.join(","));
+        }
+
+        result.join("\n")
     }
 
     #[tool(
@@ -934,11 +1215,11 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_activity_intervals",
-        description = "Get structured workout intervals with start/end times and indices."
+        description = "Get workout intervals. Params: activity_id, summary (default true), max_intervals (default 20), fields (filter)."
     )]
     async fn get_activity_intervals(
         &self,
-        params: Parameters<ActivityIdParam>,
+        params: Parameters<ActivityIntervalsParams>,
     ) -> Result<Json<ObjectResult>, String> {
         let p = params.0;
         let v = self
@@ -946,23 +1227,107 @@ impl IntervalsMcpHandler {
             .get_activity_intervals(&p.activity_id)
             .await
             .map_err(|e| e.to_string())?;
-        Ok(Json(ObjectResult { value: v }))
+
+        // Apply compact transformations
+        let result = Self::transform_intervals(
+            &v,
+            p.summary.unwrap_or(true),
+            p.max_intervals.unwrap_or(20) as usize,
+            p.fields.as_deref(),
+        );
+
+        Ok(Json(ObjectResult { value: result }))
+    }
+
+    /// Transform intervals: summarize or limit and filter fields
+    fn transform_intervals(
+        value: &serde_json::Value,
+        summary_only: bool,
+        max_intervals: usize,
+        fields: Option<&[String]>,
+    ) -> serde_json::Value {
+        let Some(arr) = value.as_array() else {
+            return value.clone();
+        };
+
+        if summary_only {
+            // Return summary statistics
+            let total = arr.len();
+            let mut type_counts: HashMap<String, usize> = HashMap::new();
+            let mut total_duration: f64 = 0.0;
+            let mut total_distance: f64 = 0.0;
+
+            for item in arr {
+                if let Some(obj) = item.as_object() {
+                    if let Some(t) = obj.get("type").and_then(|v| v.as_str()) {
+                        *type_counts.entry(t.to_string()).or_insert(0) += 1;
+                    }
+                    if let Some(d) = obj.get("duration").and_then(|v| v.as_f64()) {
+                        total_duration += d;
+                    }
+                    if let Some(d) = obj.get("distance").and_then(|v| v.as_f64()) {
+                        total_distance += d;
+                    }
+                }
+            }
+
+            return serde_json::json!({
+                "total_intervals": total,
+                "types": type_counts,
+                "total_duration_secs": total_duration,
+                "total_distance_m": total_distance,
+                "avg_duration_secs": if total > 0 { total_duration / total as f64 } else { 0.0 }
+            });
+        }
+
+        // Limit and filter fields
+        let default_fields = [
+            "type",
+            "start_index",
+            "end_index",
+            "duration",
+            "distance",
+            "intensity",
+        ];
+        let fields_to_use: Vec<&str> = fields
+            .map(|f| f.iter().map(|s| s.as_str()).collect())
+            .unwrap_or_else(|| default_fields.to_vec());
+
+        let limited: Vec<serde_json::Value> = arr
+            .iter()
+            .take(max_intervals)
+            .map(|item| {
+                let Some(obj) = item.as_object() else {
+                    return item.clone();
+                };
+                let mut result = serde_json::Map::new();
+                for field in &fields_to_use {
+                    if let Some(val) = obj.get(*field) {
+                        result.insert(field.to_string(), val.clone());
+                    }
+                }
+                serde_json::Value::Object(result)
+            })
+            .collect();
+
+        serde_json::Value::Array(limited)
     }
 
     #[tool(
         name = "get_best_efforts",
-        description = "Find peak efforts. Params: activity_id, stream (power/heartrate/speed/pace/cadence/distance), duration (secs) OR distance (meters). Single values only."
+        description = "Find peak efforts. Params: activity_id, stream, duration/distance, count (default 5), summary (default true)."
     )]
     async fn get_best_efforts(
         &self,
-        params: Parameters<BestEffortsToolParams>,
+        params: Parameters<BestEffortsCompactParams>,
     ) -> Result<Json<ObjectResult>, String> {
         let p = params.0;
+        let summary_mode = p.summary.unwrap_or(true);
         let options = intervals_icu_client::BestEffortsOptions {
-            stream: Some(p.stream),
+            stream: Some(p.stream.clone()),
             duration: p.duration,
             distance: p.distance,
-            count: p.count,
+            count: p.count.or(Some(5)),
             min_value: p.min_value,
             exclude_intervals: p.exclude_intervals,
             start_index: p.start_index,
@@ -973,20 +1338,109 @@ impl IntervalsMcpHandler {
             .get_best_efforts(&p.activity_id, Some(options))
             .await
             .map_err(|e| e.to_string())?;
-        Ok(Json(ObjectResult { value: v }))
+
+        // Apply summary mode
+        let result = if summary_mode {
+            Self::summarize_best_efforts(&v, &p.stream)
+        } else {
+            v
+        };
+
+        Ok(Json(ObjectResult { value: result }))
+    }
+
+    /// Summarize best efforts to compact format
+    fn summarize_best_efforts(value: &serde_json::Value, stream: &str) -> serde_json::Value {
+        let Some(arr) = value.as_array() else {
+            return value.clone();
+        };
+
+        let efforts: Vec<serde_json::Value> = arr
+            .iter()
+            .filter_map(|item| {
+                let obj = item.as_object()?;
+                let mut compact = serde_json::Map::new();
+
+                // Core fields only
+                if let Some(v) = obj.get("value") {
+                    compact.insert("value".to_string(), v.clone());
+                }
+                if let Some(v) = obj.get("duration") {
+                    compact.insert("duration".to_string(), v.clone());
+                }
+                if let Some(v) = obj.get("start_index") {
+                    compact.insert("start_index".to_string(), v.clone());
+                }
+
+                Some(serde_json::Value::Object(compact))
+            })
+            .collect();
+
+        serde_json::json!({
+            "stream": stream,
+            "count": efforts.len(),
+            "efforts": efforts
+        })
     }
 
     #[tool(
         name = "get_gear_list",
-        description = "Get gear inventory: bikes, shoes, watches with usage and reminders."
+        description = "Get gear inventory. Params: compact (default true), fields (filter)."
     )]
-    async fn get_gear_list(&self) -> Result<Json<ObjectResult>, String> {
+    async fn get_gear_list(
+        &self,
+        params: Parameters<GearListParams>,
+    ) -> Result<Json<ObjectResult>, String> {
+        let p = params.0;
         let v = self
             .client
             .get_gear_list()
             .await
             .map_err(|e| e.to_string())?;
-        Ok(Json(ObjectResult { value: v }))
+
+        // Apply compact mode
+        let result = if p.compact.unwrap_or(true) {
+            Self::compact_gear_list(&v, p.fields.as_deref())
+        } else if let Some(ref fields) = p.fields {
+            Self::filter_array_fields(&v, fields)
+        } else {
+            v
+        };
+
+        Ok(Json(ObjectResult { value: result }))
+    }
+
+    /// Compact gear list to essential fields
+    fn compact_gear_list(
+        value: &serde_json::Value,
+        fields: Option<&[String]>,
+    ) -> serde_json::Value {
+        let default_fields = ["id", "name", "type", "distance", "brand", "model"];
+        let fields_to_use: Vec<&str> = fields
+            .map(|f| f.iter().map(|s| s.as_str()).collect())
+            .unwrap_or_else(|| default_fields.to_vec());
+
+        let Some(arr) = value.as_array() else {
+            return value.clone();
+        };
+
+        let compacted: Vec<serde_json::Value> = arr
+            .iter()
+            .map(|item| {
+                let Some(obj) = item.as_object() else {
+                    return item.clone();
+                };
+                let mut result = serde_json::Map::new();
+                for field in &fields_to_use {
+                    if let Some(val) = obj.get(*field) {
+                        result.insert(field.to_string(), val.clone());
+                    }
+                }
+                serde_json::Value::Object(result)
+            })
+            .collect();
+
+        serde_json::Value::Array(compacted)
     }
 
     #[tool(
@@ -1004,11 +1458,11 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_power_curves",
-        description = "Get power curves (peak efforts at various durations). Params: sport type, days_back."
+        description = "Get power curves. Params: type, days_back, durations (filter), summary (default true)."
     )]
     async fn get_power_curves(
         &self,
-        params: Parameters<PowerCurvesParams>,
+        params: Parameters<CurvesParams>,
     ) -> Result<Json<ObjectResult>, String> {
         let p = params.0;
         let v = self
@@ -1016,16 +1470,84 @@ impl IntervalsMcpHandler {
             .get_power_curves(p.days_back, &p.sport)
             .await
             .map_err(|e| e.to_string())?;
-        Ok(Json(ObjectResult { value: v }))
+
+        // Apply compact mode
+        let result = Self::transform_curves(&v, p.summary.unwrap_or(true), p.durations.as_deref());
+        Ok(Json(ObjectResult { value: result }))
+    }
+
+    /// Transform power/hr/pace curves to compact format
+    fn transform_curves(
+        value: &serde_json::Value,
+        summary_only: bool,
+        durations: Option<&[u32]>,
+    ) -> serde_json::Value {
+        // If durations filter is specified, filter the curve points
+        if let Some(dur_filter) = durations
+            && let Some(obj) = value.as_object()
+        {
+            let mut result = serde_json::Map::new();
+            for (key, val) in obj {
+                if let Some(arr) = val.as_array() {
+                    // Filter to matching durations
+                    let filtered: Vec<&serde_json::Value> = arr
+                        .iter()
+                        .filter(|item| {
+                            item.get("secs")
+                                .and_then(|s| s.as_u64())
+                                .map(|s| dur_filter.contains(&(s as u32)))
+                                .unwrap_or(false)
+                        })
+                        .collect();
+                    result.insert(
+                        key.clone(),
+                        serde_json::Value::Array(filtered.into_iter().cloned().collect()),
+                    );
+                } else {
+                    result.insert(key.clone(), val.clone());
+                }
+            }
+            return serde_json::Value::Object(result);
+        }
+
+        if summary_only {
+            // Return key durations only: 5s, 30s, 1min, 5min, 20min, 60min
+            let key_durations = [5, 30, 60, 300, 1200, 3600];
+            if let Some(obj) = value.as_object() {
+                let mut result = serde_json::Map::new();
+                for (key, val) in obj {
+                    if let Some(arr) = val.as_array() {
+                        let filtered: Vec<&serde_json::Value> = arr
+                            .iter()
+                            .filter(|item| {
+                                item.get("secs")
+                                    .and_then(|s| s.as_u64())
+                                    .map(|s| key_durations.contains(&(s as u32)))
+                                    .unwrap_or(false)
+                            })
+                            .collect();
+                        result.insert(
+                            key.clone(),
+                            serde_json::Value::Array(filtered.into_iter().cloned().collect()),
+                        );
+                    } else {
+                        result.insert(key.clone(), val.clone());
+                    }
+                }
+                return serde_json::Value::Object(result);
+            }
+        }
+
+        value.clone()
     }
 
     #[tool(
         name = "get_gap_histogram",
-        description = "Get Grade Adjusted Pace distribution for an activity."
+        description = "Get GAP distribution. Params: activity_id, summary (default true), bins (default 10)."
     )]
     async fn get_gap_histogram(
         &self,
-        params: Parameters<ActivityIdParam>,
+        params: Parameters<HistogramParams>,
     ) -> Result<Json<ObjectResult>, String> {
         let p = params.0;
         let v = self
@@ -1033,7 +1555,64 @@ impl IntervalsMcpHandler {
             .get_gap_histogram(&p.activity_id)
             .await
             .map_err(|e| e.to_string())?;
-        Ok(Json(ObjectResult { value: v }))
+
+        let result =
+            Self::transform_histogram(&v, p.summary.unwrap_or(true), p.bins.unwrap_or(10) as usize);
+        Ok(Json(ObjectResult { value: result }))
+    }
+
+    /// Transform histogram to compact format
+    fn transform_histogram(
+        value: &serde_json::Value,
+        summary_only: bool,
+        max_bins: usize,
+    ) -> serde_json::Value {
+        if summary_only {
+            // Compute summary statistics from histogram
+            if let Some(arr) = value.as_array() {
+                let mut total_count: f64 = 0.0;
+                let mut weighted_sum: f64 = 0.0;
+                let mut min_val: Option<f64> = None;
+                let mut max_val: Option<f64> = None;
+
+                for item in arr {
+                    let value = item.get("value").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    let count = item.get("count").and_then(|v| v.as_f64()).unwrap_or(0.0);
+
+                    if count > 0.0 {
+                        total_count += count;
+                        weighted_sum += value * count;
+                        min_val = Some(min_val.map_or(value, |m: f64| m.min(value)));
+                        max_val = Some(max_val.map_or(value, |m: f64| m.max(value)));
+                    }
+                }
+
+                return serde_json::json!({
+                    "total_samples": total_count as u64,
+                    "weighted_avg": if total_count > 0.0 { (weighted_sum / total_count * 100.0).round() / 100.0 } else { 0.0 },
+                    "min": min_val.unwrap_or(0.0),
+                    "max": max_val.unwrap_or(0.0),
+                    "bins_available": arr.len()
+                });
+            }
+        }
+
+        // Limit bins if needed
+        if let Some(arr) = value.as_array()
+            && arr.len() > max_bins
+        {
+            // Sample bins uniformly
+            let step = arr.len() / max_bins;
+            let sampled: Vec<serde_json::Value> = arr
+                .iter()
+                .step_by(step.max(1))
+                .take(max_bins)
+                .cloned()
+                .collect();
+            return serde_json::Value::Array(sampled);
+        }
+
+        value.clone()
     }
 
     #[tool(
@@ -1426,11 +2005,11 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_power_histogram",
-        description = "Get power distribution histogram for an activity."
+        description = "Get power distribution. Params: activity_id, summary (default true), bins (default 10)."
     )]
     async fn get_power_histogram(
         &self,
-        params: Parameters<ActivityIdParam>,
+        params: Parameters<HistogramParams>,
     ) -> Result<Json<ObjectResult>, String> {
         let p = params.0;
         let v = self
@@ -1438,16 +2017,19 @@ impl IntervalsMcpHandler {
             .get_power_histogram(&p.activity_id)
             .await
             .map_err(|e| e.to_string())?;
-        Ok(Json(ObjectResult { value: v }))
+
+        let result =
+            Self::transform_histogram(&v, p.summary.unwrap_or(true), p.bins.unwrap_or(10) as usize);
+        Ok(Json(ObjectResult { value: result }))
     }
 
     #[tool(
         name = "get_hr_histogram",
-        description = "Get HR distribution histogram for an activity."
+        description = "Get HR distribution. Params: activity_id, summary (default true), bins (default 10)."
     )]
     async fn get_hr_histogram(
         &self,
-        params: Parameters<ActivityIdParam>,
+        params: Parameters<HistogramParams>,
     ) -> Result<Json<ObjectResult>, String> {
         let p = params.0;
         let v = self
@@ -1455,16 +2037,19 @@ impl IntervalsMcpHandler {
             .get_hr_histogram(&p.activity_id)
             .await
             .map_err(|e| e.to_string())?;
-        Ok(Json(ObjectResult { value: v }))
+
+        let result =
+            Self::transform_histogram(&v, p.summary.unwrap_or(true), p.bins.unwrap_or(10) as usize);
+        Ok(Json(ObjectResult { value: result }))
     }
 
     #[tool(
         name = "get_pace_histogram",
-        description = "Get pace distribution histogram for an activity."
+        description = "Get pace distribution. Params: activity_id, summary (default true), bins (default 10)."
     )]
     async fn get_pace_histogram(
         &self,
-        params: Parameters<ActivityIdParam>,
+        params: Parameters<HistogramParams>,
     ) -> Result<Json<ObjectResult>, String> {
         let p = params.0;
         let v = self
@@ -1472,7 +2057,10 @@ impl IntervalsMcpHandler {
             .get_pace_histogram(&p.activity_id)
             .await
             .map_err(|e| e.to_string())?;
-        Ok(Json(ObjectResult { value: v }))
+
+        let result =
+            Self::transform_histogram(&v, p.summary.unwrap_or(true), p.bins.unwrap_or(10) as usize);
+        Ok(Json(ObjectResult { value: result }))
     }
 
     // === Fitness Summary ===
@@ -1494,19 +2082,105 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_wellness",
-        description = "Get recent wellness data (sleep, stress, resting HR). Param: days_back."
+        description = "Get wellness data. Params: days_back (default 7), summary (default true), fields (filter)."
     )]
     async fn get_wellness(
         &self,
-        params: Parameters<RecentParams>,
+        params: Parameters<WellnessParams>,
     ) -> Result<Json<ObjectResult>, String> {
         let p = params.0;
         let v = self
             .client
-            .get_wellness(p.days_back)
+            .get_wellness(p.days_back.or(Some(7)))
             .await
             .map_err(|e| e.to_string())?;
-        Ok(Json(ObjectResult { value: v }))
+
+        // Apply compact mode
+        let result = Self::transform_wellness(&v, p.summary.unwrap_or(true), p.fields.as_deref());
+        Ok(Json(ObjectResult { value: result }))
+    }
+
+    /// Transform wellness data to compact format
+    fn transform_wellness(
+        value: &serde_json::Value,
+        summary_only: bool,
+        fields: Option<&[String]>,
+    ) -> serde_json::Value {
+        let Some(arr) = value.as_array() else {
+            return value.clone();
+        };
+
+        if summary_only {
+            // Compute trends/averages
+            let mut sleep_total: f64 = 0.0;
+            let mut stress_total: f64 = 0.0;
+            let mut hr_total: f64 = 0.0;
+            let mut hrv_total: f64 = 0.0;
+            let mut sleep_count: usize = 0;
+            let mut stress_count: usize = 0;
+            let mut hr_count: usize = 0;
+            let mut hrv_count: usize = 0;
+
+            for item in arr {
+                if let Some(obj) = item.as_object() {
+                    if let Some(v) = obj.get("sleepSecs").and_then(|v| v.as_f64()) {
+                        sleep_total += v / 3600.0; // convert to hours
+                        sleep_count += 1;
+                    }
+                    if let Some(v) = obj.get("stress").and_then(|v| v.as_f64()) {
+                        stress_total += v;
+                        stress_count += 1;
+                    }
+                    if let Some(v) = obj.get("restingHR").and_then(|v| v.as_f64()) {
+                        hr_total += v;
+                        hr_count += 1;
+                    }
+                    if let Some(v) = obj.get("hrv").and_then(|v| v.as_f64()) {
+                        hrv_total += v;
+                        hrv_count += 1;
+                    }
+                }
+            }
+
+            return serde_json::json!({
+                "days": arr.len(),
+                "avg_sleep_hours": if sleep_count > 0 { (sleep_total / sleep_count as f64 * 10.0).round() / 10.0 } else { 0.0 },
+                "avg_stress": if stress_count > 0 { (stress_total / stress_count as f64 * 10.0).round() / 10.0 } else { 0.0 },
+                "avg_resting_hr": if hr_count > 0 { (hr_total / hr_count as f64).round() } else { 0.0 },
+                "avg_hrv": if hrv_count > 0 { (hrv_total / hrv_count as f64).round() } else { 0.0 }
+            });
+        }
+
+        // Filter fields if specified
+        if let Some(field_list) = fields {
+            let default_fields = ["id", "sleepSecs", "stress", "restingHR", "hrv", "weight"];
+            let fields_to_use: Vec<&str> = field_list.iter().map(|s| s.as_str()).collect();
+            let fields_to_use = if fields_to_use.is_empty() {
+                default_fields.to_vec()
+            } else {
+                fields_to_use
+            };
+
+            let filtered: Vec<serde_json::Value> = arr
+                .iter()
+                .map(|item| {
+                    let Some(obj) = item.as_object() else {
+                        return item.clone();
+                    };
+                    let mut result = serde_json::Map::new();
+                    for field in &fields_to_use {
+                        if let Some(val) = obj.get(*field) {
+                            result.insert(field.to_string(), val.clone());
+                        }
+                    }
+                    serde_json::Value::Object(result)
+                })
+                .collect();
+
+            return serde_json::Value::Array(filtered);
+        }
+
+        value.clone()
     }
 
     #[tool(
@@ -1653,11 +2327,11 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_hr_curves",
-        description = "Get HR curves (best HR at various durations). Params: sport, days_back."
+        description = "Get HR curves. Params: type, days_back, durations (filter), summary (default true)."
     )]
     async fn get_hr_curves(
         &self,
-        params: Parameters<PowerCurvesParams>,
+        params: Parameters<CurvesParams>,
     ) -> Result<Json<ObjectResult>, String> {
         let p = params.0;
         let v = self
@@ -1665,16 +2339,18 @@ impl IntervalsMcpHandler {
             .get_hr_curves(p.days_back, &p.sport)
             .await
             .map_err(|e| e.to_string())?;
-        Ok(Json(ObjectResult { value: v }))
+
+        let result = Self::transform_curves(&v, p.summary.unwrap_or(true), p.durations.as_deref());
+        Ok(Json(ObjectResult { value: result }))
     }
 
     #[tool(
         name = "get_pace_curves",
-        description = "Get pace/speed curves (best pace at various durations). Params: sport, days_back."
+        description = "Get pace/speed curves. Params: type, days_back, durations (filter), summary (default true)."
     )]
     async fn get_pace_curves(
         &self,
-        params: Parameters<PowerCurvesParams>,
+        params: Parameters<CurvesParams>,
     ) -> Result<Json<ObjectResult>, String> {
         let p = params.0;
         let v = self
@@ -1682,7 +2358,9 @@ impl IntervalsMcpHandler {
             .get_pace_curves(p.days_back, &p.sport)
             .await
             .map_err(|e| e.to_string())?;
-        Ok(Json(ObjectResult { value: v }))
+
+        let result = Self::transform_curves(&v, p.summary.unwrap_or(true), p.durations.as_deref());
+        Ok(Json(ObjectResult { value: result }))
     }
 
     // === Workout Library ===
@@ -1702,11 +2380,11 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_workouts_in_folder",
-        description = "Get workouts in a library folder."
+        description = "Get workouts in folder. Params: folder_id, compact (default true), limit (default 20)."
     )]
     async fn get_workouts_in_folder(
         &self,
-        params: Parameters<FolderIdParam>,
+        params: Parameters<WorkoutsInFolderParams>,
     ) -> Result<Json<ObjectResult>, String> {
         let p = params.0;
         let v = self
@@ -1714,7 +2392,56 @@ impl IntervalsMcpHandler {
             .get_workouts_in_folder(&p.folder_id)
             .await
             .map_err(|e| e.to_string())?;
-        Ok(Json(ObjectResult { value: v }))
+
+        // Apply compact mode
+        let result = Self::compact_workouts(
+            &v,
+            p.compact.unwrap_or(true),
+            p.limit.unwrap_or(20) as usize,
+            p.fields.as_deref(),
+        );
+
+        Ok(Json(ObjectResult { value: result }))
+    }
+
+    /// Compact workouts list
+    fn compact_workouts(
+        value: &serde_json::Value,
+        compact: bool,
+        limit: usize,
+        fields: Option<&[String]>,
+    ) -> serde_json::Value {
+        let Some(arr) = value.as_array() else {
+            return value.clone();
+        };
+
+        let default_fields = ["id", "name", "type", "duration", "description"];
+        let fields_to_use: Vec<&str> = if compact {
+            fields
+                .map(|f| f.iter().map(|s| s.as_str()).collect())
+                .unwrap_or_else(|| default_fields.to_vec())
+        } else {
+            return serde_json::Value::Array(arr.iter().take(limit).cloned().collect());
+        };
+
+        let compacted: Vec<serde_json::Value> = arr
+            .iter()
+            .take(limit)
+            .map(|item| {
+                let Some(obj) = item.as_object() else {
+                    return item.clone();
+                };
+                let mut result = serde_json::Map::new();
+                for field in &fields_to_use {
+                    if let Some(val) = obj.get(*field) {
+                        result.insert(field.to_string(), val.clone());
+                    }
+                }
+                serde_json::Value::Object(result)
+            })
+            .collect();
+
+        serde_json::Value::Array(compacted)
     }
 
     // === Gear Management ===
@@ -3199,7 +3926,7 @@ mod tests {
             r#type: None,
         };
         let params = Parameters(BulkCreateEventsToolParams { events: vec![ev] });
-        let res = handler.bulk_create_events(params).await.expect("ok");
+        let _res = handler.bulk_create_events(params).await.expect("ok");
         let guard = captured.lock().await;
         let stored = guard.as_ref().expect("captured");
         assert_eq!(stored[0].r#type.as_deref(), Some("Run"));
@@ -3993,8 +4720,11 @@ mod tests {
         assert!(res.is_ok());
 
         // Intervals
-        let intervals_param = ActivityIdParam {
+        let intervals_param = ActivityIntervalsParams {
             activity_id: "a1".into(),
+            summary: None,
+            max_intervals: None,
+            fields: None,
         };
         let res = handler
             .get_activity_intervals(Parameters(intervals_param))
@@ -4002,12 +4732,13 @@ mod tests {
         assert!(res.is_ok());
 
         // Best efforts - now the tool requires explicit stream per API contract
-        let best_param = BestEffortsToolParams {
+        let best_param = BestEffortsCompactParams {
             activity_id: "a1".into(),
             stream: "power".into(),
             duration: Some(60),
             distance: None,
             count: None,
+            summary: None,
             min_value: None,
             exclude_intervals: None,
             start_index: None,
@@ -5702,7 +6433,12 @@ mod tests {
         let handler = IntervalsMcpHandler::new(Arc::new(client));
 
         // gear
-        let res = handler.get_gear_list().await;
+        let res = handler
+            .get_gear_list(Parameters(GearListParams {
+                compact: None,
+                fields: None,
+            }))
+            .await;
         assert!(res.is_ok());
 
         // sport settings
@@ -5711,9 +6447,11 @@ mod tests {
 
         // power curves
         let res = handler
-            .get_power_curves(Parameters(PowerCurvesParams {
-                days_back: Some(30),
+            .get_power_curves(Parameters(CurvesParams {
                 sport: "Ride".into(),
+                days_back: Some(30),
+                durations: None,
+                summary: None,
             }))
             .await;
         assert!(res.is_ok());
@@ -5723,8 +6461,10 @@ mod tests {
 
         // gap histogram
         let res = handler
-            .get_gap_histogram(Parameters(ActivityIdParam {
+            .get_gap_histogram(Parameters(HistogramParams {
                 activity_id: "a1".into(),
+                summary: None,
+                bins: None,
             }))
             .await;
         assert!(res.is_ok());
@@ -5754,9 +6494,11 @@ mod tests {
         let handler = IntervalsMcpHandler::new(Arc::new(client));
 
         let res = handler
-            .get_power_curves(Parameters(PowerCurvesParams {
-                days_back: Some(7),
+            .get_power_curves(Parameters(CurvesParams {
                 sport: "run".into(),
+                days_back: Some(7),
+                durations: None,
+                summary: None,
             }))
             .await;
         assert!(res.is_ok());
@@ -6716,6 +7458,304 @@ mod tests {
         assert_eq!(result, input);
     }
 
+    // === New Token-Efficiency Tests ===
+
+    #[test]
+    fn filter_csv_limits_rows_and_columns() {
+        let csv = "id,start_date_local,name,type,moving_time,distance,calories\n\
+                   1,2026-01-01,Run1,Run,3600,10000,500\n\
+                   2,2026-01-02,Run2,Run,3000,8000,400\n\
+                   3,2026-01-03,Run3,Run,2400,6000,300";
+
+        let result = IntervalsMcpHandler::filter_csv(csv, 2, 90, None);
+        let lines: Vec<&str> = result.lines().collect();
+        assert_eq!(lines.len(), 3, "header + 2 rows");
+        // Default columns should be filtered
+        assert!(lines[0].contains("id"));
+        assert!(lines[0].contains("name"));
+        assert!(
+            !lines[0].contains("calories"),
+            "calories not in default columns"
+        );
+    }
+
+    #[test]
+    fn filter_csv_custom_columns() {
+        let csv = "id,name,distance,calories\n\
+                   1,Run1,10000,500\n\
+                   2,Run2,8000,400";
+
+        let result =
+            IntervalsMcpHandler::filter_csv(csv, 100, 90, Some(&["id".into(), "calories".into()]));
+        let lines: Vec<&str> = result.lines().collect();
+        assert!(lines[0].contains("id"));
+        assert!(lines[0].contains("calories"));
+        assert!(!lines[0].contains("name"));
+        assert!(!lines[0].contains("distance"));
+    }
+
+    #[test]
+    fn compact_activities_array_filters_fields() {
+        let input = serde_json::json!([
+            {"id": "1", "name": "Run", "distance": 10000, "some_extra": "data"},
+            {"id": "2", "name": "Ride", "distance": 50000, "another_extra": [1,2,3]}
+        ]);
+
+        let result = IntervalsMcpHandler::compact_activities_array(&input, None);
+        let arr = result.as_array().expect("array");
+
+        assert_eq!(arr.len(), 2);
+        assert!(arr[0].get("id").is_some());
+        assert!(arr[0].get("name").is_some());
+        assert!(arr[0].get("distance").is_some());
+        assert!(arr[0].get("some_extra").is_none());
+        assert!(arr[1].get("another_extra").is_none());
+    }
+
+    #[test]
+    fn transform_intervals_summary_mode() {
+        let input = serde_json::json!([
+            {"type": "work", "duration": 300, "distance": 1000},
+            {"type": "rest", "duration": 60, "distance": 100},
+            {"type": "work", "duration": 300, "distance": 1000}
+        ]);
+
+        let result = IntervalsMcpHandler::transform_intervals(&input, true, 20, None);
+
+        assert_eq!(
+            result.get("total_intervals").and_then(|v| v.as_u64()),
+            Some(3)
+        );
+        assert!(result.get("types").is_some());
+        assert!(result.get("total_duration_secs").is_some());
+        assert!(result.get("avg_duration_secs").is_some());
+    }
+
+    #[test]
+    fn transform_intervals_limits_and_filters() {
+        let input = serde_json::json!([
+            {"type": "work", "duration": 300, "distance": 1000, "intensity": 80},
+            {"type": "rest", "duration": 60, "distance": 100, "intensity": 40},
+            {"type": "work", "duration": 300, "distance": 1000, "intensity": 85}
+        ]);
+
+        let result = IntervalsMcpHandler::transform_intervals(&input, false, 2, None);
+        let arr = result.as_array().expect("array");
+
+        assert_eq!(arr.len(), 2, "should limit to 2 intervals");
+        assert!(arr[0].get("type").is_some());
+        assert!(arr[0].get("duration").is_some());
+    }
+
+    #[test]
+    fn summarize_best_efforts_compacts_output() {
+        let input = serde_json::json!([
+            {"value": 350, "duration": 5, "start_index": 100, "end_index": 104, "extra": "data"},
+            {"value": 340, "duration": 5, "start_index": 200, "end_index": 204, "extra": "more"}
+        ]);
+
+        let result = IntervalsMcpHandler::summarize_best_efforts(&input, "power");
+
+        assert_eq!(result.get("stream").and_then(|v| v.as_str()), Some("power"));
+        assert_eq!(result.get("count").and_then(|v| v.as_u64()), Some(2));
+        let efforts = result
+            .get("efforts")
+            .and_then(|v| v.as_array())
+            .expect("efforts");
+        assert_eq!(efforts.len(), 2);
+        assert!(efforts[0].get("value").is_some());
+        assert!(efforts[0].get("duration").is_some());
+        assert!(
+            efforts[0].get("extra").is_none(),
+            "extra should be excluded"
+        );
+    }
+
+    #[test]
+    fn compact_gear_list_filters_fields() {
+        let input = serde_json::json!([
+            {"id": "g1", "name": "Bike", "type": "Bike", "distance": 5000, "reminders": []},
+            {"id": "g2", "name": "Shoes", "type": "Shoes", "distance": 500, "notes": "worn"}
+        ]);
+
+        let result = IntervalsMcpHandler::compact_gear_list(&input, None);
+        let arr = result.as_array().expect("array");
+
+        assert_eq!(arr.len(), 2);
+        assert!(arr[0].get("id").is_some());
+        assert!(arr[0].get("name").is_some());
+        assert!(arr[0].get("type").is_some());
+        assert!(arr[0].get("distance").is_some());
+        assert!(arr[0].get("reminders").is_none());
+        assert!(arr[1].get("notes").is_none());
+    }
+
+    #[test]
+    fn transform_curves_summary_filters_key_durations() {
+        let input = serde_json::json!({
+            "curve": [
+                {"secs": 5, "value": 800},
+                {"secs": 10, "value": 750},
+                {"secs": 30, "value": 600},
+                {"secs": 60, "value": 500},
+                {"secs": 120, "value": 450},
+                {"secs": 300, "value": 400},
+                {"secs": 600, "value": 350},
+                {"secs": 1200, "value": 300},
+                {"secs": 3600, "value": 250}
+            ]
+        });
+
+        let result = IntervalsMcpHandler::transform_curves(&input, true, None);
+        let curve = result
+            .get("curve")
+            .and_then(|v| v.as_array())
+            .expect("curve");
+
+        // Should only include key durations: 5, 30, 60, 300, 1200, 3600
+        let secs: Vec<u64> = curve
+            .iter()
+            .filter_map(|v| v.get("secs").and_then(|s| s.as_u64()))
+            .collect();
+        assert!(secs.contains(&5));
+        assert!(secs.contains(&60));
+        assert!(secs.contains(&300));
+        assert!(secs.contains(&3600));
+        assert!(!secs.contains(&10), "10s not a key duration");
+        assert!(!secs.contains(&120), "120s not a key duration");
+    }
+
+    #[test]
+    fn transform_curves_custom_durations() {
+        let input = serde_json::json!({
+            "curve": [
+                {"secs": 5, "value": 800},
+                {"secs": 60, "value": 500},
+                {"secs": 300, "value": 400}
+            ]
+        });
+
+        let result = IntervalsMcpHandler::transform_curves(&input, false, Some(&[60, 300]));
+        let curve = result
+            .get("curve")
+            .and_then(|v| v.as_array())
+            .expect("curve");
+
+        assert_eq!(curve.len(), 2);
+        let secs: Vec<u64> = curve
+            .iter()
+            .filter_map(|v| v.get("secs").and_then(|s| s.as_u64()))
+            .collect();
+        assert!(secs.contains(&60));
+        assert!(secs.contains(&300));
+        assert!(!secs.contains(&5));
+    }
+
+    #[test]
+    fn compact_workouts_limits_and_filters() {
+        let input = serde_json::json!([
+            {"id": "w1", "name": "Tempo", "type": "Run", "duration": 3600, "description": "test", "extra": "data"},
+            {"id": "w2", "name": "Intervals", "type": "Run", "duration": 2400, "description": "test2"},
+            {"id": "w3", "name": "Long Run", "type": "Run", "duration": 7200, "description": "test3"}
+        ]);
+
+        let result = IntervalsMcpHandler::compact_workouts(&input, true, 2, None);
+        let arr = result.as_array().expect("array");
+
+        assert_eq!(arr.len(), 2, "should limit to 2");
+        assert!(arr[0].get("id").is_some());
+        assert!(arr[0].get("name").is_some());
+        assert!(arr[0].get("type").is_some());
+        assert!(arr[0].get("extra").is_none());
+    }
+
+    #[test]
+    fn transform_histogram_summary_computes_stats() {
+        let input = serde_json::json!([
+            {"value": 100, "count": 10},
+            {"value": 150, "count": 20},
+            {"value": 200, "count": 30},
+            {"value": 250, "count": 15}
+        ]);
+
+        let result = IntervalsMcpHandler::transform_histogram(&input, true, 10);
+
+        assert!(result.get("total_samples").is_some());
+        assert!(result.get("weighted_avg").is_some());
+        assert!(result.get("min").is_some());
+        assert!(result.get("max").is_some());
+        assert_eq!(result.get("min").and_then(|v| v.as_f64()), Some(100.0));
+        assert_eq!(result.get("max").and_then(|v| v.as_f64()), Some(250.0));
+    }
+
+    #[test]
+    fn transform_histogram_limits_bins() {
+        let input: Vec<serde_json::Value> = (0..50)
+            .map(|i| serde_json::json!({"value": i * 10, "count": 5}))
+            .collect();
+        let input = serde_json::Value::Array(input);
+
+        let result = IntervalsMcpHandler::transform_histogram(&input, false, 10);
+        let arr = result.as_array().expect("array");
+
+        assert!(arr.len() <= 10, "should limit to 10 bins");
+    }
+
+    #[test]
+    fn transform_wellness_summary_computes_averages() {
+        let input = serde_json::json!([
+            {"id": "d1", "sleepSecs": 25200, "stress": 30, "restingHR": 55, "hrv": 45},
+            {"id": "d2", "sleepSecs": 28800, "stress": 25, "restingHR": 52, "hrv": 50},
+            {"id": "d3", "sleepSecs": 27000, "stress": 35, "restingHR": 54, "hrv": 48}
+        ]);
+
+        let result = IntervalsMcpHandler::transform_wellness(&input, true, None);
+
+        assert_eq!(result.get("days").and_then(|v| v.as_u64()), Some(3));
+        assert!(result.get("avg_sleep_hours").is_some());
+        assert!(result.get("avg_stress").is_some());
+        assert!(result.get("avg_resting_hr").is_some());
+        assert!(result.get("avg_hrv").is_some());
+    }
+
+    #[test]
+    fn transform_wellness_filters_fields() {
+        let input = serde_json::json!([
+            {"id": "d1", "sleepSecs": 25200, "stress": 30, "restingHR": 55, "weight": 70.5},
+            {"id": "d2", "sleepSecs": 28800, "stress": 25, "restingHR": 52, "weight": 70.3}
+        ]);
+
+        let result = IntervalsMcpHandler::transform_wellness(
+            &input,
+            false,
+            Some(&["id".into(), "sleepSecs".into()]),
+        );
+        let arr = result.as_array().expect("array");
+
+        assert_eq!(arr.len(), 2);
+        assert!(arr[0].get("id").is_some());
+        assert!(arr[0].get("sleepSecs").is_some());
+        assert!(arr[0].get("stress").is_none());
+        assert!(arr[0].get("weight").is_none());
+    }
+
+    #[test]
+    fn filter_array_fields_filters_each_item() {
+        let input = serde_json::json!([
+            {"id": "1", "name": "A", "extra": "x"},
+            {"id": "2", "name": "B", "extra": "y"}
+        ]);
+
+        let result =
+            IntervalsMcpHandler::filter_array_fields(&input, &["id".into(), "name".into()]);
+        let arr = result.as_array().expect("array");
+
+        assert_eq!(arr.len(), 2);
+        assert!(arr[0].get("id").is_some());
+        assert!(arr[0].get("name").is_some());
+        assert!(arr[0].get("extra").is_none());
+    }
+
     #[test]
     fn tool_descriptions_are_concise() {
         let client =
@@ -6738,7 +7778,12 @@ mod tests {
     async fn get_activities_csv_tool() {
         let client = MockClient;
         let handler = IntervalsMcpHandler::new(Arc::new(client));
-        let res = handler.get_activities_csv().await;
+        let params = ActivitiesCsvParams {
+            limit: Some(10),
+            days_back: Some(30),
+            columns: None,
+        };
+        let res = handler.get_activities_csv(Parameters(params)).await;
         assert!(res.is_ok());
         let Json(result) = res.unwrap();
         assert!(result.value.get("csv").is_some());
@@ -6756,9 +7801,10 @@ mod tests {
     async fn get_wellness_tool() {
         let client = MockClient;
         let handler = IntervalsMcpHandler::new(Arc::new(client));
-        let params = RecentParams {
-            limit: None,
+        let params = WellnessParams {
             days_back: Some(7),
+            summary: Some(true),
+            fields: None,
         };
         let res = handler.get_wellness(Parameters(params)).await;
         assert!(res.is_ok());
@@ -6817,9 +7863,11 @@ mod tests {
     async fn get_hr_curves_tool() {
         let client = MockClient;
         let handler = IntervalsMcpHandler::new(Arc::new(client));
-        let params = PowerCurvesParams {
-            days_back: Some(30),
+        let params = CurvesParams {
             sport: "Run".into(),
+            days_back: Some(30),
+            durations: None,
+            summary: None,
         };
         let res = handler.get_hr_curves(Parameters(params)).await;
         assert!(res.is_ok());
@@ -6829,9 +7877,11 @@ mod tests {
     async fn get_pace_curves_tool() {
         let client = MockClient;
         let handler = IntervalsMcpHandler::new(Arc::new(client));
-        let params = PowerCurvesParams {
-            days_back: Some(30),
+        let params = CurvesParams {
             sport: "Run".into(),
+            days_back: Some(30),
+            durations: None,
+            summary: None,
         };
         let res = handler.get_pace_curves(Parameters(params)).await;
         assert!(res.is_ok());
@@ -6849,8 +7899,11 @@ mod tests {
     async fn get_workouts_in_folder_tool() {
         let client = MockClient;
         let handler = IntervalsMcpHandler::new(Arc::new(client));
-        let params = FolderIdParam {
+        let params = WorkoutsInFolderParams {
             folder_id: "folder1".into(),
+            compact: None,
+            limit: None,
+            fields: None,
         };
         let res = handler.get_workouts_in_folder(Parameters(params)).await;
         assert!(res.is_ok());
@@ -6897,20 +7950,26 @@ mod tests {
 
         // Histograms and streams
         let r = handler
-            .get_power_histogram(Parameters(ActivityIdParam {
+            .get_power_histogram(Parameters(HistogramParams {
                 activity_id: "a1".into(),
+                summary: None,
+                bins: None,
             }))
             .await;
         assert!(r.is_ok());
         let r = handler
-            .get_hr_histogram(Parameters(ActivityIdParam {
+            .get_hr_histogram(Parameters(HistogramParams {
                 activity_id: "a1".into(),
+                summary: None,
+                bins: None,
             }))
             .await;
         assert!(r.is_ok());
         let r = handler
-            .get_pace_histogram(Parameters(ActivityIdParam {
+            .get_pace_histogram(Parameters(HistogramParams {
                 activity_id: "a1".into(),
+                summary: None,
+                bins: None,
             }))
             .await;
         assert!(r.is_ok());
@@ -6918,9 +7977,10 @@ mod tests {
         // Fitness & wellness
         assert!(handler.get_fitness_summary().await.is_ok());
         let r = handler
-            .get_wellness(Parameters(RecentParams {
+            .get_wellness(Parameters(WellnessParams {
                 days_back: None,
-                limit: None,
+                summary: None,
+                fields: None,
             }))
             .await;
         assert!(r.is_ok());
@@ -6941,8 +8001,11 @@ mod tests {
         // Workouts & gear
         assert!(handler.get_workout_library().await.is_ok());
         let r = handler
-            .get_workouts_in_folder(Parameters(FolderIdParam {
+            .get_workouts_in_folder(Parameters(WorkoutsInFolderParams {
                 folder_id: "f1".into(),
+                compact: None,
+                limit: None,
+                fields: None,
             }))
             .await;
         assert!(r.is_ok());
@@ -7067,8 +8130,10 @@ mod tests {
     async fn get_power_histogram_tool() {
         let client = MockClient;
         let handler = IntervalsMcpHandler::new(Arc::new(client));
-        let params = ActivityIdParam {
+        let params = HistogramParams {
             activity_id: "a1".into(),
+            summary: None,
+            bins: None,
         };
         let res = handler.get_power_histogram(Parameters(params)).await;
         assert!(res.is_ok());
@@ -7078,8 +8143,10 @@ mod tests {
     async fn get_hr_histogram_tool() {
         let client = MockClient;
         let handler = IntervalsMcpHandler::new(Arc::new(client));
-        let params = ActivityIdParam {
+        let params = HistogramParams {
             activity_id: "a1".into(),
+            summary: None,
+            bins: None,
         };
         let res = handler.get_hr_histogram(Parameters(params)).await;
         assert!(res.is_ok());
@@ -7089,8 +8156,10 @@ mod tests {
     async fn get_pace_histogram_tool() {
         let client = MockClient;
         let handler = IntervalsMcpHandler::new(Arc::new(client));
-        let params = ActivityIdParam {
+        let params = HistogramParams {
             activity_id: "a1".into(),
+            summary: None,
+            bins: None,
         };
         let res = handler.get_pace_histogram(Parameters(params)).await;
         assert!(res.is_ok());
