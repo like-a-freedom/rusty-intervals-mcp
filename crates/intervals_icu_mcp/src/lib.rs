@@ -94,6 +94,33 @@ pub struct ObjectResult {
     pub value: serde_json::Value,
 }
 
+/// Parameters for get_activity_details with optional compact mode.
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct ActivityDetailsParams {
+    /// Activity ID
+    pub activity_id: String,
+    /// Return full payload (default: false = compact summary)
+    pub expand: Option<bool>,
+    /// Specific fields to return (e.g., ["id", "name", "distance", "moving_time"])
+    pub fields: Option<Vec<String>>,
+}
+
+/// Compact activity summary for token-efficient responses
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ActivitySummaryCompact {
+    pub id: String,
+    pub name: Option<String>,
+    pub start_date_local: Option<String>,
+    pub r#type: Option<String>,
+    pub moving_time: Option<i64>,
+    pub distance: Option<f64>,
+    pub total_elevation_gain: Option<f64>,
+    pub average_watts: Option<f64>,
+    pub average_heartrate: Option<f64>,
+    pub icu_training_load: Option<f64>,
+    pub icu_intensity: Option<f64>,
+}
+
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct ActivityIdParam {
     pub activity_id: String,
@@ -157,6 +184,19 @@ pub struct IntervalSearchParams {
 pub struct UpdateActivityParams {
     pub activity_id: String,
     pub fields: serde_json::Value,
+}
+
+/// Parameters for get_activity_streams with optional compact mode.
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct StreamsParams {
+    /// Activity ID
+    pub activity_id: String,
+    /// Maximum number of data points per stream. If set, arrays are downsampled.
+    pub max_points: Option<u32>,
+    /// Return summary statistics (min/max/avg/count) instead of raw arrays.
+    pub summary: Option<bool>,
+    /// Specific streams to return (e.g., ["power", "heartrate"]). Default: all available.
+    pub streams: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -416,7 +456,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "set_webhook_secret",
-        description = "Set HMAC secret for webhook verification. Call this once with your webhook secret string to enable signature verification for incoming webhook payloads"
+        description = "Set HMAC secret for webhook signature verification."
     )]
     async fn set_webhook_secret(
         &self,
@@ -482,7 +522,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "create_event",
-        description = "Create a calendar event (workout, race, note, etc). Requires: title, start_date_local (YYYY-MM-DD or ISO datetime), category (WORKOUT/RACE_A/RACE_B/RACE_C/NOTE/PLAN/HOLIDAY/SICK/INJURED/TARGET/SET_FITNESS/etc). Optional: description, notes, duration_mins"
+        description = "Create calendar event. Requires: name, start_date_local, category (WORKOUT/RACE_A/NOTE/etc)."
     )]
     async fn create_event(
         &self,
@@ -559,7 +599,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "bulk_create_events",
-        description = "Create multiple calendar events in one call. Payload must be an object with 'events': [ ...event objects... ]. Fields per event: title, start_date_local (YYYY-MM-DD or ISO datetime), category (WORKOUT/RACE/NOTE/etc). Efficient for importing plans"
+        description = "Create multiple calendar events. Params: events array with name, start_date_local, category per event."
     )]
     pub async fn bulk_create_events(
         &self,
@@ -617,11 +657,11 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_activity_details",
-        description = "Get complete activity details including distance, elevation, power, heart rate, pace, and other metrics. Use with get_activity_streams for time-series data"
+        description = "Get activity details. Params: activity_id, expand (full data), fields (filter). Default: compact summary."
     )]
     async fn get_activity_details(
         &self,
-        params: Parameters<ActivityIdParam>,
+        params: Parameters<ActivityDetailsParams>,
     ) -> Result<Json<ObjectResult>, String> {
         let p = params.0;
         let v = self
@@ -629,12 +669,80 @@ impl IntervalsMcpHandler {
             .get_activity_details(&p.activity_id)
             .await
             .map_err(|e| e.to_string())?;
-        Ok(Json(ObjectResult { value: v }))
+
+        // Return full payload if expand=true, otherwise compact summary
+        let result = if p.expand.unwrap_or(false) {
+            // Apply field filtering if specified
+            if let Some(ref fields) = p.fields {
+                Self::filter_fields(&v, fields)
+            } else {
+                v
+            }
+        } else {
+            Self::extract_activity_summary(&v, p.fields.as_deref())
+        };
+
+        Ok(Json(ObjectResult { value: result }))
+    }
+
+    /// Extract compact activity summary from full details
+    fn extract_activity_summary(
+        value: &serde_json::Value,
+        fields: Option<&[String]>,
+    ) -> serde_json::Value {
+        let default_fields = [
+            "id",
+            "name",
+            "start_date_local",
+            "type",
+            "moving_time",
+            "distance",
+            "total_elevation_gain",
+            "average_watts",
+            "average_heartrate",
+            "icu_training_load",
+            "icu_intensity",
+            "calories",
+            "average_speed",
+        ];
+
+        let fields_to_extract: Vec<&str> = fields
+            .map(|f| f.iter().map(|s| s.as_str()).collect())
+            .unwrap_or_else(|| default_fields.to_vec());
+
+        let Some(obj) = value.as_object() else {
+            return value.clone();
+        };
+
+        let mut result = serde_json::Map::new();
+        for field in fields_to_extract {
+            if let Some(val) = obj.get(field) {
+                result.insert(field.to_string(), val.clone());
+            }
+        }
+
+        serde_json::Value::Object(result)
+    }
+
+    /// Filter JSON object to only include specified fields
+    fn filter_fields(value: &serde_json::Value, fields: &[String]) -> serde_json::Value {
+        let Some(obj) = value.as_object() else {
+            return value.clone();
+        };
+
+        let mut result = serde_json::Map::new();
+        for field in fields {
+            if let Some(val) = obj.get(field) {
+                result.insert(field.clone(), val.clone());
+            }
+        }
+
+        serde_json::Value::Object(result)
     }
 
     #[tool(
         name = "search_activities",
-        description = "Search your activities by text (name, description, route). Returns ID and name. Use limit to control results. Use search_activities_full for complete activity objects"
+        description = "Search activities by text. Returns ID/name. Use search_activities_full for complete data."
     )]
     async fn search_activities(
         &self,
@@ -658,7 +766,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "search_activities_full",
-        description = "Search activities by text and return full activity objects with all metrics. Returns complete data: distance, time, power, HR, elevation, etc"
+        description = "Search activities by text, return full objects with all metrics."
     )]
     async fn search_activities_full(
         &self,
@@ -675,7 +783,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_activities_csv",
-        description = "Download your complete activities log as CSV file. Useful for data export and analysis in spreadsheets"
+        description = "Download activities log as CSV for export/analysis."
     )]
     async fn get_activities_csv(&self) -> Result<Json<ObjectResult>, String> {
         let v = self
@@ -690,7 +798,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "update_activity",
-        description = "Update activity fields: name, description, notes, keywords, private (true/false), etc. Pass activity_id and fields object with values to change"
+        description = "Update activity fields: name, description, notes, keywords, private."
     )]
     async fn update_activity(
         &self,
@@ -707,11 +815,11 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_activity_streams",
-        description = "Get time-series data streams for an activity: power, heart rate, speed, pace, cadence, elevation, temperature, etc. Each stream is an array of timestamped values"
+        description = "Get activity streams. Params: activity_id, max_points (downsample), summary (stats only), streams (filter)."
     )]
     async fn get_activity_streams(
         &self,
-        params: Parameters<ActivityIdParam>,
+        params: Parameters<StreamsParams>,
     ) -> Result<Json<ObjectResult>, String> {
         let p = params.0;
         let v = self
@@ -719,12 +827,114 @@ impl IntervalsMcpHandler {
             .get_activity_streams(&p.activity_id, None)
             .await
             .map_err(|e| e.to_string())?;
-        Ok(Json(ObjectResult { value: v }))
+
+        // Apply compact transformations if requested
+        let result =
+            Self::transform_streams(v, p.max_points, p.summary.unwrap_or(false), p.streams);
+        Ok(Json(ObjectResult { value: result }))
+    }
+
+    /// Transform streams: downsample to max_points, compute summary stats, filter by stream names
+    fn transform_streams(
+        value: serde_json::Value,
+        max_points: Option<u32>,
+        summary_only: bool,
+        filter_streams: Option<Vec<String>>,
+    ) -> serde_json::Value {
+        let Some(obj) = value.as_object() else {
+            return value;
+        };
+
+        let mut result = serde_json::Map::new();
+
+        for (key, val) in obj {
+            // Filter streams if specified
+            if let Some(ref filter) = filter_streams
+                && !filter.iter().any(|f| f.eq_ignore_ascii_case(key))
+            {
+                continue;
+            }
+
+            let Some(arr) = val.as_array() else {
+                result.insert(key.clone(), val.clone());
+                continue;
+            };
+
+            if summary_only {
+                // Compute summary statistics for numeric arrays
+                let stats = Self::compute_stream_stats(arr);
+                result.insert(key.clone(), stats);
+            } else if let Some(max) = max_points {
+                // Downsample the array
+                let sampled = Self::downsample_array(arr, max as usize);
+                result.insert(key.clone(), serde_json::Value::Array(sampled));
+            } else {
+                result.insert(key.clone(), val.clone());
+            }
+        }
+
+        serde_json::Value::Object(result)
+    }
+
+    /// Compute summary statistics for a numeric array
+    fn compute_stream_stats(arr: &[serde_json::Value]) -> serde_json::Value {
+        let nums: Vec<f64> = arr
+            .iter()
+            .filter_map(|v| v.as_f64().or_else(|| v.as_i64().map(|i| i as f64)))
+            .collect();
+
+        if nums.is_empty() {
+            return serde_json::json!({ "count": 0 });
+        }
+
+        let count = nums.len();
+        let sum: f64 = nums.iter().sum();
+        let avg = sum / count as f64;
+        let min = nums.iter().cloned().fold(f64::INFINITY, f64::min);
+        let max = nums.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+
+        // Compute percentiles (p10, p50, p90)
+        let mut sorted = nums.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let p10 = sorted[count / 10];
+        let p50 = sorted[count / 2];
+        let p90 = sorted[count * 9 / 10];
+
+        serde_json::json!({
+            "count": count,
+            "min": min,
+            "max": max,
+            "avg": (avg * 100.0).round() / 100.0,
+            "p10": p10,
+            "p50": p50,
+            "p90": p90
+        })
+    }
+
+    /// Downsample array to target size using LTTB-like selection
+    fn downsample_array(arr: &[serde_json::Value], target: usize) -> Vec<serde_json::Value> {
+        let len = arr.len();
+        if len <= target || target < 2 {
+            return arr.to_vec();
+        }
+
+        // Simple uniform sampling (preserves first and last)
+        let mut result = Vec::with_capacity(target);
+        result.push(arr[0].clone());
+
+        let step = (len - 1) as f64 / (target - 1) as f64;
+        for i in 1..(target - 1) {
+            let idx = (i as f64 * step).round() as usize;
+            result.push(arr[idx.min(len - 1)].clone());
+        }
+
+        result.push(arr[len - 1].clone());
+        result
     }
 
     #[tool(
         name = "get_activity_intervals",
-        description = "Get structured intervals from a workout activity. Returns start/end times and indices for each interval segment. Useful for analyzing interval training sessions"
+        description = "Get structured workout intervals with start/end times and indices."
     )]
     async fn get_activity_intervals(
         &self,
@@ -741,13 +951,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_best_efforts",
-        description = "Find peak performances in an activity. \
-            REQUIRED PARAMS: activity_id (string), stream (string), and ONE of: duration (integer, seconds) OR distance (number, meters). \
-            IMPORTANT: All params are FLAT (no nested 'options' object). Use SINGLE values, NOT arrays. \
-            CORRECT: {\"activity_id\": \"i112895444\", \"stream\": \"power\", \"duration\": 300} - finds best 5-min power. \
-            CORRECT: {\"activity_id\": \"i112895444\", \"stream\": \"distance\", \"distance\": 1000} - finds best 1km effort. \
-            WRONG: {\"options\": {...}} or {\"durations\": [60,300]} - no nested objects, no arrays! \
-            Streams: power, heartrate, speed, pace, cadence, distance."
+        description = "Find peak efforts. Params: activity_id, stream (power/heartrate/speed/pace/cadence/distance), duration (secs) OR distance (meters). Single values only."
     )]
     async fn get_best_efforts(
         &self,
@@ -774,7 +978,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_gear_list",
-        description = "Get your gear inventory (bikes, shoes, watches, etc). Returns gear ID, name, type, usage, maintenance reminders, and retirement status"
+        description = "Get gear inventory: bikes, shoes, watches with usage and reminders."
     )]
     async fn get_gear_list(&self) -> Result<Json<ObjectResult>, String> {
         let v = self
@@ -787,7 +991,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_sport_settings",
-        description = "Get sport-specific settings: FTP (power), FTHR (threshold heart rate), thresholds for zones, pace thresholds, power zones, and HR zones for each sport"
+        description = "Get sport settings: FTP, FTHR, pace thresholds, power/HR zones."
     )]
     async fn get_sport_settings(&self) -> Result<Json<ObjectResult>, String> {
         let v = self
@@ -800,7 +1004,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_power_curves",
-        description = "Get power output curves (peak power efforts) for a sport. Returns best power outputs at different durations (5s, 1min, 5min, 20min, etc). Requires: sport type (Run/Ride/etc) and days_back (7/30/90/365 days)"
+        description = "Get power curves (peak efforts at various durations). Params: sport type, days_back."
     )]
     async fn get_power_curves(
         &self,
@@ -817,7 +1021,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_gap_histogram",
-        description = "Get Grade Adjusted Pace (GAP) distribution histogram for an activity. Shows how time was distributed across different pace values"
+        description = "Get Grade Adjusted Pace distribution for an activity."
     )]
     async fn get_gap_histogram(
         &self,
@@ -834,7 +1038,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "start_download",
-        description = "Start downloading activity file with progress tracking. Returns download_id to check status. Supports FIT, GPX, and original formats. Optional output_path saves to disk, otherwise returns base64"
+        description = "Start activity file download with progress. Returns download_id for status checks."
     )]
     async fn start_download(
         &self,
@@ -932,7 +1136,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "download_fit_file",
-        description = "Download activity as FIT file (binary format from Garmin/sports watches). Use with compatible sports analysis software. Optional output_path saves to disk"
+        description = "Download activity as FIT file. Optional output_path saves to disk."
     )]
     async fn download_fit_file(
         &self,
@@ -957,7 +1161,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "download_gpx_file",
-        description = "Download activity as GPX file (GPS track format). Useful for importing into maps, other apps, or sharing with others. Optional output_path saves to disk"
+        description = "Download activity as GPX file. Optional output_path saves to disk."
     )]
     async fn download_gpx_file(
         &self,
@@ -982,7 +1186,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_download_status",
-        description = "Check download progress by download_id. Returns state (Pending/InProgress/Completed/Failed), bytes_downloaded, total_bytes, and file path"
+        description = "Check download progress by download_id."
     )]
     async fn get_download_status(
         &self,
@@ -999,7 +1203,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "receive_webhook",
-        description = "Receive and verify webhook payloads from Intervals.icu. Validates HMAC signature and deduplicates events"
+        description = "Receive and verify webhook payload with HMAC signature."
     )]
     async fn receive_webhook(
         &self,
@@ -1179,7 +1383,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_activities_around",
-        description = "Get activities before and after a specific activity. Useful for analyzing activity sequences and patterns"
+        description = "Get activities before/after a specific activity."
     )]
     async fn get_activities_around(
         &self,
@@ -1196,7 +1400,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "search_intervals",
-        description = "Search for similar intervals across all activities. Filter by duration (seconds), intensity (%), interval type, and other criteria"
+        description = "Search similar intervals across activities by duration, intensity, type."
     )]
     async fn search_intervals(
         &self,
@@ -1222,7 +1426,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_power_histogram",
-        description = "Get power output distribution for an activity. Shows time spent at different power levels"
+        description = "Get power distribution histogram for an activity."
     )]
     async fn get_power_histogram(
         &self,
@@ -1239,7 +1443,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_hr_histogram",
-        description = "Get heart rate distribution for an activity. Shows time spent in different heart rate ranges"
+        description = "Get HR distribution histogram for an activity."
     )]
     async fn get_hr_histogram(
         &self,
@@ -1256,7 +1460,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_pace_histogram",
-        description = "Get pace distribution for an activity. Shows time spent at different pace values"
+        description = "Get pace distribution histogram for an activity."
     )]
     async fn get_pace_histogram(
         &self,
@@ -1275,7 +1479,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_fitness_summary",
-        description = "Get fitness metrics: CTL (Chronic Training Load), ATL (Acute Training Load), TSB (Training Stress Balance), and ramp rate. Key indicators for recovery and readiness"
+        description = "Get fitness: CTL, ATL, TSB, ramp rate."
     )]
     async fn get_fitness_summary(&self) -> Result<Json<ObjectResult>, String> {
         let v = self
@@ -1290,7 +1494,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_wellness",
-        description = "Get recent wellness data (sleep, stress, resting HR, notes). Use days_back to specify date range"
+        description = "Get recent wellness data (sleep, stress, resting HR). Param: days_back."
     )]
     async fn get_wellness(
         &self,
@@ -1307,7 +1511,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_wellness_for_date",
-        description = "Get wellness data for a specific date (format: YYYY-MM-DD). Returns sleep hours, stress level, resting HR, and notes"
+        description = "Get wellness for specific date (YYYY-MM-DD)."
     )]
     async fn get_wellness_for_date(
         &self,
@@ -1330,7 +1534,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "update_wellness",
-        description = "Update wellness data for a specific date. Can update: sleep_hours, stress_level, resting_hr, notes, etc"
+        description = "Update wellness for a date: sleep_hours, stress_level, resting_hr, notes."
     )]
     async fn update_wellness(
         &self,
@@ -1354,7 +1558,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_upcoming_workouts",
-        description = "Get upcoming scheduled workouts and planned events. Specify days_ahead to control the forecast window (default: 7 days)"
+        description = "Get scheduled workouts. Param: days_ahead (default 7)."
     )]
     async fn get_upcoming_workouts(
         &self,
@@ -1371,7 +1575,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "update_event",
-        description = "Update calendar event fields: title, description, date/time (YYYY-MM-DD or ISO datetime), category, etc"
+        description = "Update calendar event fields: title, description, date, category."
     )]
     async fn update_event(
         &self,
@@ -1404,7 +1608,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "bulk_delete_events",
-        description = "Delete multiple calendar events in a single operation. Pass array of event IDs"
+        description = "Delete multiple calendar events by IDs."
     )]
     async fn bulk_delete_events(
         &self,
@@ -1427,7 +1631,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "duplicate_event",
-        description = "Duplicate an event to multiple future dates. Specify num_copies and weeks_between to create recurring schedule"
+        description = "Duplicate event to future dates. Params: num_copies, weeks_between."
     )]
     async fn duplicate_event(
         &self,
@@ -1449,7 +1653,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_hr_curves",
-        description = "Get heart rate performance curves. Returns best HR efforts at different durations. Requires: sport type (Run/Ride/etc) and days_back (7/30/90/365)"
+        description = "Get HR curves (best HR at various durations). Params: sport, days_back."
     )]
     async fn get_hr_curves(
         &self,
@@ -1466,7 +1670,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_pace_curves",
-        description = "Get pace/speed performance curves. Returns best pace efforts at different durations. Requires: sport type and days_back (7/30/90/365)"
+        description = "Get pace/speed curves (best pace at various durations). Params: sport, days_back."
     )]
     async fn get_pace_curves(
         &self,
@@ -1485,7 +1689,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_workout_library",
-        description = "Get your workout library including all training plan folders. Use get_workouts_in_folder to view specific workouts"
+        description = "Get workout library folders. Use get_workouts_in_folder for contents."
     )]
     async fn get_workout_library(&self) -> Result<Json<ObjectResult>, String> {
         let v = self
@@ -1498,7 +1702,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_workouts_in_folder",
-        description = "Get all workouts in a specific library folder. Returns workout details including duration, intervals, and focus area"
+        description = "Get workouts in a library folder."
     )]
     async fn get_workouts_in_folder(
         &self,
@@ -1517,7 +1721,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "create_gear",
-        description = "Add new gear item (bike, shoes, watch, etc). Specify name, type, weight, retired status, and maintenance reminders"
+        description = "Add gear item (bike, shoes, watch). Specify name, type, weight."
     )]
     async fn create_gear(
         &self,
@@ -1532,10 +1736,7 @@ impl IntervalsMcpHandler {
         Ok(Json(ObjectResult { value: v }))
     }
 
-    #[tool(
-        name = "update_gear",
-        description = "Update gear item details: name, type, notes, retirement status, or any other field"
-    )]
+    #[tool(name = "update_gear", description = "Update gear item fields.")]
     async fn update_gear(
         &self,
         params: Parameters<UpdateGearParams>,
@@ -1569,7 +1770,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "create_gear_reminder",
-        description = "Set up maintenance reminder for gear. Specify reminder type (km/miles/months) and threshold value"
+        description = "Set maintenance reminder for gear."
     )]
     async fn create_gear_reminder(
         &self,
@@ -1586,7 +1787,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "update_gear_reminder",
-        description = "Update or snooze a gear maintenance reminder. Set reset=true to reset counter, snooze_days to delay notification"
+        description = "Update or snooze gear reminder. Params: reset, snooze_days."
     )]
     async fn update_gear_reminder(
         &self,
@@ -1611,7 +1812,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "update_sport_settings",
-        description = "Update sport settings: FTP (power threshold), FTHR (heart rate threshold), pace thresholds, power/HR zone definitions. Optionally recalculate HR zones"
+        description = "Update sport settings: FTP, FTHR, pace thresholds, zones."
     )]
     async fn update_sport_settings(
         &self,
@@ -1628,7 +1829,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "apply_sport_settings",
-        description = "Apply updated sport settings to all historical activities. Recalculates zones and metrics for all past activities of that sport"
+        description = "Apply sport settings to all historical activities."
     )]
     async fn apply_sport_settings(
         &self,
@@ -2236,21 +2437,26 @@ mod tests {
                 *cap = Some(events.clone());
                 Ok(events)
             }
+
             async fn download_activity_file_with_progress(
                 &self,
                 _activity_id: &str,
                 _output_path: Option<std::path::PathBuf>,
-                _progress_tx: tokio::sync::mpsc::Sender<intervals_icu_client::DownloadProgress>,
+                progress_tx: tokio::sync::mpsc::Sender<intervals_icu_client::DownloadProgress>,
                 _cancel_rx: tokio::sync::watch::Receiver<bool>,
             ) -> Result<Option<String>, intervals_icu_client::IntervalsError> {
+                // param unused in this mock; explicitly ignore to satisfy clippy
+                let _ = progress_tx;
                 Ok(Some("/tmp/a1.fit".into()))
             }
+
             async fn delete_activity(
                 &self,
                 _activity_id: &str,
             ) -> Result<(), intervals_icu_client::IntervalsError> {
                 Ok(())
             }
+
             async fn update_event(
                 &self,
                 _event_id: &str,
@@ -2258,6 +2464,7 @@ mod tests {
             ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
                 Ok(serde_json::json!({}))
             }
+
             async fn get_activities_around(
                 &self,
                 _activity_id: &str,
@@ -2635,6 +2842,13 @@ mod tests {
         ) -> Result<(), intervals_icu_client::IntervalsError> {
             Ok(())
         }
+        async fn update_event(
+            &self,
+            _event_id: &str,
+            _fields: &serde_json::Value,
+        ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+            Ok(serde_json::json!({}))
+        }
         async fn get_activity_streams(
             &self,
             _activity_id: &str,
@@ -2842,13 +3056,6 @@ mod tests {
         ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
             Ok(serde_json::json!({}))
         }
-        async fn update_event(
-            &self,
-            _event_id: &str,
-            _fields: &serde_json::Value,
-        ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
-            Ok(serde_json::json!({}))
-        }
         async fn bulk_delete_events(
             &self,
             _event_ids: Vec<String>,
@@ -2958,9 +3165,12 @@ mod tests {
         let client = MockClient;
         let handler = IntervalsMcpHandler::new(Arc::new(client));
 
-        // Streams
-        let streams_param = ActivityIdParam {
+        // Streams - now uses StreamsParams
+        let streams_param = StreamsParams {
             activity_id: "a1".into(),
+            max_points: None,
+            summary: None,
+            streams: None,
         };
         let res = handler
             .get_activity_streams(Parameters(streams_param))
@@ -3320,9 +3530,11 @@ mod tests {
                 &self,
                 _activity_id: &str,
                 _output_path: Option<std::path::PathBuf>,
-                _progress_tx: tokio::sync::mpsc::Sender<intervals_icu_client::DownloadProgress>,
+                progress_tx: tokio::sync::mpsc::Sender<intervals_icu_client::DownloadProgress>,
                 _cancel_rx: tokio::sync::watch::Receiver<bool>,
             ) -> Result<Option<String>, intervals_icu_client::IntervalsError> {
+                // param unused in this mock; explicitly ignore to satisfy clippy
+                let _ = progress_tx;
                 Ok(Some("/tmp/a1.fit".into()))
             }
 
@@ -3338,8 +3550,9 @@ mod tests {
                 _event_id: &str,
                 fields: &serde_json::Value,
             ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
-                let mut cap = self.captured.lock().await;
-                *cap = Some(fields.clone());
+                // Capture the provided fields for assertions in tests
+                let mut guard = self.captured.lock().await;
+                *guard = Some(fields.clone());
                 Ok(serde_json::json!({}))
             }
 
@@ -3621,7 +3834,8 @@ mod tests {
         let pa = crate::prompts::performance_analysis_prompt("power", 14);
         assert!(pa.description.unwrap().to_lowercase().contains("power"));
         let pd = crate::prompts::activity_deep_dive_prompt("act1");
-        assert!(pd.description.unwrap().contains("activity act1"));
+        // Compact description just says "Activity act1 analysis"
+        assert!(pd.description.unwrap().contains("act1"));
     }
 
     #[test]
@@ -3790,6 +4004,141 @@ mod tests {
         match s.state {
             DownloadState::Cancelled => {}
             _ => panic!("expected cancelled"),
+        }
+    }
+
+    // === Token-Efficiency Tests ===
+
+    #[test]
+    fn transform_streams_summary_computes_stats() {
+        let input = serde_json::json!({
+            "power": [100, 150, 200, 250, 300, 350, 400, 450, 500, 550],
+            "heartrate": [120, 125, 130, 135, 140, 145, 150, 155, 160, 165]
+        });
+
+        let result = IntervalsMcpHandler::transform_streams(input, None, true, None);
+
+        let power_stats = result.get("power").expect("power stats");
+        assert_eq!(power_stats.get("count").and_then(|v| v.as_u64()), Some(10));
+        assert_eq!(power_stats.get("min").and_then(|v| v.as_f64()), Some(100.0));
+        assert_eq!(power_stats.get("max").and_then(|v| v.as_f64()), Some(550.0));
+        assert!(power_stats.get("avg").is_some());
+        assert!(power_stats.get("p50").is_some());
+
+        let hr_stats = result.get("heartrate").expect("hr stats");
+        assert_eq!(hr_stats.get("count").and_then(|v| v.as_u64()), Some(10));
+    }
+
+    #[test]
+    fn transform_streams_downsample_reduces_array() {
+        let input = serde_json::json!({
+            "power": [100, 110, 120, 130, 140, 150, 160, 170, 180, 190, 200]
+        });
+
+        let result = IntervalsMcpHandler::transform_streams(input, Some(5), false, None);
+
+        let arr = result
+            .get("power")
+            .and_then(|v| v.as_array())
+            .expect("power array");
+        assert!(arr.len() <= 5, "should downsample to max 5 points");
+        // First and last should be preserved
+        assert_eq!(arr.first().and_then(|v| v.as_i64()), Some(100));
+        assert_eq!(arr.last().and_then(|v| v.as_i64()), Some(200));
+    }
+
+    #[test]
+    fn transform_streams_filter_streams() {
+        let input = serde_json::json!({
+            "power": [100, 200, 300],
+            "heartrate": [120, 140, 160],
+            "cadence": [80, 85, 90]
+        });
+
+        let result = IntervalsMcpHandler::transform_streams(
+            input,
+            None,
+            false,
+            Some(vec!["power".into(), "heartrate".into()]),
+        );
+
+        assert!(result.get("power").is_some());
+        assert!(result.get("heartrate").is_some());
+        assert!(
+            result.get("cadence").is_none(),
+            "cadence should be filtered out"
+        );
+    }
+
+    #[test]
+    fn extract_activity_summary_returns_compact() {
+        let input = serde_json::json!({
+            "id": "a123",
+            "name": "Morning Run",
+            "start_date_local": "2026-01-30T07:00:00",
+            "type": "Run",
+            "moving_time": 3600,
+            "distance": 10000.0,
+            "total_elevation_gain": 150.0,
+            "average_watts": null,
+            "average_heartrate": 145.0,
+            "icu_training_load": 85.0,
+            "icu_intensity": 0.72,
+            "some_extra_field": "should be excluded",
+            "another_big_field": [1,2,3,4,5,6,7,8,9,10]
+        });
+
+        let result = IntervalsMcpHandler::extract_activity_summary(&input, None);
+
+        assert!(result.get("id").is_some());
+        assert!(result.get("name").is_some());
+        assert!(result.get("distance").is_some());
+        assert!(result.get("moving_time").is_some());
+        assert!(result.get("average_heartrate").is_some());
+        // Extra fields should NOT be included
+        assert!(result.get("some_extra_field").is_none());
+        assert!(result.get("another_big_field").is_none());
+    }
+
+    #[test]
+    fn extract_activity_summary_with_custom_fields() {
+        let input = serde_json::json!({
+            "id": "a123",
+            "name": "Morning Run",
+            "distance": 10000.0,
+            "calories": 500,
+            "average_speed": 2.78
+        });
+
+        let result = IntervalsMcpHandler::extract_activity_summary(
+            &input,
+            Some(&["id".into(), "calories".into()]),
+        );
+
+        assert!(result.get("id").is_some());
+        assert!(result.get("calories").is_some());
+        assert!(result.get("name").is_none(), "name not in custom fields");
+        assert!(
+            result.get("distance").is_none(),
+            "distance not in custom fields"
+        );
+    }
+
+    #[test]
+    fn tool_descriptions_are_concise() {
+        let client =
+            ReqwestIntervalsClient::new("http://localhost", "ath", SecretString::new("key".into()));
+        let handler = IntervalsMcpHandler::new(Arc::new(client));
+        let tools = handler.tool_router.list_all();
+
+        for tool in tools {
+            let desc_len = tool.description.as_ref().map(|d| d.len()).unwrap_or(0);
+            assert!(
+                desc_len < 200,
+                "Tool '{}' description too long: {} chars (max 200)",
+                tool.name,
+                desc_len
+            );
         }
     }
 }

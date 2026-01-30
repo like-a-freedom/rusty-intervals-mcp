@@ -62,7 +62,18 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-- No changes yet.
+### Added
+- Token-efficiency features: `get_activity_streams` now supports `max_points` (downsample arrays), `summary` (return statistics instead of arrays), and `streams` filtering to reduce tokens when returning long time-series.
+- `get_activity_details` gained `expand` (boolean) and `fields` (array) parameters. By default the MCP now returns a compact activity summary; set `expand=true` to fetch full payload when needed.
+- Shortened tool descriptions and prompt templates to reduce token overhead in tool metadata and prompt injection.
+
+### Fixed / Notes
+- Tests added for sampling, summary stats, and compact activity extraction. All tests updated to reflect new API shapes and behavior.
+
+### Breaking changes
+- `get_activity_details` defaults to a compact summary (previously returned the full details by default). If your integrations rely on the full payload, update calls to `get_activity_details` to pass `{"expand": true}`.
+
+
 
 ## [0.1.0] - 2025-12-15
 - Initial MCP-compatible Intervals.icu client in Rust.
