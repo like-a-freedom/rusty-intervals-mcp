@@ -9,8 +9,8 @@ use uuid::Uuid;
 use rmcp::Json;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
-    AnnotateAble, GetPromptRequestParam, GetPromptResult, ListPromptsResult, ListResourcesResult,
-    PaginatedRequestParam, RawResource, ReadResourceRequestParam, ReadResourceResult,
+    AnnotateAble, GetPromptRequestParams, GetPromptResult, ListPromptsResult, ListResourcesResult,
+    PaginatedRequestParams, RawResource, ReadResourceRequestParams, ReadResourceResult,
     ResourceContents,
 };
 use rmcp::service::RequestContext;
@@ -1838,7 +1838,7 @@ impl rmcp::ServerHandler for IntervalsMcpHandler {
 
     async fn list_resources(
         &self,
-        _request: Option<PaginatedRequestParam>,
+        _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, ErrorData> {
         let resource = RawResource::new("intervals-icu://athlete/profile", "Athlete Profile");
@@ -1856,7 +1856,7 @@ impl rmcp::ServerHandler for IntervalsMcpHandler {
 
     async fn read_resource(
         &self,
-        request: ReadResourceRequestParam,
+        request: ReadResourceRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResult, ErrorData> {
         if request.uri == "intervals-icu://athlete/profile" {
