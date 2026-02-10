@@ -829,8 +829,6 @@ This project is organized as a Cargo workspace:
 - `crates/intervals_icu_client` - Core HTTP client library with retry logic and observability
 - `crates/intervals_icu_mcp` - MCP server implementation with RMCP integration
 
-See [docs/SPEC.md](docs/SPEC.md) for detailed specification and [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) for implementation status.
-
 ## License
 
 MIT License - see [LICENSE](LICENSE) file for details
