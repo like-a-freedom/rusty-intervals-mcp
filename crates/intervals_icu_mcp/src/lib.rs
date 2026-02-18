@@ -18,11 +18,15 @@ use rmcp::{ErrorData, RoleServer};
 use rmcp::{prompt, prompt_handler, prompt_router, tool, tool_handler, tool_router};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::borrow::Cow;
 
 use intervals_icu_client::{ActivitySummary, IntervalsClient};
 
+mod event_id;
 mod prompts;
+mod state;
+
+pub use event_id::EventId;
+pub use state::{DownloadState, DownloadStatus, WebhookEvent};
 
 #[derive(Clone)]
 pub struct IntervalsMcpHandler {
@@ -33,32 +37,6 @@ pub struct IntervalsMcpHandler {
     cancel_senders: Arc<Mutex<HashMap<String, watch::Sender<bool>>>>,
     webhooks: Arc<Mutex<HashMap<String, WebhookEvent>>>,
     webhook_secret: Arc<Mutex<Option<String>>>,
-}
-
-#[derive(Debug, Serialize, JsonSchema, Clone)]
-pub enum DownloadState {
-    Pending,
-    InProgress,
-    Completed,
-    Failed(String),
-    Cancelled,
-}
-
-#[derive(Debug, Serialize, JsonSchema, Clone)]
-pub struct DownloadStatus {
-    pub id: String,
-    pub activity_id: String,
-    pub state: DownloadState,
-    pub bytes_downloaded: u64,
-    pub total_bytes: Option<u64>,
-    pub path: Option<String>,
-}
-
-#[derive(Debug, Serialize, JsonSchema, Clone)]
-pub struct WebhookEvent {
-    pub id: String,
-    pub payload: serde_json::Value,
-    pub received_at: u64,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -459,22 +437,6 @@ pub struct DaysAheadParams {
     pub limit: Option<u32>,
     /// Specific fields to return (default: id,name,start_date_local,category,type)
     pub fields: Option<Vec<String>>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
-#[serde(untagged)]
-pub enum EventId {
-    Int(i64),
-    Str(String),
-}
-
-impl EventId {
-    fn as_cow(&self) -> Cow<'_, str> {
-        match self {
-            EventId::Int(v) => Cow::Owned(v.to_string()),
-            EventId::Str(s) => Cow::Borrowed(s),
-        }
-    }
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
