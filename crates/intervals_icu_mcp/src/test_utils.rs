@@ -2,16 +2,14 @@
 //!
 //! Keep this module `#[cfg(test)]`-only and ensure behaviour matches existing inline mocks
 //! so tests don't change their expectations.
-#![cfg(test)]
 
 use async_trait::async_trait;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 
 use serde_json::json;
 
 /// A generic lightweight mock used by many unit tests.
 /// Behaviour mirrors the previous in‑file `MockClient` implementations.
+#[allow(dead_code)]
 pub struct MockClient;
 
 #[async_trait]
@@ -323,6 +321,28 @@ impl intervals_icu_client::IntervalsClient for MockClient {
         _folder_id: &str,
     ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
         Ok(json!([]))
+    }
+
+    async fn create_folder(
+        &self,
+        _folder: &serde_json::Value,
+    ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+        Ok(json!({"id": "f1", "name": "New Folder"}))
+    }
+
+    async fn update_folder(
+        &self,
+        _folder_id: &str,
+        _fields: &serde_json::Value,
+    ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+        Ok(json!({"id": "f1", "name": "Updated Folder"}))
+    }
+
+    async fn delete_folder(
+        &self,
+        _folder_id: &str,
+    ) -> Result<(), intervals_icu_client::IntervalsError> {
+        Ok(())
     }
 
     async fn create_gear(

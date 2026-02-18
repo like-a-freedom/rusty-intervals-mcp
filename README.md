@@ -19,7 +19,7 @@ Standard MCP servers often overwhelm LLMs with raw, verbose data, consuming thou
 
 ## Overview
 
-This MCP server provides **54 tools** to interact with your Intervals.icu account, organized into 9 categories:
+This MCP server provides **57 tools** to interact with your Intervals.icu account, organized into 9 categories:
 
 - **Activities** (11 tools) - Query, search, update, delete, and download activities
 - **Activity Analysis** (8 tools) - Deep dive into streams, intervals, best efforts, and histograms
@@ -27,7 +27,7 @@ This MCP server provides **54 tools** to interact with your Intervals.icu accoun
 - **Wellness** (3 tools) - Track and update recovery, HRV, sleep, and health metrics
 - **Events/Calendar** (9 tools) - Manage planned workouts, races, notes with bulk operations
 - **Performance/Curves** (3 tools) - Analyze power, heart rate, and pace curves
-- **Workout Library** (2 tools) - Browse and explore workout templates and plans
+- **Workout Library** (5 tools) - Browse, create, update, and delete workout folders and training plans
 - **Gear Management** (6 tools) - Track equipment and maintenance reminders
 - **Sport Settings** (5 tools) - Configure FTP, FTHR, pace thresholds, and zones
 
@@ -536,12 +536,15 @@ Note: Intervals.icu event IDs are numeric; the MCP tools accept either numbers o
 | `get_hr_curves` | Analyze heart rate curves with HR zones |
 | `get_pace_curves` | Analyze running/swimming pace curves with optional GAP |
 
-### Workout Library (2 tools)
+### Workout Library (5 tools)
 
 | Tool | Description |
 |------|-------------|
 | `get_workout_library` | Browse workout folders and training plans |
 | `get_workouts_in_folder` | View all workouts in a specific folder |
+| `create_folder` | Create new folder (training plan) |
+| `update_folder` | Update existing folder details |
+| `delete_folder` | Delete a folder (training plan) |
 
 ### Gear Management (6 tools)
 

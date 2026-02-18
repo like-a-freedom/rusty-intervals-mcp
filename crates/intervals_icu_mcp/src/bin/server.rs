@@ -331,6 +331,25 @@ mod test_helpers {
         ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
             Ok(serde_json::json!({}))
         }
+        async fn create_folder(
+            &self,
+            _folder: &serde_json::Value,
+        ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+            Ok(serde_json::json!({"id": "f1", "name": "New Folder"}))
+        }
+        async fn update_folder(
+            &self,
+            _folder_id: &str,
+            _fields: &serde_json::Value,
+        ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+            Ok(serde_json::json!({"id": "f1", "name": "Updated Folder"}))
+        }
+        async fn delete_folder(
+            &self,
+            _folder_id: &str,
+        ) -> Result<(), intervals_icu_client::IntervalsError> {
+            Ok(())
+        }
         async fn create_gear(
             &self,
             _gear: &serde_json::Value,
@@ -860,6 +879,25 @@ mod tests {
                 _folder_id: &str,
             ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
                 Ok(serde_json::json!({}))
+            }
+            async fn create_folder(
+                &self,
+                _folder: &serde_json::Value,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(serde_json::json!({"id": "f1", "name": "New Folder"}))
+            }
+            async fn update_folder(
+                &self,
+                _folder_id: &str,
+                _fields: &serde_json::Value,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(serde_json::json!({"id": "f1", "name": "Updated Folder"}))
+            }
+            async fn delete_folder(
+                &self,
+                _folder_id: &str,
+            ) -> Result<(), intervals_icu_client::IntervalsError> {
+                Ok(())
             }
             async fn create_gear(
                 &self,

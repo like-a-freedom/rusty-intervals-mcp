@@ -435,6 +435,31 @@ pub struct FolderIdParam {
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct CreateFolderParams {
+    /// Folder data (name, description, etc.)
+    pub folder: serde_json::Value,
+    /// Return compact summary (default: true)
+    pub compact: Option<bool>,
+    /// Specific fields to return (default: id,name,description)
+    pub response_fields: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct UpdateFolderParams {
+    pub folder_id: String,
+    pub fields: serde_json::Value,
+    /// Return compact summary (default: true)
+    pub compact: Option<bool>,
+    /// Specific fields to return (default: id,name,description)
+    pub response_fields: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct DeleteFolderParams {
+    pub folder_id: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct CreateGearParams {
     pub gear: serde_json::Value,
     /// Return compact summary (default: true)

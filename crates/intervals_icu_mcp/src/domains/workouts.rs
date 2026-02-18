@@ -70,6 +70,27 @@ pub fn compact_workouts(
     Value::Array(compacted)
 }
 
+/// Compact a single folder item to essential fields
+pub fn compact_folder_item(value: &Value, fields: Option<&[String]>) -> Value {
+    let default_fields = ["id", "name", "description"];
+    let fields_to_use: Vec<&str> = fields
+        .map(|f| f.iter().map(|s| s.as_str()).collect())
+        .unwrap_or_else(|| default_fields.to_vec());
+
+    let Some(obj) = value.as_object() else {
+        return value.clone();
+    };
+
+    let mut result = Map::new();
+    for field in &fields_to_use {
+        if let Some(val) = obj.get(*field) {
+            result.insert(field.to_string(), val.clone());
+        }
+    }
+
+    Value::Object(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -100,5 +121,16 @@ mod tests {
         assert_eq!(arr.len(), 2);
         assert!(arr[0].get("id").is_some());
         assert!(arr[0].get("duration").is_some());
+    }
+
+    #[test]
+    fn compact_folder_item_filters_fields() {
+        let input = json!({"id": "f1", "name": "Base Plan", "description": "desc", "extra": 1});
+        let out = compact_folder_item(&input, None);
+        assert!(out.is_object());
+        assert_eq!(out.get("id").and_then(|v| v.as_str()), Some("f1"));
+        assert_eq!(out.get("name").and_then(|v| v.as_str()), Some("Base Plan"));
+        assert!(out.get("description").is_some());
+        assert!(out.get("extra").is_none());
     }
 }

@@ -311,6 +311,22 @@ pub trait IntervalsClient: Send + Sync + 'static {
         folder_id: &str,
     ) -> Result<serde_json::Value, IntervalsError>;
 
+    /// Create a new folder (training plan)
+    async fn create_folder(
+        &self,
+        folder: &serde_json::Value,
+    ) -> Result<serde_json::Value, IntervalsError>;
+
+    /// Update an existing folder
+    async fn update_folder(
+        &self,
+        folder_id: &str,
+        fields: &serde_json::Value,
+    ) -> Result<serde_json::Value, IntervalsError>;
+
+    /// Delete a folder
+    async fn delete_folder(&self, folder_id: &str) -> Result<(), IntervalsError>;
+
     // === Gear Management ===
 
     /// Create a new gear item
