@@ -23,7 +23,7 @@ mod state;
 mod transforms;
 mod types;
 
-pub use event_id::EventId;
+pub use event_id::{EventId, FolderId};
 pub use state::{DownloadState, DownloadStatus, WebhookEvent};
 pub use types::*;
 
@@ -1424,9 +1424,10 @@ impl IntervalsMcpHandler {
         params: Parameters<WorkoutsInFolderParams>,
     ) -> Result<Json<ObjectResult>, String> {
         let p = params.0;
+        let folder_id_str = p.folder_id.as_cow();
         let v = self
             .client
-            .get_workouts_in_folder(&p.folder_id)
+            .get_workouts_in_folder(folder_id_str.as_ref())
             .await
             .map_err(|e| e.to_string())?;
 
@@ -1487,9 +1488,10 @@ impl IntervalsMcpHandler {
         params: Parameters<UpdateFolderParams>,
     ) -> Result<Json<ObjectResult>, String> {
         let p = params.0;
+        let folder_id_str = p.folder_id.as_cow();
         let v = self
             .client
-            .update_folder(&p.folder_id, &p.fields)
+            .update_folder(folder_id_str.as_ref(), &p.fields)
             .await
             .map_err(|e| e.to_string())?;
 
@@ -1514,8 +1516,9 @@ impl IntervalsMcpHandler {
         params: Parameters<DeleteFolderParams>,
     ) -> Result<Json<ObjectResult>, String> {
         let p = params.0;
+        let folder_id_str = p.folder_id.as_cow();
         self.client
-            .delete_folder(&p.folder_id)
+            .delete_folder(folder_id_str.as_ref())
             .await
             .map_err(|e| e.to_string())?;
 
