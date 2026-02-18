@@ -164,6 +164,50 @@ pub fn compact_events_from_value(
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum EventValidationError {
+    EmptyName,
+    InvalidStartDate(String),
+    UnknownCategory,
+}
+
+/// Validate, normalize and apply sensible defaults to an `Event` before sending to the API.
+///
+/// - Ensures `name` is non-empty
+/// - Normalizes `start_date_local` (accepts YYYY-MM-DD or ISO datetimes)
+/// - Rejects `EventCategory::Unknown`
+/// - If category == Workout and `type` is missing, default to `Run` (logged)
+pub fn validate_and_prepare_event(
+    mut ev: intervals_icu_client::Event,
+) -> Result<intervals_icu_client::Event, EventValidationError> {
+    if ev.name.trim().is_empty() {
+        return Err(EventValidationError::EmptyName);
+    }
+
+    match normalize_event_start(&ev.start_date_local) {
+        Ok(s) => ev.start_date_local = s,
+        Err(()) => return Err(EventValidationError::InvalidStartDate(ev.start_date_local)),
+    }
+
+    if ev.category == intervals_icu_client::EventCategory::Unknown {
+        return Err(EventValidationError::UnknownCategory);
+    }
+
+    if ev.category == intervals_icu_client::EventCategory::Workout
+        && ev
+            .r#type
+            .as_ref()
+            .map(|s| s.trim())
+            .unwrap_or("")
+            .is_empty()
+    {
+        tracing::debug!("validate_and_prepare_event: missing type for WORKOUT - defaulting to Run");
+        ev.r#type = Some("Run".into());
+    }
+
+    Ok(ev)
+}
+
 pub fn compact_json_event(value: &Value, fields: Option<&[String]>) -> Value {
     let default_fields = [
         "id",
@@ -205,5 +249,54 @@ mod tests {
     fn normalize_event_start_expands_date() {
         let normalized = normalize_event_start("2026-01-19").unwrap();
         assert_eq!(normalized, "2026-01-19T00:00:00");
+    }
+
+    #[test]
+    fn validate_and_prepare_event_rejects_empty_name() {
+        let ev = intervals_icu_client::Event {
+            id: None,
+            start_date_local: "2026-01-19".into(),
+            name: "".into(),
+            category: intervals_icu_client::EventCategory::Note,
+            description: None,
+            r#type: None,
+        };
+        matches!(
+            validate_and_prepare_event(ev),
+            Err(EventValidationError::EmptyName)
+        );
+    }
+
+    #[test]
+    fn validate_and_prepare_event_normalizes_start_date_and_defaults_workout_type() {
+        let ev = intervals_icu_client::Event {
+            id: None,
+            start_date_local: "2026-01-19".into(),
+            name: "Test".into(),
+            category: intervals_icu_client::EventCategory::Workout,
+            description: None,
+            r#type: None,
+        };
+
+        let prepared = validate_and_prepare_event(ev).expect("should prepare event");
+        assert_eq!(prepared.start_date_local, "2026-01-19T00:00:00");
+        assert_eq!(prepared.r#type.as_deref(), Some("Run"));
+    }
+
+    #[test]
+    fn validate_and_prepare_event_rejects_invalid_start_date() {
+        let ev = intervals_icu_client::Event {
+            id: None,
+            start_date_local: "not-a-date".into(),
+            name: "Test".into(),
+            category: intervals_icu_client::EventCategory::Note,
+            description: None,
+            r#type: None,
+        };
+
+        match validate_and_prepare_event(ev) {
+            Err(EventValidationError::InvalidStartDate(s)) => assert_eq!(s, "not-a-date"),
+            other => panic!("unexpected result: {:?}", other),
+        }
     }
 }
