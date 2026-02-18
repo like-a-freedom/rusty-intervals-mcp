@@ -158,6 +158,22 @@ pub fn filter_array_fields(value: &Value, fields: &[String]) -> Value {
     Value::Array(filtered)
 }
 
+/// Filter a JSON object to only include specified fields
+pub fn filter_fields(value: &Value, fields: &[String]) -> Value {
+    let Some(obj) = value.as_object() else {
+        return value.clone();
+    };
+
+    let mut result = serde_json::Map::new();
+    for field in fields {
+        if let Some(val) = obj.get(field) {
+            result.insert(field.clone(), val.clone());
+        }
+    }
+
+    Value::Object(result)
+}
+
 /// Generic compact function that handles both objects and arrays
 ///
 /// # Arguments
@@ -290,6 +306,18 @@ mod tests {
         let result_arr = result.as_array().unwrap();
         assert_eq!(result_arr.len(), 2);
         assert!(result_arr[0].get("extra").is_none());
+    }
+
+    #[test]
+    fn test_filter_fields_object() {
+        let value = serde_json::json!({"id":"1","name":"x","extra":"ignored"});
+        let fields = vec!["id".to_string(), "name".to_string()];
+
+        let result = filter_fields(&value, &fields);
+
+        assert_eq!(result["id"], "1");
+        assert_eq!(result["name"], "x");
+        assert!(result.get("extra").is_none());
     }
 
     #[test]
