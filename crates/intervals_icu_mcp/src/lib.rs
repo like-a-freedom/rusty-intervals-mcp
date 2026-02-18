@@ -714,40 +714,7 @@ impl IntervalsMcpHandler {
         sports_filter: Option<&[String]>,
         fields: Option<&[String]>,
     ) -> serde_json::Value {
-        let default_fields = ["type", "ftp", "fthr", "hrZones", "powerZones"];
-        let fields_to_use: Vec<&str> = fields
-            .map(|f| f.iter().map(|s| s.as_str()).collect())
-            .unwrap_or_else(|| default_fields.to_vec());
-
-        let Some(arr) = value.as_array() else {
-            return value.clone();
-        };
-
-        let filtered: Vec<serde_json::Value> = arr
-            .iter()
-            .filter_map(|item| {
-                let obj = item.as_object()?;
-
-                // Apply sport type filter if specified
-                if let Some(filter) = sports_filter {
-                    let sport_type = obj.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                    if !filter.iter().any(|s| s.eq_ignore_ascii_case(sport_type)) {
-                        return None;
-                    }
-                }
-
-                // Apply field filtering
-                let mut result = serde_json::Map::new();
-                for field in &fields_to_use {
-                    if let Some(val) = obj.get(*field) {
-                        result.insert(field.to_string(), val.clone());
-                    }
-                }
-                Some(serde_json::Value::Object(result))
-            })
-            .collect();
-
-        serde_json::Value::Array(filtered)
+        domains::sport_settings::compact_sport_settings(value, sports_filter, fields)
     }
 
     /// Filter sport settings by sport type and/or fields (without compacting)
@@ -756,39 +723,7 @@ impl IntervalsMcpHandler {
         sports_filter: Option<&[String]>,
         fields: Option<&[String]>,
     ) -> serde_json::Value {
-        let Some(arr) = value.as_array() else {
-            return value.clone();
-        };
-
-        let filtered: Vec<serde_json::Value> = arr
-            .iter()
-            .filter_map(|item| {
-                let obj = item.as_object()?;
-
-                // Apply sport type filter if specified
-                if let Some(filter) = sports_filter {
-                    let sport_type = obj.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                    if !filter.iter().any(|s| s.eq_ignore_ascii_case(sport_type)) {
-                        return None;
-                    }
-                }
-
-                // Apply field filtering if specified
-                if let Some(field_list) = fields {
-                    let mut result = serde_json::Map::new();
-                    for field in field_list {
-                        if let Some(val) = obj.get(field) {
-                            result.insert(field.clone(), val.clone());
-                        }
-                    }
-                    Some(serde_json::Value::Object(result))
-                } else {
-                    Some(item.clone())
-                }
-            })
-            .collect();
-
-        serde_json::Value::Array(filtered)
+        domains::sport_settings::filter_sport_settings(value, sports_filter, fields)
     }
 
     #[tool(
@@ -1191,30 +1126,7 @@ impl IntervalsMcpHandler {
         value: &serde_json::Value,
         fields: Option<&[String]>,
     ) -> serde_json::Value {
-        let default_fields = [
-            "ctl",
-            "atl",
-            "tsb",
-            "ctl_ramp_rate",
-            "atl_ramp_rate",
-            "date",
-        ];
-        let fields_to_use: Vec<&str> = fields
-            .map(|f| f.iter().map(|s| s.as_str()).collect())
-            .unwrap_or_else(|| default_fields.to_vec());
-
-        let Some(obj) = value.as_object() else {
-            return value.clone();
-        };
-
-        let mut result = serde_json::Map::new();
-        for field in &fields_to_use {
-            if let Some(val) = obj.get(*field) {
-                result.insert(field.to_string(), val.clone());
-            }
-        }
-
-        serde_json::Value::Object(result)
+        domains::fitness::compact_fitness_summary(value, fields)
     }
 
     // === Wellness ===
