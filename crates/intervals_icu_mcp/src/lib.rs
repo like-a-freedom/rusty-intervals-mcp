@@ -555,95 +555,12 @@ impl IntervalsMcpHandler {
         summary_only: bool,
         filter_streams: Option<Vec<String>>,
     ) -> serde_json::Value {
-        let Some(obj) = value.as_object() else {
-            return value;
-        };
-
-        let mut result = serde_json::Map::new();
-
-        for (key, val) in obj {
-            // Filter streams if specified
-            if let Some(ref filter) = filter_streams
-                && !filter.iter().any(|f| f.eq_ignore_ascii_case(key))
-            {
-                continue;
-            }
-
-            let Some(arr) = val.as_array() else {
-                result.insert(key.clone(), val.clone());
-                continue;
-            };
-
-            if summary_only {
-                // Compute summary statistics for numeric arrays
-                let stats = Self::compute_stream_stats(arr);
-                result.insert(key.clone(), stats);
-            } else if let Some(max) = max_points {
-                // Downsample the array
-                let sampled = Self::downsample_array(arr, max as usize);
-                result.insert(key.clone(), serde_json::Value::Array(sampled));
-            } else {
-                result.insert(key.clone(), val.clone());
-            }
-        }
-
-        serde_json::Value::Object(result)
-    }
-
-    /// Compute summary statistics for a numeric array
-    fn compute_stream_stats(arr: &[serde_json::Value]) -> serde_json::Value {
-        let nums: Vec<f64> = arr
-            .iter()
-            .filter_map(|v| v.as_f64().or_else(|| v.as_i64().map(|i| i as f64)))
-            .collect();
-
-        if nums.is_empty() {
-            return serde_json::json!({ "count": 0 });
-        }
-
-        let count = nums.len();
-        let sum: f64 = nums.iter().sum();
-        let avg = sum / count as f64;
-        let min = nums.iter().cloned().fold(f64::INFINITY, f64::min);
-        let max = nums.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-
-        // Compute percentiles (p10, p50, p90)
-        let mut sorted = nums.clone();
-        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let p10 = sorted[count / 10];
-        let p50 = sorted[count / 2];
-        let p90 = sorted[count * 9 / 10];
-
-        serde_json::json!({
-            "count": count,
-            "min": min,
-            "max": max,
-            "avg": (avg * 100.0).round() / 100.0,
-            "p10": p10,
-            "p50": p50,
-            "p90": p90
-        })
-    }
-
-    /// Downsample array to target size using LTTB-like selection
-    fn downsample_array(arr: &[serde_json::Value], target: usize) -> Vec<serde_json::Value> {
-        let len = arr.len();
-        if len <= target || target < 2 {
-            return arr.to_vec();
-        }
-
-        // Simple uniform sampling (preserves first and last)
-        let mut result = Vec::with_capacity(target);
-        result.push(arr[0].clone());
-
-        let step = (len - 1) as f64 / (target - 1) as f64;
-        for i in 1..(target - 1) {
-            let idx = (i as f64 * step).round() as usize;
-            result.push(arr[idx.min(len - 1)].clone());
-        }
-
-        result.push(arr[len - 1].clone());
-        result
+        domains::activity_analysis::transform_streams(
+            value,
+            max_points,
+            summary_only,
+            filter_streams,
+        )
     }
 
     #[tool(
@@ -679,71 +596,7 @@ impl IntervalsMcpHandler {
         max_intervals: usize,
         fields: Option<&[String]>,
     ) -> serde_json::Value {
-        let Some(arr) = value.as_array() else {
-            return value.clone();
-        };
-
-        if summary_only {
-            // Return summary statistics
-            let total = arr.len();
-            let mut type_counts: HashMap<String, usize> = HashMap::new();
-            let mut total_duration: f64 = 0.0;
-            let mut total_distance: f64 = 0.0;
-
-            for item in arr {
-                if let Some(obj) = item.as_object() {
-                    if let Some(t) = obj.get("type").and_then(|v| v.as_str()) {
-                        *type_counts.entry(t.to_string()).or_insert(0) += 1;
-                    }
-                    if let Some(d) = obj.get("duration").and_then(|v| v.as_f64()) {
-                        total_duration += d;
-                    }
-                    if let Some(d) = obj.get("distance").and_then(|v| v.as_f64()) {
-                        total_distance += d;
-                    }
-                }
-            }
-
-            return serde_json::json!({
-                "total_intervals": total,
-                "types": type_counts,
-                "total_duration_secs": total_duration,
-                "total_distance_m": total_distance,
-                "avg_duration_secs": if total > 0 { total_duration / total as f64 } else { 0.0 }
-            });
-        }
-
-        // Limit and filter fields
-        let default_fields = [
-            "type",
-            "start_index",
-            "end_index",
-            "duration",
-            "distance",
-            "intensity",
-        ];
-        let fields_to_use: Vec<&str> = fields
-            .map(|f| f.iter().map(|s| s.as_str()).collect())
-            .unwrap_or_else(|| default_fields.to_vec());
-
-        let limited: Vec<serde_json::Value> = arr
-            .iter()
-            .take(max_intervals)
-            .map(|item| {
-                let Some(obj) = item.as_object() else {
-                    return item.clone();
-                };
-                let mut result = serde_json::Map::new();
-                for field in &fields_to_use {
-                    if let Some(val) = obj.get(*field) {
-                        result.insert(field.to_string(), val.clone());
-                    }
-                }
-                serde_json::Value::Object(result)
-            })
-            .collect();
-
-        serde_json::Value::Array(limited)
+        domains::activity_analysis::transform_intervals(value, summary_only, max_intervals, fields)
     }
 
     #[tool(
@@ -790,36 +643,7 @@ impl IntervalsMcpHandler {
 
     /// Summarize best efforts to compact format
     fn summarize_best_efforts(value: &serde_json::Value, stream: &str) -> serde_json::Value {
-        let Some(arr) = value.as_array() else {
-            return value.clone();
-        };
-
-        let efforts: Vec<serde_json::Value> = arr
-            .iter()
-            .filter_map(|item| {
-                let obj = item.as_object()?;
-                let mut compact = serde_json::Map::new();
-
-                // Core fields only
-                if let Some(v) = obj.get("value") {
-                    compact.insert("value".to_string(), v.clone());
-                }
-                if let Some(v) = obj.get("duration") {
-                    compact.insert("duration".to_string(), v.clone());
-                }
-                if let Some(v) = obj.get("start_index") {
-                    compact.insert("start_index".to_string(), v.clone());
-                }
-
-                Some(serde_json::Value::Object(compact))
-            })
-            .collect();
-
-        serde_json::json!({
-            "stream": stream,
-            "count": efforts.len(),
-            "efforts": efforts
-        })
+        domains::activity_analysis::summarize_best_efforts(value, stream)
     }
 
     #[tool(
@@ -854,32 +678,7 @@ impl IntervalsMcpHandler {
         value: &serde_json::Value,
         fields: Option<&[String]>,
     ) -> serde_json::Value {
-        let default_fields = ["id", "name", "type", "distance", "brand", "model"];
-        let fields_to_use: Vec<&str> = fields
-            .map(|f| f.iter().map(|s| s.as_str()).collect())
-            .unwrap_or_else(|| default_fields.to_vec());
-
-        let Some(arr) = value.as_array() else {
-            return value.clone();
-        };
-
-        let compacted: Vec<serde_json::Value> = arr
-            .iter()
-            .map(|item| {
-                let Some(obj) = item.as_object() else {
-                    return item.clone();
-                };
-                let mut result = serde_json::Map::new();
-                for field in &fields_to_use {
-                    if let Some(val) = obj.get(*field) {
-                        result.insert(field.to_string(), val.clone());
-                    }
-                }
-                serde_json::Value::Object(result)
-            })
-            .collect();
-
-        serde_json::Value::Array(compacted)
+        domains::gear::compact_gear_list(value, fields)
     }
 
     #[tool(
@@ -1018,63 +817,7 @@ impl IntervalsMcpHandler {
         summary_only: bool,
         durations: Option<&[u32]>,
     ) -> serde_json::Value {
-        // If durations filter is specified, filter the curve points
-        if let Some(dur_filter) = durations
-            && let Some(obj) = value.as_object()
-        {
-            let mut result = serde_json::Map::new();
-            for (key, val) in obj {
-                if let Some(arr) = val.as_array() {
-                    // Filter to matching durations
-                    let filtered: Vec<&serde_json::Value> = arr
-                        .iter()
-                        .filter(|item| {
-                            item.get("secs")
-                                .and_then(|s| s.as_u64())
-                                .map(|s| dur_filter.contains(&(s as u32)))
-                                .unwrap_or(false)
-                        })
-                        .collect();
-                    result.insert(
-                        key.clone(),
-                        serde_json::Value::Array(filtered.into_iter().cloned().collect()),
-                    );
-                } else {
-                    result.insert(key.clone(), val.clone());
-                }
-            }
-            return serde_json::Value::Object(result);
-        }
-
-        if summary_only {
-            // Return key durations only: 5s, 30s, 1min, 5min, 20min, 60min
-            let key_durations = [5, 30, 60, 300, 1200, 3600];
-            if let Some(obj) = value.as_object() {
-                let mut result = serde_json::Map::new();
-                for (key, val) in obj {
-                    if let Some(arr) = val.as_array() {
-                        let filtered: Vec<&serde_json::Value> = arr
-                            .iter()
-                            .filter(|item| {
-                                item.get("secs")
-                                    .and_then(|s| s.as_u64())
-                                    .map(|s| key_durations.contains(&(s as u32)))
-                                    .unwrap_or(false)
-                            })
-                            .collect();
-                        result.insert(
-                            key.clone(),
-                            serde_json::Value::Array(filtered.into_iter().cloned().collect()),
-                        );
-                    } else {
-                        result.insert(key.clone(), val.clone());
-                    }
-                }
-                return serde_json::Value::Object(result);
-            }
-        }
-
-        value.clone()
+        domains::activity_analysis::transform_curves(value, summary_only, durations)
     }
 
     #[tool(
@@ -1103,52 +846,7 @@ impl IntervalsMcpHandler {
         summary_only: bool,
         max_bins: usize,
     ) -> serde_json::Value {
-        if summary_only {
-            // Compute summary statistics from histogram
-            if let Some(arr) = value.as_array() {
-                let mut total_count: f64 = 0.0;
-                let mut weighted_sum: f64 = 0.0;
-                let mut min_val: Option<f64> = None;
-                let mut max_val: Option<f64> = None;
-
-                for item in arr {
-                    let value = item.get("value").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                    let count = item.get("count").and_then(|v| v.as_f64()).unwrap_or(0.0);
-
-                    if count > 0.0 {
-                        total_count += count;
-                        weighted_sum += value * count;
-                        min_val = Some(min_val.map_or(value, |m: f64| m.min(value)));
-                        max_val = Some(max_val.map_or(value, |m: f64| m.max(value)));
-                    }
-                }
-
-                return serde_json::json!({
-                    "total_samples": total_count as u64,
-                    "weighted_avg": if total_count > 0.0 { (weighted_sum / total_count * 100.0).round() / 100.0 } else { 0.0 },
-                    "min": min_val.unwrap_or(0.0),
-                    "max": max_val.unwrap_or(0.0),
-                    "bins_available": arr.len()
-                });
-            }
-        }
-
-        // Limit bins if needed
-        if let Some(arr) = value.as_array()
-            && arr.len() > max_bins
-        {
-            // Sample bins uniformly
-            let step = arr.len() / max_bins;
-            let sampled: Vec<serde_json::Value> = arr
-                .iter()
-                .step_by(step.max(1))
-                .take(max_bins)
-                .cloned()
-                .collect();
-            return serde_json::Value::Array(sampled);
-        }
-
-        value.clone()
+        domains::activity_analysis::transform_histogram(value, summary_only, max_bins)
     }
 
     #[tool(
@@ -1396,39 +1094,7 @@ impl IntervalsMcpHandler {
         value: &serde_json::Value,
         fields: Option<&[String]>,
     ) -> serde_json::Value {
-        let default_fields = [
-            "type",
-            "start",
-            "end",
-            "duration",
-            "intensity",
-            "activity_id",
-        ];
-        let fields_to_use: Vec<&str> = fields
-            .map(|f| f.iter().map(|s| s.as_str()).collect())
-            .unwrap_or_else(|| default_fields.to_vec());
-
-        let Some(arr) = value.as_array() else {
-            return value.clone();
-        };
-
-        let compacted: Vec<serde_json::Value> = arr
-            .iter()
-            .map(|item| {
-                let Some(obj) = item.as_object() else {
-                    return item.clone();
-                };
-                let mut result = serde_json::Map::new();
-                for field in &fields_to_use {
-                    if let Some(val) = obj.get(*field) {
-                        result.insert(field.to_string(), val.clone());
-                    }
-                }
-                serde_json::Value::Object(result)
-            })
-            .collect();
-
-        serde_json::Value::Array(compacted)
+        domains::activity_analysis::compact_intervals(value, fields)
     }
 
     #[tool(
@@ -1867,32 +1533,7 @@ impl IntervalsMcpHandler {
         value: &serde_json::Value,
         fields: Option<&[String]>,
     ) -> serde_json::Value {
-        let default_fields = ["id", "name", "description"];
-        let fields_to_use: Vec<&str> = fields
-            .map(|f| f.iter().map(|s| s.as_str()).collect())
-            .unwrap_or_else(|| default_fields.to_vec());
-
-        let Some(arr) = value.as_array() else {
-            return value.clone();
-        };
-
-        let compacted: Vec<serde_json::Value> = arr
-            .iter()
-            .map(|item| {
-                let Some(obj) = item.as_object() else {
-                    return item.clone();
-                };
-                let mut result = serde_json::Map::new();
-                for field in &fields_to_use {
-                    if let Some(val) = obj.get(*field) {
-                        result.insert(field.to_string(), val.clone());
-                    }
-                }
-                serde_json::Value::Object(result)
-            })
-            .collect();
-
-        serde_json::Value::Array(compacted)
+        domains::workouts::compact_workout_library(value, fields)
     }
 
     #[tool(
@@ -1928,37 +1569,7 @@ impl IntervalsMcpHandler {
         limit: usize,
         fields: Option<&[String]>,
     ) -> serde_json::Value {
-        let Some(arr) = value.as_array() else {
-            return value.clone();
-        };
-
-        let default_fields = ["id", "name", "type", "duration", "description"];
-        let fields_to_use: Vec<&str> = if compact {
-            fields
-                .map(|f| f.iter().map(|s| s.as_str()).collect())
-                .unwrap_or_else(|| default_fields.to_vec())
-        } else {
-            return serde_json::Value::Array(arr.iter().take(limit).cloned().collect());
-        };
-
-        let compacted: Vec<serde_json::Value> = arr
-            .iter()
-            .take(limit)
-            .map(|item| {
-                let Some(obj) = item.as_object() else {
-                    return item.clone();
-                };
-                let mut result = serde_json::Map::new();
-                for field in &fields_to_use {
-                    if let Some(val) = obj.get(*field) {
-                        result.insert(field.to_string(), val.clone());
-                    }
-                }
-                serde_json::Value::Object(result)
-            })
-            .collect();
-
-        serde_json::Value::Array(compacted)
+        domains::workouts::compact_workouts(value, compact, limit, fields)
     }
 
     // === Gear Management ===
@@ -2022,23 +1633,7 @@ impl IntervalsMcpHandler {
         value: &serde_json::Value,
         fields: Option<&[String]>,
     ) -> serde_json::Value {
-        let default_fields = ["id", "name", "type", "distance", "brand", "model"];
-        let fields_to_use: Vec<&str> = fields
-            .map(|f| f.iter().map(|s| s.as_str()).collect())
-            .unwrap_or_else(|| default_fields.to_vec());
-
-        let Some(obj) = value.as_object() else {
-            return value.clone();
-        };
-
-        let mut result = serde_json::Map::new();
-        for field in &fields_to_use {
-            if let Some(val) = obj.get(*field) {
-                result.insert(field.to_string(), val.clone());
-            }
-        }
-
-        serde_json::Value::Object(result)
+        domains::gear::compact_gear_item(value, fields)
     }
 
     #[tool(
@@ -7910,14 +7505,14 @@ mod tests {
     #[test]
     fn compute_stream_stats_empty_array() {
         let arr = vec![];
-        let stats = IntervalsMcpHandler::compute_stream_stats(&arr);
+        let stats = crate::domains::activity_analysis::compute_stream_stats(&arr);
         assert_eq!(stats["count"], 0);
     }
 
     #[test]
     fn compute_stream_stats_single_value() {
         let arr = vec![serde_json::json!(42.5)];
-        let stats = IntervalsMcpHandler::compute_stream_stats(&arr);
+        let stats = crate::domains::activity_analysis::compute_stream_stats(&arr);
         assert_eq!(stats["count"], 1);
         assert_eq!(stats["min"], 42.5);
         assert_eq!(stats["max"], 42.5);
@@ -7936,7 +7531,7 @@ mod tests {
             serde_json::json!(40.0),
             serde_json::json!(50.0),
         ];
-        let stats = IntervalsMcpHandler::compute_stream_stats(&arr);
+        let stats = crate::domains::activity_analysis::compute_stream_stats(&arr);
         assert_eq!(stats["count"], 5);
         assert_eq!(stats["min"], 10.0);
         assert_eq!(stats["max"], 50.0);
@@ -7953,7 +7548,7 @@ mod tests {
             serde_json::json!(2),
             serde_json::json!(3),
         ];
-        let stats = IntervalsMcpHandler::compute_stream_stats(&arr);
+        let stats = crate::domains::activity_analysis::compute_stream_stats(&arr);
         assert_eq!(stats["count"], 3);
         assert_eq!(stats["min"], 1.0);
         assert_eq!(stats["max"], 3.0);
@@ -7967,7 +7562,7 @@ mod tests {
             serde_json::json!(2),
             serde_json::json!(3),
         ];
-        let result = IntervalsMcpHandler::downsample_array(&arr, 5);
+        let result = crate::domains::activity_analysis::downsample_array(&arr, 5);
         assert_eq!(result, arr);
     }
 
@@ -7978,7 +7573,7 @@ mod tests {
             serde_json::json!(2),
             serde_json::json!(3),
         ];
-        let result = IntervalsMcpHandler::downsample_array(&arr, 1);
+        let result = crate::domains::activity_analysis::downsample_array(&arr, 1);
         assert_eq!(result, arr);
     }
 
@@ -7996,7 +7591,7 @@ mod tests {
             serde_json::json!(8),
             serde_json::json!(9),
         ];
-        let result = IntervalsMcpHandler::downsample_array(&arr, 4);
+        let result = crate::domains::activity_analysis::downsample_array(&arr, 4);
         assert_eq!(result.len(), 4);
         assert_eq!(result[0], serde_json::json!(0)); // first
         assert_eq!(result[3], serde_json::json!(9)); // last
@@ -8009,7 +7604,7 @@ mod tests {
             serde_json::json!("middle"),
             serde_json::json!("last"),
         ];
-        let result = IntervalsMcpHandler::downsample_array(&arr, 2);
+        let result = crate::domains::activity_analysis::downsample_array(&arr, 2);
         assert_eq!(result.len(), 2);
         assert_eq!(result[0], serde_json::json!("first"));
         assert_eq!(result[1], serde_json::json!("last"));
