@@ -6,8 +6,7 @@ use rmcp::Json;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
     AnnotateAble, GetPromptRequestParams, GetPromptResult, ListPromptsResult, ListResourcesResult,
-    PaginatedRequestParams, RawResource, ReadResourceRequestParams, ReadResourceResult,
-    ResourceContents,
+    PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResult, ResourceContents,
 };
 use rmcp::service::RequestContext;
 use rmcp::{ErrorData, RoleServer};
@@ -1808,11 +1807,7 @@ impl rmcp::ServerHandler for IntervalsMcpHandler {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, ErrorData> {
-        let resource = RawResource::new("intervals-icu://athlete/profile", "Athlete Profile");
-
-        let mut res = resource.no_annotation();
-        res.description = Some("Complete athlete profile with current fitness metrics (CTL/ATL/TSB) and sport settings".to_string());
-        res.mime_type = Some("application/json".to_string());
+        let res = domains::resources::athlete_profile_resource().no_annotation();
 
         Ok(ListResourcesResult {
             resources: vec![res],
@@ -1827,48 +1822,11 @@ impl rmcp::ServerHandler for IntervalsMcpHandler {
         _context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResult, ErrorData> {
         if request.uri == "intervals-icu://athlete/profile" {
-            // Fetch athlete profile and fitness data
-            let profile = self
-                .client
-                .get_athlete_profile()
+            let text = domains::resources::build_athlete_profile_text(&*self.client)
                 .await
-                .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
-
-            // Fetch fitness summary (CTL/ATL/TSB)
-            let fitness = self
-                .client
-                .get_fitness_summary()
-                .await
-                .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
-
-            // Fetch sport settings
-            let sport_settings = self
-                .client
-                .get_sport_settings()
-                .await
-                .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
-
-            // Combine into a comprehensive resource (format as JSON manually)
-            let text = format!(
-                r#"{{
-  "profile": {{
-    "id": "{}",
-    "name": {}
-  }},
-  "fitness": {},
-  "sport_settings": {},
-  "timestamp": "{}"
-}}"#,
-                profile.id,
-                profile
-                    .name
-                    .as_ref()
-                    .map(|n| format!("\"{}\"", n))
-                    .unwrap_or_else(|| "null".to_string()),
-                serde_json::to_string_pretty(&fitness).unwrap_or_else(|_| "{}".to_string()),
-                serde_json::to_string_pretty(&sport_settings).unwrap_or_else(|_| "[]".to_string()),
-                chrono::Utc::now().to_rfc3339()
-            );
+                .map_err(|e: intervals_icu_client::IntervalsError| {
+                    ErrorData::internal_error(e.to_string(), None)
+                })?;
 
             Ok(ReadResourceResult {
                 contents: vec![ResourceContents::TextResourceContents {
