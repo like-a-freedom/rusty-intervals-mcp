@@ -1451,6 +1451,87 @@ impl IntervalsMcpHandler {
         domains::workouts::compact_workouts(value, compact, limit, fields)
     }
 
+    #[tool(
+        name = "create_folder",
+        description = "Create new folder (training plan). Params: folder data (name, description, etc.), compact (default true), response_fields (filter)."
+    )]
+    async fn create_folder(
+        &self,
+        params: Parameters<CreateFolderParams>,
+    ) -> Result<Json<ObjectResult>, String> {
+        let p = params.0;
+        let v = self
+            .client
+            .create_folder(&p.folder)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        // Apply compact mode to response
+        let result = if p.compact.unwrap_or(true) {
+            Self::compact_folder_item(&v, p.response_fields.as_deref())
+        } else if let Some(ref response_fields) = p.response_fields {
+            Self::filter_fields(&v, response_fields)
+        } else {
+            v
+        };
+
+        Ok(Json(ObjectResult { value: result }))
+    }
+
+    #[tool(
+        name = "update_folder",
+        description = "Update folder. Params: folder_id, fields, compact (default true), response_fields (filter)."
+    )]
+    async fn update_folder(
+        &self,
+        params: Parameters<UpdateFolderParams>,
+    ) -> Result<Json<ObjectResult>, String> {
+        let p = params.0;
+        let v = self
+            .client
+            .update_folder(&p.folder_id, &p.fields)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        // Apply compact mode to response
+        let result = if p.compact.unwrap_or(true) {
+            Self::compact_folder_item(&v, p.response_fields.as_deref())
+        } else if let Some(ref response_fields) = p.response_fields {
+            Self::filter_fields(&v, response_fields)
+        } else {
+            v
+        };
+
+        Ok(Json(ObjectResult { value: result }))
+    }
+
+    #[tool(
+        name = "delete_folder",
+        description = "Delete a folder (training plan)"
+    )]
+    async fn delete_folder(
+        &self,
+        params: Parameters<DeleteFolderParams>,
+    ) -> Result<Json<ObjectResult>, String> {
+        let p = params.0;
+        self.client
+            .delete_folder(&p.folder_id)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        Ok(Json(ObjectResult {
+            value: serde_json::json!({"deleted": true}),
+        }))
+    }
+
+    /// Compact a single folder item to essential fields
+    fn compact_folder_item(
+        value: &serde_json::Value,
+        fields: Option<&[String]>,
+    ) -> serde_json::Value {
+        domains::workouts::compact_folder_item(value, fields)
+    }
+
     // === Gear Management ===
 
     #[tool(
@@ -1915,8 +1996,11 @@ mod tests {
         assert!(tools.iter().any(|t| t.name == "apply_sport_settings"));
         assert!(tools.iter().any(|t| t.name == "create_sport_settings"));
         assert!(tools.iter().any(|t| t.name == "delete_sport_settings"));
+        assert!(tools.iter().any(|t| t.name == "create_folder"));
+        assert!(tools.iter().any(|t| t.name == "update_folder"));
+        assert!(tools.iter().any(|t| t.name == "delete_folder"));
         // Ensure the number of registered tools matches the documented implementation
-        assert_eq!(handler.tool_count(), 54, "Should register 54 tools");
+        assert_eq!(handler.tool_count(), 57, "Should register 57 tools");
     }
 
     #[test]
@@ -2322,6 +2406,28 @@ mod tests {
                 _folder_id: &str,
             ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
                 Ok(serde_json::json!({}))
+            }
+
+            async fn create_folder(
+                &self,
+                _folder: &serde_json::Value,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(serde_json::json!({"id": "f1", "name": "New Folder"}))
+            }
+
+            async fn update_folder(
+                &self,
+                _folder_id: &str,
+                _fields: &serde_json::Value,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(serde_json::json!({"id": "f1", "name": "Updated Folder"}))
+            }
+
+            async fn delete_folder(
+                &self,
+                _folder_id: &str,
+            ) -> Result<(), intervals_icu_client::IntervalsError> {
+                Ok(())
             }
 
             async fn create_gear(
@@ -2889,6 +2995,25 @@ mod tests {
             ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
                 Ok(serde_json::json!({}))
             }
+            async fn create_folder(
+                &self,
+                _folder: &serde_json::Value,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(serde_json::json!({"id": "f1", "name": "New Folder"}))
+            }
+            async fn update_folder(
+                &self,
+                _folder_id: &str,
+                _fields: &serde_json::Value,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(serde_json::json!({"id": "f1", "name": "Updated Folder"}))
+            }
+            async fn delete_folder(
+                &self,
+                _folder_id: &str,
+            ) -> Result<(), intervals_icu_client::IntervalsError> {
+                Ok(())
+            }
             async fn create_gear(
                 &self,
                 _gear: &serde_json::Value,
@@ -3268,6 +3393,25 @@ mod tests {
                 _folder_id: &str,
             ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
                 Ok(serde_json::json!({}))
+            }
+            async fn create_folder(
+                &self,
+                _folder: &serde_json::Value,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(serde_json::json!({"id": "f1", "name": "New Folder"}))
+            }
+            async fn update_folder(
+                &self,
+                _folder_id: &str,
+                _fields: &serde_json::Value,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(serde_json::json!({"id": "f1", "name": "Updated Folder"}))
+            }
+            async fn delete_folder(
+                &self,
+                _folder_id: &str,
+            ) -> Result<(), intervals_icu_client::IntervalsError> {
+                Ok(())
             }
             async fn create_gear(
                 &self,
@@ -3682,6 +3826,25 @@ mod tests {
             _folder_id: &str,
         ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
             Ok(serde_json::json!({}))
+        }
+        async fn create_folder(
+            &self,
+            _folder: &serde_json::Value,
+        ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+            Ok(serde_json::json!({"id": "f1", "name": "New Folder"}))
+        }
+        async fn update_folder(
+            &self,
+            _folder_id: &str,
+            _fields: &serde_json::Value,
+        ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+            Ok(serde_json::json!({"id": "f1", "name": "Updated Folder"}))
+        }
+        async fn delete_folder(
+            &self,
+            _folder_id: &str,
+        ) -> Result<(), intervals_icu_client::IntervalsError> {
+            Ok(())
         }
         async fn create_gear(
             &self,
@@ -4139,6 +4302,25 @@ mod tests {
             ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
                 Ok(serde_json::json!({}))
             }
+            async fn create_folder(
+                &self,
+                _folder: &serde_json::Value,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(serde_json::json!({"id": "f1", "name": "New Folder"}))
+            }
+            async fn update_folder(
+                &self,
+                _folder_id: &str,
+                _fields: &serde_json::Value,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(serde_json::json!({"id": "f1", "name": "Updated Folder"}))
+            }
+            async fn delete_folder(
+                &self,
+                _folder_id: &str,
+            ) -> Result<(), intervals_icu_client::IntervalsError> {
+                Ok(())
+            }
             async fn create_gear(
                 &self,
                 _gear: &serde_json::Value,
@@ -4573,6 +4755,25 @@ mod tests {
             ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
                 Ok(serde_json::json!({}))
             }
+            async fn create_folder(
+                &self,
+                _folder: &serde_json::Value,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(serde_json::json!({"id": "f1", "name": "New Folder"}))
+            }
+            async fn update_folder(
+                &self,
+                _folder_id: &str,
+                _fields: &serde_json::Value,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(serde_json::json!({"id": "f1", "name": "Updated Folder"}))
+            }
+            async fn delete_folder(
+                &self,
+                _folder_id: &str,
+            ) -> Result<(), intervals_icu_client::IntervalsError> {
+                Ok(())
+            }
             async fn create_gear(
                 &self,
                 _gear: &serde_json::Value,
@@ -4971,6 +5172,25 @@ mod tests {
             ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
                 Ok(serde_json::json!({}))
             }
+            async fn create_folder(
+                &self,
+                _folder: &serde_json::Value,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(serde_json::json!({"id": "f1", "name": "New Folder"}))
+            }
+            async fn update_folder(
+                &self,
+                _folder_id: &str,
+                _fields: &serde_json::Value,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(serde_json::json!({"id": "f1", "name": "Updated Folder"}))
+            }
+            async fn delete_folder(
+                &self,
+                _folder_id: &str,
+            ) -> Result<(), intervals_icu_client::IntervalsError> {
+                Ok(())
+            }
             async fn create_gear(
                 &self,
                 _gear: &serde_json::Value,
@@ -5367,6 +5587,25 @@ mod tests {
                 _folder_id: &str,
             ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
                 Ok(serde_json::json!({}))
+            }
+            async fn create_folder(
+                &self,
+                _folder: &serde_json::Value,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(serde_json::json!({"id": "f1", "name": "New Folder"}))
+            }
+            async fn update_folder(
+                &self,
+                _folder_id: &str,
+                _fields: &serde_json::Value,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(serde_json::json!({"id": "f1", "name": "Updated Folder"}))
+            }
+            async fn delete_folder(
+                &self,
+                _folder_id: &str,
+            ) -> Result<(), intervals_icu_client::IntervalsError> {
+                Ok(())
             }
             async fn create_gear(
                 &self,
@@ -5931,6 +6170,28 @@ mod tests {
                 _folder_id: &str,
             ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
                 Ok(serde_json::json!({}))
+            }
+
+            async fn create_folder(
+                &self,
+                _folder: &serde_json::Value,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(serde_json::json!({"id": "f1", "name": "New Folder"}))
+            }
+
+            async fn update_folder(
+                &self,
+                _folder_id: &str,
+                _fields: &serde_json::Value,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(serde_json::json!({"id": "f1", "name": "Updated Folder"}))
+            }
+
+            async fn delete_folder(
+                &self,
+                _folder_id: &str,
+            ) -> Result<(), intervals_icu_client::IntervalsError> {
+                Ok(())
             }
 
             async fn create_gear(
@@ -7012,6 +7273,44 @@ mod tests {
             gear_id: "g1".into(),
         };
         let res = handler.delete_gear(Parameters(params)).await;
+        assert!(res.is_ok());
+    }
+
+    #[tokio::test]
+    async fn create_folder_tool() {
+        let client = MockClient;
+        let handler = IntervalsMcpHandler::new(Arc::new(client));
+        let params = CreateFolderParams {
+            folder: serde_json::json!({"name": "New Plan", "description": "Test"}),
+            compact: None,
+            response_fields: None,
+        };
+        let res = handler.create_folder(Parameters(params)).await;
+        assert!(res.is_ok());
+    }
+
+    #[tokio::test]
+    async fn update_folder_tool() {
+        let client = MockClient;
+        let handler = IntervalsMcpHandler::new(Arc::new(client));
+        let params = UpdateFolderParams {
+            folder_id: "f1".into(),
+            fields: serde_json::json!({"name": "Updated Plan"}),
+            compact: None,
+            response_fields: None,
+        };
+        let res = handler.update_folder(Parameters(params)).await;
+        assert!(res.is_ok());
+    }
+
+    #[tokio::test]
+    async fn delete_folder_tool() {
+        let client = MockClient;
+        let handler = IntervalsMcpHandler::new(Arc::new(client));
+        let params = DeleteFolderParams {
+            folder_id: "f1".into(),
+        };
+        let res = handler.delete_folder(Parameters(params)).await;
         assert!(res.is_ok());
     }
 

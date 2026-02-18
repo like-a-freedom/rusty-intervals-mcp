@@ -1515,6 +1515,75 @@ impl IntervalsClient for ReqwestIntervalsClient {
         Ok(workouts)
     }
 
+    async fn create_folder(
+        &self,
+        folder: &serde_json::Value,
+    ) -> Result<serde_json::Value, IntervalsError> {
+        let url = format!(
+            "{}/api/v1/athlete/{}/folders",
+            self.base_url, self.athlete_id
+        );
+        let resp = self
+            .client
+            .post(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .json(folder)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(IntervalsError::Config(format!(
+                "unexpected status: {}",
+                resp.status()
+            )));
+        }
+        Ok(resp.json().await?)
+    }
+
+    async fn update_folder(
+        &self,
+        folder_id: &str,
+        fields: &serde_json::Value,
+    ) -> Result<serde_json::Value, IntervalsError> {
+        let url = format!(
+            "{}/api/v1/athlete/{}/folders/{}",
+            self.base_url, self.athlete_id, folder_id
+        );
+        let resp = self
+            .client
+            .put(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .json(fields)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(IntervalsError::Config(format!(
+                "unexpected status: {}",
+                resp.status()
+            )));
+        }
+        Ok(resp.json().await?)
+    }
+
+    async fn delete_folder(&self, folder_id: &str) -> Result<(), IntervalsError> {
+        let url = format!(
+            "{}/api/v1/athlete/{}/folders/{}",
+            self.base_url, self.athlete_id, folder_id
+        );
+        let resp = self
+            .client
+            .delete(&url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(IntervalsError::Config(format!(
+                "unexpected status: {}",
+                resp.status()
+            )));
+        }
+        Ok(())
+    }
+
     // === Gear Management ===
 
     async fn create_gear(

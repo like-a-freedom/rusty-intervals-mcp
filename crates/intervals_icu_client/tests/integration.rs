@@ -1762,3 +1762,96 @@ async fn get_workouts_in_folder_empty_folder_id_returns_all() {
     let arr = all.as_array().cloned().unwrap_or_default();
     assert_eq!(arr.len(), 2);
 }
+
+#[tokio::test]
+async fn create_folder_sends_post_request() {
+    let server = MockServer::start().await;
+    let new_folder = serde_json::json!({"name": "New Plan", "description": "Test"});
+    let response = serde_json::json!({"id": "f1", "name": "New Plan", "description": "Test"});
+    Mock::given(method("POST"))
+        .and(path("/api/v1/athlete/ath/folders"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&response))
+        .mount(&server)
+        .await;
+
+    let client = intervals_icu_client::http_client::ReqwestIntervalsClient::new(
+        &server.uri(),
+        "ath",
+        SecretString::new("tok".into()),
+    );
+
+    let result = client
+        .create_folder(&new_folder)
+        .await
+        .expect("create folder");
+    assert_eq!(result.get("id").and_then(|v| v.as_str()), Some("f1"));
+    assert_eq!(
+        result.get("name").and_then(|v| v.as_str()),
+        Some("New Plan")
+    );
+}
+
+#[tokio::test]
+async fn update_folder_sends_put_request() {
+    let server = MockServer::start().await;
+    let updates = serde_json::json!({"name": "Updated Plan"});
+    let response = serde_json::json!({"id": "f1", "name": "Updated Plan", "description": "desc"});
+    Mock::given(method("PUT"))
+        .and(path("/api/v1/athlete/ath/folders/f1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&response))
+        .mount(&server)
+        .await;
+
+    let client = intervals_icu_client::http_client::ReqwestIntervalsClient::new(
+        &server.uri(),
+        "ath",
+        SecretString::new("tok".into()),
+    );
+
+    let result = client
+        .update_folder("f1", &updates)
+        .await
+        .expect("update folder");
+    assert_eq!(
+        result.get("name").and_then(|v| v.as_str()),
+        Some("Updated Plan")
+    );
+}
+
+#[tokio::test]
+async fn delete_folder_sends_delete_request() {
+    let server = MockServer::start().await;
+    Mock::given(method("DELETE"))
+        .and(path("/api/v1/athlete/ath/folders/f1"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+
+    let client = intervals_icu_client::http_client::ReqwestIntervalsClient::new(
+        &server.uri(),
+        "ath",
+        SecretString::new("tok".into()),
+    );
+
+    let result = client.delete_folder("f1").await;
+    assert!(result.is_ok());
+}
+
+#[tokio::test]
+async fn delete_folder_handles_non_success() {
+    let server = MockServer::start().await;
+    Mock::given(method("DELETE"))
+        .and(path("/api/v1/athlete/ath/folders/f1"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+
+    let client = intervals_icu_client::http_client::ReqwestIntervalsClient::new(
+        &server.uri(),
+        "ath",
+        SecretString::new("tok".into()),
+    );
+
+    let result = client.delete_folder("f1").await;
+    assert!(result.is_err());
+}
