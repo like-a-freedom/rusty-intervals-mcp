@@ -1,10 +1,6 @@
-use hmac::{Hmac, Mac};
-use sha2::Sha256;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::sync::{Mutex, mpsc, watch};
-use uuid::Uuid;
+use tokio::sync::{Mutex, watch};
 
 use rmcp::Json;
 use rmcp::handler::server::wrapper::Parameters;
@@ -16,17 +12,21 @@ use rmcp::model::{
 use rmcp::service::RequestContext;
 use rmcp::{ErrorData, RoleServer};
 use rmcp::{prompt, prompt_handler, prompt_router, tool, tool_handler, tool_router};
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
 
 use intervals_icu_client::{ActivitySummary, IntervalsClient};
 
+pub mod compact;
+mod domains;
 mod event_id;
 mod prompts;
+mod services;
 mod state;
+mod transforms;
+mod types;
 
 pub use event_id::EventId;
 pub use state::{DownloadState, DownloadStatus, WebhookEvent};
+pub use types::*;
 
 #[derive(Clone)]
 pub struct IntervalsMcpHandler {
@@ -39,548 +39,17 @@ pub struct IntervalsMcpHandler {
     webhook_secret: Arc<Mutex<Option<String>>>,
 }
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct RecentParams {
-    pub limit: Option<u32>,
-    pub days_back: Option<i32>,
-}
-
-#[derive(Debug, Serialize, JsonSchema)]
-pub struct ProfileResult {
-    pub id: String,
-    pub name: Option<String>,
-}
-
-#[derive(Debug, Serialize, JsonSchema)]
-pub struct ActivitySummaryResult {
-    pub id: String,
-    pub name: Option<String>,
-}
-
-#[derive(Debug, Serialize, JsonSchema)]
-pub struct RecentActivitiesResult {
-    pub activities: Vec<ActivitySummaryResult>,
-}
-
-#[derive(Debug, Serialize, JsonSchema)]
-pub struct EventsResult {
-    pub events: Vec<intervals_icu_client::Event>,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct ObjectResult {
-    pub value: serde_json::Value,
-}
-
-/// Parameters for get_activity_details with optional compact mode.
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct ActivityDetailsParams {
-    /// Activity ID
-    pub activity_id: String,
-    /// Return full payload (default: false = compact summary)
-    pub expand: Option<bool>,
-    /// Specific fields to return (e.g., ["id", "name", "distance", "moving_time"])
-    pub fields: Option<Vec<String>>,
-}
-
-/// Compact activity summary for token-efficient responses
-#[derive(Debug, Serialize, JsonSchema)]
-pub struct ActivitySummaryCompact {
-    pub id: String,
-    pub name: Option<String>,
-    pub start_date_local: Option<String>,
-    pub r#type: Option<String>,
-    pub moving_time: Option<i64>,
-    pub distance: Option<f64>,
-    pub total_elevation_gain: Option<f64>,
-    pub average_watts: Option<f64>,
-    pub average_heartrate: Option<f64>,
-    pub icu_training_load: Option<f64>,
-    pub icu_intensity: Option<f64>,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct ActivityIdParam {
-    pub activity_id: String,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct BulkCreateEventsToolParams {
-    /// Array of calendar events to create (title, start_date_local, category, etc.)
-    pub events: Vec<intervals_icu_client::Event>,
-    /// Return compact summaries for created events (default: true)
-    pub compact: Option<bool>,
-    /// Specific fields to return per event (default: id,name,start_date_local,category,type)
-    pub fields: Option<Vec<String>>,
-}
-
-/// Parameters for create_event with optional response filtering
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct CreateEventParams {
-    #[serde(flatten)]
-    pub event: intervals_icu_client::Event,
-    /// Return compact summary (default: true)
-    pub compact: Option<bool>,
-    /// Specific fields to return (default: id,name,start_date_local,category,type,description)
-    pub fields: Option<Vec<String>>,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-/// Parameters for finding peak performances (best efforts) in an activity.
-/// All parameters are flat (no nested "options" object). Use SINGULAR values, NOT arrays.
-pub struct BestEffortsToolParams {
-    /// REQUIRED. The activity ID, e.g. "i112895444"
-    pub activity_id: String,
-    /// REQUIRED. Stream to analyze: "power", "heartrate", "speed", "pace", "cadence", or "distance"
-    pub stream: String,
-    /// A SINGLE integer in seconds (NOT an array). Use for time-based efforts. Example: 300 means 5 minutes. Provide duration OR distance, not both.
-    pub duration: Option<i32>,
-    /// A SINGLE number in meters (NOT an array). Use for distance-based efforts. Example: 1000 means 1 km. Provide duration OR distance, not both.
-    pub distance: Option<f64>,
-    /// Maximum number of best efforts to return (optional)
-    pub count: Option<i32>,
-    /// Minimum value threshold for the stream (optional)
-    pub min_value: Option<f64>,
-    /// Whether to exclude structured intervals from analysis (optional)
-    pub exclude_intervals: Option<bool>,
-    /// Start index in the activity data (optional)
-    pub start_index: Option<i32>,
-    /// End index in the activity data (optional)
-    pub end_index: Option<i32>,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct SearchParams {
-    #[serde(rename = "q", alias = "query")]
-    pub q: String,
-    pub limit: Option<u32>,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct IntervalSearchParams {
-    /// Minimum time for interval (seconds)
-    pub min_secs: u32,
-    /// Maximum time for interval (seconds)
-    pub max_secs: u32,
-    /// Minimum intensity percentage (0-100)
-    pub min_intensity: u32,
-    /// Maximum intensity percentage (0-100)
-    pub max_intensity: u32,
-    #[serde(rename = "type")]
-    pub interval_type: Option<String>,
-    pub min_reps: Option<u32>,
-    pub max_reps: Option<u32>,
-    pub limit: Option<u32>,
-    /// Return compact summaries (default: true)
-    pub compact: Option<bool>,
-    /// Specific fields to return per interval (default: type,start,end,duration,intensity)
-    pub fields: Option<Vec<String>>,
-}
-
-// === Token-Efficient Parameters ===
-
-/// Parameters for get_activities_csv with optional filtering
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct ActivitiesCsvParams {
-    /// Limit number of rows (default: 100, max: 1000)
-    pub limit: Option<u32>,
-    /// Number of days back to include (default: 90)
-    pub days_back: Option<i32>,
-    /// Specific columns to include (default: id,start_date_local,name,type,moving_time,distance)
-    pub columns: Option<Vec<String>>,
-}
-
-/// Parameters for search_activities_full with compact mode
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct SearchActivitiesFullParams {
-    /// Search query
-    #[serde(rename = "q", alias = "query")]
-    pub q: String,
-    /// Maximum results (default: 10)
-    pub limit: Option<u32>,
-    /// Return compact summaries (default: true)
-    pub compact: Option<bool>,
-    /// Specific fields to return when compact=false
-    pub fields: Option<Vec<String>>,
-}
-
-/// Parameters for get_activity_intervals with compact mode
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct ActivityIntervalsParams {
-    /// Activity ID
-    pub activity_id: String,
-    /// Return summary statistics only (default: true)
-    pub summary: Option<bool>,
-    /// Maximum intervals to return (default: 20)
-    pub max_intervals: Option<u32>,
-    /// Specific fields per interval (default: type,start_index,end_index,duration,distance)
-    pub fields: Option<Vec<String>>,
-}
-
-/// Parameters for get_best_efforts with compact mode
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct BestEffortsCompactParams {
-    /// Activity ID
-    pub activity_id: String,
-    /// Stream to analyze: power, heartrate, speed, pace, cadence, distance
-    pub stream: String,
-    /// Duration in seconds (REQUIRED: provide duration OR distance, not both)
-    pub duration: Option<i32>,
-    /// Distance in meters (REQUIRED: provide duration OR distance, not both)
-    pub distance: Option<f64>,
-    /// Max results (default: 5)
-    pub count: Option<i32>,
-    /// Return summary only (default: true)
-    pub summary: Option<bool>,
-    /// Minimum value threshold
-    pub min_value: Option<f64>,
-    /// Exclude structured intervals
-    pub exclude_intervals: Option<bool>,
-    /// Start index
-    pub start_index: Option<i32>,
-    /// End index
-    pub end_index: Option<i32>,
-}
-
-/// Parameters for power/hr/pace curves with compact mode
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct CurvesParams {
-    /// Sport type (e.g., "Ride", "Run")
-    #[serde(rename = "type")]
-    pub sport: String,
-    /// Days back to analyze (default: 90)
-    pub days_back: Option<i32>,
-    /// Specific durations in seconds to return (e.g., [5, 60, 300, 1200, 3600])
-    pub durations: Option<Vec<u32>>,
-    /// Return summary with key durations only (default: true)
-    pub summary: Option<bool>,
-}
-
-/// Parameters for get_workouts_in_folder with compact mode
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct WorkoutsInFolderParams {
-    /// Folder ID
-    pub folder_id: String,
-    /// Return compact summaries (default: true)
-    pub compact: Option<bool>,
-    /// Max workouts to return (default: 20)
-    pub limit: Option<u32>,
-    /// Specific fields to return
-    pub fields: Option<Vec<String>>,
-}
-
-/// Parameters for get_workout_library with compact mode
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct WorkoutLibraryParams {
-    /// Return compact summaries (default: true)
-    pub compact: Option<bool>,
-    /// Specific fields to return (default: id,name,description)
-    pub fields: Option<Vec<String>>,
-}
-
-/// Parameters for get_gear_list with compact mode
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct GearListParams {
-    /// Return compact summaries (default: true)
-    pub compact: Option<bool>,
-    /// Specific fields to return (default: id,name,type,distance)
-    pub fields: Option<Vec<String>>,
-}
-
-/// Parameters for histogram tools with compact mode
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct HistogramParams {
-    /// Activity ID
-    pub activity_id: String,
-    /// Return summary statistics only (default: true)
-    pub summary: Option<bool>,
-    /// Number of bins (default: 10, max: 50)
-    pub bins: Option<u32>,
-}
-
-/// Parameters for get_wellness with compact mode
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct WellnessParams {
-    /// Days back (default: 7)
-    pub days_back: Option<i32>,
-    /// Return summary/trends only (default: true)
-    pub summary: Option<bool>,
-    /// Specific fields to return (default: all)
-    pub fields: Option<Vec<String>>,
-}
-
-/// Parameters for get_sport_settings with compact mode
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct SportSettingsParams {
-    /// Return compact summary (default: true)
-    pub compact: Option<bool>,
-    /// Specific sport types to return (default: all)
-    pub sports: Option<Vec<String>>,
-    /// Specific fields to return per sport (default: type,ftp,fthr,hrzones,powerzones)
-    pub fields: Option<Vec<String>>,
-}
-
-/// Parameters for get_fitness_summary with compact mode
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct FitnessSummaryParams {
-    /// Return compact summary (default: true)
-    pub compact: Option<bool>,
-    /// Specific fields to return (default: ctl,atl,tsb,ctl_ramp_rate,atl_ramp_rate,date)
-    pub fields: Option<Vec<String>>,
-}
-
-/// Parameters for get_events with compact mode
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct EventsParams {
-    /// Days back (default: 30)
-    pub days_back: Option<i32>,
-    /// Maximum events to return (default: 50)
-    pub limit: Option<u32>,
-    /// Return compact summaries (default: true)
-    pub compact: Option<bool>,
-    /// Specific fields to return (default: id,start_date_local,name,category)
-    pub fields: Option<Vec<String>>,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct UpdateActivityParams {
-    pub activity_id: String,
-    pub fields: serde_json::Value,
-    /// Return compact summary (default: true)
-    pub compact: Option<bool>,
-    /// Specific fields to return (default: id,name,start_date_local,type,distance,moving_time)
-    pub response_fields: Option<Vec<String>>,
-}
-
-/// Parameters for get_activity_streams with optional compact mode.
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct StreamsParams {
-    /// Activity ID
-    pub activity_id: String,
-    /// Maximum number of data points per stream. If set, arrays are downsampled.
-    pub max_points: Option<u32>,
-    /// Return summary statistics (min/max/avg/count) instead of raw arrays.
-    pub summary: Option<bool>,
-    /// Specific streams to return (e.g., ["power", "heartrate"]). Default: all available.
-    pub streams: Option<Vec<String>>,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct PowerCurvesParams {
-    pub days_back: Option<i32>,
-    #[serde(rename = "type")]
-    pub sport: String,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct DownloadParams {
-    pub activity_id: String,
-    pub output_path: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct DownloadIdParam {
-    pub download_id: String,
-}
-
-#[derive(Debug, Serialize, JsonSchema)]
-pub struct DownloadStartResult {
-    pub download_id: String,
-}
-
-#[derive(Debug, Serialize, JsonSchema)]
-pub struct DownloadStatusResult {
-    pub status: DownloadStatus,
-}
-
-// === New Parameter Structs for Missing Tools ===
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct ActivitiesAroundParams {
-    pub activity_id: String,
-    /// Maximum activities to return (default: 10)
-    pub limit: Option<u32>,
-    pub route_id: Option<i64>,
-    /// Return compact summaries (default: true)
-    pub compact: Option<bool>,
-    /// Specific fields to return (default: id,name,start_date_local,type,distance,moving_time)
-    pub fields: Option<Vec<String>>,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct DateParam {
-    pub date: String,
-}
-
-/// Parameters for get_wellness_for_date with compact mode
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct WellnessDateParams {
-    pub date: String,
-    /// Return compact summary (default: true)
-    pub compact: Option<bool>,
-    /// Specific fields to return (default: id,sleepSecs,stress,restingHR,hrv,weight,fatigue,motivation)
-    pub fields: Option<Vec<String>>,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct WellnessUpdateParams {
-    pub date: String,
-    pub data: serde_json::Value,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct DaysAheadParams {
-    pub days_ahead: Option<u32>,
-    /// Return compact summaries (default: true)
-    pub compact: Option<bool>,
-    /// Maximum workouts to return (default: 20)
-    pub limit: Option<u32>,
-    /// Specific fields to return (default: id,name,start_date_local,category,type)
-    pub fields: Option<Vec<String>>,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct UpdateEventParams {
-    pub event_id: EventId,
-    pub fields: serde_json::Value,
-    /// Return compact summary (default: true)
-    pub compact: Option<bool>,
-    /// Specific fields to return (default: id,name,start_date_local,category,type,description)
-    pub response_fields: Option<Vec<String>>,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct BulkDeleteEventsParams {
-    pub event_ids: Vec<EventId>,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct DuplicateEventParams {
-    pub event_id: EventId,
-    pub num_copies: Option<u32>,
-    pub weeks_between: Option<u32>,
-    /// Return compact summaries (default: true)
-    pub compact: Option<bool>,
-    /// Specific fields to return per event (default: id,name,start_date_local,category,type)
-    pub fields: Option<Vec<String>>,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct FolderIdParam {
-    pub folder_id: String,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct CreateGearParams {
-    pub gear: serde_json::Value,
-    /// Return compact summary (default: true)
-    pub compact: Option<bool>,
-    /// Specific fields to return (default: id,name,type,distance)
-    pub response_fields: Option<Vec<String>>,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct UpdateGearParams {
-    pub gear_id: String,
-    pub fields: serde_json::Value,
-    /// Return compact summary (default: true)
-    pub compact: Option<bool>,
-    /// Specific fields to return (default: id,name,type,distance)
-    pub response_fields: Option<Vec<String>>,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct GearIdParam {
-    pub gear_id: String,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct CreateGearReminderParams {
-    pub gear_id: String,
-    pub reminder: serde_json::Value,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct UpdateGearReminderParams {
-    pub gear_id: String,
-    pub reminder_id: String,
-    pub reset: bool,
-    pub snooze_days: u32,
-    pub fields: serde_json::Value,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct SportTypeParam {
-    pub sport_type: String,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct UpdateSportSettingsParams {
-    pub sport_type: String,
-    pub recalc_hr_zones: bool,
-    pub fields: serde_json::Value,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct ApplySportSettingsParams {
-    pub sport_type: String,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct CreateSportSettingsParams {
-    pub settings: serde_json::Value,
-}
-
-#[derive(Debug, Serialize, JsonSchema)]
-pub struct DownloadListResult {
-    pub downloads: Vec<DownloadStatus>,
-}
-
-// === Prompt Parameters ===
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct AnalyzeRecentTrainingParams {
-    pub days_back: Option<i32>,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct PerformanceAnalysisParams {
-    pub days_back: Option<i32>,
-    pub metric: Option<String>,
-    pub sport_type: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct ActivityDeepDiveParams {
-    pub activity_id: String,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct RecoveryCheckParams {
-    pub days_back: Option<i32>,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct TrainingPlanReviewParams {
-    pub start_date: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct PlanTrainingWeekParams {
-    pub start_date: Option<String>,
-    pub focus: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct AnalyzeAdaptPlanParams {
-    pub period: Option<String>,
-    pub days_back: Option<i32>,
-    pub focus: Option<String>,
-}
-
 #[tool_router]
 #[prompt_router]
 impl IntervalsMcpHandler {
+    fn download_service(&self) -> services::DownloadService {
+        services::DownloadService::new(self.downloads.clone(), self.cancel_senders.clone())
+    }
+
+    fn webhook_service(&self) -> services::WebhookService {
+        services::WebhookService::new(self.webhooks.clone(), self.webhook_secret.clone())
+    }
+
     pub fn new(client: Arc<dyn IntervalsClient>) -> Self {
         Self {
             client,
@@ -651,9 +120,7 @@ impl IntervalsMcpHandler {
     ) -> Result<Json<ObjectResult>, String> {
         let p = params.0;
         if let Some(s) = p.value.get("secret").and_then(|v| v.as_str()) {
-            // set secret in mutex
-            let mut secret = self.webhook_secret.lock().await;
-            *secret = Some(s.to_string());
+            self.webhook_service().set_secret(s.to_string()).await;
             Ok(Json(ObjectResult {
                 value: serde_json::json!({ "ok": true }),
             }))
@@ -691,83 +158,17 @@ impl IntervalsMcpHandler {
         compact: bool,
         fields: Option<&[String]>,
     ) -> Vec<serde_json::Value> {
-        let default_fields = ["id", "start_date_local", "name", "category", "type"];
-        let fields_to_use: Vec<&str> = if compact {
-            fields
-                .map(|f| f.iter().map(|s| s.as_str()).collect())
-                .unwrap_or_else(|| default_fields.to_vec())
-        } else {
-            // Full mode but still limit fields if specified
-            return events
-                .into_iter()
-                .map(|e| {
-                    let mut obj = serde_json::Map::new();
-                    if let Some(_val) = serde_json::to_value(&e)
-                        .ok()
-                        .and_then(|v| v.as_object().cloned())
-                    {
-                        if let Some(filter) = fields {
-                            for field in filter {
-                                if let Some(v) = obj.get(field) {
-                                    obj.insert(field.clone(), v.clone());
-                                }
-                            }
-                            serde_json::Value::Object(obj)
-                        } else {
-                            serde_json::Value::Object(obj)
-                        }
-                    } else {
-                        serde_json::to_value(e).unwrap_or_default()
-                    }
-                })
-                .collect();
-        };
-
-        events
-            .into_iter()
-            .map(|event| {
-                let mut result = serde_json::Map::new();
-                let event_json = serde_json::to_value(&event).unwrap_or_default();
-
-                if let Some(obj) = event_json.as_object() {
-                    for field in &fields_to_use {
-                        if let Some(val) = obj.get(*field) {
-                            result.insert(field.to_string(), val.clone());
-                        }
-                    }
-                }
-
-                serde_json::Value::Object(result)
-            })
-            .collect()
+        domains::events::compact_events(events, compact, fields)
     }
 
     // Shared helper: normalize date-only strings to YYYY-MM-DD. Accepts YYYY-MM-DD, RFC3339, or naive YYYY-MM-DDTHH:MM:SS
     fn normalize_date_str(s: &str) -> Result<String, ()> {
-        if chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").is_ok() {
-            return Ok(s.to_string());
-        }
-        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
-            return Ok(dt.date_naive().format("%Y-%m-%d").to_string());
-        }
-        if let Ok(ndt) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S") {
-            return Ok(ndt.date().format("%Y-%m-%d").to_string());
-        }
-        Err(())
+        domains::events::normalize_date_str(s)
     }
 
     // Normalize start_date_local for events: return ISO datetime. Keep provided time; if only a date is given, set time to 00:00:00.
     fn normalize_event_start(s: &str) -> Result<String, ()> {
-        if chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").is_ok() {
-            return Ok(format!("{}T00:00:00", s));
-        }
-        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
-            return Ok(dt.naive_local().format("%Y-%m-%dT%H:%M:%S").to_string());
-        }
-        if let Ok(ndt) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S") {
-            return Ok(ndt.format("%Y-%m-%dT%H:%M:%S").to_string());
-        }
-        Err(())
+        domains::events::normalize_event_start(s)
     }
 
     #[tool(
@@ -831,30 +232,7 @@ impl IntervalsMcpHandler {
         event: &intervals_icu_client::Event,
         fields: Option<&[String]>,
     ) -> serde_json::Value {
-        let default_fields = [
-            "id",
-            "name",
-            "start_date_local",
-            "category",
-            "type",
-            "description",
-        ];
-        let fields_to_use: Vec<&str> = fields
-            .map(|f| f.iter().map(|s| s.as_str()).collect())
-            .unwrap_or_else(|| default_fields.to_vec());
-
-        let mut result = serde_json::Map::new();
-        let event_json = serde_json::to_value(event).unwrap_or_default();
-
-        if let Some(obj) = event_json.as_object() {
-            for field in &fields_to_use {
-                if let Some(val) = obj.get(*field) {
-                    result.insert(field.to_string(), val.clone());
-                }
-            }
-        }
-
-        serde_json::Value::Object(result)
+        domains::events::compact_single_event(event, fields)
     }
 
     /// Filter fields of a single event
@@ -862,18 +240,7 @@ impl IntervalsMcpHandler {
         event: &intervals_icu_client::Event,
         fields: &[String],
     ) -> serde_json::Value {
-        let mut result = serde_json::Map::new();
-        let event_json = serde_json::to_value(event).unwrap_or_default();
-
-        if let Some(obj) = event_json.as_object() {
-            for field in fields {
-                if let Some(val) = obj.get(field) {
-                    result.insert(field.clone(), val.clone());
-                }
-            }
-        }
-
-        serde_json::Value::Object(result)
+        domains::events::filter_event_fields(event, fields)
     }
 
     #[tool(
@@ -1023,54 +390,12 @@ impl IntervalsMcpHandler {
         value: &serde_json::Value,
         fields: Option<&[String]>,
     ) -> serde_json::Value {
-        let default_fields = [
-            "id",
-            "name",
-            "start_date_local",
-            "type",
-            "moving_time",
-            "distance",
-            "total_elevation_gain",
-            "average_watts",
-            "average_heartrate",
-            "icu_training_load",
-            "icu_intensity",
-            "calories",
-            "average_speed",
-        ];
-
-        let fields_to_extract: Vec<&str> = fields
-            .map(|f| f.iter().map(|s| s.as_str()).collect())
-            .unwrap_or_else(|| default_fields.to_vec());
-
-        let Some(obj) = value.as_object() else {
-            return value.clone();
-        };
-
-        let mut result = serde_json::Map::new();
-        for field in fields_to_extract {
-            if let Some(val) = obj.get(field) {
-                result.insert(field.to_string(), val.clone());
-            }
-        }
-
-        serde_json::Value::Object(result)
+        transforms::extract_activity_summary(value, fields)
     }
 
     /// Filter JSON object to only include specified fields
     fn filter_fields(value: &serde_json::Value, fields: &[String]) -> serde_json::Value {
-        let Some(obj) = value.as_object() else {
-            return value.clone();
-        };
-
-        let mut result = serde_json::Map::new();
-        for field in fields {
-            if let Some(val) = obj.get(field) {
-                result.insert(field.clone(), val.clone());
-            }
-        }
-
-        serde_json::Value::Object(result)
+        compact::filter_fields(value, fields)
     }
 
     #[tool(
@@ -1129,58 +454,12 @@ impl IntervalsMcpHandler {
         value: &serde_json::Value,
         custom_fields: Option<&[String]>,
     ) -> serde_json::Value {
-        let default_fields = [
-            "id",
-            "name",
-            "start_date_local",
-            "type",
-            "moving_time",
-            "distance",
-            "total_elevation_gain",
-            "average_watts",
-            "average_heartrate",
-            "icu_training_load",
-        ];
-
-        let fields: Vec<&str> = custom_fields
-            .map(|f| f.iter().map(|s| s.as_str()).collect())
-            .unwrap_or_else(|| default_fields.to_vec());
-
-        let Some(arr) = value.as_array() else {
-            return value.clone();
-        };
-
-        let compacted: Vec<serde_json::Value> = arr
-            .iter()
-            .map(|item| {
-                let Some(obj) = item.as_object() else {
-                    return item.clone();
-                };
-                let mut result = serde_json::Map::new();
-                for field in &fields {
-                    if let Some(val) = obj.get(*field) {
-                        result.insert(field.to_string(), val.clone());
-                    }
-                }
-                serde_json::Value::Object(result)
-            })
-            .collect();
-
-        serde_json::Value::Array(compacted)
+        transforms::compact_activities_array(value, custom_fields)
     }
 
     /// Filter each object in an array to only include specified fields
     fn filter_array_fields(value: &serde_json::Value, fields: &[String]) -> serde_json::Value {
-        let Some(arr) = value.as_array() else {
-            return value.clone();
-        };
-
-        let filtered: Vec<serde_json::Value> = arr
-            .iter()
-            .map(|item| Self::filter_fields(item, fields))
-            .collect();
-
-        serde_json::Value::Array(filtered)
+        compact::filter_array_fields(value, fields)
     }
 
     #[tool(
@@ -1218,73 +497,7 @@ impl IntervalsMcpHandler {
         _days_back: i32,
         columns: Option<&[String]>,
     ) -> String {
-        let mut lines = csv.lines();
-        let Some(header) = lines.next() else {
-            return csv.to_string();
-        };
-
-        let header_cols: Vec<&str> = header.split(',').collect();
-
-        // Determine which column indices to keep
-        let col_indices: Vec<usize> = if let Some(cols) = columns {
-            header_cols
-                .iter()
-                .enumerate()
-                .filter_map(|(i, h)| {
-                    if cols.iter().any(|c| c.eq_ignore_ascii_case(h)) {
-                        Some(i)
-                    } else {
-                        None
-                    }
-                })
-                .collect()
-        } else {
-            // Default columns for compact mode
-            let defaults = [
-                "id",
-                "start_date_local",
-                "name",
-                "type",
-                "moving_time",
-                "distance",
-            ];
-            header_cols
-                .iter()
-                .enumerate()
-                .filter_map(|(i, h)| {
-                    if defaults.iter().any(|d| d.eq_ignore_ascii_case(h)) {
-                        Some(i)
-                    } else {
-                        None
-                    }
-                })
-                .collect()
-        };
-
-        // If no columns matched, return all columns
-        let col_indices = if col_indices.is_empty() {
-            (0..header_cols.len()).collect()
-        } else {
-            col_indices
-        };
-
-        let mut result = Vec::with_capacity(max_rows + 1);
-
-        // Build filtered header
-        let filtered_header: Vec<&str> = col_indices.iter().map(|&i| header_cols[i]).collect();
-        result.push(filtered_header.join(","));
-
-        // Filter rows
-        for line in lines.take(max_rows) {
-            let cols: Vec<&str> = line.split(',').collect();
-            let filtered: Vec<&str> = col_indices
-                .iter()
-                .filter_map(|&i| cols.get(i).copied())
-                .collect();
-            result.push(filtered.join(","));
-        }
-
-        result.join("\n")
+        transforms::filter_csv(csv, max_rows, columns)
     }
 
     #[tool(
@@ -1947,91 +1160,10 @@ impl IntervalsMcpHandler {
         params: Parameters<DownloadParams>,
     ) -> Result<Json<DownloadStartResult>, String> {
         let p = params.0;
-        let id = Uuid::new_v4().to_string();
-        let path_opt = p.output_path.clone();
-
-        let status = DownloadStatus {
-            id: id.clone(),
-            activity_id: p.activity_id.clone(),
-            state: DownloadState::Pending,
-            bytes_downloaded: 0,
-            total_bytes: None,
-            path: None,
-        };
-
-        {
-            let mut map = self.downloads.lock().await;
-            map.insert(id.clone(), status);
-        }
-
-        // cancellation channel
-        let (cancel_tx, cancel_rx) = watch::channel(false);
-        {
-            let mut canc = self.cancel_senders.lock().await;
-            canc.insert(id.clone(), cancel_tx.clone());
-        }
-
-        let client = self.client.clone();
-        let downloads = self.downloads.clone();
-        let id_clone_for_task = id.clone();
-        let params_activity = p.activity_id.clone();
-        let path_opt_clone = path_opt.clone();
-
-        tokio::spawn(async move {
-            // mark in-progress
-            {
-                let mut map = downloads.lock().await;
-                if let Some(s) = map.get_mut(&id_clone_for_task) {
-                    s.state = DownloadState::InProgress;
-                }
-            }
-
-            // create progress channel
-            let (tx, mut rx) = mpsc::channel(8);
-            let activity = params_activity.clone();
-            let out_path = path_opt_clone.map(std::path::PathBuf::from);
-
-            // launch client download
-            let download_fut = client.download_activity_file_with_progress(
-                &activity,
-                out_path,
-                tx,
-                cancel_rx.clone(),
-            );
-
-            // progress reader
-            let downloads_clone = downloads.clone();
-            let id_clone = id_clone_for_task.clone();
-            let progress_handle = tokio::spawn(async move {
-                while let Some(pr) = rx.recv().await {
-                    let mut map = downloads_clone.lock().await;
-                    if let Some(s) = map.get_mut(&id_clone) {
-                        s.bytes_downloaded = pr.bytes_downloaded;
-                        s.total_bytes = pr.total_bytes;
-                    }
-                }
-            });
-
-            match download_fut.await {
-                Ok(pth) => {
-                    let mut map = downloads.lock().await;
-                    if let Some(s) = map.get_mut(&id_clone_for_task) {
-                        s.state = DownloadState::Completed;
-                        s.path = pth;
-                    }
-                }
-                Err(e) => {
-                    let mut map = downloads.lock().await;
-                    if let Some(s) = map.get_mut(&id_clone_for_task) {
-                        s.state = DownloadState::Failed(e.to_string());
-                    }
-                }
-            }
-
-            drop(progress_handle.await);
-            // cleanup cancel sender
-            // Note: we intentionally keep status for inspection
-        });
+        let id = self
+            .download_service()
+            .start_download(self.client.clone(), p.activity_id, p.output_path)
+            .await;
 
         Ok(Json(DownloadStartResult { download_id: id }))
     }
@@ -2095,8 +1227,7 @@ impl IntervalsMcpHandler {
         params: Parameters<DownloadIdParam>,
     ) -> Result<Json<DownloadStatusResult>, String> {
         let p = params.0;
-        let map = self.downloads.lock().await;
-        if let Some(s) = map.get(&p.download_id) {
+        if let Some(s) = self.download_service().get_status(&p.download_id).await {
             Ok(Json(DownloadStatusResult { status: s.clone() }))
         } else {
             Err("not found".into())
@@ -2123,51 +1254,10 @@ impl IntervalsMcpHandler {
             .cloned()
             .ok_or_else(|| "missing payload".to_string())?;
 
-        // verify
-        let secret_opt = { self.webhook_secret.lock().await.clone() };
-        let secret = secret_opt.ok_or_else(|| "webhook secret not set".to_string())?;
-        let mut mac: Hmac<Sha256> =
-            Hmac::new_from_slice(secret.as_bytes()).map_err(|e| e.to_string())?;
-        let body = serde_json::to_vec(&payload).map_err(|e| e.to_string())?;
-        mac.update(&body);
-        let expected = mac.finalize().into_bytes();
-        let sig_bytes = hex::decode(sig).map_err(|e| e.to_string())?;
-        if expected.as_slice() != sig_bytes.as_slice() {
-            return Err("signature mismatch".into());
-        }
-
-        // dedupe by payload id if present
-        let id = payload
-            .get("id")
-            .and_then(|v| v.as_str())
-            .unwrap_or_else(|| {
-                // fallback to timestamp-based id
-                let since = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default();
-                Box::leak(format!("ts-{}", since.as_millis()).into_boxed_str())
-            })
-            .to_string();
-
-        let evt = WebhookEvent {
-            id: id.clone(),
-            payload: payload.clone(),
-            received_at: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
-        };
-
-        let mut store = self.webhooks.lock().await;
-        if store.contains_key(&id) {
-            return Ok(Json(ObjectResult {
-                value: serde_json::json!({ "duplicate": true }),
-            }));
-        }
-        store.insert(id.clone(), evt);
-        Ok(Json(ObjectResult {
-            value: serde_json::json!({ "ok": true, "id": id }),
-        }))
+        self.webhook_service()
+            .process_webhook(sig, payload)
+            .await
+            .map(Json)
     }
 
     /// Programmatic webhook handler (callable from HTTP server). Performs HMAC verification
@@ -2177,56 +1267,14 @@ impl IntervalsMcpHandler {
         signature: &str,
         payload: serde_json::Value,
     ) -> Result<ObjectResult, String> {
-        // verify
-        let secret_opt = { self.webhook_secret.lock().await.clone() };
-        let secret = secret_opt.ok_or_else(|| "webhook secret not set".to_string())?;
-        let mut mac: Hmac<Sha256> =
-            Hmac::new_from_slice(secret.as_bytes()).map_err(|e| e.to_string())?;
-        let body = serde_json::to_vec(&payload).map_err(|e| e.to_string())?;
-        mac.update(&body);
-        let expected = mac.finalize().into_bytes();
-        let sig_bytes = hex::decode(signature).map_err(|e| e.to_string())?;
-        if expected.as_slice() != sig_bytes.as_slice() {
-            return Err("signature mismatch".into());
-        }
-
-        // dedupe
-        let id = payload
-            .get("id")
-            .and_then(|v| v.as_str())
-            .unwrap_or_else(|| {
-                let since = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default();
-                Box::leak(format!("ts-{}", since.as_millis()).into_boxed_str())
-            })
-            .to_string();
-
-        let evt = WebhookEvent {
-            id: id.clone(),
-            payload: payload.clone(),
-            received_at: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
-        };
-
-        let mut store = self.webhooks.lock().await;
-        if store.contains_key(&id) {
-            return Ok(ObjectResult {
-                value: serde_json::json!({ "duplicate": true }),
-            });
-        }
-        store.insert(id.clone(), evt);
-        Ok(ObjectResult {
-            value: serde_json::json!({ "ok": true, "id": id }),
-        })
+        self.webhook_service()
+            .process_webhook(signature, payload)
+            .await
     }
 
     /// Set webhook secret programmatically (for tests or admin flows).
     pub async fn set_webhook_secret_value(&self, secret: impl Into<String>) {
-        let mut s = self.webhook_secret.lock().await;
-        *s = Some(secret.into());
+        self.webhook_service().set_secret(secret.into()).await;
     }
 
     #[tool(
@@ -2234,8 +1282,7 @@ impl IntervalsMcpHandler {
         description = "List all activity downloads and their current status (Pending/InProgress/Completed/Failed)"
     )]
     async fn list_downloads(&self) -> Result<Json<DownloadListResult>, String> {
-        let map = self.downloads.lock().await;
-        let list = map.values().cloned().collect();
+        let list = self.download_service().list_downloads().await;
         Ok(Json(DownloadListResult { downloads: list }))
     }
 
@@ -2248,13 +1295,11 @@ impl IntervalsMcpHandler {
         params: Parameters<DownloadIdParam>,
     ) -> Result<Json<ObjectResult>, String> {
         let p = params.0;
-        let canc = self.cancel_senders.lock().await;
-        if let Some(tx) = canc.get(&p.download_id) {
-            let _ = tx.send(true);
-            let mut map = self.downloads.lock().await;
-            if let Some(s) = map.get_mut(&p.download_id) {
-                s.state = DownloadState::Cancelled;
-            }
+        if self
+            .download_service()
+            .cancel_download(&p.download_id)
+            .await
+        {
             Ok(Json(ObjectResult {
                 value: serde_json::json!({ "cancelled": true }),
             }))
@@ -2534,81 +1579,7 @@ impl IntervalsMcpHandler {
         summary_only: bool,
         fields: Option<&[String]>,
     ) -> serde_json::Value {
-        let Some(arr) = value.as_array() else {
-            return value.clone();
-        };
-
-        if summary_only {
-            // Compute trends/averages
-            let mut sleep_total: f64 = 0.0;
-            let mut stress_total: f64 = 0.0;
-            let mut hr_total: f64 = 0.0;
-            let mut hrv_total: f64 = 0.0;
-            let mut sleep_count: usize = 0;
-            let mut stress_count: usize = 0;
-            let mut hr_count: usize = 0;
-            let mut hrv_count: usize = 0;
-
-            for item in arr {
-                if let Some(obj) = item.as_object() {
-                    if let Some(v) = obj.get("sleepSecs").and_then(|v| v.as_f64()) {
-                        sleep_total += v / 3600.0; // convert to hours
-                        sleep_count += 1;
-                    }
-                    if let Some(v) = obj.get("stress").and_then(|v| v.as_f64()) {
-                        stress_total += v;
-                        stress_count += 1;
-                    }
-                    if let Some(v) = obj.get("restingHR").and_then(|v| v.as_f64()) {
-                        hr_total += v;
-                        hr_count += 1;
-                    }
-                    if let Some(v) = obj.get("hrv").and_then(|v| v.as_f64()) {
-                        hrv_total += v;
-                        hrv_count += 1;
-                    }
-                }
-            }
-
-            return serde_json::json!({
-                "days": arr.len(),
-                "avg_sleep_hours": if sleep_count > 0 { (sleep_total / sleep_count as f64 * 10.0).round() / 10.0 } else { 0.0 },
-                "avg_stress": if stress_count > 0 { (stress_total / stress_count as f64 * 10.0).round() / 10.0 } else { 0.0 },
-                "avg_resting_hr": if hr_count > 0 { (hr_total / hr_count as f64).round() } else { 0.0 },
-                "avg_hrv": if hrv_count > 0 { (hrv_total / hrv_count as f64).round() } else { 0.0 }
-            });
-        }
-
-        // Filter fields if specified
-        if let Some(field_list) = fields {
-            let default_fields = ["id", "sleepSecs", "stress", "restingHR", "hrv", "weight"];
-            let fields_to_use: Vec<&str> = field_list.iter().map(|s| s.as_str()).collect();
-            let fields_to_use = if fields_to_use.is_empty() {
-                default_fields.to_vec()
-            } else {
-                fields_to_use
-            };
-
-            let filtered: Vec<serde_json::Value> = arr
-                .iter()
-                .map(|item| {
-                    let Some(obj) = item.as_object() else {
-                        return item.clone();
-                    };
-                    let mut result = serde_json::Map::new();
-                    for field in &fields_to_use {
-                        if let Some(val) = obj.get(*field) {
-                            result.insert(field.to_string(), val.clone());
-                        }
-                    }
-                    serde_json::Value::Object(result)
-                })
-                .collect();
-
-            return serde_json::Value::Array(filtered);
-        }
-
-        value.clone()
+        domains::wellness::transform_wellness(value, summary_only, fields)
     }
 
     #[tool(
@@ -2649,32 +1620,7 @@ impl IntervalsMcpHandler {
         value: &serde_json::Value,
         fields: Option<&[String]>,
     ) -> serde_json::Value {
-        let default_fields = [
-            "id",
-            "sleepSecs",
-            "stress",
-            "restingHR",
-            "hrv",
-            "weight",
-            "fatigue",
-            "motivation",
-        ];
-        let fields_to_use: Vec<&str> = fields
-            .map(|f| f.iter().map(|s| s.as_str()).collect())
-            .unwrap_or_else(|| default_fields.to_vec());
-
-        let Some(obj) = value.as_object() else {
-            return value.clone();
-        };
-
-        let mut result = serde_json::Map::new();
-        for field in &fields_to_use {
-            if let Some(val) = obj.get(*field) {
-                result.insert(field.to_string(), val.clone());
-            }
-        }
-
-        serde_json::Value::Object(result)
+        domains::wellness::compact_wellness_entry(value, fields)
     }
 
     #[tool(
@@ -2734,37 +1680,7 @@ impl IntervalsMcpHandler {
         limit: usize,
         fields: Option<&[String]>,
     ) -> serde_json::Value {
-        if compact {
-            let default_fields = ["id", "name", "start_date_local", "category", "type"];
-            let fields_to_use: Vec<&str> = fields
-                .map(|f| f.iter().map(|s| s.as_str()).collect())
-                .unwrap_or_else(|| default_fields.to_vec());
-
-            let arr = value.as_array().cloned().unwrap_or_default();
-            let compacted: Vec<serde_json::Value> = arr
-                .iter()
-                .take(limit)
-                .map(|item| {
-                    let Some(obj) = item.as_object() else {
-                        return item.clone();
-                    };
-                    let mut result = serde_json::Map::new();
-                    for field in &fields_to_use {
-                        if let Some(val) = obj.get(*field) {
-                            result.insert(field.to_string(), val.clone());
-                        }
-                    }
-                    serde_json::Value::Object(result)
-                })
-                .collect();
-
-            serde_json::Value::Array(compacted)
-        } else if let Some(field_list) = fields {
-            // Apply field filtering without compacting
-            Self::filter_array_fields(value, field_list)
-        } else {
-            value.clone()
-        }
+        domains::events::compact_events_from_value(value, compact, limit, fields)
     }
 
     #[tool(
@@ -2815,30 +1731,7 @@ impl IntervalsMcpHandler {
         value: &serde_json::Value,
         fields: Option<&[String]>,
     ) -> serde_json::Value {
-        let default_fields = [
-            "id",
-            "name",
-            "start_date_local",
-            "category",
-            "type",
-            "description",
-        ];
-        let fields_to_use: Vec<&str> = fields
-            .map(|f| f.iter().map(|s| s.as_str()).collect())
-            .unwrap_or_else(|| default_fields.to_vec());
-
-        let Some(obj) = value.as_object() else {
-            return value.clone();
-        };
-
-        let mut result = serde_json::Map::new();
-        for field in &fields_to_use {
-            if let Some(val) = obj.get(*field) {
-                result.insert(field.to_string(), val.clone());
-            }
-        }
-
-        serde_json::Value::Object(result)
+        domains::events::compact_json_event(value, fields)
     }
 
     #[tool(
@@ -3522,9 +2415,11 @@ impl rmcp::ServerHandler for IntervalsMcpHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hmac::{Hmac, Mac};
     use intervals_icu_client::http_client::ReqwestIntervalsClient;
     use secrecy::SecretString;
     use serde_json::json;
+    use sha2::Sha256;
     use std::sync::Arc;
 
     #[tokio::test]
