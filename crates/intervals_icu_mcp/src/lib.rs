@@ -130,6 +130,21 @@ pub struct ActivityIdParam {
 pub struct BulkCreateEventsToolParams {
     /// Array of calendar events to create (title, start_date_local, category, etc.)
     pub events: Vec<intervals_icu_client::Event>,
+    /// Return compact summaries for created events (default: true)
+    pub compact: Option<bool>,
+    /// Specific fields to return per event (default: id,name,start_date_local,category,type)
+    pub fields: Option<Vec<String>>,
+}
+
+/// Parameters for create_event with optional response filtering
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct CreateEventParams {
+    #[serde(flatten)]
+    pub event: intervals_icu_client::Event,
+    /// Return compact summary (default: true)
+    pub compact: Option<bool>,
+    /// Specific fields to return (default: id,name,start_date_local,category,type,description)
+    pub fields: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -178,6 +193,10 @@ pub struct IntervalSearchParams {
     pub min_reps: Option<u32>,
     pub max_reps: Option<u32>,
     pub limit: Option<u32>,
+    /// Return compact summaries (default: true)
+    pub compact: Option<bool>,
+    /// Specific fields to return per interval (default: type,start,end,duration,intensity)
+    pub fields: Option<Vec<String>>,
 }
 
 // === Token-Efficient Parameters ===
@@ -272,6 +291,15 @@ pub struct WorkoutsInFolderParams {
     pub fields: Option<Vec<String>>,
 }
 
+/// Parameters for get_workout_library with compact mode
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct WorkoutLibraryParams {
+    /// Return compact summaries (default: true)
+    pub compact: Option<bool>,
+    /// Specific fields to return (default: id,name,description)
+    pub fields: Option<Vec<String>>,
+}
+
 /// Parameters for get_gear_list with compact mode
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct GearListParams {
@@ -303,10 +331,47 @@ pub struct WellnessParams {
     pub fields: Option<Vec<String>>,
 }
 
+/// Parameters for get_sport_settings with compact mode
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct SportSettingsParams {
+    /// Return compact summary (default: true)
+    pub compact: Option<bool>,
+    /// Specific sport types to return (default: all)
+    pub sports: Option<Vec<String>>,
+    /// Specific fields to return per sport (default: type,ftp,fthr,hrzones,powerzones)
+    pub fields: Option<Vec<String>>,
+}
+
+/// Parameters for get_fitness_summary with compact mode
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct FitnessSummaryParams {
+    /// Return compact summary (default: true)
+    pub compact: Option<bool>,
+    /// Specific fields to return (default: ctl,atl,tsb,ctl_ramp_rate,atl_ramp_rate,date)
+    pub fields: Option<Vec<String>>,
+}
+
+/// Parameters for get_events with compact mode
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct EventsParams {
+    /// Days back (default: 30)
+    pub days_back: Option<i32>,
+    /// Maximum events to return (default: 50)
+    pub limit: Option<u32>,
+    /// Return compact summaries (default: true)
+    pub compact: Option<bool>,
+    /// Specific fields to return (default: id,start_date_local,name,category)
+    pub fields: Option<Vec<String>>,
+}
+
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct UpdateActivityParams {
     pub activity_id: String,
     pub fields: serde_json::Value,
+    /// Return compact summary (default: true)
+    pub compact: Option<bool>,
+    /// Specific fields to return (default: id,name,start_date_local,type,distance,moving_time)
+    pub response_fields: Option<Vec<String>>,
 }
 
 /// Parameters for get_activity_streams with optional compact mode.
@@ -355,13 +420,28 @@ pub struct DownloadStatusResult {
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct ActivitiesAroundParams {
     pub activity_id: String,
+    /// Maximum activities to return (default: 10)
     pub limit: Option<u32>,
     pub route_id: Option<i64>,
+    /// Return compact summaries (default: true)
+    pub compact: Option<bool>,
+    /// Specific fields to return (default: id,name,start_date_local,type,distance,moving_time)
+    pub fields: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct DateParam {
     pub date: String,
+}
+
+/// Parameters for get_wellness_for_date with compact mode
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct WellnessDateParams {
+    pub date: String,
+    /// Return compact summary (default: true)
+    pub compact: Option<bool>,
+    /// Specific fields to return (default: id,sleepSecs,stress,restingHR,hrv,weight,fatigue,motivation)
+    pub fields: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -373,6 +453,12 @@ pub struct WellnessUpdateParams {
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct DaysAheadParams {
     pub days_ahead: Option<u32>,
+    /// Return compact summaries (default: true)
+    pub compact: Option<bool>,
+    /// Maximum workouts to return (default: 20)
+    pub limit: Option<u32>,
+    /// Specific fields to return (default: id,name,start_date_local,category,type)
+    pub fields: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -395,6 +481,10 @@ impl EventId {
 pub struct UpdateEventParams {
     pub event_id: EventId,
     pub fields: serde_json::Value,
+    /// Return compact summary (default: true)
+    pub compact: Option<bool>,
+    /// Specific fields to return (default: id,name,start_date_local,category,type,description)
+    pub response_fields: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -407,6 +497,10 @@ pub struct DuplicateEventParams {
     pub event_id: EventId,
     pub num_copies: Option<u32>,
     pub weeks_between: Option<u32>,
+    /// Return compact summaries (default: true)
+    pub compact: Option<bool>,
+    /// Specific fields to return per event (default: id,name,start_date_local,category,type)
+    pub fields: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -417,12 +511,20 @@ pub struct FolderIdParam {
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct CreateGearParams {
     pub gear: serde_json::Value,
+    /// Return compact summary (default: true)
+    pub compact: Option<bool>,
+    /// Specific fields to return (default: id,name,type,distance)
+    pub response_fields: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct UpdateGearParams {
     pub gear_id: String,
     pub fields: serde_json::Value,
+    /// Return compact summary (default: true)
+    pub compact: Option<bool>,
+    /// Specific fields to return (default: id,name,type,distance)
+    pub response_fields: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -600,19 +702,82 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_events",
-        description = "List calendar events (workouts, races, notes, rest days). Returns events within date range. Use days_back to specify window, limit to control result count"
+        description = "List calendar events. Params: days_back, limit (default 50), compact (default true), fields (filter)."
     )]
     async fn get_events(
         &self,
-        params: Parameters<RecentParams>,
-    ) -> Result<Json<EventsResult>, String> {
+        params: Parameters<EventsParams>,
+    ) -> Result<Json<ObjectResult>, String> {
         let p = params.0;
         let evs = self
             .client
-            .get_events(p.days_back, p.limit)
+            .get_events(p.days_back, p.limit.or(Some(50)))
             .await
             .map_err(|e| e.to_string())?;
-        Ok(Json(EventsResult { events: evs }))
+
+        // Apply compact mode
+        let result = Self::compact_events(evs, p.compact.unwrap_or(true), p.fields.as_deref());
+
+        Ok(Json(ObjectResult {
+            value: serde_json::to_value(result).map_err(|e| e.to_string())?,
+        }))
+    }
+
+    /// Compact events list to essential fields
+    fn compact_events(
+        events: Vec<intervals_icu_client::Event>,
+        compact: bool,
+        fields: Option<&[String]>,
+    ) -> Vec<serde_json::Value> {
+        let default_fields = ["id", "start_date_local", "name", "category", "type"];
+        let fields_to_use: Vec<&str> = if compact {
+            fields
+                .map(|f| f.iter().map(|s| s.as_str()).collect())
+                .unwrap_or_else(|| default_fields.to_vec())
+        } else {
+            // Full mode but still limit fields if specified
+            return events
+                .into_iter()
+                .map(|e| {
+                    let mut obj = serde_json::Map::new();
+                    if let Some(_val) = serde_json::to_value(&e)
+                        .ok()
+                        .and_then(|v| v.as_object().cloned())
+                    {
+                        if let Some(filter) = fields {
+                            for field in filter {
+                                if let Some(v) = obj.get(field) {
+                                    obj.insert(field.clone(), v.clone());
+                                }
+                            }
+                            serde_json::Value::Object(obj)
+                        } else {
+                            serde_json::Value::Object(obj)
+                        }
+                    } else {
+                        serde_json::to_value(e).unwrap_or_default()
+                    }
+                })
+                .collect();
+        };
+
+        events
+            .into_iter()
+            .map(|event| {
+                let mut result = serde_json::Map::new();
+                let event_json = serde_json::to_value(&event).unwrap_or_default();
+
+                if let Some(obj) = event_json.as_object() {
+                    for field in &fields_to_use {
+                        if let Some(val) = obj.get(*field) {
+                            result.insert(field.to_string(), val.clone());
+                        }
+                    }
+                }
+
+                serde_json::Value::Object(result)
+            })
+            .collect()
     }
 
     // Shared helper: normalize date-only strings to YYYY-MM-DD. Accepts YYYY-MM-DD, RFC3339, or naive YYYY-MM-DDTHH:MM:SS
@@ -645,13 +810,14 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "create_event",
-        description = "Create calendar event. Requires: name, start_date_local, category (WORKOUT/RACE_A/NOTE/etc)."
+        description = "Create calendar event. Params: event fields (name, start_date_local, category), compact (default true), fields (filter response)."
     )]
     async fn create_event(
         &self,
-        params: Parameters<intervals_icu_client::Event>,
-    ) -> Result<Json<intervals_icu_client::Event>, String> {
-        let ev = params.0;
+        params: Parameters<CreateEventParams>,
+    ) -> Result<Json<ObjectResult>, String> {
+        let p = params.0;
+        let ev = p.event;
         // Validate and normalize input: accept YYYY-MM-DD or ISO 8601 datetimes; preserve time when provided, default to 00:00:00 when only date is supplied
         if ev.name.trim().is_empty() {
             return Err("invalid event: name is empty".into());
@@ -685,7 +851,67 @@ impl IntervalsMcpHandler {
             .create_event(ev2)
             .await
             .map_err(|e| e.to_string())?;
-        Ok(Json(created))
+
+        // Apply compact mode to response
+        let result = if p.compact.unwrap_or(true) {
+            Self::compact_single_event(&created, p.fields.as_deref())
+        } else if let Some(ref fields) = p.fields {
+            Self::filter_event_fields(&created, fields)
+        } else {
+            serde_json::to_value(&created).map_err(|e| e.to_string())?
+        };
+
+        Ok(Json(ObjectResult { value: result }))
+    }
+
+    /// Compact a single event to essential fields
+    fn compact_single_event(
+        event: &intervals_icu_client::Event,
+        fields: Option<&[String]>,
+    ) -> serde_json::Value {
+        let default_fields = [
+            "id",
+            "name",
+            "start_date_local",
+            "category",
+            "type",
+            "description",
+        ];
+        let fields_to_use: Vec<&str> = fields
+            .map(|f| f.iter().map(|s| s.as_str()).collect())
+            .unwrap_or_else(|| default_fields.to_vec());
+
+        let mut result = serde_json::Map::new();
+        let event_json = serde_json::to_value(event).unwrap_or_default();
+
+        if let Some(obj) = event_json.as_object() {
+            for field in &fields_to_use {
+                if let Some(val) = obj.get(*field) {
+                    result.insert(field.to_string(), val.clone());
+                }
+            }
+        }
+
+        serde_json::Value::Object(result)
+    }
+
+    /// Filter fields of a single event
+    fn filter_event_fields(
+        event: &intervals_icu_client::Event,
+        fields: &[String],
+    ) -> serde_json::Value {
+        let mut result = serde_json::Map::new();
+        let event_json = serde_json::to_value(event).unwrap_or_default();
+
+        if let Some(obj) = event_json.as_object() {
+            for field in fields {
+                if let Some(val) = obj.get(field) {
+                    result.insert(field.clone(), val.clone());
+                }
+            }
+        }
+
+        serde_json::Value::Object(result)
     }
 
     #[tool(
@@ -722,13 +948,14 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "bulk_create_events",
-        description = "Create multiple calendar events. Params: events array with name, start_date_local, category per event."
+        description = "Create multiple calendar events. Params: events array, compact (default true), fields (filter response)."
     )]
     pub async fn bulk_create_events(
         &self,
         params: Parameters<BulkCreateEventsToolParams>,
-    ) -> Result<Json<EventsResult>, String> {
-        let events = params.0.events;
+    ) -> Result<Json<ObjectResult>, String> {
+        let p = params.0;
+        let events = p.events;
         // Normalize and validate input early to provide clearer errors and avoid 422 from the API.
         // Accept either YYYY-MM-DD or ISO 8601 datetimes; preserve time when provided, default to 00:00:00 for date-only input.
         let mut norm_events: Vec<intervals_icu_client::Event> = Vec::with_capacity(events.len());
@@ -775,7 +1002,28 @@ impl IntervalsMcpHandler {
             .bulk_create_events(norm_events)
             .await
             .map_err(|e| e.to_string())?;
-        Ok(Json(EventsResult { events: created }))
+
+        // Apply compact mode to response
+        let compacted: Vec<serde_json::Value> = if p.compact.unwrap_or(true) {
+            created
+                .iter()
+                .map(|e| Self::compact_single_event(e, p.fields.as_deref()))
+                .collect()
+        } else if let Some(ref fields) = p.fields {
+            created
+                .iter()
+                .map(|e| Self::filter_event_fields(e, fields))
+                .collect()
+        } else {
+            created
+                .into_iter()
+                .map(|e| serde_json::to_value(e).unwrap_or_default())
+                .collect()
+        };
+
+        Ok(Json(ObjectResult {
+            value: serde_json::Value::Array(compacted),
+        }))
     }
 
     #[tool(
@@ -1079,7 +1327,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "update_activity",
-        description = "Update activity fields: name, description, notes, keywords, private."
+        description = "Update activity. Params: activity_id, fields to update, compact (default true), response_fields (filter)."
     )]
     async fn update_activity(
         &self,
@@ -1091,7 +1339,17 @@ impl IntervalsMcpHandler {
             .update_activity(&p.activity_id, &p.fields)
             .await
             .map_err(|e| e.to_string())?;
-        Ok(Json(ObjectResult { value: v }))
+
+        // Apply compact mode to response
+        let result = if p.compact.unwrap_or(true) {
+            Self::extract_activity_summary(&v, p.response_fields.as_deref())
+        } else if let Some(ref response_fields) = p.response_fields {
+            Self::filter_fields(&v, response_fields)
+        } else {
+            v
+        };
+
+        Ok(Json(ObjectResult { value: result }))
     }
 
     #[tool(
@@ -1451,15 +1709,112 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_sport_settings",
-        description = "Get sport settings: FTP, FTHR, pace thresholds, power/HR zones."
+        description = "Get sport settings. Params: compact (default true), sports (filter by type), fields (filter)."
     )]
-    async fn get_sport_settings(&self) -> Result<Json<ObjectResult>, String> {
+    async fn get_sport_settings(
+        &self,
+        params: Parameters<SportSettingsParams>,
+    ) -> Result<Json<ObjectResult>, String> {
+        let p = params.0;
         let v = self
             .client
             .get_sport_settings()
             .await
             .map_err(|e| e.to_string())?;
-        Ok(Json(ObjectResult { value: v }))
+
+        // Apply compact mode
+        let result = if p.compact.unwrap_or(true) {
+            Self::compact_sport_settings(&v, p.sports.as_deref(), p.fields.as_deref())
+        } else if p.sports.is_some() || p.fields.is_some() {
+            Self::filter_sport_settings(&v, p.sports.as_deref(), p.fields.as_deref())
+        } else {
+            v
+        };
+
+        Ok(Json(ObjectResult { value: result }))
+    }
+
+    /// Compact sport settings to essential fields
+    fn compact_sport_settings(
+        value: &serde_json::Value,
+        sports_filter: Option<&[String]>,
+        fields: Option<&[String]>,
+    ) -> serde_json::Value {
+        let default_fields = ["type", "ftp", "fthr", "hrZones", "powerZones"];
+        let fields_to_use: Vec<&str> = fields
+            .map(|f| f.iter().map(|s| s.as_str()).collect())
+            .unwrap_or_else(|| default_fields.to_vec());
+
+        let Some(arr) = value.as_array() else {
+            return value.clone();
+        };
+
+        let filtered: Vec<serde_json::Value> = arr
+            .iter()
+            .filter_map(|item| {
+                let obj = item.as_object()?;
+
+                // Apply sport type filter if specified
+                if let Some(filter) = sports_filter {
+                    let sport_type = obj.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                    if !filter.iter().any(|s| s.eq_ignore_ascii_case(sport_type)) {
+                        return None;
+                    }
+                }
+
+                // Apply field filtering
+                let mut result = serde_json::Map::new();
+                for field in &fields_to_use {
+                    if let Some(val) = obj.get(*field) {
+                        result.insert(field.to_string(), val.clone());
+                    }
+                }
+                Some(serde_json::Value::Object(result))
+            })
+            .collect();
+
+        serde_json::Value::Array(filtered)
+    }
+
+    /// Filter sport settings by sport type and/or fields (without compacting)
+    fn filter_sport_settings(
+        value: &serde_json::Value,
+        sports_filter: Option<&[String]>,
+        fields: Option<&[String]>,
+    ) -> serde_json::Value {
+        let Some(arr) = value.as_array() else {
+            return value.clone();
+        };
+
+        let filtered: Vec<serde_json::Value> = arr
+            .iter()
+            .filter_map(|item| {
+                let obj = item.as_object()?;
+
+                // Apply sport type filter if specified
+                if let Some(filter) = sports_filter {
+                    let sport_type = obj.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                    if !filter.iter().any(|s| s.eq_ignore_ascii_case(sport_type)) {
+                        return None;
+                    }
+                }
+
+                // Apply field filtering if specified
+                if let Some(field_list) = fields {
+                    let mut result = serde_json::Map::new();
+                    for field in field_list {
+                        if let Some(val) = obj.get(field) {
+                            result.insert(field.clone(), val.clone());
+                        }
+                    }
+                    Some(serde_json::Value::Object(result))
+                } else {
+                    Some(item.clone())
+                }
+            })
+            .collect();
+
+        serde_json::Value::Array(filtered)
     }
 
     #[tool(
@@ -1968,7 +2323,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_activities_around",
-        description = "Get activities before/after a specific activity."
+        description = "Get activities before/after a specific activity. Params: compact (default true), fields (filter)."
     )]
     async fn get_activities_around(
         &self,
@@ -1977,15 +2332,25 @@ impl IntervalsMcpHandler {
         let p = params.0;
         let v = self
             .client
-            .get_activities_around(&p.activity_id, p.limit, p.route_id)
+            .get_activities_around(&p.activity_id, p.limit.or(Some(10)), p.route_id)
             .await
             .map_err(|e| e.to_string())?;
-        Ok(Json(ObjectResult { value: v }))
+
+        // Apply compact mode
+        let result = if p.compact.unwrap_or(true) {
+            Self::compact_activities_array(&v, p.fields.as_deref())
+        } else if let Some(ref fields) = p.fields {
+            Self::filter_array_fields(&v, fields)
+        } else {
+            v
+        };
+
+        Ok(Json(ObjectResult { value: result }))
     }
 
     #[tool(
         name = "search_intervals",
-        description = "Search similar intervals across activities by duration, intensity, type."
+        description = "Search similar intervals across activities. Params: compact (default true), fields (filter)."
     )]
     async fn search_intervals(
         &self,
@@ -2006,7 +2371,57 @@ impl IntervalsMcpHandler {
             )
             .await
             .map_err(|e| e.to_string())?;
-        Ok(Json(ObjectResult { value: v }))
+
+        // Apply compact mode for intervals
+        let result = if p.compact.unwrap_or(true) {
+            Self::compact_intervals(&v, p.fields.as_deref())
+        } else if let Some(ref fields) = p.fields {
+            Self::filter_array_fields(&v, fields)
+        } else {
+            v
+        };
+
+        Ok(Json(ObjectResult { value: result }))
+    }
+
+    /// Compact intervals list to essential fields
+    fn compact_intervals(
+        value: &serde_json::Value,
+        fields: Option<&[String]>,
+    ) -> serde_json::Value {
+        let default_fields = [
+            "type",
+            "start",
+            "end",
+            "duration",
+            "intensity",
+            "activity_id",
+        ];
+        let fields_to_use: Vec<&str> = fields
+            .map(|f| f.iter().map(|s| s.as_str()).collect())
+            .unwrap_or_else(|| default_fields.to_vec());
+
+        let Some(arr) = value.as_array() else {
+            return value.clone();
+        };
+
+        let compacted: Vec<serde_json::Value> = arr
+            .iter()
+            .map(|item| {
+                let Some(obj) = item.as_object() else {
+                    return item.clone();
+                };
+                let mut result = serde_json::Map::new();
+                for field in &fields_to_use {
+                    if let Some(val) = obj.get(*field) {
+                        result.insert(field.to_string(), val.clone());
+                    }
+                }
+                serde_json::Value::Object(result)
+            })
+            .collect();
+
+        serde_json::Value::Array(compacted)
     }
 
     #[tool(
@@ -2073,15 +2488,60 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_fitness_summary",
-        description = "Get fitness: CTL, ATL, TSB, ramp rate."
+        description = "Get fitness: CTL, ATL, TSB, ramp rate. Params: compact (default true), fields (filter)."
     )]
-    async fn get_fitness_summary(&self) -> Result<Json<ObjectResult>, String> {
+    async fn get_fitness_summary(
+        &self,
+        params: Parameters<FitnessSummaryParams>,
+    ) -> Result<Json<ObjectResult>, String> {
+        let p = params.0;
         let v = self
             .client
             .get_fitness_summary()
             .await
             .map_err(|e| e.to_string())?;
-        Ok(Json(ObjectResult { value: v }))
+
+        // Apply compact mode
+        let result = if p.compact.unwrap_or(true) {
+            Self::compact_fitness_summary(&v, p.fields.as_deref())
+        } else if let Some(ref fields) = p.fields {
+            Self::filter_fields(&v, fields)
+        } else {
+            v
+        };
+
+        Ok(Json(ObjectResult { value: result }))
+    }
+
+    /// Compact fitness summary to essential fields
+    fn compact_fitness_summary(
+        value: &serde_json::Value,
+        fields: Option<&[String]>,
+    ) -> serde_json::Value {
+        let default_fields = [
+            "ctl",
+            "atl",
+            "tsb",
+            "ctl_ramp_rate",
+            "atl_ramp_rate",
+            "date",
+        ];
+        let fields_to_use: Vec<&str> = fields
+            .map(|f| f.iter().map(|s| s.as_str()).collect())
+            .unwrap_or_else(|| default_fields.to_vec());
+
+        let Some(obj) = value.as_object() else {
+            return value.clone();
+        };
+
+        let mut result = serde_json::Map::new();
+        for field in &fields_to_use {
+            if let Some(val) = obj.get(*field) {
+                result.insert(field.to_string(), val.clone());
+            }
+        }
+
+        serde_json::Value::Object(result)
     }
 
     // === Wellness ===
@@ -2191,11 +2651,11 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_wellness_for_date",
-        description = "Get wellness for specific date (YYYY-MM-DD)."
+        description = "Get wellness for specific date. Params: date (YYYY-MM-DD), compact (default true), fields (filter)."
     )]
     async fn get_wellness_for_date(
         &self,
-        params: Parameters<DateParam>,
+        params: Parameters<WellnessDateParams>,
     ) -> Result<Json<ObjectResult>, String> {
         let p = params.0;
         let mut date = p.date.clone();
@@ -2209,7 +2669,50 @@ impl IntervalsMcpHandler {
             .get_wellness_for_date(&date)
             .await
             .map_err(|e| e.to_string())?;
-        Ok(Json(ObjectResult { value: v }))
+
+        // Apply compact mode
+        let result = if p.compact.unwrap_or(true) {
+            Self::compact_wellness_entry(&v, p.fields.as_deref())
+        } else if let Some(ref fields) = p.fields {
+            Self::filter_fields(&v, fields)
+        } else {
+            v
+        };
+
+        Ok(Json(ObjectResult { value: result }))
+    }
+
+    /// Compact single wellness entry to essential fields
+    fn compact_wellness_entry(
+        value: &serde_json::Value,
+        fields: Option<&[String]>,
+    ) -> serde_json::Value {
+        let default_fields = [
+            "id",
+            "sleepSecs",
+            "stress",
+            "restingHR",
+            "hrv",
+            "weight",
+            "fatigue",
+            "motivation",
+        ];
+        let fields_to_use: Vec<&str> = fields
+            .map(|f| f.iter().map(|s| s.as_str()).collect())
+            .unwrap_or_else(|| default_fields.to_vec());
+
+        let Some(obj) = value.as_object() else {
+            return value.clone();
+        };
+
+        let mut result = serde_json::Map::new();
+        for field in &fields_to_use {
+            if let Some(val) = obj.get(*field) {
+                result.insert(field.to_string(), val.clone());
+            }
+        }
+
+        serde_json::Value::Object(result)
     }
 
     #[tool(
@@ -2238,7 +2741,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_upcoming_workouts",
-        description = "Get scheduled workouts. Param: days_ahead (default 7)."
+        description = "Get scheduled workouts. Params: days_ahead (default 7), compact (default true), limit (default 20), fields (filter)."
     )]
     async fn get_upcoming_workouts(
         &self,
@@ -2250,12 +2753,61 @@ impl IntervalsMcpHandler {
             .get_upcoming_workouts(p.days_ahead)
             .await
             .map_err(|e| e.to_string())?;
-        Ok(Json(ObjectResult { value: v }))
+
+        // Apply compact mode for events/workouts
+        let result = Self::compact_events_from_value(
+            &v,
+            p.compact.unwrap_or(true),
+            p.limit.unwrap_or(20) as usize,
+            p.fields.as_deref(),
+        );
+
+        Ok(Json(ObjectResult { value: result }))
+    }
+
+    /// Compact events/workouts from JSON value
+    fn compact_events_from_value(
+        value: &serde_json::Value,
+        compact: bool,
+        limit: usize,
+        fields: Option<&[String]>,
+    ) -> serde_json::Value {
+        if compact {
+            let default_fields = ["id", "name", "start_date_local", "category", "type"];
+            let fields_to_use: Vec<&str> = fields
+                .map(|f| f.iter().map(|s| s.as_str()).collect())
+                .unwrap_or_else(|| default_fields.to_vec());
+
+            let arr = value.as_array().cloned().unwrap_or_default();
+            let compacted: Vec<serde_json::Value> = arr
+                .iter()
+                .take(limit)
+                .map(|item| {
+                    let Some(obj) = item.as_object() else {
+                        return item.clone();
+                    };
+                    let mut result = serde_json::Map::new();
+                    for field in &fields_to_use {
+                        if let Some(val) = obj.get(*field) {
+                            result.insert(field.to_string(), val.clone());
+                        }
+                    }
+                    serde_json::Value::Object(result)
+                })
+                .collect();
+
+            serde_json::Value::Array(compacted)
+        } else if let Some(field_list) = fields {
+            // Apply field filtering without compacting
+            Self::filter_array_fields(value, field_list)
+        } else {
+            value.clone()
+        }
     }
 
     #[tool(
         name = "update_event",
-        description = "Update calendar event fields: title, description, date, category."
+        description = "Update calendar event. Params: event_id, fields to update, compact (default true), response_fields (filter)."
     )]
     async fn update_event(
         &self,
@@ -2283,7 +2835,48 @@ impl IntervalsMcpHandler {
             .update_event(&event_id, &fields)
             .await
             .map_err(|e| e.to_string())?;
-        Ok(Json(ObjectResult { value: v }))
+
+        // Apply compact mode to response
+        let result = if p.compact.unwrap_or(true) {
+            Self::compact_json_event(&v, p.response_fields.as_deref())
+        } else if let Some(ref response_fields) = p.response_fields {
+            Self::filter_fields(&v, response_fields)
+        } else {
+            v
+        };
+
+        Ok(Json(ObjectResult { value: result }))
+    }
+
+    /// Compact a JSON event value to essential fields
+    fn compact_json_event(
+        value: &serde_json::Value,
+        fields: Option<&[String]>,
+    ) -> serde_json::Value {
+        let default_fields = [
+            "id",
+            "name",
+            "start_date_local",
+            "category",
+            "type",
+            "description",
+        ];
+        let fields_to_use: Vec<&str> = fields
+            .map(|f| f.iter().map(|s| s.as_str()).collect())
+            .unwrap_or_else(|| default_fields.to_vec());
+
+        let Some(obj) = value.as_object() else {
+            return value.clone();
+        };
+
+        let mut result = serde_json::Map::new();
+        for field in &fields_to_use {
+            if let Some(val) = obj.get(*field) {
+                result.insert(field.to_string(), val.clone());
+            }
+        }
+
+        serde_json::Value::Object(result)
     }
 
     #[tool(
@@ -2311,7 +2904,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "duplicate_event",
-        description = "Duplicate event to future dates. Params: num_copies, weeks_between."
+        description = "Duplicate event to future dates. Params: num_copies, weeks_between, compact (default true), fields (filter)."
     )]
     async fn duplicate_event(
         &self,
@@ -2324,9 +2917,25 @@ impl IntervalsMcpHandler {
             .duplicate_event(&event_id, p.num_copies, p.weeks_between)
             .await
             .map_err(|e| e.to_string())?;
-        Ok(Json(ObjectResult {
-            value: serde_json::to_value(v).map_err(|e| e.to_string())?,
-        }))
+
+        // Apply compact mode to response
+        let result = if p.compact.unwrap_or(true) {
+            Self::compact_events_from_value(
+                &serde_json::to_value(&v).map_err(|e| e.to_string())?,
+                true,
+                p.num_copies.unwrap_or(1) as usize,
+                p.fields.as_deref(),
+            )
+        } else if let Some(ref fields) = p.fields {
+            Self::filter_array_fields(
+                &serde_json::to_value(&v).map_err(|e| e.to_string())?,
+                fields,
+            )
+        } else {
+            serde_json::to_value(v).map_err(|e| e.to_string())?
+        };
+
+        Ok(Json(ObjectResult { value: result }))
     }
 
     // === Performance Curves ===
@@ -2373,15 +2982,62 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_workout_library",
-        description = "Get workout library folders. Use get_workouts_in_folder for contents."
+        description = "Get workout library folders. Params: compact (default true), fields (filter)."
     )]
-    async fn get_workout_library(&self) -> Result<Json<ObjectResult>, String> {
+    async fn get_workout_library(
+        &self,
+        params: Parameters<WorkoutLibraryParams>,
+    ) -> Result<Json<ObjectResult>, String> {
+        let p = params.0;
         let v = self
             .client
             .get_workout_library()
             .await
             .map_err(|e| e.to_string())?;
-        Ok(Json(ObjectResult { value: v }))
+
+        // Apply compact mode
+        let result = if p.compact.unwrap_or(true) {
+            Self::compact_workout_library(&v, p.fields.as_deref())
+        } else if let Some(ref fields) = p.fields {
+            Self::filter_array_fields(&v, fields)
+        } else {
+            v
+        };
+
+        Ok(Json(ObjectResult { value: result }))
+    }
+
+    /// Compact workout library to essential fields
+    fn compact_workout_library(
+        value: &serde_json::Value,
+        fields: Option<&[String]>,
+    ) -> serde_json::Value {
+        let default_fields = ["id", "name", "description"];
+        let fields_to_use: Vec<&str> = fields
+            .map(|f| f.iter().map(|s| s.as_str()).collect())
+            .unwrap_or_else(|| default_fields.to_vec());
+
+        let Some(arr) = value.as_array() else {
+            return value.clone();
+        };
+
+        let compacted: Vec<serde_json::Value> = arr
+            .iter()
+            .map(|item| {
+                let Some(obj) = item.as_object() else {
+                    return item.clone();
+                };
+                let mut result = serde_json::Map::new();
+                for field in &fields_to_use {
+                    if let Some(val) = obj.get(*field) {
+                        result.insert(field.to_string(), val.clone());
+                    }
+                }
+                serde_json::Value::Object(result)
+            })
+            .collect();
+
+        serde_json::Value::Array(compacted)
     }
 
     #[tool(
@@ -2454,7 +3110,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "create_gear",
-        description = "Add gear item (bike, shoes, watch). Specify name, type, weight."
+        description = "Add gear item. Params: gear data, compact (default true), response_fields (filter)."
     )]
     async fn create_gear(
         &self,
@@ -2466,10 +3122,23 @@ impl IntervalsMcpHandler {
             .create_gear(&p.gear)
             .await
             .map_err(|e| e.to_string())?;
-        Ok(Json(ObjectResult { value: v }))
+
+        // Apply compact mode to response
+        let result = if p.compact.unwrap_or(true) {
+            Self::compact_gear_item(&v, p.response_fields.as_deref())
+        } else if let Some(ref response_fields) = p.response_fields {
+            Self::filter_fields(&v, response_fields)
+        } else {
+            v
+        };
+
+        Ok(Json(ObjectResult { value: result }))
     }
 
-    #[tool(name = "update_gear", description = "Update gear item fields.")]
+    #[tool(
+        name = "update_gear",
+        description = "Update gear item. Params: gear_id, fields, compact (default true), response_fields (filter)."
+    )]
     async fn update_gear(
         &self,
         params: Parameters<UpdateGearParams>,
@@ -2480,7 +3149,41 @@ impl IntervalsMcpHandler {
             .update_gear(&p.gear_id, &p.fields)
             .await
             .map_err(|e| e.to_string())?;
-        Ok(Json(ObjectResult { value: v }))
+
+        // Apply compact mode to response
+        let result = if p.compact.unwrap_or(true) {
+            Self::compact_gear_item(&v, p.response_fields.as_deref())
+        } else if let Some(ref response_fields) = p.response_fields {
+            Self::filter_fields(&v, response_fields)
+        } else {
+            v
+        };
+
+        Ok(Json(ObjectResult { value: result }))
+    }
+
+    /// Compact a single gear item to essential fields
+    fn compact_gear_item(
+        value: &serde_json::Value,
+        fields: Option<&[String]>,
+    ) -> serde_json::Value {
+        let default_fields = ["id", "name", "type", "distance", "brand", "model"];
+        let fields_to_use: Vec<&str> = fields
+            .map(|f| f.iter().map(|s| s.as_str()).collect())
+            .unwrap_or_else(|| default_fields.to_vec());
+
+        let Some(obj) = value.as_object() else {
+            return value.clone();
+        };
+
+        let mut result = serde_json::Map::new();
+        for field in &fields_to_use {
+            if let Some(val) = obj.get(*field) {
+                result.insert(field.to_string(), val.clone());
+            }
+        }
+
+        serde_json::Value::Object(result)
     }
 
     #[tool(
@@ -3446,7 +4149,14 @@ mod tests {
             .bulk_create_events(params)
             .await
             .expect("bulk create");
-        assert_eq!(res.0.events[0].start_date_local, "2026-01-19T06:30:00");
+        // Response is now ObjectResult with array value
+        let events_array = res.0.value.as_array().expect("should be array");
+        assert_eq!(
+            events_array[0]
+                .get("start_date_local")
+                .and_then(|v| v.as_str()),
+            Some("2026-01-19T06:30:00")
+        );
     }
 
     #[tokio::test]
@@ -3458,13 +4168,22 @@ mod tests {
             "start_date_local": "2026-01-19T06:30:00",
             "category": "WORKOUT",
             "type": "Run",
-            "description": null
+            "description": null,
+            "compact": false,
+            "fields": null
         });
-        let params: Parameters<intervals_icu_client::Event> =
+        let params: Parameters<CreateEventParams> =
             serde_json::from_value(payload).expect("payload should deserialize");
         let res = handler.create_event(params).await;
         let created = res.expect("create event should succeed");
-        assert_eq!(created.0.start_date_local, "2026-01-19T06:30:00");
+        assert_eq!(
+            created
+                .0
+                .value
+                .get("start_date_local")
+                .and_then(|v| v.as_str()),
+            Some("2026-01-19T06:30:00")
+        );
     }
 
     #[tokio::test]
@@ -3475,9 +4194,11 @@ mod tests {
             "name": "Test Workout",
             "start_date_local": "2026-13-01",
             "category": "WORKOUT",
-            "description": null
+            "description": null,
+            "compact": null,
+            "fields": null
         });
-        let params: Parameters<intervals_icu_client::Event> =
+        let params: Parameters<CreateEventParams> =
             serde_json::from_value(payload).expect("payload should deserialize");
         let res = handler.create_event(params).await;
         assert!(res.is_err());
@@ -3495,15 +4216,28 @@ mod tests {
             "name": "Test Workout",
             "start_date_local": "2026-01-19",
             "category": "WORKOUT",
-            "description": null
+            "description": null,
+            "compact": false,
+            "fields": null
         });
-        let params: Parameters<intervals_icu_client::Event> =
+        let params: Parameters<CreateEventParams> =
             serde_json::from_value(payload).expect("payload should deserialize");
         let res = handler.create_event(params).await;
         assert!(res.is_ok());
         let created = res.unwrap().0;
-        assert_eq!(created.r#type, Some("Run".into()));
-        assert_eq!(created.start_date_local, "2026-01-19T00:00:00");
+        // Check response is ObjectResult with value containing event data
+        assert!(created.value.get("type").is_some());
+        assert_eq!(
+            created.value.get("type").and_then(|v| v.as_str()),
+            Some("Run")
+        );
+        assert_eq!(
+            created
+                .value
+                .get("start_date_local")
+                .and_then(|v| v.as_str()),
+            Some("2026-01-19T00:00:00")
+        );
     }
 
     #[tokio::test]
@@ -3513,9 +4247,11 @@ mod tests {
         let payload = json!({
             "name": "",
             "start_date_local": "2026-01-19",
-            "category": "NOTE"
+            "category": "NOTE",
+            "compact": null,
+            "fields": null
         });
-        let params: Parameters<intervals_icu_client::Event> =
+        let params: Parameters<CreateEventParams> =
             serde_json::from_value(payload).expect("payload should deserialize");
         let res = handler.create_event(params).await;
         match res {
@@ -3531,9 +4267,11 @@ mod tests {
         let payload = json!({
             "name": "Test Event",
             "start_date_local": "2026-01-19",
-            "category": "UNKNOWN"
+            "category": "UNKNOWN",
+            "compact": null,
+            "fields": null
         });
-        let params: Parameters<intervals_icu_client::Event> =
+        let params: Parameters<CreateEventParams> =
             serde_json::from_value(payload).expect("payload should deserialize");
         let res = handler.create_event(params).await;
         match res {
@@ -3554,7 +4292,11 @@ mod tests {
             description: None,
             r#type: None,
         };
-        let params = Parameters(BulkCreateEventsToolParams { events: vec![ev] });
+        let params = Parameters(BulkCreateEventsToolParams {
+            events: vec![ev],
+            compact: None,
+            fields: None,
+        });
         let res = handler.bulk_create_events(params).await;
         assert!(res.is_err());
         assert!(res.err().unwrap().contains("name is empty"));
@@ -3931,7 +4673,11 @@ mod tests {
             description: None,
             r#type: None,
         };
-        let params = Parameters(BulkCreateEventsToolParams { events: vec![ev] });
+        let params = Parameters(BulkCreateEventsToolParams {
+            events: vec![ev],
+            compact: None,
+            fields: None,
+        });
         let _res = handler.bulk_create_events(params).await.expect("ok");
         let guard = captured.lock().await;
         let stored = guard.as_ref().expect("captured");
@@ -4325,7 +5071,7 @@ mod tests {
     async fn get_wellness_for_date_accepts_iso_datetime_and_normalizes() {
         let client = MockClient;
         let handler = IntervalsMcpHandler::new(Arc::new(client));
-        let params: Parameters<DateParam> =
+        let params: Parameters<WellnessDateParams> =
             serde_json::from_value(json!({"date": "2026-01-19T06:30:00"})).unwrap();
         let res = handler.get_wellness_for_date(params).await;
         assert!(res.is_ok());
@@ -4335,7 +5081,7 @@ mod tests {
     async fn get_wellness_for_date_rejects_invalid() {
         let client = MockClient;
         let handler = IntervalsMcpHandler::new(Arc::new(client));
-        let params: Parameters<DateParam> =
+        let params: Parameters<WellnessDateParams> =
             serde_json::from_value(json!({"date": "2026-13-01"})).unwrap();
         let res = handler.get_wellness_for_date(params).await;
         assert!(res.is_err());
@@ -6448,7 +7194,13 @@ mod tests {
         assert!(res.is_ok());
 
         // sport settings
-        let res = handler.get_sport_settings().await;
+        let res = handler
+            .get_sport_settings(Parameters(SportSettingsParams {
+                compact: None,
+                sports: None,
+                fields: None,
+            }))
+            .await;
         assert!(res.is_ok());
 
         // power curves
@@ -6969,6 +7721,8 @@ mod tests {
         let params = UpdateEventParams {
             event_id: EventId::Int(1),
             fields: serde_json::json!({"start_date_local": "2026-01-19T06:30:00"}),
+            compact: None,
+            response_fields: None,
         };
 
         let res = handler.update_event(Parameters(params)).await;
@@ -7825,7 +8579,11 @@ mod tests {
     async fn get_fitness_summary_tool() {
         let client = MockClient;
         let handler = IntervalsMcpHandler::new(Arc::new(client));
-        let res = handler.get_fitness_summary().await;
+        let params = FitnessSummaryParams {
+            compact: None,
+            fields: None,
+        };
+        let res = handler.get_fitness_summary(Parameters(params)).await;
         assert!(res.is_ok());
     }
 
@@ -7846,8 +8604,10 @@ mod tests {
     async fn get_wellness_for_date_tool() {
         let client = MockClient;
         let handler = IntervalsMcpHandler::new(Arc::new(client));
-        let params = DateParam {
+        let params = WellnessDateParams {
             date: "2025-01-01".into(),
+            compact: None,
+            fields: None,
         };
         let res = handler.get_wellness_for_date(Parameters(params)).await;
         assert!(res.is_ok());
@@ -7886,6 +8646,9 @@ mod tests {
         let handler = IntervalsMcpHandler::new(Arc::new(client));
         let params = DaysAheadParams {
             days_ahead: Some(14),
+            compact: None,
+            limit: None,
+            fields: None,
         };
         let res = handler.get_upcoming_workouts(Parameters(params)).await;
         assert!(res.is_ok());
@@ -7923,7 +8686,11 @@ mod tests {
     async fn get_workout_library_tool() {
         let client = MockClient;
         let handler = IntervalsMcpHandler::new(Arc::new(client));
-        let res = handler.get_workout_library().await;
+        let params = WorkoutLibraryParams {
+            compact: None,
+            fields: None,
+        };
+        let res = handler.get_workout_library(Parameters(params)).await;
         assert!(res.is_ok());
     }
 
@@ -7947,6 +8714,8 @@ mod tests {
         let handler = IntervalsMcpHandler::new(Arc::new(client));
         let params = CreateGearParams {
             gear: serde_json::json!({"name": "Bike", "type": "bike"}),
+            compact: None,
+            response_fields: None,
         };
         let res = handler.create_gear(Parameters(params)).await;
         assert!(res.is_ok());
@@ -7959,6 +8728,8 @@ mod tests {
         let params = UpdateGearParams {
             gear_id: "g1".into(),
             fields: serde_json::json!({"name": "New Bike"}),
+            compact: None,
+            response_fields: None,
         };
         let res = handler.update_gear(Parameters(params)).await;
         assert!(res.is_ok());
@@ -8007,7 +8778,15 @@ mod tests {
         assert!(r.is_ok());
 
         // Fitness & wellness
-        assert!(handler.get_fitness_summary().await.is_ok());
+        assert!(
+            handler
+                .get_fitness_summary(Parameters(FitnessSummaryParams {
+                    compact: None,
+                    fields: None,
+                }))
+                .await
+                .is_ok()
+        );
         let r = handler
             .get_wellness(Parameters(WellnessParams {
                 days_back: None,
@@ -8017,8 +8796,10 @@ mod tests {
             .await;
         assert!(r.is_ok());
         let r = handler
-            .get_wellness_for_date(Parameters(DateParam {
+            .get_wellness_for_date(Parameters(WellnessDateParams {
                 date: "2026-01-01".into(),
+                compact: None,
+                fields: None,
             }))
             .await;
         assert!(r.is_ok());
@@ -8031,7 +8812,15 @@ mod tests {
         assert!(r.is_ok());
 
         // Workouts & gear
-        assert!(handler.get_workout_library().await.is_ok());
+        assert!(
+            handler
+                .get_workout_library(Parameters(WorkoutLibraryParams {
+                    compact: None,
+                    fields: None,
+                }))
+                .await
+                .is_ok()
+        );
         let r = handler
             .get_workouts_in_folder(Parameters(WorkoutsInFolderParams {
                 folder_id: "f1".into(),
@@ -8135,6 +8924,8 @@ mod tests {
             activity_id: "a1".into(),
             limit: Some(5),
             route_id: Some(123),
+            compact: None,
+            fields: None,
         };
         let res = handler.get_activities_around(Parameters(params)).await;
         assert!(res.is_ok());
@@ -8153,6 +8944,8 @@ mod tests {
             min_reps: Some(1),
             max_reps: Some(10),
             limit: Some(20),
+            compact: None,
+            fields: None,
         };
         let res = handler.search_intervals(Parameters(params)).await;
         assert!(res.is_ok());
@@ -8204,6 +8997,8 @@ mod tests {
         let params = UpdateEventParams {
             event_id: EventId::Str("e1".to_string()),
             fields: serde_json::json!({"name": "Updated Event"}),
+            compact: None,
+            response_fields: None,
         };
         let res = handler.update_event(Parameters(params)).await;
         assert!(res.is_ok());
@@ -8216,6 +9011,8 @@ mod tests {
         let params = UpdateEventParams {
             event_id: EventId::Str("e1".to_string()),
             fields: serde_json::json!({"start_date_local": "not-a-date"}),
+            compact: None,
+            response_fields: None,
         };
         let res = handler.update_event(Parameters(params)).await;
         match res {
@@ -8246,6 +9043,8 @@ mod tests {
             event_id: EventId::Str("e1".to_string()),
             num_copies: Some(3),
             weeks_between: Some(1),
+            compact: None,
+            fields: None,
         };
         let res = handler.duplicate_event(Parameters(params)).await;
         assert!(res.is_ok());
