@@ -16,16 +16,13 @@ use intervals_icu_client::{ActivitySummary, IntervalsClient};
 
 pub mod compact;
 mod domains;
-pub mod error;
 mod event_id;
 mod prompts;
 mod services;
 mod state;
-mod tool_utils;
 mod transforms;
 mod types;
 
-pub use error::{McpError, McpResult};
 pub use event_id::EventId;
 pub use state::{DownloadState, DownloadStatus, WebhookEvent};
 pub use types::*;
