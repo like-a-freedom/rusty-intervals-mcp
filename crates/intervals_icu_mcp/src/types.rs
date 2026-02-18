@@ -1,7 +1,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{DownloadStatus, EventId};
+use crate::{DownloadStatus, EventId, FolderId};
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct RecentParams {
@@ -223,8 +223,8 @@ pub struct CurvesParams {
 /// Parameters for get_workouts_in_folder with compact mode
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct WorkoutsInFolderParams {
-    /// Folder ID
-    pub folder_id: String,
+    /// Folder ID (accepts string or integer)
+    pub folder_id: FolderId,
     /// Return compact summaries (default: true)
     pub compact: Option<bool>,
     /// Max workouts to return (default: 20)
@@ -431,7 +431,7 @@ pub struct DuplicateEventParams {
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct FolderIdParam {
-    pub folder_id: String,
+    pub folder_id: FolderId,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -446,7 +446,7 @@ pub struct CreateFolderParams {
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct UpdateFolderParams {
-    pub folder_id: String,
+    pub folder_id: FolderId,
     pub fields: serde_json::Value,
     /// Return compact summary (default: true)
     pub compact: Option<bool>,
@@ -456,7 +456,7 @@ pub struct UpdateFolderParams {
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct DeleteFolderParams {
-    pub folder_id: String,
+    pub folder_id: FolderId,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
