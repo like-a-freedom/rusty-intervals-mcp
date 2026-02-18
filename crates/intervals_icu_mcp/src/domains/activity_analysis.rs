@@ -364,4 +364,94 @@ mod tests {
         assert_eq!(out["count"], 1);
         assert!(out["efforts"][0].get("ignored").is_none());
     }
+
+    #[test]
+    fn compute_stream_stats_single_value() {
+        let arr = vec![serde_json::json!(42.5)];
+        let stats = compute_stream_stats(&arr);
+        assert_eq!(stats["count"], 1);
+        assert_eq!(stats["min"], 42.5);
+        assert_eq!(stats["max"], 42.5);
+        assert_eq!(stats["avg"], 42.5);
+        assert_eq!(stats["p10"], 42.5);
+        assert_eq!(stats["p50"], 42.5);
+        assert_eq!(stats["p90"], 42.5);
+    }
+
+    #[test]
+    fn compute_stream_stats_multiple_values() {
+        let arr = vec![
+            serde_json::json!(10.0),
+            serde_json::json!(20.0),
+            serde_json::json!(30.0),
+            serde_json::json!(40.0),
+            serde_json::json!(50.0),
+        ];
+        let stats = compute_stream_stats(&arr);
+        assert_eq!(stats["count"], 5);
+        assert_eq!(stats["min"], 10.0);
+        assert_eq!(stats["max"], 50.0);
+        assert_eq!(stats["avg"], 30.0);
+        assert_eq!(stats["p10"], 10.0);
+        assert_eq!(stats["p50"], 30.0);
+        assert_eq!(stats["p90"], 50.0);
+    }
+
+    #[test]
+    fn compute_stream_stats_with_integers() {
+        let arr = vec![
+            serde_json::json!(1),
+            serde_json::json!(2),
+            serde_json::json!(3),
+        ];
+        let stats = compute_stream_stats(&arr);
+        assert_eq!(stats["count"], 3);
+        assert_eq!(stats["min"], 1.0);
+        assert_eq!(stats["max"], 3.0);
+        assert_eq!(stats["avg"], 2.0);
+    }
+
+    #[test]
+    fn downsample_array_no_change_needed() {
+        let arr = vec![
+            serde_json::json!(1),
+            serde_json::json!(2),
+            serde_json::json!(3),
+        ];
+        let result = downsample_array(&arr, 5);
+        assert_eq!(result, arr);
+    }
+
+    #[test]
+    fn downsample_array_target_too_small() {
+        let arr = vec![
+            serde_json::json!(1),
+            serde_json::json!(2),
+            serde_json::json!(3),
+        ];
+        let result = downsample_array(&arr, 1);
+        assert_eq!(result, arr);
+    }
+
+    #[test]
+    fn downsample_array_basic_downsampling() {
+        let arr = (0..10).map(|i| serde_json::json!(i)).collect::<Vec<_>>();
+        let result = downsample_array(&arr, 4);
+        assert_eq!(result.len(), 4);
+        assert_eq!(result[0], serde_json::json!(0));
+        assert_eq!(result[3], serde_json::json!(9));
+    }
+
+    #[test]
+    fn downsample_array_preserves_first_and_last() {
+        let arr = vec![
+            serde_json::json!("first"),
+            serde_json::json!("middle"),
+            serde_json::json!("last"),
+        ];
+        let result = downsample_array(&arr, 2);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], serde_json::json!("first"));
+        assert_eq!(result[1], serde_json::json!("last"));
+    }
 }
