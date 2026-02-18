@@ -1846,6 +1846,9 @@ impl rmcp::ServerHandler for IntervalsMcpHandler {
 }
 
 #[cfg(test)]
+mod test_utils;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use hmac::{Hmac, Mac};
