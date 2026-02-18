@@ -181,34 +181,20 @@ impl IntervalsMcpHandler {
     ) -> Result<Json<ObjectResult>, String> {
         let p = params.0;
         let ev = p.event;
-        // Validate and normalize input: accept YYYY-MM-DD or ISO 8601 datetimes; preserve time when provided, default to 00:00:00 when only date is supplied
-        if ev.name.trim().is_empty() {
-            return Err("invalid event: name is empty".into());
-        }
-        let mut ev2 = ev.clone();
-        if Self::normalize_event_start(&ev2.start_date_local).is_err() {
-            return Err(format!(
-                "invalid start_date_local: {}",
-                ev2.start_date_local
-            ));
-        } else if let Ok(s) = Self::normalize_event_start(&ev2.start_date_local) {
-            ev2.start_date_local = s;
-        }
-        if ev2.category == intervals_icu_client::EventCategory::Unknown {
-            return Err("invalid category: unknown".into());
-        }
-        // For WORKOUT events, `type` (sport) is required by the upstream API
-        if ev2.category == intervals_icu_client::EventCategory::Workout
-            && ev2
-                .r#type
-                .as_ref()
-                .map(|s| s.trim())
-                .unwrap_or("")
-                .is_empty()
-        {
-            tracing::debug!("create_event: missing type for WORKOUT - defaulting to Run");
-            ev2.r#type = Some("Run".into());
-        }
+
+        // Validate, normalize and apply defaults (delegated to domain helper)
+        let ev2 = match domains::events::validate_and_prepare_event(ev) {
+            Ok(e) => e,
+            Err(domains::events::EventValidationError::EmptyName) => {
+                return Err("invalid event: name is empty".into());
+            }
+            Err(domains::events::EventValidationError::InvalidStartDate(s)) => {
+                return Err(format!("invalid start_date_local: {}", s));
+            }
+            Err(domains::events::EventValidationError::UnknownCategory) => {
+                return Err("invalid category: unknown".into());
+            }
+        };
         let created = self
             .client
             .create_event(ev2)
@@ -289,42 +275,24 @@ impl IntervalsMcpHandler {
         // Accept either YYYY-MM-DD or ISO 8601 datetimes; preserve time when provided, default to 00:00:00 for date-only input.
         let mut norm_events: Vec<intervals_icu_client::Event> = Vec::with_capacity(events.len());
         for (i, ev) in events.into_iter().enumerate() {
-            if ev.name.trim().is_empty() {
-                return Err(format!("invalid event at index {}: name is empty", i));
-            }
-            // Normalize date/time: accept YYYY-MM-DD or RFC3339 / NaiveDateTime, preserve time when provided
-            let mut ev2 = ev.clone();
-            match Self::normalize_event_start(&ev2.start_date_local) {
-                Ok(s) => ev2.start_date_local = s,
-                Err(()) => {
+            match domains::events::validate_and_prepare_event(ev) {
+                Ok(ev2) => norm_events.push(ev2),
+                Err(domains::events::EventValidationError::EmptyName) => {
+                    return Err(format!("invalid event at index {}: name is empty", i));
+                }
+                Err(domains::events::EventValidationError::InvalidStartDate(s)) => {
                     return Err(format!(
                         "invalid start_date_local for event at index {}: {}",
-                        i, ev2.start_date_local
+                        i, s
+                    ));
+                }
+                Err(domains::events::EventValidationError::UnknownCategory) => {
+                    return Err(format!(
+                        "invalid category for event at index {}: unknown category",
+                        i
                     ));
                 }
             }
-            if ev2.category == intervals_icu_client::EventCategory::Unknown {
-                return Err(format!(
-                    "invalid category for event at index {}: unknown category",
-                    i
-                ));
-            }
-            // If type is missing for WORKOUT events, default to Run to avoid upstream 422s
-            if ev2.category == intervals_icu_client::EventCategory::Workout
-                && ev2
-                    .r#type
-                    .as_ref()
-                    .map(|s| s.trim())
-                    .unwrap_or("")
-                    .is_empty()
-            {
-                tracing::debug!(
-                    "bulk_create_events: missing type for WORKOUT at index {} - defaulting to Run",
-                    i
-                );
-                ev2.r#type = Some("Run".into());
-            }
-            norm_events.push(ev2);
         }
         let created = self
             .client
