@@ -25,6 +25,18 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo target (host + linux target)
+        if: runner.os == 'Linux'
+        uses: actions/cache@v5
+        with:
+          path: |
+            target
+            target/x86_64-unknown-linux-gnu
+          key: ${{ runner.os }}-cargo-target-x86_64-unknown-linux-gnu-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-target-x86_64-unknown-linux-gnu-
+
       - name: Set up Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1.15.2
         with:
@@ -39,6 +51,20 @@ jobs:
 
       - name: Run tests
         run: cargo test --all --no-fail-fast
+
+      - name: Build Linux release and upload artifact
+        if: runner.os == 'Linux'
+        run: |
+          # build into the platform-specific target directory so other jobs can reuse/cache it
+          cargo build -p intervals_icu_mcp --release --target x86_64-unknown-linux-gnu
+          mkdir -p app/x86_64-unknown-linux-gnu
+          cp target/x86_64-unknown-linux-gnu/release/intervals_icu_mcp app/x86_64-unknown-linux-gnu/intervals_icu_mcp
+      - name: Upload release artifact
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-release-binary
+          path: app/x86_64-unknown-linux-gnu/intervals_icu_mcp
 
       - name: Install cargo-tarpaulin
         if: runner.os == 'Linux'
@@ -107,19 +133,31 @@ jobs:
           target: ${{ matrix.platform.target }}
 
       - name: Cache target directory
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: target/${{ matrix.platform.target }}
           key: ${{ runner.os }}-cargo-target-${{ matrix.platform.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-target-${{ matrix.platform.target }}-
+
+      - name: Download Linux release artifact
+        if: matrix.platform.target == 'x86_64-unknown-linux-gnu'
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-release-binary
+          path: app/${{ matrix.platform.target }}
 
       - name: Build binary
+        if: matrix.platform.target != 'x86_64-unknown-linux-gnu'
         run: cargo build -p intervals_icu_mcp --release --target ${{ matrix.platform.target }}
 
       - name: Prepare artifact (Unix)
         if: matrix.platform.os != 'windows-latest'
         run: |
           mkdir -p app/${{ matrix.platform.target }}
-          cp target/${{ matrix.platform.target }}/release/intervals_icu_mcp app/${{ matrix.platform.target }}/${{ matrix.platform.bin }}
+          if [ ! -f app/${{ matrix.platform.target }}/${{ matrix.platform.bin }} ]; then
+            cp target/${{ matrix.platform.target }}/release/intervals_icu_mcp app/${{ matrix.platform.target }}/${{ matrix.platform.bin }}
+          fi
 
       - name: Prepare artifact (Windows)
         if: matrix.platform.os == 'windows-latest'
