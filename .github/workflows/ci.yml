@@ -12,6 +12,10 @@ on:
   pull_request:
     branches: [main, master]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   checks:
     name: Checks (fmt, clippy, tests)
@@ -52,30 +56,24 @@ jobs:
       - name: Run tests
         run: cargo test --all --no-fail-fast
 
-      - name: Build Linux release and upload artifact
-        if: runner.os == 'Linux'
-        run: |
-          # build into the platform-specific target directory so other jobs can reuse/cache it
-          cargo build -p intervals_icu_mcp --release --target x86_64-unknown-linux-gnu
-          mkdir -p app/x86_64-unknown-linux-gnu
-          cp target/x86_64-unknown-linux-gnu/release/intervals_icu_mcp app/x86_64-unknown-linux-gnu/intervals_icu_mcp
-      - name: Upload release artifact
-        if: runner.os == 'Linux'
-        uses: actions/upload-artifact@v4
+      - name: Cache tarpaulin coverage
+        if: runner.os == 'Linux' && github.event_name != 'pull_request'
+        uses: actions/cache@v5
         with:
-          name: linux-release-binary
-          path: app/x86_64-unknown-linux-gnu/intervals_icu_mcp
+          path: ~/.cache/tarpaulin
+          key: tarpaulin-coverage-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: tarpaulin-coverage-
 
       - name: Install cargo-tarpaulin
-        if: runner.os == 'Linux'
-        run: cargo install cargo-tarpaulin --version 0.34.1
+        if: runner.os == 'Linux' && github.event_name != 'pull_request'
+        run: cargo install cargo-tarpaulin --version 0.34.1 --locked
 
       - name: Run coverage (tarpaulin)
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && github.event_name != 'pull_request'
         run: cargo tarpaulin --out Xml --ciserver github --run-types Tests --timeout 900
 
       - name: Upload coverage to Codecov
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && github.event_name != 'pull_request'
         uses: codecov/codecov-action@v5
         with:
           files: ./cobertura.xml
@@ -140,12 +138,12 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-target-${{ matrix.platform.target }}-
 
-      - name: Download Linux release artifact
+      - name: Build Linux release (if Linux)
         if: matrix.platform.target == 'x86_64-unknown-linux-gnu'
-        uses: actions/download-artifact@v4
-        with:
-          name: linux-release-binary
-          path: app/${{ matrix.platform.target }}
+        run: |
+          cargo build -p intervals_icu_mcp --release --target x86_64-unknown-linux-gnu
+          mkdir -p app/${{ matrix.platform.target }}
+          cp target/${{ matrix.platform.target }}/release/intervals_icu_mcp app/${{ matrix.platform.target }}/${{ matrix.platform.bin }}
 
       - name: Build binary
         if: matrix.platform.target != 'x86_64-unknown-linux-gnu'
