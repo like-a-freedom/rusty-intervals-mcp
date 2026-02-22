@@ -15,13 +15,13 @@ use rmcp::{prompt, prompt_handler, prompt_router, tool, tool_handler, tool_route
 use intervals_icu_client::{ActivitySummary, IntervalsClient};
 
 pub mod compact;
-mod domains;
+pub mod domains;
 mod event_id;
-mod prompts;
+pub mod prompts;
 mod services;
 mod state;
 mod transforms;
-mod types;
+pub mod types;
 
 pub use event_id::{EventId, FolderId};
 pub use state::{DownloadState, DownloadStatus, WebhookEvent};
@@ -161,12 +161,12 @@ impl IntervalsMcpHandler {
     }
 
     // Shared helper: normalize date-only strings to YYYY-MM-DD. Accepts YYYY-MM-DD, RFC3339, or naive YYYY-MM-DDTHH:MM:SS
-    fn normalize_date_str(s: &str) -> Result<String, ()> {
+    fn normalize_date_str(s: &str) -> Option<String> {
         domains::events::normalize_date_str(s)
     }
 
     // Normalize start_date_local for events: return ISO datetime. Keep provided time; if only a date is given, set time to 00:00:00.
-    fn normalize_event_start(s: &str) -> Result<String, ()> {
+    fn normalize_event_start(s: &str) -> Option<String> {
         domains::events::normalize_event_start(s)
     }
 
@@ -1070,20 +1070,67 @@ impl IntervalsMcpHandler {
         params: Parameters<FitnessSummaryParams>,
     ) -> Result<Json<ObjectResult>, String> {
         let p = params.0;
-        let v = self
-            .client
-            .get_fitness_summary()
-            .await
-            .map_err(|e| e.to_string())?;
+        tracing::info!(
+            "get_fitness_summary: compact={:?}, fields={:?}",
+            p.compact,
+            p.fields
+        );
+
+        let v = self.client.get_fitness_summary().await.map_err(|e| {
+            tracing::error!("get_fitness_summary client error: {}", e);
+            e.to_string()
+        })?;
+
+        match &v {
+            serde_json::Value::Array(a) => {
+                tracing::info!(
+                    "get_fitness_summary: raw response is array with {} elements",
+                    a.len()
+                );
+                if a.is_empty() {
+                    tracing::warn!(
+                        "get_fitness_summary: API returned empty array - no fitness data available"
+                    );
+                }
+            }
+            serde_json::Value::Object(o) => {
+                let keys: Vec<_> = o.keys().collect();
+                tracing::info!(
+                    "get_fitness_summary: raw response is object with {} keys: {:?}",
+                    keys.len(),
+                    keys
+                );
+            }
+            _ => {
+                tracing::info!("get_fitness_summary: raw response type={:?}", v);
+            }
+        }
+        tracing::info!("get_fitness_summary: raw response={}", v);
 
         // Apply compact mode
         let result = if p.compact.unwrap_or(true) {
+            tracing::info!("get_fitness_summary: using compact mode");
             Self::compact_fitness_summary(&v, p.fields.as_deref())
         } else if let Some(ref fields) = p.fields {
+            tracing::info!("get_fitness_summary: using filter_fields mode");
             Self::filter_fields(&v, fields)
         } else {
-            v
+            tracing::info!("get_fitness_summary: using non-compact mode");
+            // Non-compact mode: return first element from array (most recent day)
+            // or the whole value if it's not an array
+            if let Some(arr) = v.as_array() {
+                if arr.is_empty() {
+                    tracing::warn!("get_fitness_summary: empty array, returning empty object");
+                    serde_json::json!({})
+                } else {
+                    arr.first().cloned().unwrap_or(v)
+                }
+            } else {
+                v
+            }
         };
+
+        tracing::info!("get_fitness_summary: result={}", result);
 
         Ok(Json(ObjectResult { value: result }))
     }
@@ -1139,8 +1186,8 @@ impl IntervalsMcpHandler {
         let mut date = p.date.clone();
         // accept YYYY-MM-DD or ISO datetimes; normalize to YYYY-MM-DD
         date = match Self::normalize_date_str(&date) {
-            Ok(s) => s,
-            Err(()) => return Err(format!("invalid date: {}", p.date)),
+            Some(s) => s,
+            None => return Err(format!("invalid date: {}", p.date)),
         };
         let v = self
             .client
@@ -1179,8 +1226,8 @@ impl IntervalsMcpHandler {
         let p = params.0;
         let mut date = p.date.clone();
         date = match Self::normalize_date_str(&date) {
-            Ok(s) => s,
-            Err(()) => return Err(format!("invalid date: {}", p.date)),
+            Some(s) => s,
+            None => return Err(format!("invalid date: {}", p.date)),
         };
         let v = self
             .client
@@ -1245,8 +1292,8 @@ impl IntervalsMcpHandler {
             && let Some(s) = val.as_str()
         {
             let s2 = match Self::normalize_event_start(s) {
-                Ok(s2) => s2,
-                Err(()) => return Err(format!("invalid start_date_local: {}", s)),
+                Some(s2) => s2,
+                None => return Err(format!("invalid start_date_local: {}", s)),
             };
             obj.insert(
                 "start_date_local".to_string(),
@@ -3763,14 +3810,17 @@ mod tests {
         async fn get_fitness_summary(
             &self,
         ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
-            // API returns fitness/fatigue/form/rampRate format
-            Ok(serde_json::json!({
-                "fitness": 45.5,
-                "fatigue": 25.3,
-                "form": 20.2,
-                "rampRate": 1.5,
-                "weight": 70.0
-            }))
+            // API returns array of SummaryWithCats objects (most recent first)
+            Ok(serde_json::json!([
+                {
+                    "fitness": 45.5,
+                    "fatigue": 25.3,
+                    "form": 20.2,
+                    "rampRate": 1.5,
+                    "weight": 70.0,
+                    "date": "2025-02-22"
+                }
+            ]))
         }
         async fn get_wellness(
             &self,
@@ -6419,7 +6469,7 @@ mod tests {
             IntervalsMcpHandler::normalize_date_str("2026-01-19T06:30:00").unwrap(),
             "2026-01-19"
         );
-        assert!(IntervalsMcpHandler::normalize_date_str("not-a-date").is_err());
+        assert!(IntervalsMcpHandler::normalize_date_str("not-a-date").is_none());
     }
 
     #[test]
@@ -6440,7 +6490,7 @@ mod tests {
             "2026-01-19T06:30:00"
         );
         // Test invalid format
-        assert!(IntervalsMcpHandler::normalize_event_start("not-a-date").is_err());
+        assert!(IntervalsMcpHandler::normalize_event_start("not-a-date").is_none());
     }
 
     #[tokio::test]

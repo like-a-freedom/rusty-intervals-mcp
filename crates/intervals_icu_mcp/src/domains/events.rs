@@ -55,30 +55,30 @@ pub fn compact_events(
         .collect()
 }
 
-pub fn normalize_date_str(s: &str) -> Result<String, ()> {
+pub fn normalize_date_str(s: &str) -> Option<String> {
     if chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").is_ok() {
-        return Ok(s.to_string());
+        return Some(s.to_string());
     }
     if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
-        return Ok(dt.date_naive().format("%Y-%m-%d").to_string());
+        return Some(dt.date_naive().format("%Y-%m-%d").to_string());
     }
     if let Ok(ndt) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S") {
-        return Ok(ndt.date().format("%Y-%m-%d").to_string());
+        return Some(ndt.date().format("%Y-%m-%d").to_string());
     }
-    Err(())
+    None
 }
 
-pub fn normalize_event_start(s: &str) -> Result<String, ()> {
+pub fn normalize_event_start(s: &str) -> Option<String> {
     if chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").is_ok() {
-        return Ok(format!("{}T00:00:00", s));
+        return Some(format!("{}T00:00:00", s));
     }
     if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
-        return Ok(dt.naive_local().format("%Y-%m-%dT%H:%M:%S").to_string());
+        return Some(dt.naive_local().format("%Y-%m-%dT%H:%M:%S").to_string());
     }
     if let Ok(ndt) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S") {
-        return Ok(ndt.format("%Y-%m-%dT%H:%M:%S").to_string());
+        return Some(ndt.format("%Y-%m-%dT%H:%M:%S").to_string());
     }
-    Err(())
+    None
 }
 
 pub fn compact_single_event(
@@ -185,8 +185,8 @@ pub fn validate_and_prepare_event(
     }
 
     match normalize_event_start(&ev.start_date_local) {
-        Ok(s) => ev.start_date_local = s,
-        Err(()) => return Err(EventValidationError::InvalidStartDate(ev.start_date_local)),
+        Some(s) => ev.start_date_local = s,
+        None => return Err(EventValidationError::InvalidStartDate(ev.start_date_local)),
     }
 
     if ev.category == intervals_icu_client::EventCategory::Unknown {
