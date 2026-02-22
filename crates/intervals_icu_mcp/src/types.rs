@@ -289,7 +289,8 @@ pub struct SportSettingsParams {
 pub struct FitnessSummaryParams {
     /// Return compact summary (default: true)
     pub compact: Option<bool>,
-    /// Specific fields to return (default: ctl,atl,tsb,ctl_ramp_rate,atl_ramp_rate,date)
+    /// Specific fields to return (default: fitness,fatigue,form,rampRate)
+    /// Note: API returns fitness (CTL), fatigue (ATL), form (TSB), rampRate
     pub fields: Option<Vec<String>>,
 }
 

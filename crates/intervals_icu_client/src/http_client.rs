@@ -1,3 +1,7 @@
+//! HTTP client implementation for the Intervals.icu API.
+//!
+//! This module provides a reqwest-based implementation of the [`IntervalsClient`](crate::IntervalsClient) trait.
+
 use crate::{AthleteProfile, IntervalsClient, IntervalsError};
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -7,6 +11,7 @@ use secrecy::{ExposeSecret, SecretString};
 use std::path::PathBuf;
 use tokio::io::AsyncWriteExt;
 
+/// Client for the Intervals.icu API using reqwest.
 #[derive(Clone, Debug)]
 pub struct ReqwestIntervalsClient {
     base_url: String,
@@ -16,8 +21,16 @@ pub struct ReqwestIntervalsClient {
 }
 
 impl ReqwestIntervalsClient {
+    /// Create a new client instance.
+    ///
+    /// # Arguments
+    /// * `base_url` - The base URL of the Intervals.icu API (e.g., "https://intervals.icu")
+    /// * `athlete_id` - The athlete ID for authentication
+    /// * `api_key` - The API key for authentication
     pub fn new(base_url: &str, athlete_id: impl Into<String>, api_key: SecretString) -> Self {
-        let client = reqwest::Client::builder().build().expect("reqwest build");
+        let client = reqwest::Client::builder()
+            .build()
+            .expect("reqwest client build should not fail");
         Self {
             base_url: base_url.trim_end_matches('/').to_string(),
             athlete_id: athlete_id.into(),
@@ -26,22 +39,99 @@ impl ReqwestIntervalsClient {
         }
     }
 
+    /// Build an authenticated GET request.
+    fn get_request(&self, url: &str) -> reqwest::RequestBuilder {
+        self.client
+            .get(url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+    }
+
+    /// Build an authenticated POST request.
+    fn post_request(&self, url: &str) -> reqwest::RequestBuilder {
+        self.client
+            .post(url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+    }
+
+    /// Build an authenticated PUT request.
+    fn put_request(&self, url: &str) -> reqwest::RequestBuilder {
+        self.client
+            .put(url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+    }
+
+    /// Build an authenticated DELETE request.
+    fn delete_request(&self, url: &str) -> reqwest::RequestBuilder {
+        self.client
+            .delete(url)
+            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
+    }
+
+    /// Execute a request and expect a JSON response.
+    async fn execute_json<T: serde::de::DeserializeOwned>(
+        &self,
+        request: reqwest::RequestBuilder,
+    ) -> Result<T, IntervalsError> {
+        let resp = request.send().await?;
+        self.handle_response(resp).await
+    }
+
+    /// Execute a request and expect a text response.
+    async fn execute_text(
+        &self,
+        request: reqwest::RequestBuilder,
+    ) -> Result<String, IntervalsError> {
+        let resp = request.send().await?;
+        if !resp.status().is_success() {
+            return Err(self.error_from_response(resp).await);
+        }
+        Ok(resp.text().await?)
+    }
+
+    /// Execute a request with no expected response body.
+    async fn execute_empty(&self, request: reqwest::RequestBuilder) -> Result<(), IntervalsError> {
+        let resp = request.send().await?;
+        if !resp.status().is_success() {
+            return Err(self.error_from_response(resp).await);
+        }
+        Ok(())
+    }
+
+    /// Handle a response, converting status codes to appropriate errors.
+    async fn handle_response<T: serde::de::DeserializeOwned>(
+        &self,
+        resp: reqwest::Response,
+    ) -> Result<T, IntervalsError> {
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(self.error_from_response(resp).await);
+        }
+        Ok(resp.json::<T>().await?)
+    }
+
+    /// Extract error information from a failed response.
+    async fn error_from_response(&self, resp: reqwest::Response) -> IntervalsError {
+        let status = resp.status().as_u16();
+        let body = resp.text().await.unwrap_or_default();
+        let body_snippet: String = body.chars().take(256).collect();
+
+        match status {
+            404 => IntervalsError::NotFound(body_snippet),
+            401 | 403 => IntervalsError::Auth(body_snippet),
+            422 => IntervalsError::InvalidInput(body_snippet),
+            _ => IntervalsError::from_status(status, body_snippet),
+        }
+    }
+
+    /// Download a file from a URL, optionally saving to disk.
     async fn download_file(
         &self,
         url: String,
         output_path: Option<PathBuf>,
     ) -> Result<Option<String>, IntervalsError> {
-        let resp = self
-            .client
-            .get(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .send()
-            .await?;
+        let resp = self.get_request(&url).send().await?;
         if !resp.status().is_success() {
-            return Err(IntervalsError::Config(format!(
-                "unexpected status: {}",
-                resp.status()
-            )));
+            return Err(self.error_from_response(resp).await);
         }
 
         if let Some(path) = output_path {
@@ -62,9 +152,6 @@ impl ReqwestIntervalsClient {
         }
 
         let bytes = resp.bytes().await?;
-        if bytes.len() <= 1024 * 1024 {
-            return Ok(Some(STANDARD.encode(&bytes)));
-        }
         Ok(Some(STANDARD.encode(&bytes)))
     }
 }
@@ -72,7 +159,6 @@ impl ReqwestIntervalsClient {
 impl ReqwestIntervalsClient {
     /// Map case-insensitive sport names to their canonical API form.
     pub fn normalize_sport(s: &str) -> String {
-        // These values are taken from the intervals.icu API enum for sport `type`.
         const SPORTS: &[&str] = &[
             "Ride",
             "Run",
@@ -140,7 +226,7 @@ impl ReqwestIntervalsClient {
                 return c.to_string();
             }
         }
-        // Fallback: capitalize first char and keep rest as-is (best-effort)
+        // Fallback: capitalize first character
         if s.is_empty() {
             return s.to_string();
         }
@@ -149,7 +235,8 @@ impl ReqwestIntervalsClient {
         format!("{}{}", first, chrs.as_str())
     }
 
-    // Normalize start_date_local for events: preserve time when provided; if only date is given, set time to 00:00:00.
+    /// Normalize start_date_local for events: preserve time when provided;
+    /// if only date is given, set time to 00:00:00.
     fn normalize_event_start(s: &str) -> Result<String, ()> {
         if chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").is_ok() {
             return Ok(format!("{}T00:00:00", s));
@@ -171,19 +258,12 @@ impl IntervalsClient for ReqwestIntervalsClient {
             "{}/api/v1/athlete/{}/profile",
             self.base_url, self.athlete_id
         );
-        let resp = self
-            .client
-            .get(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .send()
-            .await?;
+        let resp = self.get_request(&url).send().await?;
         let status = resp.status();
         if !status.is_success() {
-            return Err(IntervalsError::Config(format!(
-                "unexpected status: {}",
-                status
-            )));
+            return Err(self.error_from_response(resp).await);
         }
+
         #[derive(serde::Deserialize)]
         struct ProfilePayload {
             athlete: Option<ProfileAthlete>,
@@ -193,14 +273,15 @@ impl IntervalsClient for ReqwestIntervalsClient {
             id: Option<String>,
             name: Option<String>,
         }
+
         let payload: ProfilePayload = resp.json().await?;
-        if let Some(a) = payload.athlete {
-            let id = a.id.unwrap_or_default();
-            return Ok(AthleteProfile { id, name: a.name });
-        }
-        Err(IntervalsError::Config(
-            "missing athlete profile data".into(),
-        ))
+        payload
+            .athlete
+            .map(|a| AthleteProfile {
+                id: a.id.unwrap_or_default(),
+                name: a.name,
+            })
+            .ok_or_else(|| IntervalsError::Config("missing athlete profile data".into()))
     }
 
     async fn get_recent_activities(
@@ -213,35 +294,18 @@ impl IntervalsClient for ReqwestIntervalsClient {
             self.base_url, self.athlete_id
         );
         let today = Utc::now().date_naive();
-        let oldest = if let Some(days) = days_back {
-            today - Duration::days(days as i64)
-        } else {
-            today - Duration::days(7)
-        };
-        let newest = today;
+        let oldest = today - Duration::days(days_back.unwrap_or(7) as i64);
+
         let mut pairs: Vec<(&str, String)> = vec![
             ("oldest", oldest.to_string()),
-            ("newest", newest.to_string()),
+            ("newest", today.to_string()),
         ];
         if let Some(limit) = limit {
             pairs.push(("limit", limit.to_string()));
         }
         let qp: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (*k, v.as_str())).collect();
-        let resp = self
-            .client
-            .get(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .query(&qp)
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            return Err(IntervalsError::Config(format!(
-                "unexpected status: {}",
-                resp.status()
-            )));
-        }
-        let acts: Vec<crate::ActivitySummary> = resp.json().await?;
-        Ok(acts)
+
+        self.execute_json(self.get_request(&url).query(&qp)).await
     }
 
     async fn create_event(&self, event: crate::Event) -> Result<crate::Event, IntervalsError> {
@@ -249,36 +313,20 @@ impl IntervalsClient for ReqwestIntervalsClient {
             "{}/api/v1/athlete/{}/events",
             self.base_url, self.athlete_id
         );
-        // Normalize/validate start_date_local locally to catch common mistakes and preserve time when present
-        match Self::normalize_event_start(&event.start_date_local) {
-            Ok(s) => {
-                let mut ev = event;
-                ev.start_date_local = s;
-                let resp = self
-                    .client
-                    .post(&url)
-                    .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-                    .json(&ev)
-                    .send()
-                    .await?;
-                if !resp.status().is_success() {
-                    let status = resp.status();
-                    let body = resp.text().await.unwrap_or_default();
-                    return Err(IntervalsError::Config(format!(
-                        "unexpected status: {} {}",
-                        status, body
-                    )));
-                }
-                let created: crate::Event = resp.json().await?;
-                return Ok(created);
-            }
-            Err(()) => {
-                return Err(IntervalsError::Config(format!(
-                    "invalid start_date_local: {}",
-                    event.start_date_local
-                )));
-            }
+
+        let mut ev = event;
+        ev.start_date_local = Self::normalize_event_start(&ev.start_date_local).map_err(|()| {
+            IntervalsError::InvalidInput(format!(
+                "invalid start_date_local: {}",
+                ev.start_date_local
+            ))
+        })?;
+
+        let resp = self.post_request(&url).json(&ev).send().await?;
+        if !resp.status().is_success() {
+            return Err(self.error_from_response(resp).await);
         }
+        Ok(resp.json().await?)
     }
 
     async fn get_event(&self, event_id: &str) -> Result<crate::Event, IntervalsError> {
@@ -286,32 +334,17 @@ impl IntervalsClient for ReqwestIntervalsClient {
             "{}/api/v1/athlete/{}/events/{}",
             self.base_url, self.athlete_id, event_id
         );
-        let resp = self
-            .client
-            .get(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .send()
-            .await?;
+        let resp = self.get_request(&url).send().await?;
         if !resp.status().is_success() {
-            return Err(IntervalsError::Config(format!(
-                "unexpected status: {}",
-                resp.status()
-            )));
+            return Err(self.error_from_response(resp).await);
         }
         // Read body as text first so we can provide a helpful error message
         // when the returned JSON doesn't match the expected `Event` shape.
         let text = resp.text().await?;
-        match serde_json::from_str::<crate::Event>(&text) {
-            Ok(ev) => Ok(ev),
-            Err(e) => {
-                // Truncate body to avoid huge error messages
-                let body_snippet: String = text.chars().take(512).collect();
-                return Err(IntervalsError::Config(format!(
-                    "decoding event: {} - body: {}",
-                    e, body_snippet
-                )));
-            }
-        }
+        serde_json::from_str::<crate::Event>(&text).map_err(|e| {
+            let body_snippet: String = text.chars().take(512).collect();
+            IntervalsError::Config(format!("decoding event: {} - body: {}", e, body_snippet))
+        })
     }
 
     async fn delete_event(&self, event_id: &str) -> Result<(), IntervalsError> {
@@ -319,20 +352,7 @@ impl IntervalsClient for ReqwestIntervalsClient {
             "{}/api/v1/athlete/{}/events/{}",
             self.base_url, self.athlete_id, event_id
         );
-        let resp = self
-            .client
-            .delete(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .send()
-            .await?;
-        if resp.status().is_success() {
-            Ok(())
-        } else {
-            Err(IntervalsError::Config(format!(
-                "unexpected status: {}",
-                resp.status()
-            )))
-        }
+        self.execute_empty(self.delete_request(&url)).await
     }
 
     async fn get_events(
@@ -344,30 +364,15 @@ impl IntervalsClient for ReqwestIntervalsClient {
             "{}/api/v1/athlete/{}/events",
             self.base_url, self.athlete_id
         );
-        let mut pairs: Vec<(&str, String)> = vec![];
+        let mut pairs: Vec<(&str, String)> = Vec::new();
         if let Some(d) = days_back {
-            // API may support query params; use 'days_back' as example param
             pairs.push(("days_back", d.to_string()));
         }
         if let Some(l) = limit {
             pairs.push(("limit", l.to_string()));
         }
         let qp: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (*k, v.as_str())).collect();
-        let resp = self
-            .client
-            .get(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .query(&qp)
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            return Err(IntervalsError::Config(format!(
-                "unexpected status: {}",
-                resp.status()
-            )));
-        }
-        let evs: Vec<crate::Event> = resp.json().await?;
-        Ok(evs)
+        self.execute_json(self.get_request(&url).query(&qp)).await
     }
 
     async fn bulk_create_events(
@@ -378,23 +383,8 @@ impl IntervalsClient for ReqwestIntervalsClient {
             "{}/api/v1/athlete/{}/events/bulk",
             self.base_url, self.athlete_id
         );
-        let resp = self
-            .client
-            .post(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .json(&events)
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(IntervalsError::Config(format!(
-                "unexpected status: {} {}",
-                status, body
-            )));
-        }
-        let created: Vec<crate::Event> = resp.json().await?;
-        Ok(created)
+        self.execute_json(self.post_request(&url).json(&events))
+            .await
     }
 
     async fn get_activity_streams(
@@ -403,26 +393,12 @@ impl IntervalsClient for ReqwestIntervalsClient {
         streams: Option<Vec<String>>,
     ) -> Result<serde_json::Value, IntervalsError> {
         let url = format!("{}/api/v1/activity/{}/streams", self.base_url, activity_id);
-        let mut pairs: Vec<(&str, String)> = vec![];
+        let mut pairs: Vec<(&str, String)> = Vec::new();
         if let Some(s) = streams {
             pairs.push(("streams", s.join(",")));
         }
         let qp: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (*k, v.as_str())).collect();
-        let resp = self
-            .client
-            .get(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .query(&qp)
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            return Err(IntervalsError::Config(format!(
-                "unexpected status: {}",
-                resp.status()
-            )));
-        }
-        let v = resp.json().await?;
-        Ok(v)
+        self.execute_json(self.get_request(&url).query(&qp)).await
     }
 
     async fn get_activity_intervals(
@@ -433,19 +409,7 @@ impl IntervalsClient for ReqwestIntervalsClient {
             "{}/api/v1/activity/{}/intervals",
             self.base_url, activity_id
         );
-        let resp = self
-            .client
-            .get(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            return Err(IntervalsError::Config(format!(
-                "unexpected status: {}",
-                resp.status()
-            )));
-        }
-        Ok(resp.json().await?)
+        self.execute_json(self.get_request(&url)).await
     }
 
     async fn get_best_efforts(
@@ -458,68 +422,51 @@ impl IntervalsClient for ReqwestIntervalsClient {
             self.base_url, activity_id
         );
 
-        // If caller provided explicit options, treat them as authoritative
         if let Some(opts) = options {
-            if let Some(s) = opts.stream.as_deref() {
-                // require at least one of duration or distance per API contract
-                if opts.duration.is_none() && opts.distance.is_none() {
-                    return Err(IntervalsError::Config(
-                        "missing duration or distance in best-efforts options".into(),
-                    ));
-                }
-                let mut q: Vec<(&str, String)> = Vec::new();
-                q.push(("stream", s.to_string()));
-                if let Some(dur) = opts.duration {
-                    q.push(("duration", dur.to_string()));
-                }
-                if let Some(dist) = opts.distance {
-                    q.push(("distance", dist.to_string()));
-                }
-                if let Some(cnt) = opts.count {
-                    q.push(("count", cnt.to_string()));
-                }
-                if let Some(minv) = opts.min_value {
-                    q.push(("minValue", minv.to_string()));
-                }
-                if let Some(ex) = opts.exclude_intervals {
-                    q.push((
-                        "excludeIntervals",
-                        (if ex { "true" } else { "false" }).to_string(),
-                    ));
-                }
-                if let Some(si) = opts.start_index {
-                    q.push(("startIndex", si.to_string()));
-                }
-                if let Some(ei) = opts.end_index {
-                    q.push(("endIndex", ei.to_string()));
-                }
-
-                let params = q;
-                let resp = self
-                    .client
-                    .get(&url)
-                    .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-                    .query(&params)
-                    .send()
-                    .await?;
-                if !resp.status().is_success() {
-                    return Err(IntervalsError::Config(format!(
-                        "unexpected status: {}",
-                        resp.status()
-                    )));
-                }
-                return Ok(resp.json().await?);
-            } else {
-                return Err(IntervalsError::Config(
+            if opts.stream.is_none() {
+                return Err(IntervalsError::InvalidInput(
                     "missing stream in best-efforts options".into(),
                 ));
             }
+            if opts.duration.is_none() && opts.distance.is_none() {
+                return Err(IntervalsError::InvalidInput(
+                    "missing duration or distance in best-efforts options".into(),
+                ));
+            }
+
+            let mut q: Vec<(&str, String)> = Vec::new();
+            if let Some(s) = opts.stream.as_deref() {
+                q.push(("stream", s.to_string()));
+            }
+            if let Some(dur) = opts.duration {
+                q.push(("duration", dur.to_string()));
+            }
+            if let Some(dist) = opts.distance {
+                q.push(("distance", dist.to_string()));
+            }
+            if let Some(cnt) = opts.count {
+                q.push(("count", cnt.to_string()));
+            }
+            if let Some(minv) = opts.min_value {
+                q.push(("minValue", minv.to_string()));
+            }
+            if let Some(ex) = opts.exclude_intervals {
+                q.push((
+                    "excludeIntervals",
+                    (if ex { "true" } else { "false" }).to_string(),
+                ));
+            }
+            if let Some(si) = opts.start_index {
+                q.push(("startIndex", si.to_string()));
+            }
+            if let Some(ei) = opts.end_index {
+                q.push(("endIndex", ei.to_string()));
+            }
+
+            return self.execute_json(self.get_request(&url).query(&q)).await;
         }
 
-        // Try a sequence of sensible default parameter combinations when callers
-        // only provide the activity id. Some activities (or upstream validation)
-        // may accept duration-based efforts, others distance-based; try both to
-        // avoid surfacing 422 errors for the common quick-lookup case.
+        // Try default parameter combinations when no options provided
         let attempts = [
             vec![("stream", "power"), ("duration", "60")],
             vec![("stream", "power"), ("distance", "1000")],
@@ -528,68 +475,24 @@ impl IntervalsClient for ReqwestIntervalsClient {
 
         for params in attempts.iter() {
             let qp: Vec<(&str, &str)> = params.iter().map(|(k, v)| (*k, *v)).collect();
-            let resp = self
-                .client
-                .get(&url)
-                .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-                .query(&qp)
-                .send()
-                .await?;
+            let resp = self.get_request(&url).query(&qp).send().await?;
 
             if resp.status().is_success() {
                 return Ok(resp.json().await?);
             }
 
             if resp.status().as_u16() != 422 {
-                // Unexpected non-validation error -> return immediately
-                return Err(IntervalsError::Config(format!(
-                    "unexpected status: {}",
-                    resp.status()
-                )));
+                return Err(self.error_from_response(resp).await);
             }
-
-            // otherwise it's a 422 -> try next fallback
         }
 
-        // All fallbacks yielded 422 — attempt to detect available streams on the activity
+        // All fallbacks yielded 422 — attempt to detect available streams
         let streams_payload = self.get_activity_streams(activity_id, None).await;
         match streams_payload {
             Ok(json) => {
-                // extract the stream keys if present at json.streams
-                let mut available_streams: Vec<String> = Vec::new();
-                // Streams may be returned as:
-                // - top-level object with keys for each stream: { "time": [...], "power": [...] }
-                // - nested under "streams": { "streams": { "time": [...], "speed": [...] } }
-                // - array under "streams": { "streams": [ {"name": "power"}, {"name": "speed"} ] }
-                if let Some(sv) = json.get("streams") {
-                    if let Some(obj) = sv.as_object() {
-                        for k in obj.keys() {
-                            available_streams.push(k.clone());
-                        }
-                    } else if let Some(arr) = sv.as_array() {
-                        for item in arr.iter() {
-                            if let Some(obj) = item.as_object() {
-                                if let Some(name) = obj.get("name").and_then(|n| n.as_str()) {
-                                    available_streams.push(name.to_string());
-                                } else if let Some(t) = obj.get("type").and_then(|n| n.as_str()) {
-                                    available_streams.push(t.to_string());
-                                }
-                            }
-                        }
-                    }
-                } else if let Some(obj) = json.as_object() {
-                    // Top-level streams object: treat keys whose values are arrays/numbers as stream names
-                    for (k, v) in obj.iter() {
-                        if v.is_array() {
-                            available_streams.push(k.clone());
-                        }
-                    }
-                }
-
-                // candidate stream preference
+                let available_streams = extract_available_streams(&json);
                 let candidates = ["power", "speed", "pace", "distance", "hr", "watts"];
 
-                // Build ordered list: candidate matches first, then remaining available streams
                 let mut ordered_streams: Vec<String> = Vec::new();
                 for &cand in &candidates {
                     if available_streams.contains(&cand.to_string()) {
@@ -603,30 +506,21 @@ impl IntervalsClient for ReqwestIntervalsClient {
                 }
 
                 for cand in ordered_streams.iter() {
-                    // try duration then distance for each available stream
                     let param_sets = [
                         vec![("stream", cand.as_str()), ("duration", "60")],
                         vec![("stream", cand.as_str()), ("distance", "1000")],
                         vec![("stream", cand.as_str()), ("duration", "300")],
                     ];
-                    // Also try with `count=8` and without additional params in case upstream accepts defaults
                     let mut param_sets_extended: Vec<Vec<(&str, &str)>> = param_sets.to_vec();
                     param_sets_extended.push(vec![("stream", cand.as_str()), ("count", "8")]);
                     param_sets_extended.push(vec![("stream", cand.as_str())]);
 
                     for params in param_sets.iter().chain(param_sets_extended.iter()) {
                         let qp: Vec<(&str, &str)> = params.iter().map(|(k, v)| (*k, *v)).collect();
-                        let resp = self
-                            .client
-                            .get(&url)
-                            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-                            .query(&qp)
-                            .send()
-                            .await?;
+                        let resp = self.get_request(&url).query(&qp).send().await?;
                         if resp.status().is_success() {
                             return Ok(resp.json().await?);
                         }
-                        // for debugging, capture body on 422 or 404 and continue trying
                         let status_code = resp.status().as_u16();
                         if status_code == 422 || status_code == 404 {
                             if let Ok(text) = resp.text().await {
@@ -637,37 +531,23 @@ impl IntervalsClient for ReqwestIntervalsClient {
                                     params,
                                     text
                                 );
-                            } else {
-                                tracing::trace!(
-                                    "best-efforts returned {} for stream={} params={:?} (no body)",
-                                    status_code,
-                                    cand,
-                                    params
-                                );
                             }
                             continue;
                         }
-                        // Unexpected non-validation/non-404 error -> return immediately
-                        return Err(IntervalsError::Config(format!(
-                            "unexpected status: {}",
-                            resp.status()
-                        )));
+                        return Err(self.error_from_response(resp).await);
                     }
                 }
 
-                // nothing worked
-                Err(IntervalsError::Config("unexpected status: 422".into()))
+                Err(IntervalsError::InvalidInput(
+                    "no suitable best efforts parameters found".into(),
+                ))
             }
             Err(e) => {
-                // couldn't fetch streams — if upstream returned 404 Not Found then
-                // treat as "no streams" and return a config 422 to match the
-                // validation semantics (caller expects 422 when no suitable params).
-                if let IntervalsError::Config(msg) = &e
-                    && (msg.contains("404") || msg.to_lowercase().contains("not found"))
-                {
-                    return Err(IntervalsError::Config("unexpected status: 422".into()));
+                if let IntervalsError::NotFound(_) = &e {
+                    return Err(IntervalsError::InvalidInput(
+                        "activity has no streams".into(),
+                    ));
                 }
-                // otherwise return the original error
                 Err(e)
             }
         }
@@ -678,19 +558,7 @@ impl IntervalsClient for ReqwestIntervalsClient {
         activity_id: &str,
     ) -> Result<serde_json::Value, IntervalsError> {
         let url = format!("{}/api/v1/activity/{}", self.base_url, activity_id);
-        let resp = self
-            .client
-            .get(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            return Err(IntervalsError::Config(format!(
-                "unexpected status: {}",
-                resp.status()
-            )));
-        }
-        Ok(resp.json().await?)
+        self.execute_json(self.get_request(&url)).await
     }
 
     async fn search_activities(
@@ -699,7 +567,9 @@ impl IntervalsClient for ReqwestIntervalsClient {
         limit: Option<u32>,
     ) -> Result<Vec<crate::ActivitySummary>, IntervalsError> {
         if query.trim().is_empty() {
-            return Err(IntervalsError::Config("query must not be empty".into()));
+            return Err(IntervalsError::InvalidInput(
+                "query must not be empty".into(),
+            ));
         }
         let url = format!(
             "{}/api/v1/athlete/{}/activities/search",
@@ -710,21 +580,7 @@ impl IntervalsClient for ReqwestIntervalsClient {
             pairs.push(("limit", l.to_string()));
         }
         let qp: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (*k, v.as_str())).collect();
-        let resp = self
-            .client
-            .get(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .query(&qp)
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            return Err(IntervalsError::Config(format!(
-                "unexpected status: {}",
-                resp.status()
-            )));
-        }
-        let acts: Vec<crate::ActivitySummary> = resp.json().await?;
-        Ok(acts)
+        self.execute_json(self.get_request(&url).query(&qp)).await
     }
 
     async fn search_activities_full(
@@ -733,7 +589,9 @@ impl IntervalsClient for ReqwestIntervalsClient {
         limit: Option<u32>,
     ) -> Result<serde_json::Value, IntervalsError> {
         if query.trim().is_empty() {
-            return Err(IntervalsError::Config("query must not be empty".into()));
+            return Err(IntervalsError::InvalidInput(
+                "query must not be empty".into(),
+            ));
         }
         let url = format!(
             "{}/api/v1/athlete/{}/activities/search-full",
@@ -744,20 +602,7 @@ impl IntervalsClient for ReqwestIntervalsClient {
             pairs.push(("limit", l.to_string()));
         }
         let qp: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (*k, v.as_str())).collect();
-        let resp = self
-            .client
-            .get(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .query(&qp)
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            return Err(IntervalsError::Config(format!(
-                "unexpected status: {}",
-                resp.status()
-            )));
-        }
-        Ok(resp.json().await?)
+        self.execute_json(self.get_request(&url).query(&qp)).await
     }
 
     async fn get_activities_csv(&self) -> Result<String, IntervalsError> {
@@ -765,19 +610,7 @@ impl IntervalsClient for ReqwestIntervalsClient {
             "{}/api/v1/athlete/{}/activities.csv",
             self.base_url, self.athlete_id
         );
-        let resp = self
-            .client
-            .get(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            return Err(IntervalsError::Config(format!(
-                "unexpected status: {}",
-                resp.status()
-            )));
-        }
-        Ok(resp.text().await?)
+        self.execute_text(self.get_request(&url)).await
     }
 
     async fn update_activity(
@@ -786,20 +619,7 @@ impl IntervalsClient for ReqwestIntervalsClient {
         fields: &serde_json::Value,
     ) -> Result<serde_json::Value, IntervalsError> {
         let url = format!("{}/api/v1/activity/{}", self.base_url, activity_id);
-        let resp = self
-            .client
-            .put(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .json(fields)
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            return Err(IntervalsError::Config(format!(
-                "unexpected status: {}",
-                resp.status()
-            )));
-        }
-        Ok(resp.json().await?)
+        self.execute_json(self.put_request(&url).json(fields)).await
     }
 
     async fn download_activity_file(
@@ -819,17 +639,9 @@ impl IntervalsClient for ReqwestIntervalsClient {
         mut cancel_rx: tokio::sync::watch::Receiver<bool>,
     ) -> Result<Option<String>, IntervalsError> {
         let url = format!("{}/api/v1/activity/{}/file", self.base_url, activity_id);
-        let resp = self
-            .client
-            .get(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .send()
-            .await?;
+        let resp = self.get_request(&url).send().await?;
         if !resp.status().is_success() {
-            return Err(IntervalsError::Config(format!(
-                "unexpected status: {}",
-                resp.status()
-            )));
+            return Err(self.error_from_response(resp).await);
         }
 
         let total = resp
@@ -838,18 +650,17 @@ impl IntervalsClient for ReqwestIntervalsClient {
             .and_then(|v| v.to_str().ok())
             .and_then(|s| s.parse::<u64>().ok());
 
-        // If output_path provided, stream to file and send progress
         if let Some(path) = output_path {
             let mut stream = resp.bytes_stream();
             let mut file = tokio::fs::File::create(&path)
                 .await
                 .map_err(|e| IntervalsError::Config(e.to_string()))?;
             let mut downloaded: u64 = 0;
+
             loop {
                 let chunk = tokio::select! {
                     biased;
                     _ = cancel_rx.changed() => {
-                        // check cancel flag and return error if cancelled
                         if *cancel_rx.borrow() {
                             return Err(IntervalsError::Config("download cancelled".into()));
                         }
@@ -858,31 +669,29 @@ impl IntervalsClient for ReqwestIntervalsClient {
                     c = stream.next() => c,
                 };
 
-                let Some(chunk) = chunk else {
-                    break;
-                };
+                let Some(chunk) = chunk else { break };
 
                 let bytes = chunk.map_err(IntervalsError::Http)?;
                 file.write_all(&bytes)
                     .await
                     .map_err(|e| IntervalsError::Config(e.to_string()))?;
                 downloaded = downloaded.saturating_add(bytes.len() as u64);
-                // best-effort notify
+
                 let _ = progress_tx.try_send(crate::DownloadProgress {
                     bytes_downloaded: downloaded,
                     total_bytes: total,
                 });
-                // check cancellation
+
                 if *cancel_rx.borrow() {
                     return Err(IntervalsError::Config("download cancelled".into()));
                 }
             }
+
             file.sync_all()
                 .await
                 .map_err(|e| IntervalsError::Config(e.to_string()))?;
             Ok(Some(path.to_string_lossy().to_string()))
         } else {
-            // read into memory and send a single progress update
             let bytes = resp.bytes().await?;
             let len = bytes.len() as u64;
             let _ = progress_tx.try_send(crate::DownloadProgress {
@@ -913,19 +722,7 @@ impl IntervalsClient for ReqwestIntervalsClient {
 
     async fn get_gear_list(&self) -> Result<serde_json::Value, IntervalsError> {
         let url = format!("{}/api/v1/athlete/{}/gear", self.base_url, self.athlete_id);
-        let resp = self
-            .client
-            .get(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            return Err(IntervalsError::Config(format!(
-                "unexpected status: {}",
-                resp.status()
-            )));
-        }
-        Ok(resp.json().await?)
+        self.execute_json(self.get_request(&url)).await
     }
 
     async fn get_sport_settings(&self) -> Result<serde_json::Value, IntervalsError> {
@@ -933,19 +730,7 @@ impl IntervalsClient for ReqwestIntervalsClient {
             "{}/api/v1/athlete/{}/sport-settings",
             self.base_url, self.athlete_id
         );
-        let resp = self
-            .client
-            .get(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            return Err(IntervalsError::Config(format!(
-                "unexpected status: {}",
-                resp.status()
-            )));
-        }
-        Ok(resp.json().await?)
+        self.execute_json(self.get_request(&url)).await
     }
 
     async fn get_power_curves(
@@ -959,24 +744,10 @@ impl IntervalsClient for ReqwestIntervalsClient {
         );
         let mut pairs: Vec<(&str, String)> = vec![("type", Self::normalize_sport(sport))];
         if let Some(d) = days_back {
-            let curve = format!("{}d", d);
-            pairs.push(("curves", curve));
+            pairs.push(("curves", format!("{}d", d)));
         }
         let qp: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (*k, v.as_str())).collect();
-        let resp = self
-            .client
-            .get(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .query(&qp)
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            return Err(IntervalsError::Config(format!(
-                "unexpected status: {}",
-                resp.status()
-            )));
-        }
-        Ok(resp.json().await?)
+        self.execute_json(self.get_request(&url).query(&qp)).await
     }
 
     async fn get_gap_histogram(
@@ -987,38 +758,12 @@ impl IntervalsClient for ReqwestIntervalsClient {
             "{}/api/v1/activity/{}/gap-histogram",
             self.base_url, activity_id
         );
-        let resp = self
-            .client
-            .get(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            return Err(IntervalsError::Config(format!(
-                "unexpected status: {}",
-                resp.status()
-            )));
-        }
-        Ok(resp.json().await?)
+        self.execute_json(self.get_request(&url)).await
     }
-
-    // === Activities: Missing Methods ===
 
     async fn delete_activity(&self, activity_id: &str) -> Result<(), IntervalsError> {
         let url = format!("{}/api/v1/activity/{}", self.base_url, activity_id);
-        let resp = self
-            .client
-            .delete(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            return Err(IntervalsError::Config(format!(
-                "unexpected status: {}",
-                resp.status()
-            )));
-        }
-        Ok(())
+        self.execute_empty(self.delete_request(&url)).await
     }
 
     async fn get_activities_around(
@@ -1039,20 +784,7 @@ impl IntervalsClient for ReqwestIntervalsClient {
             pairs.push(("route_id", r.to_string()));
         }
         let qp: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (*k, v.as_str())).collect();
-        let resp = self
-            .client
-            .get(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .query(&qp)
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            return Err(IntervalsError::Config(format!(
-                "unexpected status: {}",
-                resp.status()
-            )));
-        }
-        Ok(resp.json().await?)
+        self.execute_json(self.get_request(&url).query(&qp)).await
     }
 
     async fn search_intervals(
@@ -1088,20 +820,8 @@ impl IntervalsClient for ReqwestIntervalsClient {
         if let Some(l) = limit {
             pairs.push(("limit", l.to_string()));
         }
-        let resp = self
-            .client
-            .get(&url)
-            .query(&pairs)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            return Err(IntervalsError::Config(format!(
-                "unexpected status: {}",
-                resp.status()
-            )));
-        }
-        Ok(resp.json().await?)
+        self.execute_json(self.get_request(&url).query(&pairs))
+            .await
     }
 
     async fn get_power_histogram(
@@ -1112,19 +832,7 @@ impl IntervalsClient for ReqwestIntervalsClient {
             "{}/api/v1/activity/{}/power-histogram",
             self.base_url, activity_id
         );
-        let resp = self
-            .client
-            .get(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            return Err(IntervalsError::Config(format!(
-                "unexpected status: {}",
-                resp.status()
-            )));
-        }
-        Ok(resp.json().await?)
+        self.execute_json(self.get_request(&url)).await
     }
 
     async fn get_hr_histogram(
@@ -1135,19 +843,7 @@ impl IntervalsClient for ReqwestIntervalsClient {
             "{}/api/v1/activity/{}/hr-histogram",
             self.base_url, activity_id
         );
-        let resp = self
-            .client
-            .get(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            return Err(IntervalsError::Config(format!(
-                "unexpected status: {}",
-                resp.status()
-            )));
-        }
-        Ok(resp.json().await?)
+        self.execute_json(self.get_request(&url)).await
     }
 
     async fn get_pace_histogram(
@@ -1158,44 +854,13 @@ impl IntervalsClient for ReqwestIntervalsClient {
             "{}/api/v1/activity/{}/pace-histogram",
             self.base_url, activity_id
         );
-        let resp = self
-            .client
-            .get(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            return Err(IntervalsError::Config(format!(
-                "unexpected status: {}",
-                resp.status()
-            )));
-        }
-        Ok(resp.json().await?)
+        self.execute_json(self.get_request(&url)).await
     }
-
-    // === Fitness Summary ===
 
     async fn get_fitness_summary(&self) -> Result<serde_json::Value, IntervalsError> {
-        // The API exposes fitness-related fields on the athlete object (GET /api/v1/athlete/{id}).
-        // Historically there was a dedicated /fitness endpoint; use the athlete endpoint to avoid 404s.
         let url = format!("{}/api/v1/athlete/{}", self.base_url, self.athlete_id);
-        let resp = self
-            .client
-            .get(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            return Err(IntervalsError::Config(format!(
-                "unexpected status: {}",
-                resp.status()
-            )));
-        }
-        // Return raw JSON so callers can extract fitness/form/tsb fields.
-        Ok(resp.json().await?)
+        self.execute_json(self.get_request(&url)).await
     }
-
-    // === Wellness ===
 
     async fn get_wellness(
         &self,
@@ -1205,27 +870,16 @@ impl IntervalsClient for ReqwestIntervalsClient {
             "{}/api/v1/athlete/{}/wellness",
             self.base_url, self.athlete_id
         );
-        let mut req = self
-            .client
-            .get(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()));
+        let mut req = self.get_request(&url);
         if let Some(d) = days_back {
-            let oldest = chrono::Utc::now()
-                .checked_sub_signed(chrono::Duration::days(d as i64))
+            let oldest = Utc::now()
+                .checked_sub_signed(Duration::days(d as i64))
                 .map(|dt| dt.format("%Y-%m-%d").to_string());
             if let Some(o) = oldest {
-                let qp = [("oldest", o)];
-                req = req.query(&qp);
+                req = req.query(&[("oldest", o)]);
             }
         }
-        let resp = req.send().await?;
-        if !resp.status().is_success() {
-            return Err(IntervalsError::Config(format!(
-                "unexpected status: {}",
-                resp.status()
-            )));
-        }
-        Ok(resp.json().await?)
+        self.execute_json(req).await
     }
 
     async fn get_wellness_for_date(&self, date: &str) -> Result<serde_json::Value, IntervalsError> {
@@ -1233,19 +887,7 @@ impl IntervalsClient for ReqwestIntervalsClient {
             "{}/api/v1/athlete/{}/wellness/{}",
             self.base_url, self.athlete_id, date
         );
-        let resp = self
-            .client
-            .get(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            return Err(IntervalsError::Config(format!(
-                "unexpected status: {}",
-                resp.status()
-            )));
-        }
-        Ok(resp.json().await?)
+        self.execute_json(self.get_request(&url)).await
     }
 
     async fn update_wellness(
@@ -1257,23 +899,8 @@ impl IntervalsClient for ReqwestIntervalsClient {
             "{}/api/v1/athlete/{}/wellness/{}",
             self.base_url, self.athlete_id, date
         );
-        let resp = self
-            .client
-            .put(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .json(data)
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            return Err(IntervalsError::Config(format!(
-                "unexpected status: {}",
-                resp.status()
-            )));
-        }
-        Ok(resp.json().await?)
+        self.execute_json(self.put_request(&url).json(data)).await
     }
-
-    // === Events/Calendar: Missing Methods ===
 
     async fn get_upcoming_workouts(
         &self,
@@ -1283,26 +910,11 @@ impl IntervalsClient for ReqwestIntervalsClient {
             "{}/api/v1/athlete/{}/events",
             self.base_url, self.athlete_id
         );
-        let newest = chrono::Utc::now()
-            .checked_add_signed(chrono::Duration::days(days_ahead.unwrap_or(14) as i64))
-            .map(|dt| dt.format("%Y-%m-%d").to_string())
-            .unwrap_or_default();
-        let oldest = chrono::Utc::now().format("%Y-%m-%d").to_string();
-        let pairs = [("oldest", oldest), ("newest", newest)];
-        let resp = self
-            .client
-            .get(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .query(&pairs)
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            return Err(IntervalsError::Config(format!(
-                "unexpected status: {}",
-                resp.status()
-            )));
+        let mut req = self.get_request(&url);
+        if let Some(d) = days_ahead {
+            req = req.query(&[("days_ahead", d.to_string())]);
         }
-        Ok(resp.json().await?)
+        self.execute_json(req).await
     }
 
     async fn update_event(
@@ -1314,20 +926,7 @@ impl IntervalsClient for ReqwestIntervalsClient {
             "{}/api/v1/athlete/{}/events/{}",
             self.base_url, self.athlete_id, event_id
         );
-        let resp = self
-            .client
-            .put(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .json(fields)
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            return Err(IntervalsError::Config(format!(
-                "unexpected status: {}",
-                resp.status()
-            )));
-        }
-        Ok(resp.json().await?)
+        self.execute_json(self.put_request(&url).json(fields)).await
     }
 
     async fn bulk_delete_events(&self, event_ids: Vec<String>) -> Result<(), IntervalsError> {
@@ -1335,25 +934,16 @@ impl IntervalsClient for ReqwestIntervalsClient {
             "{}/api/v1/athlete/{}/events/bulk-delete",
             self.base_url, self.athlete_id
         );
-        let payload: Vec<serde_json::Value> = event_ids
+        // API expects array of objects with id field
+        let body: Vec<serde_json::Value> = event_ids
             .into_iter()
             .map(|id| serde_json::json!({ "id": id }))
             .collect();
-
-        let resp = self
-            .client
-            .put(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .json(&payload)
-            .send()
-            .await?;
-
+        let resp = self.put_request(&url).json(&body).send().await?;
         if !resp.status().is_success() {
-            return Err(IntervalsError::Config(format!(
-                "unexpected status: {}",
-                resp.status()
-            )));
+            return Err(self.error_from_response(resp).await);
         }
+        // Response body is ignored (API may return success indicator)
         Ok(())
     }
 
@@ -1367,29 +957,19 @@ impl IntervalsClient for ReqwestIntervalsClient {
             "{}/api/v1/athlete/{}/duplicate-events",
             self.base_url, self.athlete_id
         );
-        let payload = serde_json::json!({
-            "eventIds": [event_id],
-            "numCopies": num_copies.unwrap_or(1),
-            "weeksBetween": weeks_between.unwrap_or(1),
+        let mut body = serde_json::json!({
+            "eventIds": [event_id]
         });
-
-        let resp = self
-            .client
-            .post(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .json(&payload)
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            return Err(IntervalsError::Config(format!(
-                "unexpected status: {}",
-                resp.status()
-            )));
+        if let Some(obj) = body.as_object_mut() {
+            if let Some(n) = num_copies {
+                obj.insert("numCopies".to_string(), serde_json::json!(n));
+            }
+            if let Some(w) = weeks_between {
+                obj.insert("weeksBetween".to_string(), serde_json::json!(w));
+            }
         }
-        Ok(resp.json().await?)
+        self.execute_json(self.post_request(&url).json(&body)).await
     }
-
-    // === Performance Curves ===
 
     async fn get_hr_curves(
         &self,
@@ -1400,25 +980,12 @@ impl IntervalsClient for ReqwestIntervalsClient {
             "{}/api/v1/athlete/{}/hr-curves",
             self.base_url, self.athlete_id
         );
-        let mut pairs: Vec<(&str, String)> = vec![("type", sport.to_string())];
+        let mut pairs: Vec<(&str, String)> = vec![("type", Self::normalize_sport(sport))];
         if let Some(d) = days_back {
-            let curve = format!("{}d", d);
-            pairs.push(("curves", curve));
+            pairs.push(("curves", format!("{}d", d)));
         }
-        let resp = self
-            .client
-            .get(&url)
-            .query(&pairs)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            return Err(IntervalsError::Config(format!(
-                "unexpected status: {}",
-                resp.status()
-            )));
-        }
-        Ok(resp.json().await?)
+        let qp: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        self.execute_json(self.get_request(&url).query(&qp)).await
     }
 
     async fn get_pace_curves(
@@ -1430,47 +997,20 @@ impl IntervalsClient for ReqwestIntervalsClient {
             "{}/api/v1/athlete/{}/pace-curves",
             self.base_url, self.athlete_id
         );
-        let mut pairs: Vec<(&str, String)> = vec![("type", sport.to_string())];
+        let mut pairs: Vec<(&str, String)> = vec![("type", Self::normalize_sport(sport))];
         if let Some(d) = days_back {
-            let curve = format!("{}d", d);
-            pairs.push(("curves", curve));
+            pairs.push(("curves", format!("{}d", d)));
         }
-        let resp = self
-            .client
-            .get(&url)
-            .query(&pairs)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            return Err(IntervalsError::Config(format!(
-                "unexpected status: {}",
-                resp.status()
-            )));
-        }
-        Ok(resp.json().await?)
+        let qp: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        self.execute_json(self.get_request(&url).query(&qp)).await
     }
-
-    // === Workout Library ===
 
     async fn get_workout_library(&self) -> Result<serde_json::Value, IntervalsError> {
         let url = format!(
             "{}/api/v1/athlete/{}/folders",
             self.base_url, self.athlete_id
         );
-        let resp = self
-            .client
-            .get(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            return Err(IntervalsError::Config(format!(
-                "unexpected status: {}",
-                resp.status()
-            )));
-        }
-        Ok(resp.json().await?)
+        self.execute_json(self.get_request(&url)).await
     }
 
     async fn get_workouts_in_folder(
@@ -1481,38 +1021,35 @@ impl IntervalsClient for ReqwestIntervalsClient {
             "{}/api/v1/athlete/{}/workouts",
             self.base_url, self.athlete_id
         );
-        let resp = self
-            .client
-            .get(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .send()
+        let result = self
+            .execute_json::<serde_json::Value>(self.get_request(&url))
             .await?;
-        if !resp.status().is_success() {
-            return Err(IntervalsError::Config(format!(
-                "unexpected status: {}",
-                resp.status()
-            )));
-        }
-        let workouts: serde_json::Value = resp.json().await?;
+
+        // Client-side filtering when folder_id is provided
         if folder_id.is_empty() {
-            return Ok(workouts);
+            return Ok(result);
         }
 
-        let target_id = folder_id.parse::<i64>().ok();
-        if let Some(arr) = workouts.as_array() {
+        if let Some(arr) = result.as_array() {
             let filtered: Vec<serde_json::Value> = arr
                 .iter()
-                .filter(|item| match (target_id, item.get("folder_id")) {
-                    (Some(fid), Some(val)) => val.as_i64() == Some(fid),
-                    (_, Some(val)) => val.as_str() == Some(folder_id),
-                    _ => false,
+                .filter(|item| {
+                    item.get("folder_id")
+                        .and_then(|v| {
+                            // Handle both string and numeric folder_id
+                            v.as_str()
+                                .map(|s| s.to_string())
+                                .or_else(|| v.as_i64().map(|i| i.to_string()))
+                        })
+                        .map(|s| s == folder_id)
+                        .unwrap_or(false)
                 })
                 .cloned()
                 .collect();
-            return Ok(serde_json::Value::Array(filtered));
+            Ok(serde_json::Value::Array(filtered))
+        } else {
+            Ok(result)
         }
-
-        Ok(workouts)
     }
 
     async fn create_folder(
@@ -1523,20 +1060,8 @@ impl IntervalsClient for ReqwestIntervalsClient {
             "{}/api/v1/athlete/{}/folders",
             self.base_url, self.athlete_id
         );
-        let resp = self
-            .client
-            .post(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .json(folder)
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            return Err(IntervalsError::Config(format!(
-                "unexpected status: {}",
-                resp.status()
-            )));
-        }
-        Ok(resp.json().await?)
+        self.execute_json(self.post_request(&url).json(folder))
+            .await
     }
 
     async fn update_folder(
@@ -1548,20 +1073,7 @@ impl IntervalsClient for ReqwestIntervalsClient {
             "{}/api/v1/athlete/{}/folders/{}",
             self.base_url, self.athlete_id, folder_id
         );
-        let resp = self
-            .client
-            .put(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .json(fields)
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            return Err(IntervalsError::Config(format!(
-                "unexpected status: {}",
-                resp.status()
-            )));
-        }
-        Ok(resp.json().await?)
+        self.execute_json(self.put_request(&url).json(fields)).await
     }
 
     async fn delete_folder(&self, folder_id: &str) -> Result<(), IntervalsError> {
@@ -1569,42 +1081,15 @@ impl IntervalsClient for ReqwestIntervalsClient {
             "{}/api/v1/athlete/{}/folders/{}",
             self.base_url, self.athlete_id, folder_id
         );
-        let resp = self
-            .client
-            .delete(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            return Err(IntervalsError::Config(format!(
-                "unexpected status: {}",
-                resp.status()
-            )));
-        }
-        Ok(())
+        self.execute_empty(self.delete_request(&url)).await
     }
-
-    // === Gear Management ===
 
     async fn create_gear(
         &self,
         gear: &serde_json::Value,
     ) -> Result<serde_json::Value, IntervalsError> {
         let url = format!("{}/api/v1/athlete/{}/gear", self.base_url, self.athlete_id);
-        let resp = self
-            .client
-            .post(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .json(gear)
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            return Err(IntervalsError::Config(format!(
-                "unexpected status: {}",
-                resp.status()
-            )));
-        }
-        Ok(resp.json().await?)
+        self.execute_json(self.post_request(&url).json(gear)).await
     }
 
     async fn update_gear(
@@ -1616,20 +1101,7 @@ impl IntervalsClient for ReqwestIntervalsClient {
             "{}/api/v1/athlete/{}/gear/{}",
             self.base_url, self.athlete_id, gear_id
         );
-        let resp = self
-            .client
-            .put(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .json(fields)
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            return Err(IntervalsError::Config(format!(
-                "unexpected status: {}",
-                resp.status()
-            )));
-        }
-        Ok(resp.json().await?)
+        self.execute_json(self.put_request(&url).json(fields)).await
     }
 
     async fn delete_gear(&self, gear_id: &str) -> Result<(), IntervalsError> {
@@ -1637,19 +1109,7 @@ impl IntervalsClient for ReqwestIntervalsClient {
             "{}/api/v1/athlete/{}/gear/{}",
             self.base_url, self.athlete_id, gear_id
         );
-        let resp = self
-            .client
-            .delete(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            return Err(IntervalsError::Config(format!(
-                "unexpected status: {}",
-                resp.status()
-            )));
-        }
-        Ok(())
+        self.execute_empty(self.delete_request(&url)).await
     }
 
     async fn create_gear_reminder(
@@ -1658,23 +1118,11 @@ impl IntervalsClient for ReqwestIntervalsClient {
         reminder: &serde_json::Value,
     ) -> Result<serde_json::Value, IntervalsError> {
         let url = format!(
-            "{}/api/v1/athlete/{}/gear/{}/reminder",
+            "{}/api/v1/athlete/{}/gear/{}/reminders",
             self.base_url, self.athlete_id, gear_id
         );
-        let resp = self
-            .client
-            .post(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .json(reminder)
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            return Err(IntervalsError::Config(format!(
-                "unexpected status: {}",
-                resp.status()
-            )));
-        }
-        Ok(resp.json().await?)
+        self.execute_json(self.post_request(&url).json(reminder))
+            .await
     }
 
     async fn update_gear_reminder(
@@ -1689,28 +1137,13 @@ impl IntervalsClient for ReqwestIntervalsClient {
             "{}/api/v1/athlete/{}/gear/{}/reminder/{}",
             self.base_url, self.athlete_id, gear_id, reminder_id
         );
-        let pairs = [
+        let pairs = vec![
             ("reset", reset.to_string()),
             ("snoozeDays", snooze_days.to_string()),
         ];
-        let resp = self
-            .client
-            .put(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .query(&pairs)
-            .json(fields)
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            return Err(IntervalsError::Config(format!(
-                "unexpected status: {}",
-                resp.status()
-            )));
-        }
-        Ok(resp.json().await?)
+        self.execute_json(self.put_request(&url).query(&pairs).json(fields))
+            .await
     }
-
-    // === Sport Settings Management ===
 
     async fn update_sport_settings(
         &self,
@@ -1723,21 +1156,8 @@ impl IntervalsClient for ReqwestIntervalsClient {
             self.base_url, self.athlete_id, sport_type
         );
         let pairs = [("recalcHrZones", recalc_hr_zones.to_string())];
-        let resp = self
-            .client
-            .put(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .query(&pairs)
-            .json(fields)
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            return Err(IntervalsError::Config(format!(
-                "unexpected status: {}",
-                resp.status()
-            )));
-        }
-        Ok(resp.json().await?)
+        self.execute_json(self.put_request(&url).query(&pairs).json(fields))
+            .await
     }
 
     async fn apply_sport_settings(
@@ -1748,20 +1168,7 @@ impl IntervalsClient for ReqwestIntervalsClient {
             "{}/api/v1/athlete/{}/sport-settings/{}/apply",
             self.base_url, self.athlete_id, sport_type
         );
-        // Per API spec this is a PUT endpoint (apply settings). Use PUT to avoid 405 errors.
-        let resp = self
-            .client
-            .put(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            return Err(IntervalsError::Config(format!(
-                "unexpected status: {}",
-                resp.status()
-            )));
-        }
-        Ok(resp.json().await?)
+        self.execute_json(self.put_request(&url)).await
     }
 
     async fn create_sport_settings(
@@ -1772,20 +1179,8 @@ impl IntervalsClient for ReqwestIntervalsClient {
             "{}/api/v1/athlete/{}/sport-settings",
             self.base_url, self.athlete_id
         );
-        let resp = self
-            .client
-            .post(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .json(settings)
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            return Err(IntervalsError::Config(format!(
-                "unexpected status: {}",
-                resp.status()
-            )));
-        }
-        Ok(resp.json().await?)
+        self.execute_json(self.post_request(&url).json(settings))
+            .await
     }
 
     async fn delete_sport_settings(&self, sport_type: &str) -> Result<(), IntervalsError> {
@@ -1793,18 +1188,76 @@ impl IntervalsClient for ReqwestIntervalsClient {
             "{}/api/v1/athlete/{}/sport-settings/{}",
             self.base_url, self.athlete_id, sport_type
         );
-        let resp = self
-            .client
-            .delete(&url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            return Err(IntervalsError::Config(format!(
-                "unexpected status: {}",
-                resp.status()
-            )));
+        self.execute_empty(self.delete_request(&url)).await
+    }
+}
+
+/// Extract available stream names from a JSON response.
+fn extract_available_streams(json: &serde_json::Value) -> Vec<String> {
+    let mut available_streams = Vec::new();
+
+    if let Some(sv) = json.get("streams") {
+        if let Some(obj) = sv.as_object() {
+            available_streams.extend(obj.keys().cloned());
+        } else if let Some(arr) = sv.as_array() {
+            for item in arr.iter() {
+                if let Some(obj) = item.as_object() {
+                    if let Some(name) = obj.get("name").and_then(|n| n.as_str()) {
+                        available_streams.push(name.to_string());
+                    } else if let Some(t) = obj.get("type").and_then(|n| n.as_str()) {
+                        available_streams.push(t.to_string());
+                    }
+                }
+            }
         }
-        Ok(())
+    } else if let Some(obj) = json.as_object() {
+        for (k, v) in obj.iter() {
+            if v.is_array() {
+                available_streams.push(k.clone());
+            }
+        }
+    }
+
+    available_streams
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::http_client::ReqwestIntervalsClient;
+    use secrecy::SecretString;
+
+    #[tokio::test]
+    async fn client_new_and_basic() {
+        let client =
+            ReqwestIntervalsClient::new("http://localhost", "ath", SecretString::new("key".into()));
+        let _ = client;
+    }
+
+    #[test]
+    fn normalize_sport_capitalizes_correctly() {
+        assert_eq!(ReqwestIntervalsClient::normalize_sport("run"), "Run");
+        assert_eq!(ReqwestIntervalsClient::normalize_sport("RIDE"), "Ride");
+        assert_eq!(
+            ReqwestIntervalsClient::normalize_sport("MountainBikeRide"),
+            "MountainBikeRide"
+        );
+    }
+
+    #[test]
+    fn normalize_event_start_accepts_date_only() {
+        let result = ReqwestIntervalsClient::normalize_event_start("2025-12-15");
+        assert_eq!(result.unwrap(), "2025-12-15T00:00:00");
+    }
+
+    #[test]
+    fn normalize_event_start_preserves_datetime() {
+        let result = ReqwestIntervalsClient::normalize_event_start("2025-12-15T10:30:00");
+        assert_eq!(result.unwrap(), "2025-12-15T10:30:00");
+    }
+
+    #[test]
+    fn normalize_event_start_rejects_invalid() {
+        let result = ReqwestIntervalsClient::normalize_event_start("not-a-date");
+        assert!(result.is_err());
     }
 }

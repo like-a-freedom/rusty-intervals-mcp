@@ -22,12 +22,56 @@ pub struct BestEffortsOptions {
     pub end_index: Option<i32>,
 }
 
+/// Error types for Intervals.icu API operations.
 #[derive(Debug, Error)]
 pub enum IntervalsError {
-    #[error("http error: {0}")]
+    /// HTTP client or network error.
+    #[error("HTTP error: {0}")]
     Http(#[from] reqwest::Error),
+
+    /// Configuration error (missing env vars, invalid settings).
     #[error("configuration error: {0}")]
     Config(String),
+
+    /// API returned an unexpected status code.
+    #[error("API error: status {status}, message: {message}")]
+    Api { status: u16, message: String },
+
+    /// Failed to parse API response.
+    #[error("JSON decode error: {0}")]
+    JsonDecode(#[from] serde_json::Error),
+
+    /// Invalid input provided by the caller.
+    #[error("invalid input: {0}")]
+    InvalidInput(String),
+
+    /// Resource not found.
+    #[error("resource not found: {0}")]
+    NotFound(String),
+
+    /// Authentication or authorization failed.
+    #[error("authentication error: {0}")]
+    Auth(String),
+}
+
+impl IntervalsError {
+    /// Create an API error from a response status and body.
+    pub fn from_status(status: u16, body: impl Into<String>) -> Self {
+        Self::Api {
+            status,
+            message: body.into(),
+        }
+    }
+
+    /// Check if this error represents a 404 Not Found response.
+    pub fn is_not_found(&self) -> bool {
+        matches!(self, Self::Api { status: 404, .. })
+    }
+
+    /// Check if this error represents a 422 Unprocessable Entity response.
+    pub fn is_validation_error(&self) -> bool {
+        matches!(self, Self::Api { status: 422, .. })
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
