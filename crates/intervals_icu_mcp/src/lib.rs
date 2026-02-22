@@ -160,16 +160,6 @@ impl IntervalsMcpHandler {
         domains::events::compact_events(events, compact, fields)
     }
 
-    // Shared helper: normalize date-only strings to YYYY-MM-DD. Accepts YYYY-MM-DD, RFC3339, or naive YYYY-MM-DDTHH:MM:SS
-    fn normalize_date_str(s: &str) -> Option<String> {
-        domains::events::normalize_date_str(s)
-    }
-
-    // Normalize start_date_local for events: return ISO datetime. Keep provided time; if only a date is given, set time to 00:00:00.
-    fn normalize_event_start(s: &str) -> Option<String> {
-        domains::events::normalize_event_start(s)
-    }
-
     #[tool(
         name = "create_event",
         description = "Create calendar event. Params: event fields (name, start_date_local, category), compact (default true), fields (filter response)."
@@ -1081,46 +1071,21 @@ impl IntervalsMcpHandler {
             e.to_string()
         })?;
 
-        match &v {
-            serde_json::Value::Array(a) => {
-                tracing::info!(
-                    "get_fitness_summary: raw response is array with {} elements",
-                    a.len()
-                );
-                if a.is_empty() {
-                    tracing::warn!(
-                        "get_fitness_summary: API returned empty array - no fitness data available"
-                    );
-                }
-            }
-            serde_json::Value::Object(o) => {
-                let keys: Vec<_> = o.keys().collect();
-                tracing::info!(
-                    "get_fitness_summary: raw response is object with {} keys: {:?}",
-                    keys.len(),
-                    keys
-                );
-            }
-            _ => {
-                tracing::info!("get_fitness_summary: raw response type={:?}", v);
-            }
+        if v.as_array().is_some_and(|a| a.is_empty()) {
+            tracing::warn!(
+                "get_fitness_summary: API returned empty array - no fitness data available"
+            );
         }
-        tracing::info!("get_fitness_summary: raw response={}", v);
 
         // Apply compact mode
         let result = if p.compact.unwrap_or(true) {
-            tracing::info!("get_fitness_summary: using compact mode");
-            Self::compact_fitness_summary(&v, p.fields.as_deref())
+            domains::fitness::compact_fitness_summary(&v, p.fields.as_deref())
         } else if let Some(ref fields) = p.fields {
-            tracing::info!("get_fitness_summary: using filter_fields mode");
             Self::filter_fields(&v, fields)
         } else {
-            tracing::info!("get_fitness_summary: using non-compact mode");
-            // Non-compact mode: return first element from array (most recent day)
-            // or the whole value if it's not an array
+            // Non-compact: return first element from array (most recent day)
             if let Some(arr) = v.as_array() {
                 if arr.is_empty() {
-                    tracing::warn!("get_fitness_summary: empty array, returning empty object");
                     serde_json::json!({})
                 } else {
                     arr.first().cloned().unwrap_or(v)
@@ -1130,17 +1095,7 @@ impl IntervalsMcpHandler {
             }
         };
 
-        tracing::info!("get_fitness_summary: result={}", result);
-
         Ok(Json(ObjectResult { value: result }))
-    }
-
-    /// Compact fitness summary to essential fields
-    fn compact_fitness_summary(
-        value: &serde_json::Value,
-        fields: Option<&[String]>,
-    ) -> serde_json::Value {
-        domains::fitness::compact_fitness_summary(value, fields)
     }
 
     // === Wellness ===
@@ -1185,7 +1140,7 @@ impl IntervalsMcpHandler {
         let p = params.0;
         let mut date = p.date.clone();
         // accept YYYY-MM-DD or ISO datetimes; normalize to YYYY-MM-DD
-        date = match Self::normalize_date_str(&date) {
+        date = match domains::events::normalize_date_str(&date) {
             Some(s) => s,
             None => return Err(format!("invalid date: {}", p.date)),
         };
@@ -1225,7 +1180,7 @@ impl IntervalsMcpHandler {
     ) -> Result<Json<ObjectResult>, String> {
         let p = params.0;
         let mut date = p.date.clone();
-        date = match Self::normalize_date_str(&date) {
+        date = match domains::events::normalize_date_str(&date) {
             Some(s) => s,
             None => return Err(format!("invalid date: {}", p.date)),
         };
@@ -1291,7 +1246,7 @@ impl IntervalsMcpHandler {
             && let Some(val) = obj.get("start_date_local")
             && let Some(s) = val.as_str()
         {
-            let s2 = match Self::normalize_event_start(s) {
+            let s2 = match domains::events::normalize_event_start(s) {
                 Some(s2) => s2,
                 None => return Err(format!("invalid start_date_local: {}", s)),
             };
@@ -6454,44 +6409,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn normalize_date_str_accepts_known_formats() {
-        // Directly exercise the new helper to ensure consistent behavior
-        assert_eq!(
-            IntervalsMcpHandler::normalize_date_str("2026-01-19").unwrap(),
-            "2026-01-19"
-        );
-        assert_eq!(
-            IntervalsMcpHandler::normalize_date_str("2026-01-19T06:30:00Z").unwrap(),
-            "2026-01-19"
-        );
-        assert_eq!(
-            IntervalsMcpHandler::normalize_date_str("2026-01-19T06:30:00").unwrap(),
-            "2026-01-19"
-        );
-        assert!(IntervalsMcpHandler::normalize_date_str("not-a-date").is_none());
-    }
-
-    #[test]
-    fn normalize_event_start_accepts_known_formats() {
-        // Test date-only format
-        assert_eq!(
-            IntervalsMcpHandler::normalize_event_start("2026-01-19").unwrap(),
-            "2026-01-19T00:00:00"
-        );
-        // Test RFC3339 format
-        assert_eq!(
-            IntervalsMcpHandler::normalize_event_start("2026-01-19T06:30:00Z").unwrap(),
-            "2026-01-19T06:30:00"
-        );
-        // Test naive datetime format
-        assert_eq!(
-            IntervalsMcpHandler::normalize_event_start("2026-01-19T06:30:00").unwrap(),
-            "2026-01-19T06:30:00"
-        );
-        // Test invalid format
-        assert!(IntervalsMcpHandler::normalize_event_start("not-a-date").is_none());
-    }
+    // normalize_date_str and normalize_event_start are tested in domains::events::tests
 
     #[tokio::test]
     async fn process_webhook_happy_and_duplicate_paths() {
