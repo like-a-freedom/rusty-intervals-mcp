@@ -14,23 +14,18 @@ pub fn compact_events(
         return events
             .into_iter()
             .map(|e| {
-                let mut obj = Map::new();
-                if let Some(_val) = serde_json::to_value(&e)
-                    .ok()
-                    .and_then(|v| v.as_object().cloned())
-                {
-                    if let Some(filter) = fields {
+                let serialized = serde_json::to_value(&e).unwrap_or_default();
+                match (fields, serialized.as_object()) {
+                    (Some(filter), Some(obj)) => {
+                        let mut result = Map::new();
                         for field in filter {
-                            if let Some(v) = obj.get(field) {
-                                obj.insert(field.clone(), v.clone());
+                            if let Some(val) = obj.get(field) {
+                                result.insert(field.clone(), val.clone());
                             }
                         }
-                        Value::Object(obj)
-                    } else {
-                        Value::Object(obj)
+                        Value::Object(result)
                     }
-                } else {
-                    serde_json::to_value(e).unwrap_or_default()
+                    _ => serialized,
                 }
             })
             .collect();
@@ -246,9 +241,48 @@ mod tests {
     }
 
     #[test]
+    fn normalize_date_str_accepts_rfc3339() {
+        assert_eq!(
+            normalize_date_str("2026-01-19T06:30:00Z").unwrap(),
+            "2026-01-19"
+        );
+    }
+
+    #[test]
+    fn normalize_date_str_accepts_date_only() {
+        assert_eq!(normalize_date_str("2026-01-19").unwrap(), "2026-01-19");
+    }
+
+    #[test]
+    fn normalize_date_str_rejects_invalid() {
+        assert!(normalize_date_str("not-a-date").is_none());
+    }
+
+    #[test]
     fn normalize_event_start_expands_date() {
         let normalized = normalize_event_start("2026-01-19").unwrap();
         assert_eq!(normalized, "2026-01-19T00:00:00");
+    }
+
+    #[test]
+    fn normalize_event_start_preserves_time_rfc3339() {
+        assert_eq!(
+            normalize_event_start("2026-01-19T06:30:00Z").unwrap(),
+            "2026-01-19T06:30:00"
+        );
+    }
+
+    #[test]
+    fn normalize_event_start_preserves_naive_datetime() {
+        assert_eq!(
+            normalize_event_start("2026-01-19T06:30:00").unwrap(),
+            "2026-01-19T06:30:00"
+        );
+    }
+
+    #[test]
+    fn normalize_event_start_rejects_invalid() {
+        assert!(normalize_event_start("not-a-date").is_none());
     }
 
     #[test]
@@ -284,19 +318,169 @@ mod tests {
     }
 
     #[test]
-    fn validate_and_prepare_event_rejects_invalid_start_date() {
+    fn validate_and_prepare_event_rejects_unknown_category() {
         let ev = intervals_icu_client::Event {
             id: None,
-            start_date_local: "not-a-date".into(),
+            start_date_local: "2026-01-19".into(),
             name: "Test".into(),
-            category: intervals_icu_client::EventCategory::Note,
+            category: intervals_icu_client::EventCategory::Unknown,
             description: None,
             r#type: None,
         };
+        assert_eq!(
+            validate_and_prepare_event(ev),
+            Err(EventValidationError::UnknownCategory)
+        );
+    }
 
-        match validate_and_prepare_event(ev) {
-            Err(EventValidationError::InvalidStartDate(s)) => assert_eq!(s, "not-a-date"),
-            other => panic!("unexpected result: {:?}", other),
+    // ── compact_events ──────────────────────────────────────────────────────
+
+    fn make_event(id: &str, name: &str) -> intervals_icu_client::Event {
+        intervals_icu_client::Event {
+            id: Some(id.to_string()),
+            start_date_local: "2026-03-01".into(),
+            name: name.into(),
+            category: intervals_icu_client::EventCategory::Note,
+            description: Some("desc".into()),
+            r#type: None,
         }
+    }
+
+    #[test]
+    fn compact_events_compact_mode_uses_default_fields() {
+        let events = vec![make_event("e1", "My Event")];
+        let result = compact_events(events, true, None);
+        assert_eq!(result.len(), 1);
+        let obj = result[0].as_object().unwrap();
+        assert_eq!(obj.get("id").and_then(|v| v.as_str()), Some("e1"));
+        assert_eq!(
+            obj.get("start_date_local").and_then(|v| v.as_str()),
+            Some("2026-03-01")
+        );
+        assert_eq!(obj.get("name").and_then(|v| v.as_str()), Some("My Event"));
+        // description is not in default compact fields
+        assert!(obj.get("description").is_none());
+    }
+
+    #[test]
+    fn compact_events_non_compact_returns_all_fields() {
+        let events = vec![make_event("e2", "Full Event")];
+        let result = compact_events(events, false, None);
+        assert_eq!(result.len(), 1);
+        let obj = result[0].as_object().unwrap();
+        assert_eq!(obj.get("id").and_then(|v| v.as_str()), Some("e2"));
+        // description should be present in non-compact mode
+        assert_eq!(
+            obj.get("description").and_then(|v| v.as_str()),
+            Some("desc")
+        );
+    }
+
+    #[test]
+    fn compact_events_non_compact_with_fields_filters() {
+        let events = vec![make_event("e3", "Filtered")];
+        let fields = vec!["id".to_string(), "name".to_string()];
+        let result = compact_events(events, false, Some(&fields));
+        assert_eq!(result.len(), 1);
+        let obj = result[0].as_object().unwrap();
+        assert_eq!(obj.get("id").and_then(|v| v.as_str()), Some("e3"));
+        assert_eq!(obj.get("name").and_then(|v| v.as_str()), Some("Filtered"));
+        // description was serializable but not in filter
+        assert!(obj.get("description").is_none());
+    }
+
+    // ── compact_single_event ────────────────────────────────────────────────
+
+    #[test]
+    fn compact_single_event_default_fields() {
+        let ev = make_event("e4", "Single");
+        let result = compact_single_event(&ev, None);
+        let obj = result.as_object().unwrap();
+        assert_eq!(obj.get("id").and_then(|v| v.as_str()), Some("e4"));
+        assert_eq!(obj.get("name").and_then(|v| v.as_str()), Some("Single"));
+        // description is in the single-event default fields
+        assert_eq!(
+            obj.get("description").and_then(|v| v.as_str()),
+            Some("desc")
+        );
+    }
+
+    #[test]
+    fn compact_single_event_custom_fields() {
+        let ev = make_event("e5", "Custom");
+        let fields = vec!["id".to_string()];
+        let result = compact_single_event(&ev, Some(&fields));
+        let obj = result.as_object().unwrap();
+        assert_eq!(obj.get("id").and_then(|v| v.as_str()), Some("e5"));
+        assert!(obj.get("name").is_none());
+    }
+
+    // ── compact_json_event ──────────────────────────────────────────────────
+
+    #[test]
+    fn compact_json_event_default_fields() {
+        use serde_json::json;
+        let input = json!({
+            "id": "e6",
+            "name": "JSON Event",
+            "start_date_local": "2026-03-01",
+            "category": "NOTE",
+            "type": null,
+            "description": "some desc",
+            "extra_field": 42
+        });
+        let result = compact_json_event(&input, None);
+        let obj = result.as_object().unwrap();
+        assert_eq!(obj.get("id").and_then(|v| v.as_str()), Some("e6"));
+        assert_eq!(obj.get("name").and_then(|v| v.as_str()), Some("JSON Event"));
+        assert!(obj.get("extra_field").is_none());
+    }
+
+    #[test]
+    fn compact_json_event_non_object_returned_as_is() {
+        use serde_json::json;
+        let input = json!("not an object");
+        let result = compact_json_event(&input, None);
+        assert_eq!(result, input);
+    }
+
+    // ── compact_events_from_value ───────────────────────────────────────────
+
+    #[test]
+    fn compact_events_from_value_compact_limits_and_filters() {
+        use serde_json::json;
+        let input = json!([
+            {"id": "x1", "name": "A", "start_date_local": "2026-03-01",
+             "category": "NOTE", "extra": 1},
+            {"id": "x2", "name": "B", "start_date_local": "2026-03-02",
+             "category": "NOTE", "extra": 2},
+            {"id": "x3", "name": "C", "start_date_local": "2026-03-03",
+             "category": "NOTE", "extra": 3}
+        ]);
+        let result = compact_events_from_value(&input, true, 2, None);
+        let arr = result.as_array().unwrap();
+        assert_eq!(arr.len(), 2, "limit=2 crops to 2 items");
+        assert!(
+            arr[0].get("extra").is_none(),
+            "extra stripped in compact mode"
+        );
+        assert_eq!(arr[0].get("id").and_then(|v| v.as_str()), Some("x1"));
+    }
+
+    #[test]
+    fn compact_events_from_value_non_compact_returns_all() {
+        use serde_json::json;
+        let input = json!([
+            {"id": "y1", "name": "Z", "start_date_local": "2026-04-01",
+             "category": "NOTE", "extra": 99}
+        ]);
+        let result = compact_events_from_value(&input, false, 10, None);
+        let arr = result.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(
+            arr[0].get("extra").and_then(|v| v.as_i64()),
+            Some(99),
+            "extra preserved in non-compact mode"
+        );
     }
 }

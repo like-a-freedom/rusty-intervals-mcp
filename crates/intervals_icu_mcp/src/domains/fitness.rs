@@ -1,5 +1,5 @@
 use serde_json::Value;
-use tracing::{debug, info};
+use tracing::debug;
 
 fn normalize_field_name(field: &str) -> String {
     field
@@ -47,52 +47,31 @@ fn candidate_keys(field: &str) -> Vec<&str> {
 pub fn compact_fitness_summary(value: &Value, fields: Option<&[String]>) -> Value {
     let default_fields = ["fitness", "fatigue", "form", "rampRate"];
 
-    // Handle empty fields array - treat as None to use defaults
-    let mut fields_to_use: Vec<(String, String)> = match fields {
-        Some([]) => {
-            info!("compact_fitness_summary: empty fields array, using defaults");
-            default_fields
-                .iter()
-                .map(|s| (s.to_string(), s.to_string()))
-                .collect()
-        }
-        Some(f) => {
-            info!("compact_fitness_summary: using provided fields: {:?}", f);
-            f.iter()
-                .map(|s| (s.to_string(), canonical_field_name(s)))
-                .collect()
-        }
-        None => {
-            info!("compact_fitness_summary: no fields specified, using defaults");
-            default_fields
-                .iter()
-                .map(|s| (s.to_string(), s.to_string()))
-                .collect()
-        }
-    };
-
-    if fields_to_use.is_empty() {
-        fields_to_use = default_fields
+    // Empty fields array is treated the same as None: use defaults.
+    let fields_to_use: Vec<(String, String)> = match fields {
+        Some([]) | None => default_fields
             .iter()
             .map(|s| (s.to_string(), s.to_string()))
-            .collect();
-    }
+            .collect(),
+        Some(f) => f
+            .iter()
+            .map(|s| (s.to_string(), canonical_field_name(s)))
+            .collect(),
+    };
 
-    let log_fields: Vec<String> = fields_to_use
-        .iter()
-        .map(|(out, canon)| format!("{}=>{}", out, canon))
-        .collect();
-
-    info!(
-        "compact_fitness_summary: input is_array={}, fields_to_use={:?}",
+    debug!(
+        "compact_fitness_summary: input is_array={}, fields={:?}",
         value.is_array(),
-        log_fields
+        fields_to_use
+            .iter()
+            .map(|(o, c)| format!("{}=>{}", o, c))
+            .collect::<Vec<_>>()
     );
 
     // API returns array of SummaryWithCats. Prefer first element that actually
     // contains at least one requested fitness field (or alias); fallback to first.
     let obj = if let Some(arr) = value.as_array() {
-        info!(
+        debug!(
             "compact_fitness_summary: extracting element from array of {}",
             arr.len()
         );
@@ -107,47 +86,34 @@ pub fn compact_fitness_summary(value: &Value, fields: Option<&[String]>) -> Valu
             })
             .or_else(|| arr.iter().find_map(|v| v.as_object()))
     } else {
-        info!("compact_fitness_summary: input is not an array, trying as object");
         value.as_object()
     };
 
     let Some(obj) = obj else {
-        info!("compact_fitness_summary: failed to extract object, returning clone");
+        debug!(
+            "compact_fitness_summary: input is not an object or array of objects, returning as-is"
+        );
         return value.clone();
     };
 
-    info!(
-        "compact_fitness_summary: extracted object with keys: {:?}",
+    debug!(
+        "compact_fitness_summary: source object keys: {:?}",
         obj.keys().collect::<Vec<_>>()
     );
 
     let mut result = serde_json::Map::new();
     for (out_field, canonical_field) in &fields_to_use {
-        let mut found = None;
         for candidate in candidate_keys(canonical_field) {
             if let Some(val) = obj.get(candidate) {
-                info!(
-                    "compact_fitness_summary: found field '{}' via key '{}' = {:?}",
-                    out_field, candidate, val
-                );
-                found = Some(val.clone());
+                result.insert(out_field.to_string(), val.clone());
                 break;
             }
         }
-
-        if let Some(val) = found {
-            result.insert(out_field.to_string(), val);
-        } else {
-            debug!(
-                "compact_fitness_summary: field '{}' (canonical '{}') not found in object",
-                out_field, canonical_field
-            );
-        }
     }
 
-    // If custom fields produced no values, fallback to default fitness set
+    // If custom fields produced no hits, fall back to default fitness fields.
     if result.is_empty() && fields.is_some() {
-        info!("compact_fitness_summary: no requested fields found, falling back to defaults");
+        debug!("compact_fitness_summary: no requested fields found, falling back to defaults");
         for field in default_fields {
             for candidate in candidate_keys(field) {
                 if let Some(val) = obj.get(candidate) {
@@ -158,13 +124,7 @@ pub fn compact_fitness_summary(value: &Value, fields: Option<&[String]>) -> Valu
         }
     }
 
-    let result_len = result.len();
-    let out = Value::Object(result);
-    info!(
-        "compact_fitness_summary: output created with {} keys",
-        result_len
-    );
-    out
+    Value::Object(result)
 }
 
 #[cfg(test)]
