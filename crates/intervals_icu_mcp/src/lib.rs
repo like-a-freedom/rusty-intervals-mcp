@@ -1063,7 +1063,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_fitness_summary",
-        description = "Get fitness: CTL, ATL, TSB, ramp rate. Params: compact (default true), fields (filter)."
+        description = "Get fitness: fitness (CTL), fatigue (ATL), form (TSB), rampRate. Params: compact (default true), fields (filter)."
     )]
     async fn get_fitness_summary(
         &self,
@@ -3763,7 +3763,14 @@ mod tests {
         async fn get_fitness_summary(
             &self,
         ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
-            Ok(serde_json::json!({}))
+            // API returns fitness/fatigue/form/rampRate format
+            Ok(serde_json::json!({
+                "fitness": 45.5,
+                "fatigue": 25.3,
+                "form": 20.2,
+                "rampRate": 1.5,
+                "weight": 70.0
+            }))
         }
         async fn get_wellness(
             &self,
@@ -7118,6 +7125,30 @@ mod tests {
         };
         let res = handler.get_fitness_summary(Parameters(params)).await;
         assert!(res.is_ok());
+        let Json(result) = res.unwrap();
+        // Default compact mode should return fitness/fatigue/form/rampRate
+        assert!(result.value.get("fitness").is_some());
+        assert!(result.value.get("fatigue").is_some());
+        assert!(result.value.get("form").is_some());
+        assert!(result.value.get("rampRate").is_some());
+        // Weight should be filtered out in compact mode
+        assert!(result.value.get("weight").is_none());
+    }
+
+    #[tokio::test]
+    async fn get_fitness_summary_tool_non_compact() {
+        let client = MockClient;
+        let handler = IntervalsMcpHandler::new(Arc::new(client));
+        let params = FitnessSummaryParams {
+            compact: Some(false),
+            fields: None,
+        };
+        let res = handler.get_fitness_summary(Parameters(params)).await;
+        assert!(res.is_ok());
+        let Json(result) = res.unwrap();
+        // Non-compact mode should return all fields
+        assert!(result.value.get("fitness").is_some());
+        assert!(result.value.get("weight").is_some());
     }
 
     #[tokio::test]

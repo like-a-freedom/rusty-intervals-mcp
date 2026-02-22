@@ -5,7 +5,7 @@ use rmcp::model::RawResource;
 pub fn athlete_profile_resource() -> RawResource {
     let mut resource = RawResource::new("intervals-icu://athlete/profile", "Athlete Profile");
     resource.description = Some(
-        "Complete athlete profile with current fitness metrics (CTL/ATL/TSB) and sport settings"
+        "Complete athlete profile with current fitness metrics (fitness/fatigue/form/rampRate) and sport settings"
             .to_string(),
     );
     resource.mime_type = Some("application/json".to_string());
@@ -670,7 +670,7 @@ mod tests {
             async fn get_fitness_summary(
                 &self,
             ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
-                Ok(json!({"ctl": 12, "atl": 3, "tsb": 9}))
+                Ok(json!({"fitness": 45.5, "fatigue": 25.3, "form": 20.2, "rampRate": 1.5}))
             }
             async fn get_sport_settings(
                 &self,

@@ -52,14 +52,8 @@ pub mod defaults {
     ];
 
     /// Fields for fitness summary
-    pub const FITNESS: &[&str] = &[
-        "ctl",
-        "atl",
-        "tsb",
-        "ctl_ramp_rate",
-        "atl_ramp_rate",
-        "date",
-    ];
+    /// Note: API returns fitness (CTL), fatigue (ATL), form (TSB), rampRate
+    pub const FITNESS: &[&str] = &["fitness", "fatigue", "form", "rampRate"];
 
     /// Fields for intervals
     pub const INTERVAL: &[&str] = &[

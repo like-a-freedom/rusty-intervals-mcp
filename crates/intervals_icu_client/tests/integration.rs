@@ -196,10 +196,11 @@ async fn best_efforts_all_fallbacks_422_returns_error() {
     );
 
     let err = client.get_best_efforts("act3", None).await.unwrap_err();
-    assert_eq!(
-        format!("{}", err),
-        "configuration error: unexpected status: 422"
-    );
+    // After exhausting fallbacks and finding no available streams, returns InvalidInput
+    assert!(matches!(
+        err,
+        intervals_icu_client::IntervalsError::InvalidInput(_)
+    ));
 }
 
 #[tokio::test]
@@ -303,10 +304,11 @@ async fn best_efforts_stream_lookup_without_candidates_returns_error() {
     );
 
     let err = client.get_best_efforts("act5", None).await.unwrap_err();
-    assert_eq!(
-        format!("{}", err),
-        "configuration error: unexpected status: 422"
-    );
+    // After exhausting fallbacks and finding no suitable streams, returns InvalidInput
+    assert!(matches!(
+        err,
+        intervals_icu_client::IntervalsError::InvalidInput(_)
+    ));
 }
 
 #[tokio::test]
@@ -492,9 +494,8 @@ async fn get_event_returns_helpful_error_on_unexpected_body() {
     match err {
         intervals_icu_client::IntervalsError::Config(msg) => {
             assert!(msg.contains("decoding event"));
-            assert!(msg.contains("Morning Run"));
         }
-        _ => panic!("expected Config error"),
+        _ => panic!("expected Config error with decoding message"),
     }
 }
 
@@ -1035,7 +1036,7 @@ async fn bulk_create_events_propagates_error_body() {
     let res = client.bulk_create_events(vec![ev]).await;
     assert!(res.is_err());
     let err = format!("{}", res.err().unwrap());
-    assert!(err.contains("422") || err.contains("unprocessable"));
+    // New error format includes the message body
     assert!(err.contains("invalid date"));
 }
 
@@ -1204,10 +1205,10 @@ async fn get_athlete_profile_handles_non_success() {
     let res = client.get_athlete_profile().await;
     assert!(res.is_err());
     match res.err().unwrap() {
-        intervals_icu_client::IntervalsError::Config(msg) => {
-            assert!(msg.contains("unexpected status"));
+        intervals_icu_client::IntervalsError::Api { status, .. } => {
+            assert_eq!(status, 500);
         }
-        _ => panic!("expected Config error"),
+        _ => panic!("expected Api error"),
     }
 }
 

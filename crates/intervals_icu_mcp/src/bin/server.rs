@@ -521,6 +521,21 @@ fn map_err(e: intervals_icu_client::IntervalsError) -> (StatusCode, String) {
     match e {
         intervals_icu_client::IntervalsError::Http(_) => (StatusCode::BAD_GATEWAY, e.to_string()),
         intervals_icu_client::IntervalsError::Config(_) => (StatusCode::BAD_REQUEST, e.to_string()),
+        intervals_icu_client::IntervalsError::Api { status, message } => {
+            let code = match status {
+                404 => StatusCode::NOT_FOUND,
+                401 | 403 => StatusCode::UNAUTHORIZED,
+                422 => StatusCode::UNPROCESSABLE_ENTITY,
+                _ => StatusCode::BAD_GATEWAY,
+            };
+            (code, message)
+        }
+        intervals_icu_client::IntervalsError::JsonDecode(_) => {
+            (StatusCode::BAD_GATEWAY, e.to_string())
+        }
+        intervals_icu_client::IntervalsError::InvalidInput(msg) => (StatusCode::BAD_REQUEST, msg),
+        intervals_icu_client::IntervalsError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
+        intervals_icu_client::IntervalsError::Auth(msg) => (StatusCode::UNAUTHORIZED, msg),
     }
 }
 

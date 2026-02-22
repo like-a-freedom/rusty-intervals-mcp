@@ -1,15 +1,14 @@
 use serde_json::Value;
 
-/// Compact fitness summary to essential fields
+/// Compact fitness summary to essential fields.
+///
+/// The Intervals.icu API returns fitness metrics as:
+/// - `fitness` (CTL - Chronic Training Load)
+/// - `fatigue` (ATL - Acute Training Load)
+/// - `form` (TSB - Training Stress Balance = fitness - fatigue)
+/// - `rampRate` (rate of change of fitness)
 pub fn compact_fitness_summary(value: &Value, fields: Option<&[String]>) -> Value {
-    let default_fields = [
-        "ctl",
-        "atl",
-        "tsb",
-        "ctl_ramp_rate",
-        "atl_ramp_rate",
-        "date",
-    ];
+    let default_fields = ["fitness", "fatigue", "form", "rampRate"];
     let fields_to_use: Vec<&str> = fields
         .map(|f| f.iter().map(|s| s.as_str()).collect())
         .unwrap_or_else(|| default_fields.to_vec());
@@ -35,27 +34,47 @@ mod tests {
 
     #[test]
     fn compact_fitness_summary_defaults() {
+        // API returns fitness/fatigue/form/rampRate format
         let input = json!({
-            "ctl": 50.0,
-            "atl": 30.0,
-            "tsb": 20.0,
-            "ctl_ramp_rate": 1.2,
-            "atl_ramp_rate": 0.8,
-            "date": "2026-01-01",
+            "fitness": 50.0,
+            "fatigue": 30.0,
+            "form": 20.0,
+            "rampRate": 1.2,
+            "weight": 70.0,
             "extra": 123
         });
 
         let out = compact_fitness_summary(&input, None);
-        assert!(out.get("ctl").is_some());
+        assert_eq!(out.get("fitness").and_then(|v| v.as_f64()), Some(50.0));
+        assert_eq!(out.get("fatigue").and_then(|v| v.as_f64()), Some(30.0));
+        assert_eq!(out.get("form").and_then(|v| v.as_f64()), Some(20.0));
+        assert_eq!(out.get("rampRate").and_then(|v| v.as_f64()), Some(1.2));
+        assert!(out.get("weight").is_none());
         assert!(out.get("extra").is_none());
     }
 
     #[test]
     fn compact_fitness_summary_custom_fields() {
-        let input = json!({"ctl": 42.0, "date": "2026-01-02", "foo": "bar"});
-        let fields = vec!["date".to_string(), "foo".to_string()];
+        let input = json!({"fitness": 42.0, "fatigue": 10.0, "form": 32.0, "foo": "bar"});
+        let fields = vec!["fitness".to_string(), "foo".to_string()];
         let out = compact_fitness_summary(&input, Some(&fields));
-        assert_eq!(out.get("date").and_then(|v| v.as_str()), Some("2026-01-02"));
+        assert_eq!(out.get("fitness").and_then(|v| v.as_f64()), Some(42.0));
         assert_eq!(out.get("foo").and_then(|v| v.as_str()), Some("bar"));
+        assert!(out.get("fatigue").is_none());
+        assert!(out.get("form").is_none());
+    }
+
+    #[test]
+    fn compact_fitness_summary_empty_input() {
+        let input = json!({});
+        let out = compact_fitness_summary(&input, None);
+        assert!(out.as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn compact_fitness_summary_non_object_returns_clone() {
+        let input = json!("string value");
+        let out = compact_fitness_summary(&input, None);
+        assert_eq!(out, input);
     }
 }
