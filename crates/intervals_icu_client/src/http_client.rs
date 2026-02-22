@@ -237,17 +237,17 @@ impl ReqwestIntervalsClient {
 
     /// Normalize start_date_local for events: preserve time when provided;
     /// if only date is given, set time to 00:00:00.
-    fn normalize_event_start(s: &str) -> Result<String, ()> {
+    fn normalize_event_start(s: &str) -> Option<String> {
         if chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").is_ok() {
-            return Ok(format!("{}T00:00:00", s));
+            return Some(format!("{}T00:00:00", s));
         }
         if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
-            return Ok(dt.naive_local().format("%Y-%m-%dT%H:%M:%S").to_string());
+            return Some(dt.naive_local().format("%Y-%m-%dT%H:%M:%S").to_string());
         }
         if let Ok(ndt) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S") {
-            return Ok(ndt.format("%Y-%m-%dT%H:%M:%S").to_string());
+            return Some(ndt.format("%Y-%m-%dT%H:%M:%S").to_string());
         }
-        Err(())
+        None
     }
 }
 
@@ -315,12 +315,13 @@ impl IntervalsClient for ReqwestIntervalsClient {
         );
 
         let mut ev = event;
-        ev.start_date_local = Self::normalize_event_start(&ev.start_date_local).map_err(|()| {
-            IntervalsError::InvalidInput(format!(
-                "invalid start_date_local: {}",
-                ev.start_date_local
-            ))
-        })?;
+        ev.start_date_local =
+            Self::normalize_event_start(&ev.start_date_local).ok_or_else(|| {
+                IntervalsError::InvalidInput(format!(
+                    "invalid start_date_local: {}",
+                    ev.start_date_local
+                ))
+            })?;
 
         let resp = self.post_request(&url).json(&ev).send().await?;
         if !resp.status().is_success() {
@@ -858,7 +859,12 @@ impl IntervalsClient for ReqwestIntervalsClient {
     }
 
     async fn get_fitness_summary(&self) -> Result<serde_json::Value, IntervalsError> {
-        let url = format!("{}/api/v1/athlete/{}", self.base_url, self.athlete_id);
+        // Use athlete-summary endpoint which returns fitness/fatigue/form/rampRate data
+        // Returns array of SummaryWithCats objects, most recent first
+        let url = format!(
+            "{}/api/v1/athlete/{}/athlete-summary.json",
+            self.base_url, self.athlete_id
+        );
         self.execute_json(self.get_request(&url)).await
     }
 
@@ -1258,6 +1264,6 @@ mod tests {
     #[test]
     fn normalize_event_start_rejects_invalid() {
         let result = ReqwestIntervalsClient::normalize_event_start("not-a-date");
-        assert!(result.is_err());
+        assert!(result.is_none());
     }
 }
