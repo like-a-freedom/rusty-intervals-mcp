@@ -1,14 +1,28 @@
+//! Domain module for gear management.
+//!
+//! This module handles gear-related data transformation and compaction.
+//! It uses the `crate::compact` utilities for token-efficient JSON responses.
+//!
+//! # GRASP Principles
+//! - **Information Expert**: Gear compaction logic is here, not in handlers
+//! - **Low Coupling**: Uses centralized compact utilities
+
 use serde_json::Value;
 
-/// Default fields for gear items
-const DEFAULT_FIELDS: &[&str] = &["id", "name", "type", "distance", "brand", "model"];
+/// Default fields for gear items in compact responses.
+///
+/// This constant is used by both the compaction functions and can be
+/// referenced by implementations of the `Compact` trait for gear-related types.
+pub const DEFAULT_FIELDS: &[&str] = &["id", "name", "type", "distance", "brand", "model"];
 
-/// Compact gear list to essential fields
+/// Compact gear list to essential fields.
+///
+/// Uses the **Low Coupling** principle by delegating to centralized compact utilities.
 pub fn compact_gear_list(value: &Value, fields: Option<&[String]>) -> Value {
     crate::compact::compact_array(value, DEFAULT_FIELDS, fields, None)
 }
 
-/// Compact a single gear item to essential fields
+/// Compact a single gear item to essential fields.
 pub fn compact_gear_item(value: &Value, fields: Option<&[String]>) -> Value {
     crate::compact::compact_object(value, DEFAULT_FIELDS, fields)
 }

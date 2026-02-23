@@ -1,9 +1,22 @@
+//! Domain module for sport settings management.
+//!
+//! This module handles sport settings transformation and filtering.
+//! It uses the `crate::compact` utilities and the `resolve_fields!` macro
+//! for token-efficient JSON responses.
+//!
+//! # GRASP Principles
+//! - **Information Expert**: Sport settings filtering logic is encapsulated here
+//! - **Low Coupling**: Uses centralized compact utilities and macros
+
 use serde_json::Value;
 
 use crate::resolve_fields;
 
-/// Default fields for sport settings
-const DEFAULT_FIELDS: &[&str] = &["type", "ftp", "fthr", "hrZones", "powerZones"];
+/// Default fields for sport settings in compact responses.
+///
+/// This constant is used by both the compaction functions and can be
+/// referenced by implementations of the `Compact` trait for sport settings types.
+pub const DEFAULT_FIELDS: &[&str] = &["type", "ftp", "fthr", "hrZones", "powerZones"];
 
 /// Compact sport settings to essential fields
 pub fn compact_sport_settings(

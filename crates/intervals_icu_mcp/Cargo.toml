@@ -28,6 +28,7 @@ hmac = "0.12.1"
 sha2 = "0.10.9"
 hex = "0.4.3"
 chrono = "0.4.43"
+async-trait = "0.1.89"
 
 [dev-dependencies]
 tokio = { version = "1.49.0", features = ["full"] }

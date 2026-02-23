@@ -67,7 +67,12 @@ pub fn compact_events_from_value(
 ) -> Value {
     if compact {
         let arr = value.as_array().cloned().unwrap_or_default();
-        crate::compact::compact_array(&Value::Array(arr), DEFAULT_COMPACT_FIELDS, fields, Some(limit))
+        crate::compact::compact_array(
+            &Value::Array(arr),
+            DEFAULT_COMPACT_FIELDS,
+            fields,
+            Some(limit),
+        )
     } else if let Some(field_list) = fields {
         crate::compact::filter_array_fields(value, field_list)
     } else {
@@ -81,6 +86,18 @@ pub enum EventValidationError {
     InvalidStartDate(String),
     UnknownCategory,
 }
+
+impl std::fmt::Display for EventValidationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::EmptyName => write!(f, "invalid event: name is empty"),
+            Self::InvalidStartDate(s) => write!(f, "invalid start_date_local: {}", s),
+            Self::UnknownCategory => write!(f, "invalid category: unknown"),
+        }
+    }
+}
+
+impl std::error::Error for EventValidationError {}
 
 /// Validate, normalize and apply sensible defaults to an `Event` before sending to the API.
 ///
@@ -117,6 +134,14 @@ pub fn validate_and_prepare_event(
     }
 
     Ok(ev)
+}
+
+/// Convert a validation error to a user-friendly error message.
+///
+/// This helper follows the **Information Expert** principle by keeping
+/// error message formatting logic in the same module as the validation.
+pub fn validation_error_to_string(e: EventValidationError) -> String {
+    e.to_string()
 }
 
 pub fn compact_json_event(value: &Value, fields: Option<&[String]>) -> Value {

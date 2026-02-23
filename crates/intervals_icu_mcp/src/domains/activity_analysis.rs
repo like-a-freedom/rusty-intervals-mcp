@@ -1,3 +1,17 @@
+//! Domain module for activity analysis transformations.
+//!
+//! This module handles transformation of activity data including:
+//! - Stream data downsampling and statistics
+//! - Interval summarization
+//! - Best efforts compaction
+//! - Power/HR/pace curve analysis
+//! - Histogram transformations
+//!
+//! # GRASP Principles
+//! - **Information Expert**: Activity analysis logic is encapsulated here
+//! - **Low Coupling**: Minimal dependencies on other modules
+//! - **High Cohesion**: Focused on activity data transformations only
+
 use std::collections::HashMap;
 
 use serde_json::{Map, Value};
