@@ -402,6 +402,10 @@ pub struct WellnessDateParams {
 pub struct WellnessUpdateParams {
     pub date: String,
     pub data: serde_json::Value,
+    /// Return compact summary (default: true)
+    pub compact: Option<bool>,
+    /// Specific fields to return (default: id,sleepSecs,stress,restingHR,hrv,weight,fatigue,motivation)
+    pub response_fields: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
