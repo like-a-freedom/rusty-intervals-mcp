@@ -1199,7 +1199,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "update_wellness",
-        description = "Update wellness for a date: sleep_hours, stress_level, resting_hr, notes."
+        description = "Update wellness for a date: sleep_hours, stress_level, resting_hr, notes. Params: date, data, compact (default true), response_fields (filter)."
     )]
     async fn update_wellness(
         &self,
@@ -1216,7 +1216,18 @@ impl IntervalsMcpHandler {
             .update_wellness(&date, &p.data)
             .await
             .map_err(|e| e.to_string())?;
-        Ok(Json(ObjectResult { value: v }))
+
+        // Apply compact mode to response
+        let default_fields = vec!["id".to_string(), "sleepSecs".to_string(), "stress".to_string(), "restingHR".to_string(), "hrv".to_string(), "weight".to_string(), "fatigue".to_string(), "motivation".to_string()];
+        let result = if p.compact.unwrap_or(true) {
+            Self::filter_fields(&v, p.response_fields.as_deref().unwrap_or(&default_fields))
+        } else if let Some(ref response_fields) = p.response_fields {
+            Self::filter_fields(&v, response_fields)
+        } else {
+            v
+        };
+
+        Ok(Json(ObjectResult { value: result }))
     }
 
     // === Events/Calendar ===
@@ -7231,6 +7242,8 @@ mod tests {
         let params = WellnessUpdateParams {
             date: "2025-01-01".into(),
             data: serde_json::json!({"weight": 70.0}),
+            compact: None,
+            response_fields: None,
         };
         let res = handler.update_wellness(Parameters(params)).await;
         assert!(res.is_ok());
@@ -7243,6 +7256,8 @@ mod tests {
         let params = WellnessUpdateParams {
             date: "not-a-date".into(),
             data: serde_json::json!({"weight": 70.0}),
+            compact: None,
+            response_fields: None,
         };
         let res = handler.update_wellness(Parameters(params)).await;
         match res {
@@ -7456,6 +7471,8 @@ mod tests {
             .update_wellness(Parameters(WellnessUpdateParams {
                 date: "2026-01-01".into(),
                 data: serde_json::json!({"weight": 70.0}),
+                compact: None,
+                response_fields: None,
             }))
             .await;
         assert!(r.is_ok());
