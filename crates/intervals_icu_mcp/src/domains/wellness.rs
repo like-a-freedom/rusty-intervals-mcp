@@ -1,4 +1,16 @@
-use serde_json::{Map, Value};
+use serde_json::Value;
+
+/// Default fields for wellness entries
+const DEFAULT_FIELDS: &[&str] = &[
+    "id",
+    "sleepSecs",
+    "stress",
+    "restingHR",
+    "hrv",
+    "weight",
+    "fatigue",
+    "motivation",
+];
 
 pub fn transform_wellness(value: &Value, summary_only: bool, fields: Option<&[String]>) -> Value {
     let Some(arr) = value.as_array() else {
@@ -46,63 +58,20 @@ pub fn transform_wellness(value: &Value, summary_only: bool, fields: Option<&[St
     }
 
     if let Some(field_list) = fields {
-        let default_fields = ["id", "sleepSecs", "stress", "restingHR", "hrv", "weight"];
-        let fields_to_use: Vec<&str> = field_list.iter().map(|s| s.as_str()).collect();
-        let fields_to_use = if fields_to_use.is_empty() {
-            default_fields.to_vec()
+        let fields_to_use = if field_list.is_empty() {
+            DEFAULT_FIELDS.to_vec()
         } else {
-            fields_to_use
+            field_list.iter().map(|s| s.as_str()).collect()
         };
 
-        let filtered: Vec<Value> = arr
-            .iter()
-            .map(|item| {
-                let Some(obj) = item.as_object() else {
-                    return item.clone();
-                };
-                let mut result = Map::new();
-                for field in &fields_to_use {
-                    if let Some(val) = obj.get(*field) {
-                        result.insert(field.to_string(), val.clone());
-                    }
-                }
-                Value::Object(result)
-            })
-            .collect();
-
-        return Value::Array(filtered);
+        return crate::compact::compact_array(value, &fields_to_use, None, None);
     }
 
     value.clone()
 }
 
 pub fn compact_wellness_entry(value: &Value, fields: Option<&[String]>) -> Value {
-    let default_fields = [
-        "id",
-        "sleepSecs",
-        "stress",
-        "restingHR",
-        "hrv",
-        "weight",
-        "fatigue",
-        "motivation",
-    ];
-    let fields_to_use: Vec<&str> = fields
-        .map(|f| f.iter().map(|s| s.as_str()).collect())
-        .unwrap_or_else(|| default_fields.to_vec());
-
-    let Some(obj) = value.as_object() else {
-        return value.clone();
-    };
-
-    let mut result = Map::new();
-    for field in &fields_to_use {
-        if let Some(val) = obj.get(*field) {
-            result.insert(field.to_string(), val.clone());
-        }
-    }
-
-    Value::Object(result)
+    crate::compact::compact_object(value, DEFAULT_FIELDS, fields)
 }
 
 #[cfg(test)]

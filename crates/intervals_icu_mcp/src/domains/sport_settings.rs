@@ -1,4 +1,9 @@
-use serde_json::{Map, Value};
+use serde_json::Value;
+
+use crate::resolve_fields;
+
+/// Default fields for sport settings
+const DEFAULT_FIELDS: &[&str] = &["type", "ftp", "fthr", "hrZones", "powerZones"];
 
 /// Compact sport settings to essential fields
 pub fn compact_sport_settings(
@@ -6,10 +11,7 @@ pub fn compact_sport_settings(
     sports_filter: Option<&[String]>,
     fields: Option<&[String]>,
 ) -> Value {
-    let default_fields = ["type", "ftp", "fthr", "hrZones", "powerZones"];
-    let fields_to_use: Vec<&str> = fields
-        .map(|f| f.iter().map(|s| s.as_str()).collect())
-        .unwrap_or_else(|| default_fields.to_vec());
+    let fields_to_use = resolve_fields!(DEFAULT_FIELDS, fields);
 
     let Some(arr) = value.as_array() else {
         return value.clone();
@@ -29,13 +31,7 @@ pub fn compact_sport_settings(
             }
 
             // Apply field filtering
-            let mut result = Map::new();
-            for field in &fields_to_use {
-                if let Some(val) = obj.get(*field) {
-                    result.insert(field.to_string(), val.clone());
-                }
-            }
-            Some(Value::Object(result))
+            Some(crate::compact::compact_object(item, &fields_to_use, None))
         })
         .collect();
 
@@ -67,13 +63,7 @@ pub fn filter_sport_settings(
 
             // Apply field filtering if specified
             if let Some(field_list) = fields {
-                let mut result = Map::new();
-                for field in field_list {
-                    if let Some(val) = obj.get(field) {
-                        result.insert(field.clone(), val.clone());
-                    }
-                }
-                Some(Value::Object(result))
+                Some(crate::compact::compact_object(item, &[], Some(field_list)))
             } else {
                 Some(item.clone())
             }
