@@ -1,7 +1,19 @@
+//! Domain module for wellness data management.
+//!
+//! This module handles wellness data transformation and summarization.
+//! It uses the `crate::compact` utilities for token-efficient JSON responses.
+//!
+//! # GRASP Principles
+//! - **Information Expert**: Wellness summarization logic is encapsulated here
+//! - **Low Coupling**: Uses centralized compact utilities
+
 use serde_json::Value;
 
-/// Default fields for wellness entries
-const DEFAULT_FIELDS: &[&str] = &[
+/// Default fields for wellness entries in compact responses.
+///
+/// This constant is used by both the compaction functions and can be
+/// referenced by implementations of the `Compact` trait for wellness types.
+pub const DEFAULT_FIELDS: &[&str] = &[
     "id",
     "sleepSecs",
     "stress",
@@ -11,6 +23,15 @@ const DEFAULT_FIELDS: &[&str] = &[
     "fatigue",
     "motivation",
 ];
+
+/// Normalize a date string to YYYY-MM-DD format.
+///
+/// Accepts either YYYY-MM-DD or ISO 8601 datetimes.
+/// This follows the **Information Expert** principle by keeping
+/// date normalization logic in the domain module.
+pub fn normalize_date(date_str: &str) -> Option<String> {
+    crate::transforms::normalize_date_str(date_str)
+}
 
 pub fn transform_wellness(value: &Value, summary_only: bool, fields: Option<&[String]>) -> Value {
     let Some(arr) = value.as_array() else {

@@ -3,13 +3,183 @@
 //! This module provides generic functions to reduce response size by:
 //! - Filtering objects/arrays to only include specified fields
 //! - Applying default field sets when no custom fields provided
+//! - A `Compact` trait for domain types to implement token-efficient serialization
+//! - Generic helpers for common MCP tool patterns (DRY principle)
 
 use serde_json::Value;
 
+/// Helper trait for converting Results to tool-friendly String errors.
+///
+/// This implements the **DRY** principle by eliminating repetitive
+/// `.map_err(|e| e.to_string())` patterns throughout the codebase.
+///
+/// # Example
+/// ```rust,ignore
+/// use crate::compact::ToToolError;
+///
+/// async fn my_tool(&self) -> Result<Json<MyResult>, String> {
+///     let result = self.client.some_call().await.to_tool_error()?;
+///     Ok(Json(result))
+/// }
+/// ```
+pub trait ToToolError<T> {
+    fn to_tool_error(self) -> Result<T, String>;
+}
+
+impl<T, E: std::fmt::Display> ToToolError<T> for Result<T, E> {
+    fn to_tool_error(self) -> Result<T, String> {
+        self.map_err(|e| e.to_string())
+    }
+}
+
+/// Apply compact mode transformation to a JSON value.
+///
+/// This implements the **DRY** principle by centralizing the common pattern:
+/// ```rust,ignore
+/// // Before: repeated in ~40 tool methods
+/// let result = if p.compact.unwrap_or(true) {
+///     Self::compact_xyz(&v, p.fields.as_deref())
+/// } else if let Some(ref fields) = p.fields {
+///     Self::filter_array_fields(&v, fields)
+/// } else {
+///     v
+/// };
+/// ```
+///
+/// # Arguments
+/// * `value` - The JSON value to transform
+/// * `compact` - Whether to apply compact mode (None = default to true)
+/// * `fields` - Optional custom fields to filter
+/// * `compact_fn` - Function to apply when compact=true
+///
+/// # Example
+/// ```rust,ignore
+/// let result = apply_compact_mode(
+///     value,
+///     p.compact,
+///     p.fields,
+///     |v, f| domains::gear::compact_gear_list(v, f),
+/// );
+/// ```
+pub fn apply_compact_mode<F>(
+    value: Value,
+    compact: Option<bool>,
+    fields: Option<Vec<String>>,
+    compact_fn: F,
+) -> Value
+where
+    F: Fn(&Value, Option<&[String]>) -> Value,
+{
+    if compact.unwrap_or(true) {
+        compact_fn(&value, fields.as_deref())
+    } else if let Some(ref fields) = fields {
+        filter_array_fields(&value, fields)
+    } else {
+        value
+    }
+}
+
+/// Apply compact mode with an additional filter condition.
+///
+/// Similar to `apply_compact_mode` but supports an additional filter parameter
+/// (e.g., sport type filter for sport settings).
+///
+/// # Arguments
+/// * `value` - The JSON value to transform
+/// * `compact` - Whether to apply compact mode
+/// * `filter_param` - Optional additional filter parameter
+/// * `fields` - Optional custom fields
+/// * `compact_fn` - Function with signature `(&Value, Option<&[String]>, Option<&[String]>) -> Value`
+/// * `filter_fn` - Function for non-compact filtering with same signature
+pub fn apply_compact_mode_with_filter<F, G>(
+    value: Value,
+    compact: Option<bool>,
+    filter_param: Option<&[String]>,
+    fields: Option<Vec<String>>,
+    compact_fn: F,
+    filter_fn: G,
+) -> Value
+where
+    F: Fn(&Value, Option<&[String]>, Option<&[String]>) -> Value,
+    G: Fn(&Value, Option<&[String]>, Option<&[String]>) -> Value,
+{
+    if compact.unwrap_or(true) {
+        compact_fn(&value, filter_param, fields.as_deref())
+    } else if filter_param.is_some() || fields.is_some() {
+        filter_fn(&value, filter_param, fields.as_deref())
+    } else {
+        value
+    }
+}
+
+/// Trait for types that can be compacted to token-efficient JSON representations.
+///
+/// This trait implements the **Low Coupling** GRASP principle by:
+/// - Decoupling domain types from JSON manipulation logic
+/// - Providing a consistent interface for compact serialization
+/// - Allowing domain modules to own their compaction logic
+///
+/// # Example
+/// ```rust,ignore
+/// use intervals_icu_mcp::compact::Compact;
+///
+/// struct MyDomainType {
+///     id: String,
+///     name: String,
+///     extra: String,
+/// }
+///
+/// impl Compact for MyDomainType {
+///     const DEFAULT_FIELDS: &'static [&'static str] = &["id", "name"];
+///
+///     fn compact_fields(&self) -> Vec<&'static str> {
+///         Self::DEFAULT_FIELDS.to_vec()
+///     }
+/// }
+/// ```
+pub trait Compact: serde::Serialize {
+    /// Default fields to include in compact representation
+    const DEFAULT_FIELDS: &'static [&'static str];
+
+    /// Returns the fields to use for compaction.
+    /// Can be overridden to provide dynamic field selection.
+    fn compact_fields(&self) -> Vec<&'static str> {
+        Self::DEFAULT_FIELDS.to_vec()
+    }
+
+    /// Compact this value to JSON using default fields
+    fn to_compact_json(&self) -> Value
+    where
+        Self: Sized,
+    {
+        compact_item(self, Self::DEFAULT_FIELDS, None)
+    }
+
+    /// Compact this value to JSON with custom fields
+    fn to_compact_json_with_fields(&self, fields: Option<&[String]>) -> Value
+    where
+        Self: Sized,
+    {
+        compact_item(self, Self::DEFAULT_FIELDS, fields)
+    }
+
+    /// Compact a slice of this type to a JSON array
+    fn compact_slice_to_json(
+        items: &[Self],
+        fields: Option<&[String]>,
+        limit: Option<usize>,
+    ) -> Value
+    where
+        Self: Sized,
+    {
+        compact_items(items, Self::DEFAULT_FIELDS, fields, limit)
+    }
+}
+
 /// Macro to simplify the common pattern of resolving fields_to_use from optional custom fields.
-/// 
+///
 /// Usage: `let fields_to_use = resolve_fields!(default_fields, fields);`
-/// 
+///
 /// Where `fields` is `Option<&[String]>` and `default_fields` is `&[&str]`
 #[macro_export]
 macro_rules! resolve_fields {
@@ -229,11 +399,11 @@ pub fn compact_single<T: serde::Serialize>(
 }
 
 /// Compact a serializable item to a JSON object, applying default or custom fields.
-/// 
+///
 /// This is a convenience wrapper that handles the common pattern of:
 /// 1. Serializing an item to JSON
 /// 2. Filtering to default fields or custom fields
-/// 
+///
 /// # Arguments
 /// * `item` - Item to serialize and compact
 /// * `default_fields` - Default fields to use if no custom fields provided
@@ -248,7 +418,7 @@ pub fn compact_item<T: serde::Serialize>(
 }
 
 /// Compact an array of serializable items with optional limiting.
-/// 
+///
 /// # Arguments
 /// * `items` - Slice of items to compact
 /// * `default_fields` - Default fields to use
@@ -385,5 +555,126 @@ mod tests {
         let val = serde_json::json!({"id": "123"});
         let result = compact_array(&val, &["id"], None, None);
         assert_eq!(result, val);
+    }
+
+    // Tests for Compact trait
+    #[derive(serde::Serialize)]
+    struct TestCompactType {
+        id: String,
+        name: String,
+        extra: String,
+    }
+
+    impl Compact for TestCompactType {
+        const DEFAULT_FIELDS: &'static [&'static str] = &["id", "name"];
+    }
+
+    #[test]
+    fn test_compact_trait_default_fields() {
+        let item = TestCompactType {
+            id: "1".to_string(),
+            name: "Test".to_string(),
+            extra: "Should be excluded".to_string(),
+        };
+        let result = item.to_compact_json();
+        assert_eq!(result["id"], "1");
+        assert_eq!(result["name"], "Test");
+        assert!(result.get("extra").is_none());
+    }
+
+    #[test]
+    fn test_compact_trait_custom_fields() {
+        let item = TestCompactType {
+            id: "1".to_string(),
+            name: "Test".to_string(),
+            extra: "Should be included".to_string(),
+        };
+        let fields = vec!["id".to_string(), "extra".to_string()];
+        let result = item.to_compact_json_with_fields(Some(&fields));
+        assert_eq!(result["id"], "1");
+        assert!(result.get("name").is_none());
+        assert_eq!(result["extra"], "Should be included");
+    }
+
+    #[test]
+    fn test_compact_trait_slice() {
+        let items = vec![
+            TestCompactType {
+                id: "1".to_string(),
+                name: "First".to_string(),
+                extra: "x".to_string(),
+            },
+            TestCompactType {
+                id: "2".to_string(),
+                name: "Second".to_string(),
+                extra: "y".to_string(),
+            },
+        ];
+        let result = TestCompactType::compact_slice_to_json(&items, None, Some(1));
+        let arr = result.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["id"], "1");
+        assert!(arr[0].get("extra").is_none());
+    }
+
+    // Tests for ToToolError trait
+    #[test]
+    fn test_to_tool_error_success() {
+        let result: Result<i32, std::convert::Infallible> = Ok(42);
+        assert_eq!(result.to_tool_error(), Ok(42));
+    }
+
+    #[test]
+    fn test_to_tool_error_error() {
+        let result: Result<i32, &'static str> = Err("test error");
+        assert_eq!(result.to_tool_error(), Err("test error".to_string()));
+    }
+
+    // Tests for apply_compact_mode
+    #[test]
+    fn test_apply_compact_mode_compact_true() {
+        let value = serde_json::json!({"id": "1", "name": "Test", "extra": "x"});
+        let result = apply_compact_mode(value, Some(true), None, |v, _f| {
+            crate::compact::compact_object(v, &["id"], None)
+        });
+        assert_eq!(result["id"], "1");
+        assert!(result.get("name").is_none());
+    }
+
+    #[test]
+    fn test_apply_compact_mode_compact_false_no_fields() {
+        let value = serde_json::json!({"id": "1", "name": "Test"});
+        let result = apply_compact_mode(
+            value.clone(),
+            Some(false),
+            None,
+            |_v, _f| serde_json::json!({"compact": true}),
+        );
+        assert_eq!(result, value);
+    }
+
+    #[test]
+    fn test_apply_compact_mode_with_fields() {
+        let value = serde_json::json!([{"id": "1", "name": "Test", "extra": "x"}]);
+        let fields = vec!["id".to_string()];
+        let result = apply_compact_mode(value, Some(false), Some(fields), |_v, _f| {
+            serde_json::json!({})
+        });
+        let arr = result.as_array().unwrap();
+        assert_eq!(arr[0]["id"], "1");
+        assert!(arr[0].get("name").is_none());
+    }
+
+    #[test]
+    fn test_apply_compact_mode_default_compact() {
+        let value = serde_json::json!({"id": "1", "name": "Test", "extra": "x"});
+        let result = apply_compact_mode(
+            value,
+            None, // Should default to true
+            None,
+            |v, _f| crate::compact::compact_object(v, &["id"], None),
+        );
+        assert_eq!(result["id"], "1");
+        assert!(result.get("name").is_none());
     }
 }

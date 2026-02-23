@@ -1,7 +1,7 @@
 use serde_json::{Map, Value};
 
 /// Normalize a date string to YYYY-MM-DD format.
-/// 
+///
 /// Accepts:
 /// - YYYY-MM-DD (returns as-is)
 /// - RFC3339 datetime (extracts date)
@@ -21,7 +21,7 @@ pub fn normalize_date_str(s: &str) -> Option<String> {
 
 /// Normalize start_date_local for events: preserve time when provided;
 /// if only date is given, set time to 00:00:00.
-/// 
+///
 /// Accepts:
 /// - YYYY-MM-DD -> YYYY-MM-DDT00:00:00
 /// - RFC3339 datetime -> YYYY-MM-DDTHH:MM:SS

@@ -40,10 +40,10 @@ impl ReqwestIntervalsClient {
     }
 
     /// Build an API URL from path segments.
-    /// 
+    ///
     /// # Arguments
     /// * `segments` - Path segments (e.g., `&["athlete", athlete_id, "events"]`)
-    /// 
+    ///
     /// # Returns
     /// Full URL like `https://intervals.icu/api/v1/athlete/i123/events`
     fn api_url(&self, segments: &[&str]) -> String {
@@ -56,7 +56,7 @@ impl ReqwestIntervalsClient {
     }
 
     /// Build query parameters from a vector of (key, String) pairs.
-    /// 
+    ///
     /// This is a helper to avoid repeating the conversion from Vec<(&str, String)> to Vec<(&str, &str)>.
     fn build_query<'a>(&'a self, params: &'a [(&str, String)]) -> Vec<(&'a str, &'a str)> {
         params.iter().map(|(k, v)| (*k, v.as_str())).collect()
@@ -312,7 +312,8 @@ impl IntervalsClient for ReqwestIntervalsClient {
             pairs.push(("limit", limit.to_string()));
         }
 
-        self.execute_json(self.get_request(&url).query(&self.build_query(&pairs))).await
+        self.execute_json(self.get_request(&url).query(&self.build_query(&pairs)))
+            .await
     }
 
     async fn create_event(&self, event: crate::Event) -> Result<crate::Event, IntervalsError> {
@@ -367,7 +368,8 @@ impl IntervalsClient for ReqwestIntervalsClient {
         if let Some(l) = limit {
             pairs.push(("limit", l.to_string()));
         }
-        self.execute_json(self.get_request(&url).query(&self.build_query(&pairs))).await
+        self.execute_json(self.get_request(&url).query(&self.build_query(&pairs)))
+            .await
     }
 
     async fn bulk_create_events(

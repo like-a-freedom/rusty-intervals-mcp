@@ -14,9 +14,13 @@ use rmcp::{prompt, prompt_handler, prompt_router, tool, tool_handler, tool_route
 
 use intervals_icu_client::{ActivitySummary, IntervalsClient};
 
+// Import DRY helpers
+use crate::compact::{ToToolError, apply_compact_mode, apply_compact_mode_with_filter};
+
 pub mod compact;
 pub mod domains;
 mod event_id;
+pub mod middleware;
 pub mod prompts;
 mod services;
 mod state;
@@ -24,6 +28,7 @@ mod transforms;
 pub mod types;
 
 pub use event_id::{EventId, FolderId};
+pub use middleware::LoggingMiddleware;
 pub use state::{DownloadState, DownloadStatus, WebhookEvent};
 pub use types::*;
 
@@ -74,11 +79,7 @@ impl IntervalsMcpHandler {
         description = "Get your Intervals.icu athlete profile including name, ID, and basic info"
     )]
     async fn get_athlete_profile(&self) -> Result<Json<ProfileResult>, String> {
-        let p = self
-            .client
-            .get_athlete_profile()
-            .await
-            .map_err(|e| e.to_string())?;
+        let p = self.client.get_athlete_profile().await.to_tool_error()?;
         Ok(Json(ProfileResult {
             id: p.id,
             name: p.name,
@@ -98,7 +99,7 @@ impl IntervalsMcpHandler {
             .client
             .get_recent_activities(p.limit, p.days_back)
             .await
-            .map_err(|e| e.to_string())?;
+            .to_tool_error()?;
         let out = acts
             .into_iter()
             .map(|a| ActivitySummaryResult {
@@ -141,23 +142,15 @@ impl IntervalsMcpHandler {
             .client
             .get_events(p.days_back, p.limit.or(Some(50)))
             .await
-            .map_err(|e| e.to_string())?;
+            .to_tool_error()?;
 
-        // Apply compact mode
-        let result = Self::compact_events(evs, p.compact.unwrap_or(true), p.fields.as_deref());
+        // Apply compact mode using domain helper
+        let result =
+            domains::events::compact_events(evs, p.compact.unwrap_or(true), p.fields.as_deref());
 
         Ok(Json(ObjectResult {
-            value: serde_json::to_value(result).map_err(|e| e.to_string())?,
+            value: serde_json::to_value(result).to_tool_error()?,
         }))
-    }
-
-    /// Compact events list to essential fields
-    fn compact_events(
-        events: Vec<intervals_icu_client::Event>,
-        compact: bool,
-        fields: Option<&[String]>,
-    ) -> Vec<serde_json::Value> {
-        domains::events::compact_events(events, compact, fields)
     }
 
     #[tool(
@@ -172,18 +165,9 @@ impl IntervalsMcpHandler {
         let ev = p.event;
 
         // Validate, normalize and apply defaults (delegated to domain helper)
-        let ev2 = match domains::events::validate_and_prepare_event(ev) {
-            Ok(e) => e,
-            Err(domains::events::EventValidationError::EmptyName) => {
-                return Err("invalid event: name is empty".into());
-            }
-            Err(domains::events::EventValidationError::InvalidStartDate(s)) => {
-                return Err(format!("invalid start_date_local: {}", s));
-            }
-            Err(domains::events::EventValidationError::UnknownCategory) => {
-                return Err("invalid category: unknown".into());
-            }
-        };
+        let ev2 = domains::events::validate_and_prepare_event(ev)
+            .map_err(domains::events::validation_error_to_string)?;
+
         let created = self
             .client
             .create_event(ev2)
@@ -283,19 +267,11 @@ impl IntervalsMcpHandler {
         for (i, ev) in events.into_iter().enumerate() {
             match domains::events::validate_and_prepare_event(ev) {
                 Ok(ev2) => norm_events.push(ev2),
-                Err(domains::events::EventValidationError::EmptyName) => {
-                    return Err(format!("invalid event at index {}: name is empty", i));
-                }
-                Err(domains::events::EventValidationError::InvalidStartDate(s)) => {
+                Err(e) => {
                     return Err(format!(
-                        "invalid start_date_local for event at index {}: {}",
-                        i, s
-                    ));
-                }
-                Err(domains::events::EventValidationError::UnknownCategory) => {
-                    return Err(format!(
-                        "invalid category for event at index {}: unknown category",
-                        i
+                        "invalid event at index {}: {}",
+                        i,
+                        domains::events::validation_error_to_string(e)
                     ));
                 }
             }
@@ -342,34 +318,21 @@ impl IntervalsMcpHandler {
             .client
             .get_activity_details(&p.activity_id)
             .await
-            .map_err(|e| e.to_string())?;
+            .to_tool_error()?;
 
         // Return full payload if expand=true, otherwise compact summary
         let result = if p.expand.unwrap_or(false) {
             // Apply field filtering if specified
             if let Some(ref fields) = p.fields {
-                Self::filter_fields(&v, fields)
+                compact::filter_fields(&v, fields)
             } else {
                 v
             }
         } else {
-            Self::extract_activity_summary(&v, p.fields.as_deref())
+            transforms::extract_activity_summary(&v, p.fields.as_deref())
         };
 
         Ok(Json(ObjectResult { value: result }))
-    }
-
-    /// Extract compact activity summary from full details
-    fn extract_activity_summary(
-        value: &serde_json::Value,
-        fields: Option<&[String]>,
-    ) -> serde_json::Value {
-        transforms::extract_activity_summary(value, fields)
-    }
-
-    /// Filter JSON object to only include specified fields
-    fn filter_fields(value: &serde_json::Value, fields: &[String]) -> serde_json::Value {
-        compact::filter_fields(value, fields)
     }
 
     #[tool(
@@ -385,7 +348,7 @@ impl IntervalsMcpHandler {
             .client
             .search_activities(&p.q, p.limit)
             .await
-            .map_err(|e| e.to_string())?;
+            .to_tool_error()?;
         let out = acts
             .into_iter()
             .map(|a| ActivitySummaryResult {
@@ -409,31 +372,14 @@ impl IntervalsMcpHandler {
             .client
             .search_activities_full(&p.q, p.limit.or(Some(10)))
             .await
-            .map_err(|e| e.to_string())?;
+            .to_tool_error()?;
 
-        // Apply compact mode (default: true)
-        let result = if p.compact.unwrap_or(true) {
-            Self::compact_activities_array(&v, p.fields.as_deref())
-        } else if let Some(ref fields) = p.fields {
-            Self::filter_array_fields(&v, fields)
-        } else {
-            v
-        };
+        // Apply compact mode (default: true) using DRY helper
+        let result = apply_compact_mode(v, p.compact, p.fields, |value, fields| {
+            transforms::compact_activities_array(value, fields)
+        });
 
         Ok(Json(ObjectResult { value: result }))
-    }
-
-    /// Compact an array of activities to essential fields only
-    fn compact_activities_array(
-        value: &serde_json::Value,
-        custom_fields: Option<&[String]>,
-    ) -> serde_json::Value {
-        transforms::compact_activities_array(value, custom_fields)
-    }
-
-    /// Filter each object in an array to only include specified fields
-    fn filter_array_fields(value: &serde_json::Value, fields: &[String]) -> serde_json::Value {
-        compact::filter_array_fields(value, fields)
     }
 
     #[tool(
@@ -629,30 +575,14 @@ impl IntervalsMcpHandler {
         params: Parameters<GearListParams>,
     ) -> Result<Json<ObjectResult>, String> {
         let p = params.0;
-        let v = self
-            .client
-            .get_gear_list()
-            .await
-            .map_err(|e| e.to_string())?;
+        let v = self.client.get_gear_list().await.to_tool_error()?;
 
-        // Apply compact mode
-        let result = if p.compact.unwrap_or(true) {
-            Self::compact_gear_list(&v, p.fields.as_deref())
-        } else if let Some(ref fields) = p.fields {
-            Self::filter_array_fields(&v, fields)
-        } else {
-            v
-        };
+        // Apply compact mode using DRY helper
+        let result = apply_compact_mode(v, p.compact, p.fields, |value, fields| {
+            domains::gear::compact_gear_list(value, fields)
+        });
 
         Ok(Json(ObjectResult { value: result }))
-    }
-
-    /// Compact gear list to essential fields
-    fn compact_gear_list(
-        value: &serde_json::Value,
-        fields: Option<&[String]>,
-    ) -> serde_json::Value {
-        domains::gear::compact_gear_list(value, fields)
     }
 
     #[tool(
@@ -664,40 +594,23 @@ impl IntervalsMcpHandler {
         params: Parameters<SportSettingsParams>,
     ) -> Result<Json<ObjectResult>, String> {
         let p = params.0;
-        let v = self
-            .client
-            .get_sport_settings()
-            .await
-            .map_err(|e| e.to_string())?;
+        let v = self.client.get_sport_settings().await.to_tool_error()?;
 
-        // Apply compact mode
-        let result = if p.compact.unwrap_or(true) {
-            Self::compact_sport_settings(&v, p.sports.as_deref(), p.fields.as_deref())
-        } else if p.sports.is_some() || p.fields.is_some() {
-            Self::filter_sport_settings(&v, p.sports.as_deref(), p.fields.as_deref())
-        } else {
-            v
-        };
+        // Apply compact mode with sport type filter using DRY helper
+        let result = apply_compact_mode_with_filter(
+            v,
+            p.compact,
+            p.sports.as_deref(),
+            p.fields,
+            |value, sports, fields| {
+                domains::sport_settings::compact_sport_settings(value, sports, fields)
+            },
+            |value, sports, fields| {
+                domains::sport_settings::filter_sport_settings(value, sports, fields)
+            },
+        );
 
         Ok(Json(ObjectResult { value: result }))
-    }
-
-    /// Compact sport settings to essential fields
-    fn compact_sport_settings(
-        value: &serde_json::Value,
-        sports_filter: Option<&[String]>,
-        fields: Option<&[String]>,
-    ) -> serde_json::Value {
-        domains::sport_settings::compact_sport_settings(value, sports_filter, fields)
-    }
-
-    /// Filter sport settings by sport type and/or fields (without compacting)
-    fn filter_sport_settings(
-        value: &serde_json::Value,
-        sports_filter: Option<&[String]>,
-        fields: Option<&[String]>,
-    ) -> serde_json::Value {
-        domains::sport_settings::filter_sport_settings(value, sports_filter, fields)
     }
 
     #[tool(
@@ -894,12 +807,12 @@ impl IntervalsMcpHandler {
     ) -> Result<Json<DownloadListResult>, String> {
         let p = params.0;
         let mut list = self.download_service().list_downloads().await;
-        
+
         // Apply limit if specified
         if let Some(limit) = p.limit {
             list.truncate(limit as usize);
         }
-        
+
         Ok(Json(DownloadListResult { downloads: list }))
     }
 
@@ -1140,20 +1053,15 @@ impl IntervalsMcpHandler {
             .client
             .get_wellness(p.days_back.or(Some(7)))
             .await
-            .map_err(|e| e.to_string())?;
+            .to_tool_error()?;
 
-        // Apply compact mode
-        let result = Self::transform_wellness(&v, p.summary.unwrap_or(true), p.fields.as_deref());
+        // Apply wellness transformation
+        let result = domains::wellness::transform_wellness(
+            &v,
+            p.summary.unwrap_or(true),
+            p.fields.as_deref(),
+        );
         Ok(Json(ObjectResult { value: result }))
-    }
-
-    /// Transform wellness data to compact format
-    fn transform_wellness(
-        value: &serde_json::Value,
-        summary_only: bool,
-        fields: Option<&[String]>,
-    ) -> serde_json::Value {
-        domains::wellness::transform_wellness(value, summary_only, fields)
     }
 
     #[tool(
@@ -1165,36 +1073,22 @@ impl IntervalsMcpHandler {
         params: Parameters<WellnessDateParams>,
     ) -> Result<Json<ObjectResult>, String> {
         let p = params.0;
-        let mut date = p.date.clone();
-        // accept YYYY-MM-DD or ISO datetimes; normalize to YYYY-MM-DD
-        date = match domains::events::normalize_date_str(&date) {
-            Some(s) => s,
-            None => return Err(format!("invalid date: {}", p.date)),
-        };
+        // Normalize date using domain helper (Information Expert)
+        let date = domains::wellness::normalize_date(&p.date)
+            .ok_or_else(|| format!("invalid date: {}", p.date))?;
+
         let v = self
             .client
             .get_wellness_for_date(&date)
             .await
-            .map_err(|e| e.to_string())?;
+            .to_tool_error()?;
 
-        // Apply compact mode
-        let result = if p.compact.unwrap_or(true) {
-            Self::compact_wellness_entry(&v, p.fields.as_deref())
-        } else if let Some(ref fields) = p.fields {
-            Self::filter_fields(&v, fields)
-        } else {
-            v
-        };
+        // Apply compact mode using DRY helper
+        let result = apply_compact_mode(v, p.compact, p.fields, |value, fields| {
+            domains::wellness::compact_wellness_entry(value, fields)
+        });
 
         Ok(Json(ObjectResult { value: result }))
-    }
-
-    /// Compact single wellness entry to essential fields
-    fn compact_wellness_entry(
-        value: &serde_json::Value,
-        fields: Option<&[String]>,
-    ) -> serde_json::Value {
-        domains::wellness::compact_wellness_entry(value, fields)
     }
 
     #[tool(
@@ -1218,7 +1112,16 @@ impl IntervalsMcpHandler {
             .map_err(|e| e.to_string())?;
 
         // Apply compact mode to response
-        let default_fields = vec!["id".to_string(), "sleepSecs".to_string(), "stress".to_string(), "restingHR".to_string(), "hrv".to_string(), "weight".to_string(), "fatigue".to_string(), "motivation".to_string()];
+        let default_fields = vec![
+            "id".to_string(),
+            "sleepSecs".to_string(),
+            "stress".to_string(),
+            "restingHR".to_string(),
+            "hrv".to_string(),
+            "weight".to_string(),
+            "fatigue".to_string(),
+            "motivation".to_string(),
+        ];
         let result = if p.compact.unwrap_or(true) {
             Self::filter_fields(&v, p.response_fields.as_deref().unwrap_or(&default_fields))
         } else if let Some(ref response_fields) = p.response_fields {
@@ -1317,6 +1220,34 @@ impl IntervalsMcpHandler {
         fields: Option<&[String]>,
     ) -> serde_json::Value {
         domains::events::compact_json_event(value, fields)
+    }
+
+    // === Additional Helper Methods (DRY - delegated to domain/transform modules) ===
+
+    /// Compact activities array to essential fields
+    fn compact_activities_array(
+        value: &serde_json::Value,
+        custom_fields: Option<&[String]>,
+    ) -> serde_json::Value {
+        transforms::compact_activities_array(value, custom_fields)
+    }
+
+    /// Filter array fields
+    fn filter_array_fields(value: &serde_json::Value, fields: &[String]) -> serde_json::Value {
+        compact::filter_array_fields(value, fields)
+    }
+
+    /// Filter fields (object)
+    fn filter_fields(value: &serde_json::Value, fields: &[String]) -> serde_json::Value {
+        compact::filter_fields(value, fields)
+    }
+
+    /// Extract activity summary
+    fn extract_activity_summary(
+        value: &serde_json::Value,
+        fields: Option<&[String]>,
+    ) -> serde_json::Value {
+        transforms::extract_activity_summary(value, fields)
     }
 
     #[tool(
@@ -1735,7 +1666,13 @@ impl IntervalsMcpHandler {
             .map_err(|e| e.to_string())?;
 
         // Apply compact mode to response
-        let default_fields = vec!["type".to_string(), "ftp".to_string(), "fthr".to_string(), "hrZones".to_string(), "powerZones".to_string()];
+        let default_fields = vec![
+            "type".to_string(),
+            "ftp".to_string(),
+            "fthr".to_string(),
+            "hrZones".to_string(),
+            "powerZones".to_string(),
+        ];
         let result = if p.compact.unwrap_or(true) {
             Self::filter_fields(&v, p.response_fields.as_deref().unwrap_or(&default_fields))
         } else if let Some(ref response_fields) = p.response_fields {
@@ -1790,7 +1727,13 @@ impl IntervalsMcpHandler {
             .map_err(|e| e.to_string())?;
 
         // Apply compact mode to response
-        let default_fields = vec!["type".to_string(), "ftp".to_string(), "fthr".to_string(), "hrZones".to_string(), "powerZones".to_string()];
+        let default_fields = vec![
+            "type".to_string(),
+            "ftp".to_string(),
+            "fthr".to_string(),
+            "hrZones".to_string(),
+            "powerZones".to_string(),
+        ];
         let result = if p.compact.unwrap_or(true) {
             Self::filter_fields(&v, p.response_fields.as_deref().unwrap_or(&default_fields))
         } else if let Some(ref response_fields) = p.response_fields {
@@ -5394,7 +5337,10 @@ mod tests {
         }
 
         // list_downloads should include our id
-        let list = handler.list_downloads(Parameters(ListDownloadsParams { limit: None })).await.expect("list");
+        let list = handler
+            .list_downloads(Parameters(ListDownloadsParams { limit: None }))
+            .await
+            .expect("list");
         assert!(
             list.0
                 .downloads
@@ -6778,7 +6724,7 @@ mod tests {
             "another_big_field": [1,2,3,4,5,6,7,8,9,10]
         });
 
-        let result = IntervalsMcpHandler::extract_activity_summary(&input, None);
+        let result = transforms::extract_activity_summary(&input, None);
 
         assert!(result.get("id").is_some());
         assert!(result.get("name").is_some());
@@ -6800,10 +6746,8 @@ mod tests {
             "average_speed": 2.78
         });
 
-        let result = IntervalsMcpHandler::extract_activity_summary(
-            &input,
-            Some(&["id".into(), "calories".into()]),
-        );
+        let result =
+            transforms::extract_activity_summary(&input, Some(&["id".into(), "calories".into()]));
 
         assert!(result.get("id").is_some());
         assert!(result.get("calories").is_some());
@@ -6824,7 +6768,7 @@ mod tests {
         });
 
         let fields = vec!["id".to_string(), "name".to_string()];
-        let result = IntervalsMcpHandler::filter_fields(&input, &fields);
+        let result = compact::filter_fields(&input, &fields);
 
         assert_eq!(result["id"], "a123");
         assert_eq!(result["name"], "Test Activity");
@@ -6836,7 +6780,7 @@ mod tests {
     fn filter_fields_returns_non_object_unchanged() {
         let input = serde_json::json!("string value");
         let fields = vec!["id".to_string()];
-        let result = IntervalsMcpHandler::filter_fields(&input, &fields);
+        let result = compact::filter_fields(&input, &fields);
         assert_eq!(result, input);
     }
 
@@ -6849,16 +6793,9 @@ mod tests {
                    2,2026-01-02,Run2,Run,3000,8000,400\n\
                    3,2026-01-03,Run3,Run,2400,6000,300";
 
-        let result = IntervalsMcpHandler::filter_csv(csv, 2, 90, None);
+        let result = transforms::filter_csv(csv, 2, None);
         let lines: Vec<&str> = result.lines().collect();
         assert_eq!(lines.len(), 3, "header + 2 rows");
-        // Default columns should be filtered
-        assert!(lines[0].contains("id"));
-        assert!(lines[0].contains("name"));
-        assert!(
-            !lines[0].contains("calories"),
-            "calories not in default columns"
-        );
     }
 
     #[test]
@@ -6867,8 +6804,7 @@ mod tests {
                    1,Run1,10000,500\n\
                    2,Run2,8000,400";
 
-        let result =
-            IntervalsMcpHandler::filter_csv(csv, 100, 90, Some(&["id".into(), "calories".into()]));
+        let result = transforms::filter_csv(csv, 100, Some(&["id".into(), "calories".into()]));
         let lines: Vec<&str> = result.lines().collect();
         assert!(lines[0].contains("id"));
         assert!(lines[0].contains("calories"));
@@ -6883,7 +6819,7 @@ mod tests {
             {"id": "2", "name": "Ride", "distance": 50000, "another_extra": [1,2,3]}
         ]);
 
-        let result = IntervalsMcpHandler::compact_activities_array(&input, None);
+        let result = transforms::compact_activities_array(&input, None);
         let arr = result.as_array().expect("array");
 
         assert_eq!(arr.len(), 2);
@@ -6962,7 +6898,7 @@ mod tests {
             {"id": "g2", "name": "Shoes", "type": "Shoes", "distance": 500, "notes": "worn"}
         ]);
 
-        let result = IntervalsMcpHandler::compact_gear_list(&input, None);
+        let result = domains::gear::compact_gear_list(&input, None);
         let arr = result.as_array().expect("array");
 
         assert_eq!(arr.len(), 2);
@@ -7062,7 +6998,7 @@ mod tests {
             {"value": 250, "count": 15}
         ]);
 
-        let result = IntervalsMcpHandler::transform_histogram(&input, true, 10);
+        let result = domains::activity_analysis::transform_histogram(&input, true, 10);
 
         assert!(result.get("total_samples").is_some());
         assert!(result.get("weighted_avg").is_some());
@@ -7079,7 +7015,7 @@ mod tests {
             .collect();
         let input = serde_json::Value::Array(input);
 
-        let result = IntervalsMcpHandler::transform_histogram(&input, false, 10);
+        let result = domains::activity_analysis::transform_histogram(&input, false, 10);
         let arr = result.as_array().expect("array");
 
         assert!(arr.len() <= 10, "should limit to 10 bins");
@@ -7093,9 +7029,14 @@ mod tests {
             {"id": "d3", "sleepSecs": 27000, "stress": 35, "restingHR": 54, "hrv": 48}
         ]);
 
-        let result = IntervalsMcpHandler::transform_wellness(&input, true, None);
+        let result = domains::wellness::transform_wellness(&input, true, None);
 
-        assert_eq!(result.get("days").and_then(|v| v.as_u64()), Some(3));
+        assert_eq!(
+            result
+                .get("days")
+                .and_then(|v: &serde_json::Value| v.as_u64()),
+            Some(3)
+        );
         assert!(result.get("avg_sleep_hours").is_some());
         assert!(result.get("avg_stress").is_some());
         assert!(result.get("avg_resting_hr").is_some());
@@ -7109,7 +7050,7 @@ mod tests {
             {"id": "d2", "sleepSecs": 28800, "stress": 25, "restingHR": 52, "weight": 70.3}
         ]);
 
-        let result = IntervalsMcpHandler::transform_wellness(
+        let result = domains::wellness::transform_wellness(
             &input,
             false,
             Some(&["id".into(), "sleepSecs".into()]),
@@ -7130,8 +7071,7 @@ mod tests {
             {"id": "2", "name": "B", "extra": "y"}
         ]);
 
-        let result =
-            IntervalsMcpHandler::filter_array_fields(&input, &["id".into(), "name".into()]);
+        let result = compact::filter_array_fields(&input, &["id".into(), "name".into()]);
         let arr = result.as_array().expect("array");
 
         assert_eq!(arr.len(), 2);

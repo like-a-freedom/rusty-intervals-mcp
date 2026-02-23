@@ -2,7 +2,7 @@
 
 /// Normalize start_date_local for events: preserve time when provided;
 /// if only date is given, set time to 00:00:00.
-/// 
+///
 /// Accepts:
 /// - YYYY-MM-DD -> YYYY-MM-DDT00:00:00
 /// - RFC3339 datetime -> YYYY-MM-DDTHH:MM:SS
