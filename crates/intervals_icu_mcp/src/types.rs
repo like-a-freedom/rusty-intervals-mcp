@@ -68,6 +68,17 @@ pub struct ActivityIdParam {
     pub activity_id: String,
 }
 
+/// Parameters for get_event with optional compact mode
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct GetEventParams {
+    /// Event ID
+    pub event_id: EventId,
+    /// Return compact summary (default: true)
+    pub compact: Option<bool>,
+    /// Specific fields to return (default: id,name,start_date_local,category,type,description)
+    pub fields: Option<Vec<String>>,
+}
+
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct BulkCreateEventsToolParams {
     /// Array of calendar events to create (title, start_date_local, category, etc.)
@@ -488,6 +499,10 @@ pub struct GearIdParam {
 pub struct CreateGearReminderParams {
     pub gear_id: String,
     pub reminder: serde_json::Value,
+    /// Return compact summary (default: true)
+    pub compact: Option<bool>,
+    /// Specific fields to return (default: id,name,due_date,snoozed)
+    pub response_fields: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -497,6 +512,10 @@ pub struct UpdateGearReminderParams {
     pub reset: bool,
     pub snooze_days: u32,
     pub fields: serde_json::Value,
+    /// Return compact summary (default: true)
+    pub compact: Option<bool>,
+    /// Specific fields to return (default: id,name,due_date,snoozed)
+    pub response_fields: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -509,16 +528,35 @@ pub struct UpdateSportSettingsParams {
     pub sport_type: String,
     pub recalc_hr_zones: bool,
     pub fields: serde_json::Value,
+    /// Return compact summary (default: true)
+    pub compact: Option<bool>,
+    /// Specific fields to return (default: type,ftp,fthr,hrZones,powerZones)
+    pub response_fields: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct ApplySportSettingsParams {
     pub sport_type: String,
+    /// Return compact summary (default: true)
+    pub compact: Option<bool>,
+    /// Specific fields to return
+    pub response_fields: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct CreateSportSettingsParams {
     pub settings: serde_json::Value,
+    /// Return compact summary (default: true)
+    pub compact: Option<bool>,
+    /// Specific fields to return (default: type,ftp,fthr,hrZones,powerZones)
+    pub response_fields: Option<Vec<String>>,
+}
+
+/// Parameters for list_downloads with optional limit
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct ListDownloadsParams {
+    /// Maximum downloads to return (default: all)
+    pub limit: Option<u32>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
