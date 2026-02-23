@@ -1137,21 +1137,24 @@ mod tests {
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
-    // Configure logging from env var `INTERVALS_ICU_LOG_LEVEL` (or fallback to `RUST_LOG`, default `info`).
-    let log_env = std::env::var("INTERVALS_ICU_LOG_LEVEL")
-        .or_else(|_| std::env::var("RUST_LOG"))
-        .unwrap_or_else(|_| "info".to_string());
+    // Configure logging from standard `RUST_LOG` environment variable.
+    // See https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html
+    let log_env = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
+
     // Default to compact, human-friendly output and silence very verbose
     // RMCP-internal debug fields by default (they can be enabled via env).
-    let env_filter = tracing_subscriber::EnvFilter::try_new(log_env.clone())
+    let combined_filter = format!("{},rmcp=warn", log_env);
+    let env_filter = tracing_subscriber::EnvFilter::try_new(&combined_filter)
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,rmcp=warn"));
+
     tracing_subscriber::fmt()
         .compact()
         .with_ansi(false)
         .with_target(false)
         .with_env_filter(env_filter)
         .init();
-    tracing::info!(%log_env, "intervals_icu_mcp:http: log filter");
+
+    tracing::info!(%combined_filter, "intervals_icu_mcp:http: log filter");
 
     let builder = PrometheusBuilder::new();
     let handle = builder.install_recorder()?;

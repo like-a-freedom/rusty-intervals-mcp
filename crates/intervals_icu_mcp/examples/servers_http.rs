@@ -14,14 +14,12 @@ async fn metrics(handle: PrometheusHandle) -> impl IntoResponse {
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
-    // Configure logging from env var `INTERVALS_ICU_LOG_LEVEL` (or fallback to `RUST_LOG`, default `info`).
-    let log_env = std::env::var("INTERVALS_ICU_LOG_LEVEL")
-        .or_else(|_| std::env::var("RUST_LOG"))
-        .unwrap_or_else(|_| "info".to_string());
-    let env_filter = tracing_subscriber::EnvFilter::try_new(log_env.clone())
+    // Configure logging from standard `RUST_LOG` environment variable.
+    let log_env = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
+    let env_filter = tracing_subscriber::EnvFilter::try_new(&log_env)
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
     tracing_subscriber::fmt().with_env_filter(env_filter).init();
-    eprintln!("intervals_icu_mcp:example:http: log filter = {}", log_env);
+    tracing::info!("intervals_icu_mcp:example:http: log filter = {}", log_env);
 
     // Install prometheus recorder
     let builder = PrometheusBuilder::new();

@@ -2,11 +2,9 @@
 /// These tests verify configuration and initialization behavior
 
 #[test]
-fn test_log_env_priority() {
-    // Verify INTERVALS_ICU_LOG_LEVEL takes priority over RUST_LOG
-    let result = std::env::var("INTERVALS_ICU_LOG_LEVEL")
-        .or_else(|_| std::env::var("RUST_LOG"))
-        .unwrap_or_else(|_| "info".to_string());
+fn test_log_env_standard() {
+    // Verify RUST_LOG is used (standard Rust logging variable)
+    let result = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
     assert!(!result.is_empty());
 }
 

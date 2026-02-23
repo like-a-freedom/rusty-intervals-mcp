@@ -4,15 +4,15 @@ use intervals_icu_mcp::IntervalsMcpHandler;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Configure logging from env var `INTERVALS_ICU_LOG_LEVEL` (or fallback to `RUST_LOG`, default `info`).
-    let log_env = std::env::var("INTERVALS_ICU_LOG_LEVEL")
-        .or_else(|_| std::env::var("RUST_LOG"))
-        .unwrap_or_else(|_| "info".to_string());
+    // Configure logging from standard `RUST_LOG` environment variable.
+    // See https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html
+    let log_env = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
 
     // Append per-target overrides to keep rmcp internals quiet by default
     let combined_filter = format!("{},rmcp=warn,serve_inner=warn", log_env);
-    let env_filter = tracing_subscriber::EnvFilter::try_new(combined_filter)
+    let env_filter = tracing_subscriber::EnvFilter::try_new(&combined_filter)
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,rmcp=warn,serve_inner=warn"));
+
     tracing_subscriber::fmt()
         .compact()
         .with_writer(std::io::stderr)
@@ -20,7 +20,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_target(false)
         .with_env_filter(env_filter)
         .init();
-    tracing::info!("intervals_icu_mcp: log filter: {}", log_env);
+
+    tracing::info!("intervals_icu_mcp: log filter: {}", combined_filter);
 
     let base = std::env::var("INTERVALS_ICU_BASE_URL")
         .unwrap_or_else(|_| "https://intervals.icu".to_string());

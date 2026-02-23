@@ -602,7 +602,7 @@ Prompt templates for common queries (accessible via prompt suggestions in Claude
 
 ### Environment
 
-See `.env.sample` for example environment variables. Set `INTERVALS_ICU_LOG_LEVEL` (info, warn, debug, trace) or `RUST_LOG` to control logging.
+See `.env.example` for example environment variables. Set `RUST_LOG` (info, warn, debug, trace) to control logging.
 
 ### Continuous Integration & Releases ✅
 
