@@ -15,6 +15,9 @@ All notable changes to this project will be documented in this file.
 - Chore: Bump crate versions to 0.3.12 and prepare release artifacts.
 - Fix: Address clippy warnings and formatting; inline webhook tests and remove duplicate external test files.
 
+## [1.0.0] - 2026-02-23
+- Bump crate versions to 1.0.0 for initial stable release.
+
 ## [Unreleased]
 
 ### Added
