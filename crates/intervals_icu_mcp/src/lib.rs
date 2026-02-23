@@ -220,19 +220,36 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_event",
-        description = "Get a calendar event by ID. Returns event details including title, date, category, and description"
+        description = "Get a calendar event by ID. Params: event_id, compact (default true), fields (filter). Returns event details including title, date, category, and description"
     )]
     async fn get_event(
         &self,
-        params: Parameters<ActivityIdParam>,
-    ) -> Result<Json<intervals_icu_client::Event>, String> {
+        params: Parameters<GetEventParams>,
+    ) -> Result<Json<ObjectResult>, String> {
         let p = params.0;
+        let event_id = p.event_id.as_cow().into_owned();
         let ev = self
             .client
-            .get_event(&p.activity_id)
+            .get_event(&event_id)
             .await
             .map_err(|e| e.to_string())?;
-        Ok(Json(ev))
+
+        // Apply compact mode
+        let result = if p.compact.unwrap_or(true) {
+            Self::compact_json_event(
+                &serde_json::to_value(&ev).map_err(|e| e.to_string())?,
+                p.fields.as_deref(),
+            )
+        } else if let Some(ref fields) = p.fields {
+            Self::filter_fields(
+                &serde_json::to_value(&ev).map_err(|e| e.to_string())?,
+                fields,
+            )
+        } else {
+            serde_json::to_value(ev).map_err(|e| e.to_string())?
+        };
+
+        Ok(Json(ObjectResult { value: result }))
     }
 
     #[tool(name = "delete_event", description = "Delete a calendar event by ID")]
@@ -869,10 +886,20 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "list_downloads",
-        description = "List all activity downloads and their current status (Pending/InProgress/Completed/Failed)"
+        description = "List all activity downloads and their current status (Pending/InProgress/Completed/Failed). Params: limit (optional, default: all)."
     )]
-    async fn list_downloads(&self) -> Result<Json<DownloadListResult>, String> {
-        let list = self.download_service().list_downloads().await;
+    async fn list_downloads(
+        &self,
+        params: Parameters<ListDownloadsParams>,
+    ) -> Result<Json<DownloadListResult>, String> {
+        let p = params.0;
+        let mut list = self.download_service().list_downloads().await;
+        
+        // Apply limit if specified
+        if let Some(limit) = p.limit {
+            list.truncate(limit as usize);
+        }
+        
         Ok(Json(DownloadListResult { downloads: list }))
     }
 
@@ -1621,7 +1648,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "create_gear_reminder",
-        description = "Set maintenance reminder for gear."
+        description = "Set maintenance reminder for gear. Params: gear_id, reminder data, compact (default true), response_fields (filter)."
     )]
     async fn create_gear_reminder(
         &self,
@@ -1633,12 +1660,22 @@ impl IntervalsMcpHandler {
             .create_gear_reminder(&p.gear_id, &p.reminder)
             .await
             .map_err(|e| e.to_string())?;
-        Ok(Json(ObjectResult { value: v }))
+
+        // Apply compact mode to response
+        let result = if p.compact.unwrap_or(true) {
+            Self::filter_fields(&v, p.response_fields.as_deref().unwrap_or(&[]))
+        } else if let Some(ref response_fields) = p.response_fields {
+            Self::filter_fields(&v, response_fields)
+        } else {
+            v
+        };
+
+        Ok(Json(ObjectResult { value: result }))
     }
 
     #[tool(
         name = "update_gear_reminder",
-        description = "Update or snooze gear reminder. Params: reset, snooze_days."
+        description = "Update or snooze gear reminder. Params: gear_id, reminder_id, reset, snooze_days, fields, compact (default true), response_fields (filter)."
     )]
     async fn update_gear_reminder(
         &self,
@@ -1656,14 +1693,24 @@ impl IntervalsMcpHandler {
             )
             .await
             .map_err(|e| e.to_string())?;
-        Ok(Json(ObjectResult { value: v }))
+
+        // Apply compact mode to response
+        let result = if p.compact.unwrap_or(true) {
+            Self::filter_fields(&v, p.response_fields.as_deref().unwrap_or(&[]))
+        } else if let Some(ref response_fields) = p.response_fields {
+            Self::filter_fields(&v, response_fields)
+        } else {
+            v
+        };
+
+        Ok(Json(ObjectResult { value: result }))
     }
 
     // === Sport Settings ===
 
     #[tool(
         name = "update_sport_settings",
-        description = "Update sport settings: FTP, FTHR, pace thresholds, zones."
+        description = "Update sport settings: FTP, FTHR, pace thresholds, zones. Params: sport_type, recalc_hr_zones, fields, compact (default true), response_fields (filter)."
     )]
     async fn update_sport_settings(
         &self,
@@ -1675,12 +1722,23 @@ impl IntervalsMcpHandler {
             .update_sport_settings(&p.sport_type, p.recalc_hr_zones, &p.fields)
             .await
             .map_err(|e| e.to_string())?;
-        Ok(Json(ObjectResult { value: v }))
+
+        // Apply compact mode to response
+        let default_fields = vec!["type".to_string(), "ftp".to_string(), "fthr".to_string(), "hrZones".to_string(), "powerZones".to_string()];
+        let result = if p.compact.unwrap_or(true) {
+            Self::filter_fields(&v, p.response_fields.as_deref().unwrap_or(&default_fields))
+        } else if let Some(ref response_fields) = p.response_fields {
+            Self::filter_fields(&v, response_fields)
+        } else {
+            v
+        };
+
+        Ok(Json(ObjectResult { value: result }))
     }
 
     #[tool(
         name = "apply_sport_settings",
-        description = "Apply sport settings to all historical activities."
+        description = "Apply sport settings to all historical activities. Params: sport_type, compact (default true), response_fields (filter)."
     )]
     async fn apply_sport_settings(
         &self,
@@ -1692,12 +1750,22 @@ impl IntervalsMcpHandler {
             .apply_sport_settings(&p.sport_type)
             .await
             .map_err(|e| e.to_string())?;
-        Ok(Json(ObjectResult { value: v }))
+
+        // Apply compact mode to response
+        let result = if p.compact.unwrap_or(true) {
+            Self::filter_fields(&v, p.response_fields.as_deref().unwrap_or(&[]))
+        } else if let Some(ref response_fields) = p.response_fields {
+            Self::filter_fields(&v, response_fields)
+        } else {
+            v
+        };
+
+        Ok(Json(ObjectResult { value: result }))
     }
 
     #[tool(
         name = "create_sport_settings",
-        description = "Create new sport-specific settings profile for a new sport type"
+        description = "Create new sport-specific settings profile for a new sport type. Params: settings, compact (default true), response_fields (filter)."
     )]
     async fn create_sport_settings(
         &self,
@@ -1709,7 +1777,18 @@ impl IntervalsMcpHandler {
             .create_sport_settings(&p.settings)
             .await
             .map_err(|e| e.to_string())?;
-        Ok(Json(ObjectResult { value: v }))
+
+        // Apply compact mode to response
+        let default_fields = vec!["type".to_string(), "ftp".to_string(), "fthr".to_string(), "hrZones".to_string(), "powerZones".to_string()];
+        let result = if p.compact.unwrap_or(true) {
+            Self::filter_fields(&v, p.response_fields.as_deref().unwrap_or(&default_fields))
+        } else if let Some(ref response_fields) = p.response_fields {
+            Self::filter_fields(&v, response_fields)
+        } else {
+            v
+        };
+
+        Ok(Json(ObjectResult { value: result }))
     }
 
     #[tool(
@@ -5304,7 +5383,7 @@ mod tests {
         }
 
         // list_downloads should include our id
-        let list = handler.list_downloads().await.expect("list");
+        let list = handler.list_downloads(Parameters(ListDownloadsParams { limit: None })).await.expect("list");
         assert!(
             list.0
                 .downloads
@@ -7409,6 +7488,8 @@ mod tests {
         let params = CreateGearReminderParams {
             gear_id: "g1".into(),
             reminder: serde_json::json!({"type": "service", "due_distance": 1000}),
+            compact: None,
+            response_fields: None,
         };
         let res = handler.create_gear_reminder(Parameters(params)).await;
         assert!(res.is_ok());
@@ -7424,6 +7505,8 @@ mod tests {
             reset: false,
             snooze_days: 7,
             fields: serde_json::json!({"due_distance": 2000}),
+            compact: None,
+            response_fields: None,
         };
         let res = handler.update_gear_reminder(Parameters(params)).await;
         assert!(res.is_ok());
@@ -7437,6 +7520,8 @@ mod tests {
             sport_type: "Run".into(),
             recalc_hr_zones: false,
             fields: serde_json::json!({"ftp": 250}),
+            compact: None,
+            response_fields: None,
         };
         let res = handler.update_sport_settings(Parameters(params)).await;
         assert!(res.is_ok());
@@ -7448,6 +7533,8 @@ mod tests {
         let handler = IntervalsMcpHandler::new(Arc::new(client));
         let params = ApplySportSettingsParams {
             sport_type: "Run".into(),
+            compact: None,
+            response_fields: None,
         };
         let res = handler.apply_sport_settings(Parameters(params)).await;
         assert!(res.is_ok());
@@ -7459,6 +7546,8 @@ mod tests {
         let handler = IntervalsMcpHandler::new(Arc::new(client));
         let params = CreateSportSettingsParams {
             settings: serde_json::json!({"sport_type": "Run", "ftp": 250}),
+            compact: None,
+            response_fields: None,
         };
         let res = handler.create_sport_settings(Parameters(params)).await;
         assert!(res.is_ok());
