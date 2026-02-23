@@ -1,16 +1,27 @@
 use serde_json::{Map, Value};
 
+// Re-export date normalization utilities from transforms
+pub use crate::transforms::{normalize_date_str, normalize_event_start};
+
+/// Default fields for compact event listings
+const DEFAULT_COMPACT_FIELDS: &[&str] = &["id", "start_date_local", "name", "category", "type"];
+
+/// Default fields for full event details
+const DEFAULT_EVENT_FIELDS: &[&str] = &[
+    "id",
+    "name",
+    "start_date_local",
+    "category",
+    "type",
+    "description",
+];
+
 pub fn compact_events(
     events: Vec<intervals_icu_client::Event>,
     compact: bool,
     fields: Option<&[String]>,
 ) -> Vec<Value> {
-    let default_fields = ["id", "start_date_local", "name", "category", "type"];
-    let fields_to_use: Vec<&str> = if compact {
-        fields
-            .map(|f| f.iter().map(|s| s.as_str()).collect())
-            .unwrap_or_else(|| default_fields.to_vec())
-    } else {
+    if !compact {
         return events
             .into_iter()
             .map(|e| {
@@ -29,96 +40,23 @@ pub fn compact_events(
                 }
             })
             .collect();
-    };
+    }
 
     events
         .into_iter()
-        .map(|event| {
-            let mut result = Map::new();
-            let event_json = serde_json::to_value(&event).unwrap_or_default();
-
-            if let Some(obj) = event_json.as_object() {
-                for field in &fields_to_use {
-                    if let Some(val) = obj.get(*field) {
-                        result.insert(field.to_string(), val.clone());
-                    }
-                }
-            }
-
-            Value::Object(result)
-        })
+        .map(|event| crate::compact::compact_item(&event, DEFAULT_COMPACT_FIELDS, fields))
         .collect()
-}
-
-pub fn normalize_date_str(s: &str) -> Option<String> {
-    if chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").is_ok() {
-        return Some(s.to_string());
-    }
-    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
-        return Some(dt.date_naive().format("%Y-%m-%d").to_string());
-    }
-    if let Ok(ndt) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S") {
-        return Some(ndt.date().format("%Y-%m-%d").to_string());
-    }
-    None
-}
-
-pub fn normalize_event_start(s: &str) -> Option<String> {
-    if chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").is_ok() {
-        return Some(format!("{}T00:00:00", s));
-    }
-    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
-        return Some(dt.naive_local().format("%Y-%m-%dT%H:%M:%S").to_string());
-    }
-    if let Ok(ndt) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S") {
-        return Some(ndt.format("%Y-%m-%dT%H:%M:%S").to_string());
-    }
-    None
 }
 
 pub fn compact_single_event(
     event: &intervals_icu_client::Event,
     fields: Option<&[String]>,
 ) -> Value {
-    let default_fields = [
-        "id",
-        "name",
-        "start_date_local",
-        "category",
-        "type",
-        "description",
-    ];
-    let fields_to_use: Vec<&str> = fields
-        .map(|f| f.iter().map(|s| s.as_str()).collect())
-        .unwrap_or_else(|| default_fields.to_vec());
-
-    let mut result = Map::new();
-    let event_json = serde_json::to_value(event).unwrap_or_default();
-
-    if let Some(obj) = event_json.as_object() {
-        for field in &fields_to_use {
-            if let Some(val) = obj.get(*field) {
-                result.insert(field.to_string(), val.clone());
-            }
-        }
-    }
-
-    Value::Object(result)
+    crate::compact::compact_item(event, DEFAULT_EVENT_FIELDS, fields)
 }
 
 pub fn filter_event_fields(event: &intervals_icu_client::Event, fields: &[String]) -> Value {
-    let mut result = Map::new();
-    let event_json = serde_json::to_value(event).unwrap_or_default();
-
-    if let Some(obj) = event_json.as_object() {
-        for field in fields {
-            if let Some(val) = obj.get(field) {
-                result.insert(field.clone(), val.clone());
-            }
-        }
-    }
-
-    Value::Object(result)
+    crate::compact::compact_item(event, &[], Some(fields))
 }
 
 pub fn compact_events_from_value(
@@ -128,30 +66,8 @@ pub fn compact_events_from_value(
     fields: Option<&[String]>,
 ) -> Value {
     if compact {
-        let default_fields = ["id", "name", "start_date_local", "category", "type"];
-        let fields_to_use: Vec<&str> = fields
-            .map(|f| f.iter().map(|s| s.as_str()).collect())
-            .unwrap_or_else(|| default_fields.to_vec());
-
         let arr = value.as_array().cloned().unwrap_or_default();
-        let compacted: Vec<Value> = arr
-            .iter()
-            .take(limit)
-            .map(|item| {
-                let Some(obj) = item.as_object() else {
-                    return item.clone();
-                };
-                let mut result = Map::new();
-                for field in &fields_to_use {
-                    if let Some(val) = obj.get(*field) {
-                        result.insert(field.to_string(), val.clone());
-                    }
-                }
-                Value::Object(result)
-            })
-            .collect();
-
-        Value::Array(compacted)
+        crate::compact::compact_array(&Value::Array(arr), DEFAULT_COMPACT_FIELDS, fields, Some(limit))
     } else if let Some(field_list) = fields {
         crate::compact::filter_array_fields(value, field_list)
     } else {
@@ -204,30 +120,7 @@ pub fn validate_and_prepare_event(
 }
 
 pub fn compact_json_event(value: &Value, fields: Option<&[String]>) -> Value {
-    let default_fields = [
-        "id",
-        "name",
-        "start_date_local",
-        "category",
-        "type",
-        "description",
-    ];
-    let fields_to_use: Vec<&str> = fields
-        .map(|f| f.iter().map(|s| s.as_str()).collect())
-        .unwrap_or_else(|| default_fields.to_vec());
-
-    let Some(obj) = value.as_object() else {
-        return value.clone();
-    };
-
-    let mut result = Map::new();
-    for field in &fields_to_use {
-        if let Some(val) = obj.get(*field) {
-            result.insert(field.to_string(), val.clone());
-        }
-    }
-
-    Value::Object(result)
+    crate::compact::compact_object(value, DEFAULT_EVENT_FIELDS, fields)
 }
 
 #[cfg(test)]

@@ -9,6 +9,7 @@ pub mod config;
 pub mod http_client;
 pub mod observability;
 pub mod retry;
+pub mod utils;
 
 #[derive(Clone, Debug)]
 pub struct BestEffortsOptions {

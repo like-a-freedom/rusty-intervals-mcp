@@ -1,54 +1,16 @@
-use serde_json::{Map, Value};
+use serde_json::Value;
+
+/// Default fields for gear items
+const DEFAULT_FIELDS: &[&str] = &["id", "name", "type", "distance", "brand", "model"];
 
 /// Compact gear list to essential fields
 pub fn compact_gear_list(value: &Value, fields: Option<&[String]>) -> Value {
-    let default_fields = ["id", "name", "type", "distance", "brand", "model"];
-    let fields_to_use: Vec<&str> = fields
-        .map(|f| f.iter().map(|s| s.as_str()).collect())
-        .unwrap_or_else(|| default_fields.to_vec());
-
-    let Some(arr) = value.as_array() else {
-        return value.clone();
-    };
-
-    let compacted: Vec<Value> = arr
-        .iter()
-        .map(|item| {
-            let Some(obj) = item.as_object() else {
-                return item.clone();
-            };
-            let mut result = Map::new();
-            for field in &fields_to_use {
-                if let Some(val) = obj.get(*field) {
-                    result.insert(field.to_string(), val.clone());
-                }
-            }
-            Value::Object(result)
-        })
-        .collect();
-
-    Value::Array(compacted)
+    crate::compact::compact_array(value, DEFAULT_FIELDS, fields, None)
 }
 
 /// Compact a single gear item to essential fields
 pub fn compact_gear_item(value: &Value, fields: Option<&[String]>) -> Value {
-    let default_fields = ["id", "name", "type", "distance", "brand", "model"];
-    let fields_to_use: Vec<&str> = fields
-        .map(|f| f.iter().map(|s| s.as_str()).collect())
-        .unwrap_or_else(|| default_fields.to_vec());
-
-    let Some(obj) = value.as_object() else {
-        return value.clone();
-    };
-
-    let mut result = Map::new();
-    for field in &fields_to_use {
-        if let Some(val) = obj.get(*field) {
-            result.insert(field.to_string(), val.clone());
-        }
-    }
-
-    Value::Object(result)
+    crate::compact::compact_object(value, DEFAULT_FIELDS, fields)
 }
 
 #[cfg(test)]

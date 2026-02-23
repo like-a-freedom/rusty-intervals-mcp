@@ -39,6 +39,29 @@ impl ReqwestIntervalsClient {
         }
     }
 
+    /// Build an API URL from path segments.
+    /// 
+    /// # Arguments
+    /// * `segments` - Path segments (e.g., `&["athlete", athlete_id, "events"]`)
+    /// 
+    /// # Returns
+    /// Full URL like `https://intervals.icu/api/v1/athlete/i123/events`
+    fn api_url(&self, segments: &[&str]) -> String {
+        let mut url = format!("{}/api/v1", self.base_url);
+        for segment in segments {
+            url.push('/');
+            url.push_str(segment);
+        }
+        url
+    }
+
+    /// Build query parameters from a vector of (key, String) pairs.
+    /// 
+    /// This is a helper to avoid repeating the conversion from Vec<(&str, String)> to Vec<(&str, &str)>.
+    fn build_query<'a>(&'a self, params: &'a [(&str, String)]) -> Vec<(&'a str, &'a str)> {
+        params.iter().map(|(k, v)| (*k, v.as_str())).collect()
+    }
+
     /// Build an authenticated GET request.
     fn get_request(&self, url: &str) -> reqwest::RequestBuilder {
         self.client
@@ -238,26 +261,14 @@ impl ReqwestIntervalsClient {
     /// Normalize start_date_local for events: preserve time when provided;
     /// if only date is given, set time to 00:00:00.
     fn normalize_event_start(s: &str) -> Option<String> {
-        if chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").is_ok() {
-            return Some(format!("{}T00:00:00", s));
-        }
-        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
-            return Some(dt.naive_local().format("%Y-%m-%dT%H:%M:%S").to_string());
-        }
-        if let Ok(ndt) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S") {
-            return Some(ndt.format("%Y-%m-%dT%H:%M:%S").to_string());
-        }
-        None
+        crate::utils::normalize_event_start(s)
     }
 }
 
 #[async_trait]
 impl IntervalsClient for ReqwestIntervalsClient {
     async fn get_athlete_profile(&self) -> Result<AthleteProfile, IntervalsError> {
-        let url = format!(
-            "{}/api/v1/athlete/{}/profile",
-            self.base_url, self.athlete_id
-        );
+        let url = self.api_url(&["athlete", &self.athlete_id, "profile"]);
         let resp = self.get_request(&url).send().await?;
         let status = resp.status();
         if !status.is_success() {
@@ -289,10 +300,7 @@ impl IntervalsClient for ReqwestIntervalsClient {
         limit: Option<u32>,
         days_back: Option<i32>,
     ) -> Result<Vec<crate::ActivitySummary>, IntervalsError> {
-        let url = format!(
-            "{}/api/v1/athlete/{}/activities",
-            self.base_url, self.athlete_id
-        );
+        let url = self.api_url(&["athlete", &self.athlete_id, "activities"]);
         let today = Utc::now().date_naive();
         let oldest = today - Duration::days(days_back.unwrap_or(7) as i64);
 
@@ -303,16 +311,12 @@ impl IntervalsClient for ReqwestIntervalsClient {
         if let Some(limit) = limit {
             pairs.push(("limit", limit.to_string()));
         }
-        let qp: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (*k, v.as_str())).collect();
 
-        self.execute_json(self.get_request(&url).query(&qp)).await
+        self.execute_json(self.get_request(&url).query(&self.build_query(&pairs))).await
     }
 
     async fn create_event(&self, event: crate::Event) -> Result<crate::Event, IntervalsError> {
-        let url = format!(
-            "{}/api/v1/athlete/{}/events",
-            self.base_url, self.athlete_id
-        );
+        let url = self.api_url(&["athlete", &self.athlete_id, "events"]);
 
         let mut ev = event;
         ev.start_date_local =
@@ -331,10 +335,7 @@ impl IntervalsClient for ReqwestIntervalsClient {
     }
 
     async fn get_event(&self, event_id: &str) -> Result<crate::Event, IntervalsError> {
-        let url = format!(
-            "{}/api/v1/athlete/{}/events/{}",
-            self.base_url, self.athlete_id, event_id
-        );
+        let url = self.api_url(&["athlete", &self.athlete_id, "events", event_id]);
         let resp = self.get_request(&url).send().await?;
         if !resp.status().is_success() {
             return Err(self.error_from_response(resp).await);
@@ -349,10 +350,7 @@ impl IntervalsClient for ReqwestIntervalsClient {
     }
 
     async fn delete_event(&self, event_id: &str) -> Result<(), IntervalsError> {
-        let url = format!(
-            "{}/api/v1/athlete/{}/events/{}",
-            self.base_url, self.athlete_id, event_id
-        );
+        let url = self.api_url(&["athlete", &self.athlete_id, "events", event_id]);
         self.execute_empty(self.delete_request(&url)).await
     }
 
@@ -361,10 +359,7 @@ impl IntervalsClient for ReqwestIntervalsClient {
         days_back: Option<i32>,
         limit: Option<u32>,
     ) -> Result<Vec<crate::Event>, IntervalsError> {
-        let url = format!(
-            "{}/api/v1/athlete/{}/events",
-            self.base_url, self.athlete_id
-        );
+        let url = self.api_url(&["athlete", &self.athlete_id, "events"]);
         let mut pairs: Vec<(&str, String)> = Vec::new();
         if let Some(d) = days_back {
             pairs.push(("days_back", d.to_string()));
@@ -372,8 +367,7 @@ impl IntervalsClient for ReqwestIntervalsClient {
         if let Some(l) = limit {
             pairs.push(("limit", l.to_string()));
         }
-        let qp: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (*k, v.as_str())).collect();
-        self.execute_json(self.get_request(&url).query(&qp)).await
+        self.execute_json(self.get_request(&url).query(&self.build_query(&pairs))).await
     }
 
     async fn bulk_create_events(
@@ -1247,23 +1241,5 @@ mod tests {
             ReqwestIntervalsClient::normalize_sport("MountainBikeRide"),
             "MountainBikeRide"
         );
-    }
-
-    #[test]
-    fn normalize_event_start_accepts_date_only() {
-        let result = ReqwestIntervalsClient::normalize_event_start("2025-12-15");
-        assert_eq!(result.unwrap(), "2025-12-15T00:00:00");
-    }
-
-    #[test]
-    fn normalize_event_start_preserves_datetime() {
-        let result = ReqwestIntervalsClient::normalize_event_start("2025-12-15T10:30:00");
-        assert_eq!(result.unwrap(), "2025-12-15T10:30:00");
-    }
-
-    #[test]
-    fn normalize_event_start_rejects_invalid() {
-        let result = ReqwestIntervalsClient::normalize_event_start("not-a-date");
-        assert!(result.is_none());
     }
 }

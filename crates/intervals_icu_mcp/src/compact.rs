@@ -6,6 +6,20 @@
 
 use serde_json::Value;
 
+/// Macro to simplify the common pattern of resolving fields_to_use from optional custom fields.
+/// 
+/// Usage: `let fields_to_use = resolve_fields!(default_fields, fields);`
+/// 
+/// Where `fields` is `Option<&[String]>` and `default_fields` is `&[&str]`
+#[macro_export]
+macro_rules! resolve_fields {
+    ($defaults:expr, $fields:expr) => {
+        $fields
+            .map(|f| f.iter().map(|s| s.as_str()).collect())
+            .unwrap_or_else(|| $defaults.to_vec())
+    };
+}
+
 /// Default field sets for different entity types
 pub mod defaults {
     /// Fields for activity summaries
@@ -212,6 +226,51 @@ pub fn compact_single<T: serde::Serialize>(
 ) -> Value {
     let value = serde_json::to_value(item).unwrap_or_default();
     compact_object(&value, default_fields, fields)
+}
+
+/// Compact a serializable item to a JSON object, applying default or custom fields.
+/// 
+/// This is a convenience wrapper that handles the common pattern of:
+/// 1. Serializing an item to JSON
+/// 2. Filtering to default fields or custom fields
+/// 
+/// # Arguments
+/// * `item` - Item to serialize and compact
+/// * `default_fields` - Default fields to use if no custom fields provided
+/// * `fields` - Optional custom fields (overrides defaults)
+pub fn compact_item<T: serde::Serialize>(
+    item: &T,
+    default_fields: &[&str],
+    fields: Option<&[String]>,
+) -> Value {
+    let value = serde_json::to_value(item).unwrap_or_default();
+    compact_object(&value, default_fields, fields)
+}
+
+/// Compact an array of serializable items with optional limiting.
+/// 
+/// # Arguments
+/// * `items` - Slice of items to compact
+/// * `default_fields` - Default fields to use
+/// * `fields` - Optional custom fields
+/// * `limit` - Optional maximum number of items to return
+pub fn compact_items<T: serde::Serialize>(
+    items: &[T],
+    default_fields: &[&str],
+    fields: Option<&[String]>,
+    limit: Option<usize>,
+) -> Value {
+    let iter: Box<dyn Iterator<Item = &T>> = if let Some(l) = limit {
+        Box::new(items.iter().take(l))
+    } else {
+        Box::new(items.iter())
+    };
+
+    let compacted: Vec<Value> = iter
+        .map(|item| compact_item(item, default_fields, fields))
+        .collect();
+
+    Value::Array(compacted)
 }
 
 /// Apply sport type filter to an array of sport settings
