@@ -519,7 +519,7 @@ Note: Intervals.icu event IDs are numeric; the MCP tools accept either numbers o
 | Tool | Description |
 |------|-------------|
 | `get_events` | Get planned events and workouts from calendar |
-| `get_upcoming_workouts` | Get upcoming planned workouts only |
+| `get_upcoming_workouts` | Get upcoming workouts (defaults to `WORKOUT`, supports `category=all`, and applies `limit` in compact/full modes) |
 | `get_event` | Get details for a specific event |
 | `create_event` | Create new calendar events (workouts, races, notes, goals) |
 | `update_event` | Modify existing calendar events |

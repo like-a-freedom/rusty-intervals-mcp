@@ -907,16 +907,33 @@ impl IntervalsClient for ReqwestIntervalsClient {
     async fn get_upcoming_workouts(
         &self,
         days_ahead: Option<u32>,
+        limit: Option<u32>,
+        category: Option<String>,
     ) -> Result<serde_json::Value, IntervalsError> {
         let url = format!(
             "{}/api/v1/athlete/{}/events",
             self.base_url, self.athlete_id
         );
-        let mut req = self.get_request(&url);
-        if let Some(d) = days_ahead {
-            req = req.query(&[("days_ahead", d.to_string())]);
+
+        let today = Utc::now().date_naive();
+        let horizon_days = days_ahead.unwrap_or(7) as i64;
+        let newest = today + Duration::days(horizon_days);
+
+        let mut pairs: Vec<(&str, String)> = vec![
+            ("oldest", today.to_string()),
+            ("newest", newest.to_string()),
+        ];
+
+        if let Some(l) = limit {
+            pairs.push(("limit", l.to_string()));
         }
-        self.execute_json(req).await
+
+        if let Some(c) = category.filter(|c| !c.trim().is_empty()) {
+            pairs.push(("category", c));
+        }
+
+        self.execute_json(self.get_request(&url).query(&self.build_query(&pairs)))
+            .await
     }
 
     async fn update_event(

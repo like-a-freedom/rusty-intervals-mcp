@@ -1420,6 +1420,8 @@ async fn get_upcoming_workouts_includes_oldest_and_newest() {
     let payload = serde_json::json!({ "items": [] });
     Mock::given(method("GET"))
         .and(path("/api/v1/athlete/ath/events"))
+        .and(query_param("limit", "100"))
+        .and(query_param("category", "WORKOUT"))
         .respond_with(ResponseTemplate::new(200).set_body_json(&payload))
         .mount(&server)
         .await;
@@ -1430,7 +1432,10 @@ async fn get_upcoming_workouts_includes_oldest_and_newest() {
         SecretString::new("tok".into()),
     );
 
-    let res = client.get_upcoming_workouts(Some(3)).await.expect("ok");
+    let res = client
+        .get_upcoming_workouts(Some(3), Some(100), Some("WORKOUT".to_string()))
+        .await
+        .expect("ok");
     assert!(res.get("items").is_some());
 }
 

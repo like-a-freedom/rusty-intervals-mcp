@@ -411,6 +411,9 @@ pub struct WellnessUpdateParams {
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct DaysAheadParams {
     pub days_ahead: Option<u32>,
+    /// Event category filter. Default: "WORKOUT".
+    /// Use "all" to include all event categories.
+    pub category: Option<String>,
     /// Return compact summaries (default: true)
     pub compact: Option<bool>,
     /// Maximum workouts to return (default: 20)

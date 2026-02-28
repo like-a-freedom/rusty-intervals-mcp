@@ -73,10 +73,17 @@ pub fn compact_events_from_value(
             fields,
             Some(limit),
         )
-    } else if let Some(field_list) = fields {
-        crate::compact::filter_array_fields(value, field_list)
     } else {
-        value.clone()
+        let limited = match value {
+            Value::Array(arr) => Value::Array(arr.iter().take(limit).cloned().collect()),
+            _ => value.clone(),
+        };
+
+        if let Some(field_list) = fields {
+            crate::compact::filter_array_fields(&limited, field_list)
+        } else {
+            limited
+        }
     }
 }
 
@@ -400,5 +407,21 @@ mod tests {
             Some(99),
             "extra preserved in non-compact mode"
         );
+    }
+
+    #[test]
+    fn compact_events_from_value_non_compact_applies_limit() {
+        use serde_json::json;
+        let input = json!([
+            {"id": "z1", "name": "A"},
+            {"id": "z2", "name": "B"},
+            {"id": "z3", "name": "C"}
+        ]);
+
+        let result = compact_events_from_value(&input, false, 2, None);
+        let arr = result.as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0].get("id").and_then(|v| v.as_str()), Some("z1"));
+        assert_eq!(arr[1].get("id").and_then(|v| v.as_str()), Some("z2"));
     }
 }

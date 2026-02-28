@@ -309,6 +309,8 @@ pub trait IntervalsClient: Send + Sync + 'static {
     async fn get_upcoming_workouts(
         &self,
         days_ahead: Option<u32>,
+        limit: Option<u32>,
+        category: Option<String>,
     ) -> Result<serde_json::Value, IntervalsError>;
 
     /// Update an existing event
