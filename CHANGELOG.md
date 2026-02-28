@@ -23,6 +23,10 @@ All notable changes to this project will be documented in this file.
 ### Added
 - Prepare for next release.
 
+## [1.0.1] - 2026-02-28
+- Chore: bump crate versions to 1.0.1 for patch release.
+
+
 
 ## [0.3.0] - 2025-12-16
 - Fix: `get_event` now returns a descriptive decoding error (includes a short snippet of the response body) when the API returns a payload that doesn't match the `Event` schema (e.g., when an `activity_id` is passed by mistake). See `docs/SPEC.md` and `docs/OPENAPI_EVENT_FIX.md` for details.
