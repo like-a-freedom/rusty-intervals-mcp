@@ -239,6 +239,8 @@ impl intervals_icu_client::IntervalsClient for MockClient {
     async fn get_upcoming_workouts(
         &self,
         _days_ahead: Option<u32>,
+        _limit: Option<u32>,
+        _category: Option<String>,
     ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
         Ok(json!({}))
     }

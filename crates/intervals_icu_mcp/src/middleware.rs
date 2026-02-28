@@ -464,9 +464,15 @@ impl<C: IntervalsClient + 'static> IntervalsClient for LoggingMiddleware<C> {
     async fn get_upcoming_workouts(
         &self,
         days_ahead: Option<u32>,
+        limit: Option<u32>,
+        category: Option<String>,
     ) -> Result<serde_json::Value, IntervalsError> {
         self.with_logging(
-            |client| async move { client.get_upcoming_workouts(days_ahead).await },
+            |client| async move {
+                client
+                    .get_upcoming_workouts(days_ahead, limit, category)
+                    .await
+            },
             "get_upcoming_workouts",
         )
         .await
@@ -945,6 +951,8 @@ mod tests {
         async fn get_upcoming_workouts(
             &self,
             _days_ahead: Option<u32>,
+            _limit: Option<u32>,
+            _category: Option<String>,
         ) -> Result<serde_json::Value, IntervalsError> {
             Ok(serde_json::json!({}))
         }

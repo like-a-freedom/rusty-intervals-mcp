@@ -1137,16 +1137,22 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_upcoming_workouts",
-        description = "Get scheduled workouts. Params: days_ahead (default 7), compact (default true), limit (default 20), fields (filter)."
+        description = "Get scheduled workouts. Params: days_ahead (default 7), category (default WORKOUT, use 'all' for all categories), compact (default true), limit (default 20), fields (filter)."
     )]
     async fn get_upcoming_workouts(
         &self,
         params: Parameters<DaysAheadParams>,
     ) -> Result<Json<ObjectResult>, String> {
         let p = params.0;
+        let category = match p.category.as_deref().map(str::trim) {
+            None | Some("") => Some("WORKOUT".to_string()),
+            Some(s) if s.eq_ignore_ascii_case("all") => None,
+            Some(s) => Some(s.to_string()),
+        };
+
         let v = self
             .client
-            .get_upcoming_workouts(p.days_ahead)
+            .get_upcoming_workouts(p.days_ahead, p.limit.or(Some(20)), category)
             .await
             .map_err(|e| e.to_string())?;
 
@@ -2396,6 +2402,8 @@ mod tests {
             async fn get_upcoming_workouts(
                 &self,
                 _days_ahead: Option<u32>,
+                _limit: Option<u32>,
+                _category: Option<String>,
             ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
                 Ok(serde_json::json!({}))
             }
@@ -2990,6 +2998,8 @@ mod tests {
             async fn get_upcoming_workouts(
                 &self,
                 _days_ahead: Option<u32>,
+                _limit: Option<u32>,
+                _category: Option<String>,
             ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
                 Ok(serde_json::json!({}))
             }
@@ -3389,6 +3399,8 @@ mod tests {
             async fn get_upcoming_workouts(
                 &self,
                 _days_ahead: Option<u32>,
+                _limit: Option<u32>,
+                _category: Option<String>,
             ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
                 Ok(serde_json::json!({}))
             }
@@ -3832,6 +3844,8 @@ mod tests {
         async fn get_upcoming_workouts(
             &self,
             _days_ahead: Option<u32>,
+            _limit: Option<u32>,
+            _category: Option<String>,
         ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
             Ok(serde_json::json!({}))
         }
@@ -4307,6 +4321,8 @@ mod tests {
             async fn get_upcoming_workouts(
                 &self,
                 _days_ahead: Option<u32>,
+                _limit: Option<u32>,
+                _category: Option<String>,
             ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
                 Ok(serde_json::json!({}))
             }
@@ -4760,6 +4776,8 @@ mod tests {
             async fn get_upcoming_workouts(
                 &self,
                 _days_ahead: Option<u32>,
+                _limit: Option<u32>,
+                _category: Option<String>,
             ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
                 Ok(serde_json::json!({}))
             }
@@ -5177,6 +5195,8 @@ mod tests {
             async fn get_upcoming_workouts(
                 &self,
                 _days_ahead: Option<u32>,
+                _limit: Option<u32>,
+                _category: Option<String>,
             ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
                 Ok(serde_json::json!({}))
             }
@@ -5596,6 +5616,8 @@ mod tests {
             async fn get_upcoming_workouts(
                 &self,
                 _days_ahead: Option<u32>,
+                _limit: Option<u32>,
+                _category: Option<String>,
             ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
                 Ok(serde_json::json!({}))
             }
@@ -6173,6 +6195,8 @@ mod tests {
             async fn get_upcoming_workouts(
                 &self,
                 _days_ahead: Option<u32>,
+                _limit: Option<u32>,
+                _category: Option<String>,
             ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
                 Ok(serde_json::json!({}))
             }
@@ -7214,6 +7238,7 @@ mod tests {
             days_ahead: Some(14),
             compact: None,
             limit: None,
+            category: None,
             fields: None,
         };
         let res = handler.get_upcoming_workouts(Parameters(params)).await;

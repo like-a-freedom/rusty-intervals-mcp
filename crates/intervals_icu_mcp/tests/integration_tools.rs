@@ -373,7 +373,9 @@ async fn integration_get_sport_settings() {
 #[ignore = "requires real API credentials"]
 async fn integration_get_upcoming_workouts() {
     let client = create_client();
-    let result = client.get_upcoming_workouts(Some(14)).await;
+    let result = client
+        .get_upcoming_workouts(Some(14), Some(100), Some("WORKOUT".to_string()))
+        .await;
 
     assert!(
         result.is_ok(),

@@ -298,7 +298,9 @@ mod tests {
 
         async fn get_upcoming_workouts(
             &self,
+            _days_ahead: Option<u32>,
             _limit: Option<u32>,
+            _category: Option<String>,
         ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
             Ok(serde_json::json!([]))
         }
@@ -698,7 +700,9 @@ mod tests {
             }
             async fn get_upcoming_workouts(
                 &self,
+                _days_ahead: Option<u32>,
                 _limit: Option<u32>,
+                _category: Option<String>,
             ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
                 Ok(json!([]))
             }
