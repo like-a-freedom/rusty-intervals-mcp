@@ -184,7 +184,7 @@ pub struct SearchActivitiesFullParams {
 pub struct ActivityIntervalsParams {
     /// Activity ID
     pub activity_id: String,
-    /// Return summary statistics only (default: true)
+    /// Return summary statistics only (default: false)
     pub summary: Option<bool>,
     /// Maximum intervals to return (default: 20)
     pub max_intervals: Option<u32>,
@@ -197,7 +197,7 @@ pub struct ActivityIntervalsParams {
 pub struct BestEffortsCompactParams {
     /// Activity ID
     pub activity_id: String,
-    /// Stream to analyze: power, heartrate, speed, pace, cadence, distance
+    /// Stream to analyze: watts (power), heartrate, speed, pace, cadence, distance. Aliases 'power'→'watts' and 'hr'→'heartrate' are also accepted.
     pub stream: String,
     /// Duration in seconds (REQUIRED: provide duration OR distance, not both)
     pub duration: Option<i32>,
@@ -205,7 +205,7 @@ pub struct BestEffortsCompactParams {
     pub distance: Option<f64>,
     /// Max results (default: 5)
     pub count: Option<i32>,
-    /// Return summary only (default: true)
+    /// Return summary only (default: false)
     pub summary: Option<bool>,
     /// Minimum value threshold
     pub min_value: Option<f64>,
@@ -227,7 +227,7 @@ pub struct CurvesParams {
     pub days_back: Option<i32>,
     /// Specific durations in seconds to return (e.g., [5, 60, 300, 1200, 3600])
     pub durations: Option<Vec<u32>>,
-    /// Return summary with key durations only (default: true)
+    /// Return summary with key durations only (default: false)
     pub summary: Option<bool>,
 }
 
@@ -267,7 +267,7 @@ pub struct GearListParams {
 pub struct HistogramParams {
     /// Activity ID
     pub activity_id: String,
-    /// Return summary statistics only (default: true)
+    /// Return summary statistics only (default: false)
     pub summary: Option<bool>,
     /// Number of bins (default: 10, max: 50)
     pub bins: Option<u32>,
@@ -278,7 +278,7 @@ pub struct HistogramParams {
 pub struct WellnessParams {
     /// Days back (default: 7)
     pub days_back: Option<i32>,
-    /// Return summary/trends only (default: true)
+    /// Return summary/trends only (default: false)
     pub summary: Option<bool>,
     /// Specific fields to return (default: all)
     pub fields: Option<Vec<String>>,
