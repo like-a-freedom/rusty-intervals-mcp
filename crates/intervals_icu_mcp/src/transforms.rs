@@ -40,6 +40,7 @@ pub fn normalize_event_start(s: &str) -> Option<String> {
 }
 
 /// Extract compact activity summary from full details.
+#[allow(dead_code)]
 pub fn extract_activity_summary(value: &Value, fields: Option<&[String]>) -> Value {
     let default_fields = [
         "id",
@@ -76,6 +77,7 @@ pub fn extract_activity_summary(value: &Value, fields: Option<&[String]>) -> Val
 }
 
 /// Compact an array of activities to essential fields only.
+#[allow(dead_code)]
 pub fn compact_activities_array(value: &Value, custom_fields: Option<&[String]>) -> Value {
     let default_fields = [
         "id",
@@ -118,6 +120,7 @@ pub fn compact_activities_array(value: &Value, custom_fields: Option<&[String]>)
 }
 
 /// Filter CSV to limit rows and columns.
+#[allow(dead_code)]
 pub fn filter_csv(csv: &str, max_rows: usize, columns: Option<&[String]>) -> String {
     let mut lines = csv.lines();
     let Some(header) = lines.next() else {
