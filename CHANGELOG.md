@@ -22,6 +22,7 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 - Prepare for next release.
+- Bump crate versions to 1.1.0 for both `intervals_icu_client` and `intervals_icu_mcp`.
 - Dynamic OpenAPI MCP runtime in `intervals_icu_mcp`: tools are generated from OpenAPI, dispatched through a generic HTTP path, and merged with compatibility aliases and internal webhook/download tools.
 - Preserved MCP prompts/resources and compact-aware response filtering in the new dynamic dispatch flow.
 - OpenAPI tag-scoping controls via `INTERVALS_INCLUDE_TAGS` and `INTERVALS_EXCLUDE_TAGS` (default scope: all tags).
