@@ -1,11 +1,12 @@
 use std::borrow::Cow;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 
 use rmcp::ErrorData;
-use rmcp::model::{CallToolResult, Content, JsonObject, ListToolsResult, Tool, ToolAnnotations};
+use rmcp::model::{CallToolResult, JsonObject, ListToolsResult, Tool, ToolAnnotations};
 use serde_json::{Map, Value};
 
 const OPENAPI_DEFAULT_PATH: &str = "/api/v1/docs";
@@ -40,12 +41,6 @@ pub struct DynamicRegistry {
 }
 
 impl DynamicRegistry {
-    pub fn empty() -> Self {
-        Self {
-            operations: HashMap::new(),
-        }
-    }
-
     pub fn operation(&self, name: &str) -> Option<&DynamicOperation> {
         self.operations.get(name)
     }
@@ -65,6 +60,14 @@ impl DynamicRegistry {
     }
 
     pub fn from_openapi(spec: &Value) -> Result<Self, String> {
+        Self::from_openapi_with_tags(spec, &HashSet::new(), &HashSet::new())
+    }
+
+    pub fn from_openapi_with_tags(
+        spec: &Value,
+        include_tags: &HashSet<String>,
+        exclude_tags: &HashSet<String>,
+    ) -> Result<Self, String> {
         let mut operations = HashMap::new();
         let Some(paths_obj) = spec.get("paths").and_then(Value::as_object) else {
             return Err("OpenAPI spec has no 'paths' object".to_string());
@@ -85,6 +88,11 @@ impl DynamicRegistry {
                 let Some(op) = path_item_obj.get(method_name).and_then(Value::as_object) else {
                     continue;
                 };
+
+                let operation_tags = extract_operation_tags(op);
+                if should_filter_operation(&operation_tags, include_tags, exclude_tags) {
+                    continue;
+                }
 
                 if contains_multipart(op) {
                     continue;
@@ -233,17 +241,46 @@ pub struct DynamicRuntime {
     pub athlete_id: String,
     pub api_key: String,
     pub spec_source: Option<String>,
+    include_tags: Arc<HashSet<String>>,
+    exclude_tags: Arc<HashSet<String>>,
+    refresh_interval: Duration,
+    last_refresh_attempt: Arc<tokio::sync::Mutex<Option<Instant>>>,
     registry: Arc<tokio::sync::RwLock<Option<Arc<DynamicRegistry>>>>,
     cached_tool_count: Arc<AtomicUsize>,
 }
 
 impl DynamicRuntime {
-    pub fn from_env() -> Self {
-        let base_url = std::env::var("INTERVALS_ICU_BASE_URL")
-            .unwrap_or_else(|_| "https://intervals.icu".to_string());
-        let athlete_id = std::env::var("INTERVALS_ICU_ATHLETE_ID").unwrap_or_default();
-        let api_key = std::env::var("INTERVALS_ICU_API_KEY").unwrap_or_default();
-        let spec_source = std::env::var("INTERVALS_ICU_OPENAPI_SPEC").ok();
+    pub fn new(
+        base_url: String,
+        athlete_id: String,
+        api_key: String,
+        spec_source: Option<String>,
+        include_tags_raw: Option<String>,
+        exclude_tags_raw: Option<String>,
+        refresh_interval: Duration,
+    ) -> Self {
+        let include_tags = parse_tag_set(include_tags_raw.as_deref());
+        let exclude_tags = parse_tag_set(exclude_tags_raw.as_deref());
+
+        if !include_tags.is_empty() && !exclude_tags.is_empty() {
+            tracing::warn!(
+                "Both INTERVALS_INCLUDE_TAGS and INTERVALS_EXCLUDE_TAGS are set; INTERVALS_EXCLUDE_TAGS will be ignored"
+            );
+        }
+
+        if include_tags.is_empty() && exclude_tags.is_empty() {
+            tracing::debug!("Tool scope mode: all OpenAPI tags enabled (default)");
+        } else if !include_tags.is_empty() {
+            tracing::debug!(
+                include_tags = ?include_tags,
+                "Tool scope mode: include-only tag filter"
+            );
+        } else {
+            tracing::debug!(
+                exclude_tags = ?exclude_tags,
+                "Tool scope mode: exclude tag filter"
+            );
+        }
 
         Self {
             http_client: reqwest::Client::new(),
@@ -251,9 +288,37 @@ impl DynamicRuntime {
             athlete_id,
             api_key,
             spec_source,
+            include_tags: Arc::new(include_tags),
+            exclude_tags: Arc::new(exclude_tags),
+            refresh_interval,
+            last_refresh_attempt: Arc::new(tokio::sync::Mutex::new(None)),
             registry: Arc::new(tokio::sync::RwLock::new(None)),
             cached_tool_count: Arc::new(AtomicUsize::new(0)),
         }
+    }
+
+    pub fn from_env() -> Self {
+        let base_url = std::env::var("INTERVALS_ICU_BASE_URL")
+            .unwrap_or_else(|_| "https://intervals.icu".to_string());
+        let athlete_id = std::env::var("INTERVALS_ICU_ATHLETE_ID").unwrap_or_default();
+        let api_key = std::env::var("INTERVALS_ICU_API_KEY").unwrap_or_default();
+        let spec_source = std::env::var("INTERVALS_ICU_OPENAPI_SPEC").ok();
+        let include_tags_raw = std::env::var("INTERVALS_INCLUDE_TAGS").ok();
+        let exclude_tags_raw = std::env::var("INTERVALS_EXCLUDE_TAGS").ok();
+        let refresh_secs = std::env::var("INTERVALS_ICU_SPEC_REFRESH_SECS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(300);
+
+        Self::new(
+            base_url,
+            athlete_id,
+            api_key,
+            spec_source,
+            include_tags_raw,
+            exclude_tags_raw,
+            Duration::from_secs(refresh_secs),
+        )
     }
 
     pub fn cached_tool_count(&self) -> usize {
@@ -262,23 +327,80 @@ impl DynamicRuntime {
 
     pub async fn ensure_registry(&self) -> Result<Arc<DynamicRegistry>, ErrorData> {
         if let Some(existing) = self.registry.read().await.clone() {
-            return Ok(existing);
+            if !self.should_attempt_refresh().await {
+                tracing::debug!(
+                    refresh_interval_secs = self.refresh_interval.as_secs(),
+                    "OpenAPI registry cache hit; refresh skipped"
+                );
+                return Ok(existing);
+            }
+
+            tracing::debug!("OpenAPI registry cache hit; attempting refresh");
+            match self.try_build_registry().await {
+                Ok(parsed) => {
+                    self.cached_tool_count
+                        .store(parsed.len(), Ordering::Relaxed);
+                    let mut write = self.registry.write().await;
+                    *write = Some(parsed.clone());
+                    tracing::debug!(
+                        tool_count = parsed.len(),
+                        "OpenAPI registry refresh succeeded"
+                    );
+                    return Ok(parsed);
+                }
+                Err(err) => {
+                    tracing::debug!(
+                        error = %err,
+                        "OpenAPI registry refresh failed; using cached registry"
+                    );
+                    return Ok(existing);
+                }
+            }
         }
 
-        let spec = self.load_spec().await.map_err(|e| {
-            ErrorData::internal_error(format!("failed to load OpenAPI spec: {e}"), None)
+        tracing::debug!("OpenAPI registry cache miss; loading spec");
+        let parsed = self.try_build_registry().await.map_err(|e| {
+            ErrorData::internal_error(format!("failed to build OpenAPI registry: {e}"), None)
         })?;
-        let parsed = DynamicRegistry::from_openapi(&spec).map_err(|e| {
-            ErrorData::internal_error(format!("failed to parse OpenAPI spec: {e}"), None)
-        })?;
-
-        let parsed = Arc::new(parsed);
         self.cached_tool_count
             .store(parsed.len(), Ordering::Relaxed);
 
         let mut write = self.registry.write().await;
         *write = Some(parsed.clone());
         Ok(parsed)
+    }
+
+    async fn should_attempt_refresh(&self) -> bool {
+        if self.refresh_interval.is_zero() {
+            return true;
+        }
+
+        let mut guard = self.last_refresh_attempt.lock().await;
+        let now = Instant::now();
+
+        match *guard {
+            Some(last) if now.duration_since(last) < self.refresh_interval => false,
+            _ => {
+                *guard = Some(now);
+                true
+            }
+        }
+    }
+
+    async fn try_build_registry(&self) -> Result<Arc<DynamicRegistry>, String> {
+        let spec = self.load_spec().await?;
+        let use_exclude = self.include_tags.is_empty();
+        let empty_exclude = HashSet::new();
+        let parsed = DynamicRegistry::from_openapi_with_tags(
+            &spec,
+            &self.include_tags,
+            if use_exclude {
+                &self.exclude_tags
+            } else {
+                &empty_exclude
+            },
+        )?;
+        Ok(Arc::new(parsed))
     }
 
     async fn load_spec(&self) -> Result<Value, String> {
@@ -570,6 +692,47 @@ fn value_to_query(value: &Value) -> String {
     }
 }
 
+fn parse_tag_set(tags: Option<&str>) -> HashSet<String> {
+    tags.unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_ascii_lowercase())
+        .collect()
+}
+
+fn extract_operation_tags(op: &Map<String, Value>) -> Vec<String> {
+    op.get("tags")
+        .and_then(Value::as_array)
+        .map(|tags| {
+            tags.iter()
+                .filter_map(Value::as_str)
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+fn should_filter_operation(
+    operation_tags: &[String],
+    include_tags: &HashSet<String>,
+    exclude_tags: &HashSet<String>,
+) -> bool {
+    if !include_tags.is_empty() {
+        return !operation_tags
+            .iter()
+            .any(|tag| include_tags.contains(&tag.to_ascii_lowercase()));
+    }
+
+    if !exclude_tags.is_empty() {
+        return operation_tags
+            .iter()
+            .any(|tag| exclude_tags.contains(&tag.to_ascii_lowercase()));
+    }
+
+    false
+}
+
 #[derive(Debug, Clone)]
 pub struct CompatAlias {
     pub alias_name: Cow<'static, str>,
@@ -722,6 +885,105 @@ pub fn merge_tools(
     }
 }
 
-pub fn result_text(text: impl Into<String>) -> CallToolResult {
-    CallToolResult::success(vec![Content::text(text.into())])
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn spec_with_tagged_operations() -> Value {
+        serde_json::json!({
+            "openapi": "3.0.0",
+            "paths": {
+                "/api/v1/athlete/{id}/wellness": {
+                    "get": {
+                        "operationId": "getWellness",
+                        "tags": ["Wellness"],
+                        "parameters": [
+                            {"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}
+                        ]
+                    }
+                },
+                "/api/v1/athlete/{id}/gear": {
+                    "get": {
+                        "operationId": "getGear",
+                        "tags": ["Gear"],
+                        "parameters": [
+                            {"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}
+                        ]
+                    }
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn tag_filter_include_only_keeps_matching_operations() {
+        let mut include = HashSet::new();
+        include.insert("wellness".to_string());
+
+        let registry = DynamicRegistry::from_openapi_with_tags(
+            &spec_with_tagged_operations(),
+            &include,
+            &HashSet::new(),
+        )
+        .expect("registry should parse");
+
+        assert!(registry.operation("getWellness").is_some());
+        assert!(registry.operation("getGear").is_none());
+    }
+
+    #[test]
+    fn tag_filter_exclude_removes_matching_operations() {
+        let mut exclude = HashSet::new();
+        exclude.insert("gear".to_string());
+
+        let registry = DynamicRegistry::from_openapi_with_tags(
+            &spec_with_tagged_operations(),
+            &HashSet::new(),
+            &exclude,
+        )
+        .expect("registry should parse");
+
+        assert!(registry.operation("getWellness").is_some());
+        assert!(registry.operation("getGear").is_none());
+    }
+
+    #[tokio::test]
+    async fn cached_registry_is_used_when_refresh_fails() {
+        let tmp_file =
+            std::env::temp_dir().join(format!("intervals_openapi_{}.json", uuid::Uuid::new_v4()));
+
+        let initial_spec = serde_json::to_string(&spec_with_tagged_operations())
+            .expect("spec serialization should succeed");
+        tokio::fs::write(&tmp_file, initial_spec)
+            .await
+            .expect("initial spec file should be written");
+
+        let runtime = DynamicRuntime::new(
+            "https://intervals.icu".to_string(),
+            "i123".to_string(),
+            "api_key".to_string(),
+            Some(tmp_file.to_string_lossy().to_string()),
+            None,
+            None,
+            Duration::ZERO,
+        );
+
+        let first = runtime
+            .ensure_registry()
+            .await
+            .expect("first load should work");
+        assert!(first.operation("getWellness").is_some());
+
+        tokio::fs::write(&tmp_file, "{ this is not valid json")
+            .await
+            .expect("broken spec should be written");
+
+        let second = runtime
+            .ensure_registry()
+            .await
+            .expect("should use cached registry when refresh fails");
+        assert!(second.operation("getWellness").is_some());
+
+        let _ = tokio::fs::remove_file(&tmp_file).await;
+    }
 }

@@ -24,9 +24,13 @@ All notable changes to this project will be documented in this file.
 - Prepare for next release.
 - Dynamic OpenAPI MCP runtime in `intervals_icu_mcp`: tools are generated from OpenAPI, dispatched through a generic HTTP path, and merged with compatibility aliases and internal webhook/download tools.
 - Preserved MCP prompts/resources and compact-aware response filtering in the new dynamic dispatch flow.
+- OpenAPI tag-scoping controls via `INTERVALS_INCLUDE_TAGS` and `INTERVALS_EXCLUDE_TAGS` (default scope: all tags).
+- Dynamic runtime tests for tag filtering and cache fallback on failed OpenAPI refresh.
 
 ### Changed
 - Replaced legacy hardcoded runtime tool routing with `ServerHandler`-based dynamic `list_tools`/`call_tool` implementation.
+- Runtime registry lifecycle is now cache-first with periodic refresh attempts (`INTERVALS_ICU_SPEC_REFRESH_SECS`) and graceful fallback to the last valid cache when refresh fails.
+- Removed dead legacy helpers from `transforms.rs` and deleted unused `src/test_utils.rs`.
 
 ### Quality
 - Validation gates pass locally: `cargo fmt --all -- --check`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo test --all-targets --all-features`.
