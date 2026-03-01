@@ -460,10 +460,16 @@ impl DynamicRuntime {
                         continue;
                     }
 
-                    let replacement = args
-                        .get(&p.name)
-                        .and_then(stringify_argument)
-                        .unwrap_or_default();
+                    // require explicit value for non-injected path parameters
+                    let replacement =
+                        args.get(&p.name)
+                            .and_then(stringify_argument)
+                            .ok_or_else(|| {
+                                ErrorData::invalid_params(
+                                    format!("missing required path parameter: {}", p.name),
+                                    None,
+                                )
+                            })?;
                     path = path.replace(&format!("{{{}}}", p.name), &replacement);
                 }
                 ParamLocation::Query => {
@@ -1155,6 +1161,49 @@ mod tests {
             as_value["structuredContent"]["body"]["weeks"],
             Value::from(4)
         );
+    }
+
+    #[tokio::test]
+    async fn dispatch_openapi_missing_path_param_errors() {
+        let server = MockServer::start().await;
+        // this path would be called if id substituted with empty string
+        Mock::given(method("GET"))
+            .and(path("/api/v1/activity//map"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+
+        let runtime = DynamicRuntime::new(
+            server.uri(),
+            "ath-1".to_string(),
+            "secret".to_string(),
+            None,
+            None,
+            None,
+            Duration::from_secs(300),
+        );
+
+        let schema = JsonObject::new();
+        let operation = DynamicOperation {
+            name: "getActivityMap".to_string(),
+            method: reqwest::Method::GET,
+            path_template: "/api/v1/activity/{id}/map".to_string(),
+            description: "Get activity map data".to_string(),
+            params: vec![ParamSpec {
+                name: "id".to_string(),
+                location: ParamLocation::Path,
+                auto_injected: false,
+            }],
+            has_json_body: false,
+            tool: Tool::new("getActivityMap", "Get activity map", Arc::new(schema)),
+        };
+
+        let err = runtime
+            .dispatch_openapi(&operation, Some(&JsonObject::new()))
+            .await
+            .expect_err("should error when path param missing");
+
+        assert!(err.message.contains("missing required path parameter"));
     }
 
     #[test]
