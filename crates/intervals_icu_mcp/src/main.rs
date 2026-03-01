@@ -24,10 +24,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tracing::info!("intervals_icu_mcp: log filter: {}", combined_filter);
 
+    // Fail-fast validation: ensure required credentials are set before proceeding
     let base = std::env::var("INTERVALS_ICU_BASE_URL")
         .unwrap_or_else(|_| "https://intervals.icu".to_string());
     let athlete = std::env::var("INTERVALS_ICU_ATHLETE_ID").unwrap_or_else(|_| "".to_string());
     let api_key = std::env::var("INTERVALS_ICU_API_KEY").unwrap_or_else(|_| "".to_string());
+
+    if api_key.trim().is_empty() {
+        tracing::error!(
+            "INTERVALS_ICU_API_KEY is not set. \
+             Please set this environment variable to your Intervals.icu API key. \
+             See https://intervals.icu/settings -> Developer section."
+        );
+        std::process::exit(1);
+    }
+
+    if athlete.trim().is_empty() {
+        tracing::error!(
+            "INTERVALS_ICU_ATHLETE_ID is not set. \
+             Please set this environment variable to your athlete ID (format: i123456). \
+             You can find your athlete ID in your Intervals.icu profile URL."
+        );
+        std::process::exit(1);
+    }
+
+    tracing::info!(
+        athlete_id = %athlete,
+        base_url = %base,
+        "intervals_icu_mcp: credentials validated"
+    );
 
     let api_key = secrecy::SecretString::new(api_key.into());
     let client =

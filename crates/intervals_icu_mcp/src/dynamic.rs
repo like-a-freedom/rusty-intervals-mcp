@@ -114,7 +114,7 @@ impl DynamicRegistry {
                     .and_then(Value::as_str)
                     .or_else(|| op.get("description").and_then(Value::as_str))
                     .map(ToOwned::to_owned)
-                    .unwrap_or_else(|| format!("{} {}", method_name.to_uppercase(), path));
+                    .unwrap_or_else(|| generate_human_readable_description(method_name, path));
 
                 let mut merged_params = BTreeMap::<(String, String), Value>::new();
                 for p in &path_level_params {
@@ -743,6 +743,175 @@ fn generate_operation_name(method: &str, path: &str) -> String {
         cleaned = "root".to_string();
     }
     format!("{}_{}", method.to_ascii_lowercase(), cleaned)
+}
+
+/// Generate a human-readable description for an API operation when OpenAPI spec
+/// doesn't provide summary/description.
+///
+/// This function applies heuristics based on HTTP method and path patterns
+/// to create intuitive descriptions that help LLMs understand the tool's purpose.
+fn generate_human_readable_description(method: &str, path: &str) -> String {
+    let method_upper = method.to_uppercase();
+
+    // Extract path segments without parameters
+    let cleaned_path = path
+        .trim_matches('/')
+        .replace("/{", "/:")
+        .replace(['{', '}'], "");
+
+    // Pattern matching for common API endpoints
+    let action: String = match (method, cleaned_path.as_str()) {
+        // Activities
+        ("get", p) if p.contains("activities") && p.contains("around") => {
+            "Get activities before/after a specific activity".to_string()
+        }
+        ("get", p) if p.contains("activities") && p.contains("csv") => {
+            "Download activities as CSV file".to_string()
+        }
+        ("get", p) if p.contains("activities") => "List athlete's activities".to_string(),
+        ("get", p) if p.contains("activity") && p.contains("streams") => {
+            "Get time-series data streams from activity (power, heart rate, etc.)".to_string()
+        }
+        ("get", p) if p.contains("activity") && p.contains("intervals") => {
+            "Get structured intervals from activity".to_string()
+        }
+        ("get", p) if p.contains("activity") && p.contains("best-efforts") => {
+            "Get best efforts from activity".to_string()
+        }
+        ("get", p) if p.contains("activity") && p.contains("histogram") => {
+            "Get histogram distribution for activity data".to_string()
+        }
+        ("get", p) if p.contains("activity") && p.contains("map") => {
+            "Get map data for activity".to_string()
+        }
+        ("get", p) if p.contains("activity") && p.contains("file") => {
+            "Download activity file (FIT, GPX, or original format)".to_string()
+        }
+        ("get", p) if p.contains("activity") => {
+            "Get detailed information about an activity".to_string()
+        }
+        ("put", p) if p.contains("activity") => {
+            "Update activity metadata (name, type, gear, etc.)".to_string()
+        }
+        ("delete", p) if p.contains("activity") => {
+            "Delete an activity permanently".to_string()
+        }
+
+        // Wellness
+        ("get", p) if p.contains("wellness") && p.contains("athlete") => {
+            "Get wellness records for date range".to_string()
+        }
+        ("get", p) if p.contains("wellness") => {
+            "Get wellness data for a specific date".to_string()
+        }
+        ("put", p) if p.contains("wellness") => {
+            "Update or create wellness record".to_string()
+        }
+
+        // Events/Calendar
+        ("get", p) if p.contains("events") && p.contains("upcoming") => {
+            "Get upcoming planned workouts".to_string()
+        }
+        ("get", p) if p.contains("events") => "List calendar events".to_string(),
+        ("get", p) if p.contains("event") => {
+            "Get details of a specific calendar event".to_string()
+        }
+        ("post", p) if p.contains("events") && p.contains("bulk") => {
+            "Create multiple calendar events at once".to_string()
+        }
+        ("post", p) if p.contains("events") && p.contains("duplicate") => {
+            "Duplicate calendar event(s)".to_string()
+        }
+        ("post", p) if p.contains("event") => "Create a new calendar event".to_string(),
+        ("put", p) if p.contains("event") && p.contains("bulk") => {
+            "Delete multiple calendar events".to_string()
+        }
+        ("put", p) if p.contains("event") => {
+            "Update calendar event details".to_string()
+        }
+        ("delete", p) if p.contains("event") => "Delete a calendar event".to_string(),
+
+        // Athlete/Profile
+        ("get", p) if p.contains("athlete") && p.contains("profile") => {
+            "Get athlete profile information".to_string()
+        }
+        ("get", p) if p.contains("athlete") && p.contains("summary") => {
+            "Get athlete fitness summary".to_string()
+        }
+        ("get", p) if p.contains("athlete") && p.contains("curves") => {
+            "Get performance curves (power, heart rate, or pace)".to_string()
+        }
+        ("get", p) if p.contains("athlete") => "Get athlete profile and settings".to_string(),
+
+        // Gear
+        ("get", p) if p.contains("gear") && p.contains("reminder") => {
+            "Get gear maintenance reminders".to_string()
+        }
+        ("get", p) if p.contains("gear") => "List athlete's gear inventory".to_string(),
+        ("post", p) if p.contains("gear") && p.contains("reminder") => {
+            "Create gear maintenance reminder".to_string()
+        }
+        ("post", p) if p.contains("gear") => "Add new gear to inventory".to_string(),
+        ("put", p) if p.contains("gear") && p.contains("reminder") => {
+            "Update gear maintenance reminder".to_string()
+        }
+        ("put", p) if p.contains("gear") => "Update gear details or distance".to_string(),
+        ("delete", p) if p.contains("gear") => "Delete gear from inventory".to_string(),
+
+        // Sport Settings
+        ("get", p) if p.contains("sport-settings") || p.contains("settings") => {
+            "Get sport-specific settings (FTP, FTHR, zones)".to_string()
+        }
+        ("post", p) if p.contains("sport-settings") || p.contains("settings") => {
+            "Create new sport settings".to_string()
+        }
+        ("put", p) if p.contains("sport-settings") && p.contains("apply") => {
+            "Apply sport settings to historical activities".to_string()
+        }
+        ("put", p) if p.contains("sport-settings") || p.contains("settings") => {
+            "Update sport settings and recalculate zones".to_string()
+        }
+        ("delete", p) if p.contains("sport-settings") || p.contains("settings") => {
+            "Delete sport settings".to_string()
+        }
+
+        // Workout Library
+        ("get", p) if p.contains("workouts") && p.contains("folder") => {
+            "Get workouts in a specific folder".to_string()
+        }
+        ("get", p) if p.contains("workouts") || p.contains("folders") => {
+            "Get workout library folders and workouts".to_string()
+        }
+        ("post", p) if p.contains("folders") => {
+            "Create new workout folder or training plan".to_string()
+        }
+        ("put", p) if p.contains("folders") => {
+            "Update workout folder or training plan".to_string()
+        }
+        ("delete", p) if p.contains("folders") => {
+            "Delete workout folder and all contained workouts".to_string()
+        }
+
+        // Intervals Search
+        ("get", p) if p.contains("intervals") && p.contains("search") => {
+            "Search for intervals across all activities by duration and intensity".to_string()
+        }
+
+        // Default fallback
+        _ => {
+            let action_word = match method {
+                "get" => "Retrieve",
+                "post" => "Create",
+                "put" => "Update",
+                "patch" => "Modify",
+                "delete" => "Remove",
+                _ => "Access",
+            };
+            format!("{} {}", action_word, cleaned_path.replace("/", " "))
+        }
+    };
+
+    format!("{} via {} {}", action, method_upper, path)
 }
 
 fn is_auto_injected_athlete_param(name: &str, location: &str, path: &str) -> bool {
@@ -1504,5 +1673,98 @@ mod tests {
             .expect("should succeed");
         let as_val = serde_json::to_value(&result).unwrap();
         assert_eq!(as_val["structuredContent"], serde_json::json!({"a":1}));
+    }
+
+    #[test]
+    fn generate_human_readable_description_activities() {
+        assert!(
+            generate_human_readable_description("get", "/api/v1/athlete/{id}/activities")
+                .contains("activities")
+        );
+        assert!(
+            generate_human_readable_description("get", "/api/v1/activity/{id}/streams")
+                .contains("streams")
+        );
+        assert!(
+            generate_human_readable_description("get", "/api/v1/activity/{id}/intervals")
+                .contains("intervals")
+        );
+        assert!(
+            generate_human_readable_description("delete", "/api/v1/activity/{id}")
+                .contains("Delete")
+        );
+    }
+
+    #[test]
+    fn generate_human_readable_description_wellness() {
+        assert!(
+            generate_human_readable_description("get", "/api/v1/athlete/{id}/wellness")
+                .contains("wellness")
+        );
+        assert!(
+            generate_human_readable_description("put", "/api/v1/athlete/{id}/wellness")
+                .contains("Update")
+        );
+    }
+
+    #[test]
+    fn generate_human_readable_description_events() {
+        assert!(
+            generate_human_readable_description("get", "/api/v1/athlete/{id}/events")
+                .contains("events")
+        );
+        assert!(
+            generate_human_readable_description("post", "/api/v1/athlete/{id}/events")
+                .contains("Create")
+        );
+        assert!(
+            generate_human_readable_description("delete", "/api/v1/event/{id}").contains("Delete")
+        );
+    }
+
+    #[test]
+    fn generate_human_readable_description_gear() {
+        assert!(
+            generate_human_readable_description("get", "/api/v1/athlete/{id}/gear")
+                .contains("gear")
+        );
+        assert!(
+            generate_human_readable_description("post", "/api/v1/athlete/{id}/gear")
+                .contains("Add")
+        );
+        assert!(
+            generate_human_readable_description("delete", "/api/v1/gear/{id}").contains("Delete")
+        );
+    }
+
+    #[test]
+    fn generate_human_readable_description_sport_settings() {
+        assert!(
+            generate_human_readable_description("get", "/api/v1/athlete/{id}/sport-settings")
+                .contains("settings")
+        );
+        assert!(
+            generate_human_readable_description("put", "/api/v1/sport-settings/{id}/apply")
+                .contains("Apply")
+        );
+    }
+
+    #[test]
+    fn generate_human_readable_description_workouts() {
+        assert!(
+            generate_human_readable_description("get", "/api/v1/athlete/{id}/folders")
+                .contains("folders")
+        );
+        assert!(
+            generate_human_readable_description("post", "/api/v1/athlete/{id}/folders")
+                .contains("Create")
+        );
+    }
+
+    #[test]
+    fn generate_human_readable_description_fallback() {
+        let desc = generate_human_readable_description("get", "/api/v1/unknown/resource");
+        assert!(desc.contains("Retrieve"));
+        assert!(desc.contains("unknown resource"));
     }
 }

@@ -751,6 +751,8 @@ mod tests {
     #[tokio::test]
     async fn handler_registers_tools_and_prompts() {
         let handler = IntervalsMcpHandler::new(Arc::new(MockClient));
+        // tool_count() returns 0 initially because dynamic registry is not loaded yet
+        // tools are generated from OpenAPI spec on first ensure_registry() call
         assert_eq!(handler.tool_count(), 0);
         assert_eq!(handler.prompt_count(), 7);
     }
@@ -758,6 +760,63 @@ mod tests {
     #[test]
     fn tool_count_matches_internal_tools_without_cache() {
         let handler = IntervalsMcpHandler::new(Arc::new(MockClient));
+        // tool_count() reflects cached dynamic registry; returns 0 before first load
         assert_eq!(handler.tool_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn handler_dynamic_tools_loaded_from_openapi() {
+        // Create a minimal OpenAPI spec for testing
+        let tmp_file = std::env::temp_dir().join("intervals_openapi_test.json");
+
+        let test_spec = serde_json::json!({
+            "openapi": "3.0.0",
+            "info": {"title": "Test API", "version": "1.0.0"},
+            "paths": {
+                "/api/v1/athlete/{id}/activities": {
+                    "get": {
+                        "operationId": "getActivities",
+                        "summary": "List athlete activities",
+                        "parameters": [
+                            {"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}
+                        ]
+                    }
+                }
+            }
+        });
+
+        tokio::fs::write(&tmp_file, serde_json::to_string(&test_spec).unwrap())
+            .await
+            .expect("should write test spec");
+
+        // Set env var for spec source
+        let original_spec = std::env::var("INTERVALS_ICU_OPENAPI_SPEC").ok();
+        #[allow(unsafe_code)]
+        unsafe {
+            std::env::set_var(
+                "INTERVALS_ICU_OPENAPI_SPEC",
+                tmp_file.to_string_lossy().to_string(),
+            );
+        }
+
+        let handler = IntervalsMcpHandler::new(Arc::new(MockClient));
+
+        // Preload should load the registry
+        let count = handler.preload_dynamic_registry().await;
+        assert!(count > 0, "should load at least one tool from test spec");
+
+        // Cleanup
+        if let Some(original) = original_spec {
+            #[allow(unsafe_code)]
+            unsafe {
+                std::env::set_var("INTERVALS_ICU_OPENAPI_SPEC", original);
+            }
+        } else {
+            #[allow(unsafe_code)]
+            unsafe {
+                std::env::remove_var("INTERVALS_ICU_OPENAPI_SPEC");
+            }
+        }
+        let _ = tokio::fs::remove_file(&tmp_file).await;
     }
 }
