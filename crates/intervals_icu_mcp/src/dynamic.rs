@@ -213,9 +213,16 @@ impl DynamicRegistry {
 
                 add_response_control_properties(&mut schema_props);
 
+                // detect suffix parameters before we move schema_props
+                let has_suffix =
+                    schema_props.get("ext").is_some() || schema_props.get("format").is_some();
+
                 let mut input_schema = Map::new();
                 input_schema.insert("type".to_string(), Value::String("object".to_string()));
-                input_schema.insert("properties".to_string(), Value::Object(schema_props));
+                input_schema.insert(
+                    "properties".to_string(),
+                    Value::Object(schema_props.clone()),
+                );
                 if !required.is_empty() {
                     input_schema.insert("required".to_string(), Value::Array(required));
                 }
@@ -231,6 +238,10 @@ impl DynamicRegistry {
                 // augment description so LLMs know about built-in compact/fields/body_only
                 let mut full_desc = description.clone();
                 full_desc.push_str(" (supports compact, fields, and body_only response options)");
+                // if operation uses ext/format suffix, mention default empty
+                if has_suffix {
+                    full_desc.push_str(" Path suffix parameter is optional and defaults to empty.");
+                }
                 let mut tool = Tool::new(name.clone(), full_desc, Arc::new(schema_obj));
                 tool.annotations = Some(method_to_annotations(&method));
 
@@ -1378,10 +1389,20 @@ mod tests {
             .tool
             .clone();
         let summary_props =
-            &serde_json::to_value(summary_tool).unwrap()["inputSchema"]["properties"];
+            &serde_json::to_value(&summary_tool).unwrap()["inputSchema"]["properties"];
         assert_eq!(
             summary_props["ext"]["default"],
             Value::String(String::new())
+        );
+        // description should mention default/optional suffix
+        assert!(
+            summary_tool
+                .description
+                .as_ref()
+                .map(|d| d.contains("suffix"))
+                .unwrap_or(false),
+            "tool description {:?}",
+            summary_tool.description
         );
 
         let events_tool = registry
@@ -1389,10 +1410,20 @@ mod tests {
             .expect("operation should exist")
             .tool
             .clone();
-        let events_props = &serde_json::to_value(events_tool).unwrap()["inputSchema"]["properties"];
+        let events_props =
+            &serde_json::to_value(&events_tool).unwrap()["inputSchema"]["properties"];
         assert_eq!(
             events_props["format"]["default"],
             Value::String(String::new())
+        );
+        assert!(
+            events_tool
+                .description
+                .as_ref()
+                .map(|d| d.contains("suffix"))
+                .unwrap_or(false),
+            "tool description {:?}",
+            events_tool.description
         );
     }
 
