@@ -4,8 +4,8 @@ use std::sync::Arc;
 use rmcp::ErrorData;
 use rmcp::model::{
     AnnotateAble, CallToolRequestParams, CallToolResult, GetPromptRequestParams, GetPromptResult,
-    ListPromptsResult, ListResourcesResult, ListToolsResult, PaginatedRequestParams, Prompt,
-    PromptArgument, ReadResourceRequestParams, ReadResourceResult, ResourceContents,
+    JsonObject, ListPromptsResult, ListResourcesResult, ListToolsResult, PaginatedRequestParams,
+    Prompt, PromptArgument, ReadResourceRequestParams, ReadResourceResult, ResourceContents,
 };
 use rmcp::service::RequestContext;
 use rmcp::{RoleServer, ServerHandler};
@@ -80,6 +80,46 @@ impl IntervalsMcpHandler {
         services::WebhookService::new(self.webhooks.clone(), self.webhook_secret.clone())
     }
 
+    fn compact_internal_result(args: &JsonObject, value: serde_json::Value) -> CallToolResult {
+        let compact_enabled = args
+            .get("compact")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let response_fields = args
+            .get("fields")
+            .and_then(serde_json::Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned)
+                    .collect::<Vec<_>>()
+            });
+
+        let normalized = if compact_enabled {
+            match &value {
+                serde_json::Value::Object(_) => {
+                    if let Some(fields) = response_fields.as_ref() {
+                        crate::compact::filter_fields(&value, fields)
+                    } else {
+                        value
+                    }
+                }
+                serde_json::Value::Array(_) => {
+                    if let Some(fields) = response_fields.as_ref() {
+                        crate::compact::filter_array_fields(&value, fields)
+                    } else {
+                        value
+                    }
+                }
+                _ => value,
+            }
+        } else {
+            value
+        };
+
+        CallToolResult::structured(normalized)
+    }
+
     async fn call_internal_tool(
         &self,
         request: &CallToolRequestParams,
@@ -95,7 +135,8 @@ impl IntervalsMcpHandler {
                         ErrorData::invalid_params("missing required parameter: secret", None)
                     })?;
                 self.webhook_service().set_secret(secret.to_string()).await;
-                Ok(Some(CallToolResult::structured(
+                Ok(Some(Self::compact_internal_result(
+                    &args,
                     serde_json::json!({"ok": true}),
                 )))
             }
@@ -115,7 +156,8 @@ impl IntervalsMcpHandler {
                     .download_service()
                     .start_download(self.client.clone(), activity_id, output_path)
                     .await;
-                Ok(Some(CallToolResult::structured(
+                Ok(Some(Self::compact_internal_result(
+                    &args,
                     serde_json::json!({"download_id": download_id}),
                 )))
             }
@@ -131,7 +173,8 @@ impl IntervalsMcpHandler {
                     .get_status(id)
                     .await
                     .ok_or_else(|| ErrorData::invalid_params("download_id not found", None))?;
-                Ok(Some(CallToolResult::structured(
+                Ok(Some(Self::compact_internal_result(
+                    &args,
                     serde_json::to_value(status).map_err(|e| {
                         ErrorData::internal_error(format!("failed to serialize status: {e}"), None)
                     })?,
@@ -145,13 +188,15 @@ impl IntervalsMcpHandler {
                         ErrorData::invalid_params("missing required parameter: download_id", None)
                     })?;
                 let cancelled = self.download_service().cancel_download(id).await;
-                Ok(Some(CallToolResult::structured(
+                Ok(Some(Self::compact_internal_result(
+                    &args,
                     serde_json::json!({"cancelled": cancelled}),
                 )))
             }
             "list_downloads" => {
                 let downloads = self.download_service().list_downloads().await;
-                Ok(Some(CallToolResult::structured(
+                Ok(Some(Self::compact_internal_result(
+                    &args,
                     serde_json::to_value(downloads).map_err(|e| {
                         ErrorData::internal_error(
                             format!("failed to serialize downloads list: {e}"),
@@ -177,7 +222,7 @@ impl IntervalsMcpHandler {
                     .map_err(|e| {
                         ErrorData::internal_error(format!("webhook processing failed: {e}"), None)
                     })?;
-                Ok(Some(CallToolResult::structured(result.value)))
+                Ok(Some(Self::compact_internal_result(&args, result.value)))
             }
             _ => Ok(None),
         }
@@ -870,5 +915,33 @@ mod tests {
     fn tool_count_matches_internal_tools_without_cache() {
         let handler = IntervalsMcpHandler::new(Arc::new(MockClient));
         assert_eq!(handler.tool_count(), dynamic::internal_tools().len());
+    }
+
+    #[test]
+    fn compact_internal_result_filters_array_fields_when_enabled() {
+        let mut args = JsonObject::new();
+        args.insert("compact".to_string(), serde_json::Value::Bool(true));
+        args.insert("fields".to_string(), serde_json::json!(["id", "status"]));
+
+        let result = IntervalsMcpHandler::compact_internal_result(
+            &args,
+            serde_json::json!([
+                {"id": "d1", "status": "running", "extra": 1},
+                {"id": "d2", "status": "done", "extra": 2}
+            ]),
+        );
+
+        let value = serde_json::to_value(result).expect("result should serialize");
+        let content = &value["structuredContent"];
+
+        assert_eq!(
+            content[0]["id"],
+            serde_json::Value::String("d1".to_string())
+        );
+        assert_eq!(
+            content[0]["status"],
+            serde_json::Value::String("running".to_string())
+        );
+        assert!(content[0].get("extra").is_none());
     }
 }
