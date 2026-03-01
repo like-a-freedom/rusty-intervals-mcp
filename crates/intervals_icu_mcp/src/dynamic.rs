@@ -197,6 +197,8 @@ impl DynamicRegistry {
                     }
                 }
 
+                add_response_control_properties(&mut schema_props);
+
                 let mut input_schema = Map::new();
                 input_schema.insert("type".to_string(), Value::String("object".to_string()));
                 input_schema.insert("properties".to_string(), Value::Object(schema_props));
@@ -754,44 +756,87 @@ fn should_filter_operation(
     false
 }
 
+fn add_response_control_properties(schema_props: &mut Map<String, Value>) {
+    schema_props.entry("compact".to_string()).or_insert_with(|| {
+        serde_json::json!({
+            "type": "boolean",
+            "description": "Enable token-efficient response mode. When false, returns full response payload."
+        })
+    });
+
+    schema_props.entry("fields".to_string()).or_insert_with(|| {
+        serde_json::json!({
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Optional response field filter applied when compact=true."
+        })
+    });
+}
+
+fn build_internal_tool_schema(mut schema: Value) -> JsonObject {
+    if !schema.is_object() {
+        schema = serde_json::json!({ "type": "object", "properties": {} });
+    }
+
+    let Some(schema_obj) = schema.as_object_mut() else {
+        return JsonObject::new();
+    };
+
+    if !schema_obj.contains_key("type") {
+        schema_obj.insert("type".to_string(), Value::String("object".to_string()));
+    }
+
+    if !schema_obj
+        .get("properties")
+        .is_some_and(serde_json::Value::is_object)
+    {
+        schema_obj.insert("properties".to_string(), Value::Object(Map::new()));
+    }
+
+    if let Some(props) = schema_obj
+        .get_mut("properties")
+        .and_then(Value::as_object_mut)
+    {
+        add_response_control_properties(props);
+    }
+
+    serde_json::from_value(schema).unwrap_or_default()
+}
+
 pub fn internal_tools() -> Vec<Tool> {
-    let set_webhook_schema: JsonObject = serde_json::from_value(serde_json::json!({
+    let set_webhook_schema = build_internal_tool_schema(serde_json::json!({
         "type": "object",
         "properties": {
             "secret": { "type": "string" }
         },
         "required": ["secret"]
-    }))
-    .unwrap_or_default();
+    }));
 
-    let download_schema: JsonObject = serde_json::from_value(serde_json::json!({
+    let download_schema = build_internal_tool_schema(serde_json::json!({
         "type": "object",
         "properties": {
             "activity_id": { "type": "string" },
             "output_path": { "type": "string" }
         },
         "required": ["activity_id"]
-    }))
-    .unwrap_or_default();
+    }));
 
-    let id_schema: JsonObject = serde_json::from_value(serde_json::json!({
+    let id_schema = build_internal_tool_schema(serde_json::json!({
         "type": "object",
         "properties": {
             "download_id": { "type": "string" }
         },
         "required": ["download_id"]
-    }))
-    .unwrap_or_default();
+    }));
 
-    let webhook_schema: JsonObject = serde_json::from_value(serde_json::json!({
+    let webhook_schema = build_internal_tool_schema(serde_json::json!({
         "type": "object",
         "properties": {
             "signature": { "type": "string" },
             "payload": { "type": "object" }
         },
         "required": ["signature", "payload"]
-    }))
-    .unwrap_or_default();
+    }));
 
     vec![
         Tool::new(
@@ -817,7 +862,10 @@ pub fn internal_tools() -> Vec<Tool> {
         Tool::new(
             "list_downloads",
             "List all tracked downloads.",
-            Arc::new(JsonObject::new()),
+            Arc::new(build_internal_tool_schema(serde_json::json!({
+                "type": "object",
+                "properties": {}
+            }))),
         ),
         Tool::new(
             "receive_webhook",
@@ -1107,5 +1155,68 @@ mod tests {
             as_value["structuredContent"]["body"]["weeks"],
             Value::from(4)
         );
+    }
+
+    #[test]
+    fn dynamic_tool_schema_includes_compact_and_fields_controls() {
+        let spec = serde_json::json!({
+            "openapi": "3.0.0",
+            "paths": {
+                "/api/v1/activity/{id}/map": {
+                    "get": {
+                        "operationId": "getActivityMap",
+                        "parameters": [
+                            {"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}
+                        ]
+                    }
+                }
+            }
+        });
+
+        let registry = DynamicRegistry::from_openapi(&spec).expect("registry should parse");
+        let tool = registry
+            .operation("getActivityMap")
+            .expect("operation should exist")
+            .tool
+            .clone();
+
+        let tool_json = serde_json::to_value(tool).expect("tool should serialize");
+        let properties = &tool_json["inputSchema"]["properties"];
+
+        assert_eq!(
+            properties["compact"]["type"],
+            Value::String("boolean".to_string())
+        );
+        assert_eq!(
+            properties["fields"]["type"],
+            Value::String("array".to_string())
+        );
+        assert_eq!(
+            properties["fields"]["items"]["type"],
+            Value::String("string".to_string())
+        );
+    }
+
+    #[test]
+    fn internal_tools_schema_includes_compact_and_fields_controls() {
+        let tools = internal_tools();
+
+        for tool in tools {
+            let tool_json = serde_json::to_value(&tool).expect("tool should serialize");
+            let properties = &tool_json["inputSchema"]["properties"];
+
+            assert_eq!(
+                properties["compact"]["type"],
+                Value::String("boolean".to_string()),
+                "tool {} must expose compact boolean",
+                tool.name
+            );
+            assert_eq!(
+                properties["fields"]["type"],
+                Value::String("array".to_string()),
+                "tool {} must expose fields array",
+                tool.name
+            );
+        }
     }
 }
