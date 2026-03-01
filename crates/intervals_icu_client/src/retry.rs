@@ -1,4 +1,4 @@
-use rand::{Rng, rng};
+use rand::{RngExt, rng};
 use std::time::Duration;
 
 /// A simple retry policy with exponential backoff and jitter.
