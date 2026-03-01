@@ -214,7 +214,10 @@ impl DynamicRegistry {
                         }
                     };
 
-                let mut tool = Tool::new(name.clone(), description.clone(), Arc::new(schema_obj));
+                // augment description so LLMs know about built-in compact/fields/body_only
+                let mut full_desc = description.clone();
+                full_desc.push_str(" (supports compact, fields, and body_only response options)");
+                let mut tool = Tool::new(name.clone(), full_desc, Arc::new(schema_obj));
                 tool.annotations = Some(method_to_annotations(&method));
 
                 operations.insert(
@@ -531,6 +534,10 @@ impl DynamicRuntime {
                 .map(ToOwned::to_owned)
                 .collect::<Vec<_>>()
         });
+        let body_only = args
+            .get("body_only")
+            .and_then(Value::as_bool)
+            .unwrap_or(true); // default to returning raw body on success
 
         let normalized_body = if compact_enabled {
             match &body_json {
@@ -553,6 +560,11 @@ impl DynamicRuntime {
         } else {
             body_json
         };
+
+        if status.is_success() && body_only {
+            // return only the (possibly compacted) payload
+            return Ok(CallToolResult::structured(normalized_body));
+        }
 
         let wrapper = serde_json::json!({
             "status": status.as_u16(),
@@ -777,6 +789,13 @@ fn add_response_control_properties(schema_props: &mut Map<String, Value>) {
             "description": "Optional response field filter applied when compact=true."
         })
     });
+
+    schema_props.entry("body_only".to_string()).or_insert_with(|| {
+        serde_json::json!({
+            "type": "boolean",
+            "description": "When true (default) and the HTTP status is success, return only the body value instead of wrapping with status/content_type. Set to false to preserve HTTP metadata."
+        })
+    });
 }
 
 fn build_internal_tool_schema(mut schema: Value) -> JsonObject {
@@ -847,27 +866,27 @@ pub fn internal_tools() -> Vec<Tool> {
     vec![
         Tool::new(
             "set_webhook_secret",
-            "Set HMAC secret for webhook verification.",
+            "Set HMAC secret for webhook verification. (compact/fields/body_only parameters ignored)",
             Arc::new(set_webhook_schema),
         ),
         Tool::new(
             "start_download",
-            "Start activity file download and return download_id.",
+            "Start activity file download and return download_id. (compact/fields/body_only ignored)",
             Arc::new(download_schema.clone()),
         ),
         Tool::new(
             "get_download_status",
-            "Get current status for a download_id.",
+            "Get current status for a download_id. (compact/fields/body_only ignored)",
             Arc::new(id_schema.clone()),
         ),
         Tool::new(
             "cancel_download",
-            "Cancel an in-progress download by download_id.",
+            "Cancel an in-progress download by download_id. (compact/fields/body_only ignored)",
             Arc::new(id_schema),
         ),
         Tool::new(
             "list_downloads",
-            "List all tracked downloads.",
+            "List all tracked downloads. (compact/fields/body_only ignored)",
             Arc::new(build_internal_tool_schema(serde_json::json!({
                 "type": "object",
                 "properties": {}
@@ -875,7 +894,7 @@ pub fn internal_tools() -> Vec<Tool> {
         ),
         Tool::new(
             "receive_webhook",
-            "Verify and ingest webhook payload.",
+            "Verify and ingest webhook payload. (compact/fields/body_only ignored)",
             Arc::new(webhook_schema),
         ),
     ]
@@ -1095,15 +1114,15 @@ mod tests {
 
         let mut args = JsonObject::new();
         args.insert("id".to_string(), Value::String("42".to_string()));
+        // default should return body-only
         let result = runtime
             .dispatch_openapi(&operation, Some(&args))
             .await
             .expect("dispatch should succeed");
 
         let as_value = serde_json::to_value(&result).expect("result should serialize");
-        assert_eq!(as_value["structuredContent"]["status"], Value::from(200));
         assert_eq!(
-            as_value["structuredContent"]["body"]["type"],
+            as_value["structuredContent"]["type"],
             Value::String("FeatureCollection".to_string())
         );
     }
@@ -1150,17 +1169,15 @@ mod tests {
             ),
         };
 
+        let args = JsonObject::new();
+        // default behaviour returns only body
         let result = runtime
-            .dispatch_openapi(&operation, Some(&JsonObject::new()))
+            .dispatch_openapi(&operation, Some(&args))
             .await
             .expect("dispatch should succeed");
 
         let as_value = serde_json::to_value(&result).expect("result should serialize");
-        assert_eq!(as_value["structuredContent"]["status"], Value::from(200));
-        assert_eq!(
-            as_value["structuredContent"]["body"]["weeks"],
-            Value::from(4)
-        );
+        assert_eq!(as_value["structuredContent"]["weeks"], Value::from(4));
     }
 
     #[tokio::test]
@@ -1244,6 +1261,89 @@ mod tests {
             properties["fields"]["items"]["type"],
             Value::String("string".to_string())
         );
+        assert_eq!(
+            properties["body_only"]["type"],
+            Value::String("boolean".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_openapi_body_only_strips_metadata() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/foo"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("{\"ok\":true}"))
+            .mount(&server)
+            .await;
+
+        let runtime = DynamicRuntime::new(
+            server.uri(),
+            "ath".to_string(),
+            "secret".to_string(),
+            None,
+            None,
+            None,
+            Duration::from_secs(300),
+        );
+
+        let schema = JsonObject::new();
+        let operation = DynamicOperation {
+            name: "test".to_string(),
+            method: reqwest::Method::GET,
+            path_template: "/foo".to_string(),
+            description: "".to_string(),
+            params: vec![],
+            has_json_body: false,
+            tool: Tool::new("test", "", Arc::new(schema)),
+        };
+
+        let mut args = JsonObject::new();
+        args.insert("body_only".to_string(), Value::Bool(true));
+        let result = runtime
+            .dispatch_openapi(&operation, Some(&args))
+            .await
+            .expect("should succeed");
+        let as_val = serde_json::to_value(&result).unwrap();
+        // when body_only, structure should *not* include status/content_type
+        assert_eq!(as_val["structuredContent"], serde_json::json!({"ok": true}));
+    }
+
+    #[tokio::test]
+    async fn dispatch_openapi_defaults_to_body_only() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/foo"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("{\"a\":1}"))
+            .mount(&server)
+            .await;
+
+        let runtime = DynamicRuntime::new(
+            server.uri(),
+            "ath".to_string(),
+            "secret".to_string(),
+            None,
+            None,
+            None,
+            Duration::from_secs(300),
+        );
+
+        let schema = JsonObject::new();
+        let operation = DynamicOperation {
+            name: "test2".to_string(),
+            method: reqwest::Method::GET,
+            path_template: "/foo".to_string(),
+            description: "".to_string(),
+            params: vec![],
+            has_json_body: false,
+            tool: Tool::new("test2", "", Arc::new(schema)),
+        };
+
+        let result = runtime
+            .dispatch_openapi(&operation, Some(&JsonObject::new()))
+            .await
+            .expect("should succeed");
+        let as_val = serde_json::to_value(&result).unwrap();
+        assert_eq!(as_val["structuredContent"], serde_json::json!({"a":1}));
     }
 
     #[test]
