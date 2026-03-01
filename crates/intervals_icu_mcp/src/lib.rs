@@ -4,12 +4,12 @@ use std::sync::Arc;
 use rmcp::ErrorData;
 use rmcp::model::{
     AnnotateAble, CallToolRequestParams, CallToolResult, GetPromptRequestParams, GetPromptResult,
-    JsonObject, ListPromptsResult, ListResourcesResult, ListToolsResult, PaginatedRequestParams,
-    Prompt, PromptArgument, ReadResourceRequestParams, ReadResourceResult, ResourceContents,
+    ListPromptsResult, ListResourcesResult, ListToolsResult, PaginatedRequestParams, Prompt,
+    PromptArgument, ReadResourceRequestParams, ReadResourceResult, ResourceContents,
 };
 use rmcp::service::RequestContext;
 use rmcp::{RoleServer, ServerHandler};
-use tokio::sync::{Mutex, watch};
+use tokio::sync::Mutex;
 
 use intervals_icu_client::IntervalsClient;
 
@@ -33,8 +33,6 @@ pub use types::*;
 pub struct IntervalsMcpHandler {
     client: Arc<dyn IntervalsClient>,
     dynamic_runtime: dynamic::DynamicRuntime,
-    downloads: Arc<Mutex<HashMap<String, DownloadStatus>>>,
-    cancel_senders: Arc<Mutex<HashMap<String, watch::Sender<bool>>>>,
     webhooks: Arc<Mutex<HashMap<String, WebhookEvent>>>,
     webhook_secret: Arc<Mutex<Option<String>>>,
 }
@@ -44,15 +42,13 @@ impl IntervalsMcpHandler {
         Self {
             client,
             dynamic_runtime: dynamic::DynamicRuntime::from_env(),
-            downloads: Arc::new(Mutex::new(HashMap::new())),
-            cancel_senders: Arc::new(Mutex::new(HashMap::new())),
             webhooks: Arc::new(Mutex::new(HashMap::new())),
             webhook_secret: Arc::new(Mutex::new(None)),
         }
     }
 
     pub fn tool_count(&self) -> usize {
-        self.dynamic_runtime.cached_tool_count() + dynamic::internal_tools().len()
+        self.dynamic_runtime.cached_tool_count()
     }
 
     pub fn prompt_count(&self) -> usize {
@@ -72,160 +68,8 @@ impl IntervalsMcpHandler {
         }
     }
 
-    fn download_service(&self) -> services::DownloadService {
-        services::DownloadService::new(self.downloads.clone(), self.cancel_senders.clone())
-    }
-
     fn webhook_service(&self) -> services::WebhookService {
         services::WebhookService::new(self.webhooks.clone(), self.webhook_secret.clone())
-    }
-
-    fn compact_internal_result(args: &JsonObject, value: serde_json::Value) -> CallToolResult {
-        let compact_enabled = args
-            .get("compact")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
-        let response_fields = args
-            .get("fields")
-            .and_then(serde_json::Value::as_array)
-            .map(|a| {
-                a.iter()
-                    .filter_map(serde_json::Value::as_str)
-                    .map(ToOwned::to_owned)
-                    .collect::<Vec<_>>()
-            });
-
-        let normalized = if compact_enabled {
-            match &value {
-                serde_json::Value::Object(_) => {
-                    if let Some(fields) = response_fields.as_ref() {
-                        crate::compact::filter_fields(&value, fields)
-                    } else {
-                        value
-                    }
-                }
-                serde_json::Value::Array(_) => {
-                    if let Some(fields) = response_fields.as_ref() {
-                        crate::compact::filter_array_fields(&value, fields)
-                    } else {
-                        value
-                    }
-                }
-                _ => value,
-            }
-        } else {
-            value
-        };
-
-        CallToolResult::structured(normalized)
-    }
-
-    async fn call_internal_tool(
-        &self,
-        request: &CallToolRequestParams,
-    ) -> Result<Option<CallToolResult>, ErrorData> {
-        let args = request.arguments.clone().unwrap_or_default();
-
-        match request.name.as_ref() {
-            "set_webhook_secret" => {
-                let secret = args
-                    .get("secret")
-                    .and_then(serde_json::Value::as_str)
-                    .ok_or_else(|| {
-                        ErrorData::invalid_params("missing required parameter: secret", None)
-                    })?;
-                self.webhook_service().set_secret(secret.to_string()).await;
-                Ok(Some(Self::compact_internal_result(
-                    &args,
-                    serde_json::json!({"ok": true}),
-                )))
-            }
-            "start_download" => {
-                let activity_id = args
-                    .get("activity_id")
-                    .and_then(serde_json::Value::as_str)
-                    .ok_or_else(|| {
-                        ErrorData::invalid_params("missing required parameter: activity_id", None)
-                    })?
-                    .to_string();
-                let output_path = args
-                    .get("output_path")
-                    .and_then(serde_json::Value::as_str)
-                    .map(ToOwned::to_owned);
-                let download_id = self
-                    .download_service()
-                    .start_download(self.client.clone(), activity_id, output_path)
-                    .await;
-                Ok(Some(Self::compact_internal_result(
-                    &args,
-                    serde_json::json!({"download_id": download_id}),
-                )))
-            }
-            "get_download_status" => {
-                let id = args
-                    .get("download_id")
-                    .and_then(serde_json::Value::as_str)
-                    .ok_or_else(|| {
-                        ErrorData::invalid_params("missing required parameter: download_id", None)
-                    })?;
-                let status = self
-                    .download_service()
-                    .get_status(id)
-                    .await
-                    .ok_or_else(|| ErrorData::invalid_params("download_id not found", None))?;
-                Ok(Some(Self::compact_internal_result(
-                    &args,
-                    serde_json::to_value(status).map_err(|e| {
-                        ErrorData::internal_error(format!("failed to serialize status: {e}"), None)
-                    })?,
-                )))
-            }
-            "cancel_download" => {
-                let id = args
-                    .get("download_id")
-                    .and_then(serde_json::Value::as_str)
-                    .ok_or_else(|| {
-                        ErrorData::invalid_params("missing required parameter: download_id", None)
-                    })?;
-                let cancelled = self.download_service().cancel_download(id).await;
-                Ok(Some(Self::compact_internal_result(
-                    &args,
-                    serde_json::json!({"cancelled": cancelled}),
-                )))
-            }
-            "list_downloads" => {
-                let downloads = self.download_service().list_downloads().await;
-                Ok(Some(Self::compact_internal_result(
-                    &args,
-                    serde_json::to_value(downloads).map_err(|e| {
-                        ErrorData::internal_error(
-                            format!("failed to serialize downloads list: {e}"),
-                            None,
-                        )
-                    })?,
-                )))
-            }
-            "receive_webhook" => {
-                let signature = args
-                    .get("signature")
-                    .and_then(serde_json::Value::as_str)
-                    .ok_or_else(|| {
-                        ErrorData::invalid_params("missing required parameter: signature", None)
-                    })?;
-                let payload = args.get("payload").cloned().ok_or_else(|| {
-                    ErrorData::invalid_params("missing required parameter: payload", None)
-                })?;
-                let result = self
-                    .webhook_service()
-                    .process_webhook(signature, payload)
-                    .await
-                    .map_err(|e| {
-                        ErrorData::internal_error(format!("webhook processing failed: {e}"), None)
-                    })?;
-                Ok(Some(Self::compact_internal_result(&args, result.value)))
-            }
-            _ => Ok(None),
-        }
     }
 
     fn available_prompts() -> Vec<Prompt> {
@@ -469,10 +313,11 @@ impl ServerHandler for IntervalsMcpHandler {
                 Vec::new()
             }
         };
-        Ok(dynamic::merge_tools(
-            dynamic_tools,
-            dynamic::internal_tools(),
-        ))
+        Ok(ListToolsResult {
+            tools: dynamic_tools,
+            next_cursor: None,
+            meta: None,
+        })
     }
 
     async fn call_tool(
@@ -480,9 +325,6 @@ impl ServerHandler for IntervalsMcpHandler {
         request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
-        if let Some(result) = self.call_internal_tool(&request).await? {
-            return Ok(result);
-        }
         let registry: Arc<dynamic::DynamicRegistry> =
             self.dynamic_runtime.ensure_registry().await?;
         let op = registry.operation(request.name.as_ref()).ok_or_else(|| {
@@ -909,41 +751,13 @@ mod tests {
     #[tokio::test]
     async fn handler_registers_tools_and_prompts() {
         let handler = IntervalsMcpHandler::new(Arc::new(MockClient));
-        assert!(handler.tool_count() > 0);
+        assert_eq!(handler.tool_count(), 0);
         assert_eq!(handler.prompt_count(), 7);
     }
 
     #[test]
     fn tool_count_matches_internal_tools_without_cache() {
         let handler = IntervalsMcpHandler::new(Arc::new(MockClient));
-        assert_eq!(handler.tool_count(), dynamic::internal_tools().len());
-    }
-
-    #[test]
-    fn compact_internal_result_filters_array_fields_when_enabled() {
-        let mut args = JsonObject::new();
-        args.insert("compact".to_string(), serde_json::Value::Bool(true));
-        args.insert("fields".to_string(), serde_json::json!(["id", "status"]));
-
-        let result = IntervalsMcpHandler::compact_internal_result(
-            &args,
-            serde_json::json!([
-                {"id": "d1", "status": "running", "extra": 1},
-                {"id": "d2", "status": "done", "extra": 2}
-            ]),
-        );
-
-        let value = serde_json::to_value(result).expect("result should serialize");
-        let content = &value["structuredContent"];
-
-        assert_eq!(
-            content[0]["id"],
-            serde_json::Value::String("d1".to_string())
-        );
-        assert_eq!(
-            content[0]["status"],
-            serde_json::Value::String("running".to_string())
-        );
-        assert!(content[0].get("extra").is_none());
+        assert_eq!(handler.tool_count(), 0);
     }
 }
