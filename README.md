@@ -19,7 +19,11 @@ Standard MCP servers often overwhelm LLMs with raw, verbose data, consuming thou
 
 ## Overview
 
-This MCP server provides **57 tools** to interact with your Intervals.icu account, organized into 9 categories:
+This MCP server builds its MCP tools **dynamically from the Intervals.icu OpenAPI spec**.
+
+By default, all OpenAPI-tagged tools are exposed. You can narrow or exclude tool groups by tags through environment variables (see [OpenAPI runtime configuration](#openapi-runtime-configuration)).
+
+The generated toolset is organized into 9 practical categories:
 
 - **Activities** (11 tools) - Query, search, update, delete, and download activities
 - **Activity Analysis** (8 tools) - Deep dive into streams, intervals, best efforts, and histograms
@@ -83,6 +87,7 @@ cp .env.example .env
 # Edit .env and add your credentials:
 # INTERVALS_ICU_API_KEY=your_api_key_here
 # INTERVALS_ICU_ATHLETE_ID=i123456
+```
 
 ### Option 1b: Install via `cargo install`
 
@@ -102,7 +107,6 @@ intervals_icu_mcp
 ```
 
 > Note: if the package provides multiple binaries, select one with `--bin intervals_icu_mcp`.
-```
 
 ### Option 2: Using Docker
 
@@ -468,7 +472,9 @@ Several tools support **compact mode** to reduce token usage:
 
 ## Available Tools
 
-### Activities (10 tools)
+> Tool availability is generated dynamically from OpenAPI and can change with spec updates and tag scoping (`INTERVALS_INCLUDE_TAGS` / `INTERVALS_EXCLUDE_TAGS`). The list below is a practical reference of commonly available tools.
+
+### Activities (11 tools)
 
 | Tool | Description |
 |------|-------------|
@@ -603,6 +609,23 @@ Prompt templates for common queries (accessible via prompt suggestions in Claude
 ### Environment
 
 See `.env.example` for example environment variables. Set `RUST_LOG` (info, warn, debug, trace) to control logging.
+
+### OpenAPI runtime configuration
+
+The dynamic registry is built from OpenAPI and cached in memory.
+
+| Variable | Default | Description |
+|---|---|---|
+| `INTERVALS_ICU_OPENAPI_SPEC` | _unset_ | Optional OpenAPI source (HTTP(S) URL or local JSON file path). If unset, runtime fetches `${INTERVALS_ICU_BASE_URL}/api/v1/docs` and falls back to `docs/intervals_icu_api.json`. |
+| `INTERVALS_ICU_SPEC_REFRESH_SECS` | `300` | Refresh cadence for cache revalidation. On cache hit, refresh is attempted on interval boundaries. |
+| `INTERVALS_INCLUDE_TAGS` | _unset_ | Comma-separated allowlist of OpenAPI tags (e.g. `Wellness,Activities`). |
+| `INTERVALS_EXCLUDE_TAGS` | _unset_ | Comma-separated denylist of OpenAPI tags (e.g. `Gear`). Ignored when include tags are set. |
+
+Behavior summary:
+- Initial tool request loads OpenAPI and caches generated tools.
+- Cache hits return immediately and attempt periodic refresh.
+- If refresh fails (network or parse error), cached registry remains active.
+- If no include/exclude vars are set, scope defaults to **all tags**.
 
 ### Continuous Integration & Releases ✅
 
