@@ -19,9 +19,12 @@ Standard MCP servers often overwhelm LLMs with raw, verbose data, consuming thou
 
 ## Overview
 
-This MCP server builds its MCP tools **dynamically from the Intervals.icu OpenAPI spec**.
+This MCP server builds its MCP tools **dynamically from the Intervals.icu OpenAPI spec**, mirroring the elegant design of https://github.com/derrix060/intervals-mcp but rewritten in Rust for performance and maintainability.
 
-By default, all OpenAPI-tagged tools are exposed. You can narrow or exclude tool groups by tags through environment variables (see [OpenAPI runtime configuration](#openapi-runtime-configuration)).
+**Why choose this project?**
+
+1. **Token‑efficiency by default.** Every tool response is automatically compacted to minimise LLM context usage without sacrificing detail—saving tokens is the default, and you can still disable it per‑call if you really need the whole payload.
+2. **Automatically up‑to‑date tools.** The server parses the live OpenAPI document on startup (with cache/refresh logic) so new endpoints and schema changes from intervals.icu appear instantly. No hand‑coding, no drift – just restart the binary and you have the latest API surface.
 
 The generated toolset is organized into 9 practical categories:
 
