@@ -247,13 +247,38 @@ pub fn summarize_best_efforts(value: &Value, stream: &str) -> Value {
 }
 
 pub fn transform_curves(value: &Value, summary_only: bool, durations: Option<&[u32]>) -> Value {
-    if let Some(dur_filter) = durations
-        && let Some(obj) = value.as_object()
-    {
-        let mut result = Map::new();
-        for (key, val) in obj {
-            if let Some(arr) = val.as_array() {
-                let filtered: Vec<&Value> = arr
+    const KEY_DURATIONS: [u32; 6] = [5, 30, 60, 300, 1200, 3600];
+    let dur_filter: &[u32] = match durations {
+        Some(d) => d,
+        None if summary_only => &KEY_DURATIONS,
+        None => return value.clone(),
+    };
+
+    let Some(obj) = value.as_object() else {
+        return value.clone();
+    };
+
+    let mut result = Map::new();
+    for (key, val) in obj {
+        if let Some(arr) = val.as_array() {
+            // Detect parallel-arrays format by checking whether the first non-empty item's
+            // "secs" field is itself an array.  Empty arrays are treated as scalar-secs
+            // format (no-op: the filtered result will also be empty).
+            let is_parallel = arr
+                .first()
+                .and_then(|item| item.get("secs"))
+                .map(|s| s.is_array())
+                .unwrap_or(false);
+
+            if is_parallel {
+                let filtered: Vec<Value> = arr
+                    .iter()
+                    .flat_map(|item| extract_parallel_curve_points(item, dur_filter))
+                    .collect();
+                result.insert(key.clone(), Value::Array(filtered));
+            } else {
+                // Original scalar-secs format
+                let filtered: Vec<Value> = arr
                     .iter()
                     .filter(|item| {
                         item.get("secs")
@@ -261,46 +286,60 @@ pub fn transform_curves(value: &Value, summary_only: bool, durations: Option<&[u
                             .map(|s| dur_filter.contains(&(s as u32)))
                             .unwrap_or(false)
                     })
+                    .cloned()
                     .collect();
-                result.insert(
-                    key.clone(),
-                    Value::Array(filtered.into_iter().cloned().collect()),
-                );
-            } else {
-                result.insert(key.clone(), val.clone());
+                result.insert(key.clone(), Value::Array(filtered));
             }
+        } else {
+            result.insert(key.clone(), val.clone());
         }
-        return Value::Object(result);
     }
+    Value::Object(result)
+}
 
-    if summary_only {
-        let key_durations = [5, 30, 60, 300, 1200, 3600];
-        if let Some(obj) = value.as_object() {
-            let mut result = Map::new();
-            for (key, val) in obj {
-                if let Some(arr) = val.as_array() {
-                    let filtered: Vec<&Value> = arr
-                        .iter()
-                        .filter(|item| {
-                            item.get("secs")
-                                .and_then(|s| s.as_u64())
-                                .map(|s| key_durations.contains(&(s as u32)))
-                                .unwrap_or(false)
-                        })
-                        .collect();
-                    result.insert(
-                        key.clone(),
-                        Value::Array(filtered.into_iter().cloned().collect()),
-                    );
-                } else {
-                    result.insert(key.clone(), val.clone());
+/// Extract curve data points at specific durations from an item using the parallel-arrays format.
+///
+/// An item looks like `{"secs": [1,2,5,30,...], "watts": [350,320,280,...], ...}`.
+/// Returns one `{"secs": N, "watts": V, ...}` object for each requested duration that
+/// has an exact match in the `secs` array.
+///
+/// A `HashMap` is built from the `secs` array once so that lookups are O(1) instead of
+/// performing a linear scan for every requested duration.
+fn extract_parallel_curve_points(item: &Value, dur_filter: &[u32]) -> Vec<Value> {
+    let Some(obj) = item.as_object() else {
+        return vec![];
+    };
+    let Some(secs_arr) = obj.get("secs").and_then(|v| v.as_array()) else {
+        return vec![];
+    };
+
+    // Build a duration→index map once for O(1) lookups
+    let secs_index: HashMap<u32, usize> = secs_arr
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, v)| v.as_u64().map(|n| (n as u32, idx)))
+        .collect();
+
+    dur_filter
+        .iter()
+        .filter_map(|&dur| {
+            let idx = *secs_index.get(&dur)?;
+
+            let mut point = Map::new();
+            point.insert("secs".to_string(), Value::from(dur));
+            for (k, v) in obj {
+                if k == "secs" {
+                    continue;
+                }
+                if let Some(stream_arr) = v.as_array()
+                    && let Some(val) = stream_arr.get(idx)
+                {
+                    point.insert(k.clone(), val.clone());
                 }
             }
-            return Value::Object(result);
-        }
-    }
-
-    value.clone()
+            Some(Value::Object(point))
+        })
+        .collect()
 }
 
 pub fn transform_histogram(value: &Value, summary_only: bool, max_bins: usize) -> Value {
@@ -467,5 +506,65 @@ mod tests {
         assert_eq!(result.len(), 2);
         assert_eq!(result[0], serde_json::json!("first"));
         assert_eq!(result[1], serde_json::json!("last"));
+    }
+
+    #[test]
+    fn transform_curves_parallel_arrays_summary() {
+        // Simulate the actual Intervals.icu API response format with parallel arrays
+        let input = serde_json::json!({
+            "list": [{"secs": [1, 5, 30, 60, 300], "watts": [400, 350, 300, 270, 220]}],
+            "activities": {"123": {"name": "Morning Ride"}}
+        });
+        let out = transform_curves(&input, true, None);
+        // Summary mode should extract values at key durations (5, 30, 60, 300 are all present)
+        let list = out["list"].as_array().expect("list should be array");
+        assert!(!list.is_empty(), "list should not be empty after transform");
+        // Check that extracted points have the correct secs values
+        let secs_values: Vec<u64> = list.iter().filter_map(|p| p["secs"].as_u64()).collect();
+        assert!(secs_values.contains(&5));
+        assert!(secs_values.contains(&30));
+        assert!(secs_values.contains(&60));
+        assert!(secs_values.contains(&300));
+        // Verify watts values are extracted correctly
+        let watts_at_5 = list
+            .iter()
+            .find(|p| p["secs"] == 5)
+            .and_then(|p| p["watts"].as_u64());
+        assert_eq!(watts_at_5, Some(350));
+    }
+
+    #[test]
+    fn transform_curves_parallel_arrays_custom_durations() {
+        let input = serde_json::json!({
+            "list": [{"secs": [1, 5, 30, 60], "watts": [400, 350, 300, 270]}],
+            "activities": {}
+        });
+        let out = transform_curves(&input, false, Some(&[5, 60]));
+        let list = out["list"].as_array().expect("list should be array");
+        assert_eq!(list.len(), 2);
+        let secs_values: Vec<u64> = list.iter().filter_map(|p| p["secs"].as_u64()).collect();
+        assert!(secs_values.contains(&5));
+        assert!(secs_values.contains(&60));
+    }
+
+    #[test]
+    fn transform_curves_parallel_arrays_unmatched_duration_skipped() {
+        let input = serde_json::json!({
+            "list": [{"secs": [1, 5, 30], "watts": [400, 350, 300]}],
+            "activities": {}
+        });
+        // Request duration 3600 which is not in secs array
+        let out = transform_curves(&input, false, Some(&[5, 3600]));
+        let list = out["list"].as_array().expect("list should be array");
+        // Only secs=5 matches, secs=3600 is absent → 1 point
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0]["secs"], 5);
+    }
+
+    #[test]
+    fn transform_curves_no_summary_returns_clone() {
+        let input = serde_json::json!({"list": [], "activities": {}});
+        let out = transform_curves(&input, false, None);
+        assert_eq!(out, input);
     }
 }

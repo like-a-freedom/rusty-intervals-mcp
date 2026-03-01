@@ -485,7 +485,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_activity_intervals",
-        description = "Get workout intervals. Params: activity_id, summary (default true), max_intervals (default 20), fields (filter)."
+        description = "Get workout intervals. Params: activity_id, summary (default false), max_intervals (default 20), fields (filter)."
     )]
     async fn get_activity_intervals(
         &self,
@@ -501,7 +501,7 @@ impl IntervalsMcpHandler {
         // Apply compact transformations
         let result = Self::transform_intervals(
             &v,
-            p.summary.unwrap_or(true),
+            p.summary.unwrap_or(false),
             p.max_intervals.unwrap_or(20) as usize,
             p.fields.as_deref(),
         );
@@ -521,7 +521,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_best_efforts",
-        description = "Find peak efforts. Params: activity_id, stream, duration/distance, count (default 5), summary (default true)."
+        description = "Find peak efforts. Params: activity_id, stream (use 'watts' for power, 'heartrate' for HR), duration/distance, count (default 5), summary (default false)."
     )]
     async fn get_best_efforts(
         &self,
@@ -534,9 +534,15 @@ impl IntervalsMcpHandler {
             return Err("Must provide either 'duration' (seconds) or 'distance' (meters) for best efforts analysis".to_string());
         }
 
-        let summary_mode = p.summary.unwrap_or(true);
+        let summary_mode = p.summary.unwrap_or(false);
+        // Normalize common aliases to the API-expected stream names without unnecessary allocation
+        let stream = match p.stream.as_str() {
+            s if s.eq_ignore_ascii_case("power") => "watts".to_string(),
+            s if s.eq_ignore_ascii_case("hr") => "heartrate".to_string(),
+            _ => p.stream.clone(),
+        };
         let options = intervals_icu_client::BestEffortsOptions {
-            stream: Some(p.stream.clone()),
+            stream: Some(stream.clone()),
             duration: p.duration,
             distance: p.distance,
             count: p.count.or(Some(5)),
@@ -553,7 +559,7 @@ impl IntervalsMcpHandler {
 
         // Apply summary mode
         let result = if summary_mode {
-            Self::summarize_best_efforts(&v, &p.stream)
+            Self::summarize_best_efforts(&v, &stream)
         } else {
             v
         };
@@ -615,7 +621,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_power_curves",
-        description = "Get power curves. Params: type, days_back, durations (filter), summary (default true)."
+        description = "Get power curves. Params: type, days_back, durations (filter), summary (default false)."
     )]
     async fn get_power_curves(
         &self,
@@ -629,7 +635,7 @@ impl IntervalsMcpHandler {
             .map_err(|e| e.to_string())?;
 
         // Apply compact mode
-        let result = Self::transform_curves(&v, p.summary.unwrap_or(true), p.durations.as_deref());
+        let result = Self::transform_curves(&v, p.summary.unwrap_or(false), p.durations.as_deref());
         Ok(Json(ObjectResult { value: result }))
     }
 
@@ -644,7 +650,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_gap_histogram",
-        description = "Get GAP distribution. Params: activity_id, summary (default true), bins (default 10)."
+        description = "Get GAP distribution. Params: activity_id, summary (default false), bins (default 10)."
     )]
     async fn get_gap_histogram(
         &self,
@@ -657,8 +663,11 @@ impl IntervalsMcpHandler {
             .await
             .map_err(|e| e.to_string())?;
 
-        let result =
-            Self::transform_histogram(&v, p.summary.unwrap_or(true), p.bins.unwrap_or(10) as usize);
+        let result = Self::transform_histogram(
+            &v,
+            p.summary.unwrap_or(false),
+            p.bins.unwrap_or(10) as usize,
+        );
         Ok(Json(ObjectResult { value: result }))
     }
 
@@ -931,7 +940,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_power_histogram",
-        description = "Get power distribution. Params: activity_id, summary (default true), bins (default 10)."
+        description = "Get power distribution. Params: activity_id, summary (default false), bins (default 10)."
     )]
     async fn get_power_histogram(
         &self,
@@ -944,14 +953,17 @@ impl IntervalsMcpHandler {
             .await
             .map_err(|e| e.to_string())?;
 
-        let result =
-            Self::transform_histogram(&v, p.summary.unwrap_or(true), p.bins.unwrap_or(10) as usize);
+        let result = Self::transform_histogram(
+            &v,
+            p.summary.unwrap_or(false),
+            p.bins.unwrap_or(10) as usize,
+        );
         Ok(Json(ObjectResult { value: result }))
     }
 
     #[tool(
         name = "get_hr_histogram",
-        description = "Get HR distribution. Params: activity_id, summary (default true), bins (default 10)."
+        description = "Get HR distribution. Params: activity_id, summary (default false), bins (default 10)."
     )]
     async fn get_hr_histogram(
         &self,
@@ -964,14 +976,17 @@ impl IntervalsMcpHandler {
             .await
             .map_err(|e| e.to_string())?;
 
-        let result =
-            Self::transform_histogram(&v, p.summary.unwrap_or(true), p.bins.unwrap_or(10) as usize);
+        let result = Self::transform_histogram(
+            &v,
+            p.summary.unwrap_or(false),
+            p.bins.unwrap_or(10) as usize,
+        );
         Ok(Json(ObjectResult { value: result }))
     }
 
     #[tool(
         name = "get_pace_histogram",
-        description = "Get pace distribution. Params: activity_id, summary (default true), bins (default 10)."
+        description = "Get pace distribution. Params: activity_id, summary (default false), bins (default 10)."
     )]
     async fn get_pace_histogram(
         &self,
@@ -984,8 +999,11 @@ impl IntervalsMcpHandler {
             .await
             .map_err(|e| e.to_string())?;
 
-        let result =
-            Self::transform_histogram(&v, p.summary.unwrap_or(true), p.bins.unwrap_or(10) as usize);
+        let result = Self::transform_histogram(
+            &v,
+            p.summary.unwrap_or(false),
+            p.bins.unwrap_or(10) as usize,
+        );
         Ok(Json(ObjectResult { value: result }))
     }
 
@@ -1042,7 +1060,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_wellness",
-        description = "Get wellness data. Params: days_back (default 7), summary (default true), fields (filter)."
+        description = "Get wellness data. Params: days_back (default 7), summary (default false), fields (filter)."
     )]
     async fn get_wellness(
         &self,
@@ -1058,7 +1076,7 @@ impl IntervalsMcpHandler {
         // Apply wellness transformation
         let result = domains::wellness::transform_wellness(
             &v,
-            p.summary.unwrap_or(true),
+            p.summary.unwrap_or(false),
             p.fields.as_deref(),
         );
         Ok(Json(ObjectResult { value: result }))
@@ -1319,7 +1337,7 @@ impl IntervalsMcpHandler {
 
     #[tool(
         name = "get_hr_curves",
-        description = "Get HR curves. Params: type, days_back, durations (filter), summary (default true)."
+        description = "Get HR curves. Params: type, days_back, durations (filter), summary (default false)."
     )]
     async fn get_hr_curves(
         &self,
@@ -1332,13 +1350,13 @@ impl IntervalsMcpHandler {
             .await
             .map_err(|e| e.to_string())?;
 
-        let result = Self::transform_curves(&v, p.summary.unwrap_or(true), p.durations.as_deref());
+        let result = Self::transform_curves(&v, p.summary.unwrap_or(false), p.durations.as_deref());
         Ok(Json(ObjectResult { value: result }))
     }
 
     #[tool(
         name = "get_pace_curves",
-        description = "Get pace/speed curves. Params: type, days_back, durations (filter), summary (default true)."
+        description = "Get pace/speed curves. Params: type, days_back, durations (filter), summary (default false)."
     )]
     async fn get_pace_curves(
         &self,
@@ -1351,7 +1369,7 @@ impl IntervalsMcpHandler {
             .await
             .map_err(|e| e.to_string())?;
 
-        let result = Self::transform_curves(&v, p.summary.unwrap_or(true), p.durations.as_deref());
+        let result = Self::transform_curves(&v, p.summary.unwrap_or(false), p.durations.as_deref());
         Ok(Json(ObjectResult { value: result }))
     }
 
