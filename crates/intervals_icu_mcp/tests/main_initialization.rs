@@ -87,8 +87,8 @@ async fn test_handler_initialization() {
     );
     let handler = intervals_icu_mcp::IntervalsMcpHandler::new(Arc::new(client));
 
-    // Handler should have tools and prompts registered
-    assert!(handler.tool_count() > 0);
+    // Handler starts with an empty dynamic cache before OpenAPI preload
+    assert_eq!(handler.tool_count(), 0);
     assert!(handler.prompt_count() > 0);
 }
 

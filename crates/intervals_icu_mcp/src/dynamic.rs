@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use rmcp::ErrorData;
-use rmcp::model::{CallToolResult, JsonObject, ListToolsResult, Tool, ToolAnnotations};
+use rmcp::model::{CallToolResult, JsonObject, Tool, ToolAnnotations};
 use serde_json::{Map, Value};
 
 const OPENAPI_DEFAULT_PATH: &str = "/api/v1/docs";
@@ -810,125 +810,6 @@ fn add_response_control_properties(schema_props: &mut Map<String, Value>) {
     });
 }
 
-fn build_internal_tool_schema(mut schema: Value) -> JsonObject {
-    if !schema.is_object() {
-        schema = serde_json::json!({ "type": "object", "properties": {} });
-    }
-
-    let Some(schema_obj) = schema.as_object_mut() else {
-        return JsonObject::new();
-    };
-
-    if !schema_obj.contains_key("type") {
-        schema_obj.insert("type".to_string(), Value::String("object".to_string()));
-    }
-
-    if !schema_obj
-        .get("properties")
-        .is_some_and(serde_json::Value::is_object)
-    {
-        schema_obj.insert("properties".to_string(), Value::Object(Map::new()));
-    }
-
-    if let Some(props) = schema_obj
-        .get_mut("properties")
-        .and_then(Value::as_object_mut)
-    {
-        add_response_control_properties(props);
-    }
-
-    serde_json::from_value(schema).unwrap_or_default()
-}
-
-pub fn internal_tools() -> Vec<Tool> {
-    let set_webhook_schema = build_internal_tool_schema(serde_json::json!({
-        "type": "object",
-        "properties": {
-            "secret": { "type": "string" }
-        },
-        "required": ["secret"]
-    }));
-
-    let download_schema = build_internal_tool_schema(serde_json::json!({
-        "type": "object",
-        "properties": {
-            "activity_id": { "type": "string" },
-            "output_path": { "type": "string" }
-        },
-        "required": ["activity_id"]
-    }));
-
-    let id_schema = build_internal_tool_schema(serde_json::json!({
-        "type": "object",
-        "properties": {
-            "download_id": { "type": "string" }
-        },
-        "required": ["download_id"]
-    }));
-
-    let webhook_schema = build_internal_tool_schema(serde_json::json!({
-        "type": "object",
-        "properties": {
-            "signature": { "type": "string" },
-            "payload": { "type": "object" }
-        },
-        "required": ["signature", "payload"]
-    }));
-
-    vec![
-        Tool::new(
-            "set_webhook_secret",
-            "Set HMAC secret for webhook verification. (compact/fields/body_only parameters ignored)",
-            Arc::new(set_webhook_schema),
-        ),
-        Tool::new(
-            "start_download",
-            "Start activity file download and return download_id. (compact/fields/body_only ignored)",
-            Arc::new(download_schema.clone()),
-        ),
-        Tool::new(
-            "get_download_status",
-            "Get current status for a download_id. (compact/fields/body_only ignored)",
-            Arc::new(id_schema.clone()),
-        ),
-        Tool::new(
-            "cancel_download",
-            "Cancel an in-progress download by download_id. (compact/fields/body_only ignored)",
-            Arc::new(id_schema),
-        ),
-        Tool::new(
-            "list_downloads",
-            "List all tracked downloads. (compact/fields/body_only ignored)",
-            Arc::new(build_internal_tool_schema(serde_json::json!({
-                "type": "object",
-                "properties": {}
-            }))),
-        ),
-        Tool::new(
-            "receive_webhook",
-            "Verify and ingest webhook payload. (compact/fields/body_only ignored)",
-            Arc::new(webhook_schema),
-        ),
-    ]
-}
-
-pub fn merge_tools(dynamic: Vec<Tool>, internal: Vec<Tool>) -> ListToolsResult {
-    let mut by_name: BTreeMap<String, Tool> = BTreeMap::new();
-
-    for tool in dynamic {
-        by_name.insert(tool.name.to_string(), tool);
-    }
-    for tool in internal {
-        by_name.insert(tool.name.to_string(), tool);
-    }
-
-    ListToolsResult {
-        tools: by_name.into_values().collect(),
-        next_cursor: None,
-        meta: None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1425,28 +1306,5 @@ mod tests {
             .expect("should succeed");
         let as_val = serde_json::to_value(&result).unwrap();
         assert_eq!(as_val["structuredContent"], serde_json::json!({"a":1}));
-    }
-
-    #[test]
-    fn internal_tools_schema_includes_compact_and_fields_controls() {
-        let tools = internal_tools();
-
-        for tool in tools {
-            let tool_json = serde_json::to_value(&tool).expect("tool should serialize");
-            let properties = &tool_json["inputSchema"]["properties"];
-
-            assert_eq!(
-                properties["compact"]["type"],
-                Value::String("boolean".to_string()),
-                "tool {} must expose compact boolean",
-                tool.name
-            );
-            assert_eq!(
-                properties["fields"]["type"],
-                Value::String("array".to_string()),
-                "tool {} must expose fields array",
-                tool.name
-            );
-        }
     }
 }

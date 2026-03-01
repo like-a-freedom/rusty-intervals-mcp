@@ -150,12 +150,11 @@ async fn e2e_stdio_lists_tools_and_calls_profile() {
     .await
     .expect("call_tool timeout")
     .expect("call_tool");
-    // Dynamic dispatcher wraps payload as { status, body }
+    // Dynamic dispatcher returns body-only by default
     let structured = res.structured_content;
     assert!(structured.is_some());
     let v = structured.unwrap();
-    assert_eq!(v.get("status").and_then(|s| s.as_u64()), Some(200));
-    assert!(v.get("body").is_some());
+    assert_eq!(v.get("athlete").and_then(|a| a.get("id")).and_then(|id| id.as_str()), Some("ath123"));
 
     tokio::time::timeout(std::time::Duration::from_secs(10), service.cancel())
         .await
