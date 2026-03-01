@@ -36,6 +36,9 @@ All notable changes to this project will be documented in this file.
 ### Quality
 - Validation gates pass locally: `cargo fmt --all -- --check`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo test --all-targets --all-features`.
 
+## [1.1.1] - 2026-03-01
+- Chore: bump crate versions to 1.1.1 for patch release.
+
 ## [1.0.2] - 2026-03-01
 - Chore: bump crate versions to 1.0.2 for patch release.
 
