@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use intervals_icu_mcp::IntervalsMcpHandler;
 
@@ -31,12 +32,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let api_key = secrecy::SecretString::new(api_key.into());
     let client =
         intervals_icu_client::http_client::ReqwestIntervalsClient::new(&base, athlete, api_key);
-    let _handler = IntervalsMcpHandler::new(Arc::new(client));
+    let handler = IntervalsMcpHandler::new(Arc::new(client));
+    let dynamic_tools = match tokio::time::timeout(
+        Duration::from_secs(3),
+        handler.preload_dynamic_registry(),
+    )
+    .await
+    {
+        Ok(count) => count,
+        Err(_) => {
+            tracing::warn!(
+                "intervals_icu_mcp: timed out preloading dynamic OpenAPI registry; continuing startup"
+            );
+            0
+        }
+    };
 
     tracing::info!(
-        "intervals_icu_mcp: registered {} tools and {} prompts",
-        _handler.tool_count(),
-        _handler.prompt_count()
+        "intervals_icu_mcp: discovered {} dynamic tools; advertising {} tools and {} prompts",
+        dynamic_tools,
+        handler.tool_count(),
+        handler.prompt_count()
     );
 
     // Start RMCP server over stdio transport so it's immediately usable with MCP clients
@@ -44,7 +60,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     use rmcp::serve_server;
     let transport = (tokio::io::stdin(), tokio::io::stdout());
-    let _server = serve_server(_handler, transport).await?;
+    let _server = serve_server(handler, transport).await?;
 
     tracing::info!("intervals_icu_mcp: service initialized as server");
 

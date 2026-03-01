@@ -77,8 +77,8 @@ async fn e2e_stdio_lists_tools_and_calls_profile() {
     cmd.env("INTERVALS_ICU_BASE_URL", mock.uri());
     cmd.env("INTERVALS_ICU_ATHLETE_ID", "ath123");
     cmd.env("INTERVALS_ICU_API_KEY", "tok");
-    // enable debug logging from child to stderr to aid debugging
-    cmd.env("RUST_LOG", "debug");
+    // keep child stderr quieter to avoid stdio backpressure during long e2e runs
+    cmd.env("RUST_LOG", "info");
 
     // `TokioChildProcess::new` takes the configured `Command`.
     // spawn with piped stderr so we can capture server logs on failure
@@ -103,9 +103,14 @@ async fn e2e_stdio_lists_tools_and_calls_profile() {
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     // List tools and ensure our tools are present
-    let tools = match service.list_tools(Default::default()).await {
-        Ok(t) => t,
-        Err(e) => {
+    let tools = match tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        service.list_tools(Default::default()),
+    )
+    .await
+    {
+        Ok(Ok(t)) => t,
+        Ok(Err(e)) => {
             if let Some(ref mut stderr) = stderr_opt {
                 use tokio::io::AsyncReadExt;
                 let mut buf = String::new();
@@ -114,30 +119,46 @@ async fn e2e_stdio_lists_tools_and_calls_profile() {
             }
             panic!("list tools failed: {e}")
         }
+        Err(_) => {
+            if let Some(ref mut stderr) = stderr_opt {
+                use tokio::io::AsyncReadExt;
+                let mut buf = String::new();
+                let _ = stderr.read_to_string(&mut buf).await;
+                eprintln!("child stderr after list_tools timeout:\n{}", buf);
+            }
+            panic!("list tools timed out")
+        }
     };
     let names: Vec<_> = tools
         .tools
         .into_iter()
         .map(|t| t.name.to_string())
         .collect();
-    assert!(names.iter().any(|n| n == "get_athlete_profile"));
-    assert!(names.iter().any(|n| n == "get_recent_activities"));
+    assert!(names.iter().any(|n| n == "getAthleteProfile"));
+    assert!(names.iter().any(|n| n == "listActivities"));
 
-    // Call get_athlete_profile
-    let res = service
-        .call_tool(rmcp::model::CallToolRequestParams {
-            name: "get_athlete_profile".into(),
+    // Call dynamic OpenAPI tool for athlete profile
+    let res = tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        service.call_tool(rmcp::model::CallToolRequestParams {
+            name: "getAthleteProfile".into(),
             arguments: None,
             meta: None,
             task: None,
-        })
-        .await
-        .expect("call_tool");
-    // Expect structured JSON result matching profile
+        }),
+    )
+    .await
+    .expect("call_tool timeout")
+    .expect("call_tool");
+    // Dynamic dispatcher wraps payload as { status, body }
     let structured = res.structured_content;
     assert!(structured.is_some());
     let v = structured.unwrap();
-    assert!(v.get("id").is_some());
+    assert_eq!(v.get("status").and_then(|s| s.as_u64()), Some(200));
+    assert!(v.get("body").is_some());
 
-    service.cancel().await.expect("cancel");
+    tokio::time::timeout(std::time::Duration::from_secs(10), service.cancel())
+        .await
+        .expect("cancel timeout")
+        .expect("cancel");
 }

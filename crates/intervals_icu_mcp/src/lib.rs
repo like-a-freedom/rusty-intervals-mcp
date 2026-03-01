@@ -33,7 +33,6 @@ pub use types::*;
 pub struct IntervalsMcpHandler {
     client: Arc<dyn IntervalsClient>,
     dynamic_runtime: dynamic::DynamicRuntime,
-    compat_aliases: Arc<Vec<dynamic::CompatAlias>>,
     downloads: Arc<Mutex<HashMap<String, DownloadStatus>>>,
     cancel_senders: Arc<Mutex<HashMap<String, watch::Sender<bool>>>>,
     webhooks: Arc<Mutex<HashMap<String, WebhookEvent>>>,
@@ -45,7 +44,6 @@ impl IntervalsMcpHandler {
         Self {
             client,
             dynamic_runtime: dynamic::DynamicRuntime::from_env(),
-            compat_aliases: Arc::new(dynamic::default_compat_aliases()),
             downloads: Arc::new(Mutex::new(HashMap::new())),
             cancel_senders: Arc::new(Mutex::new(HashMap::new())),
             webhooks: Arc::new(Mutex::new(HashMap::new())),
@@ -54,16 +52,24 @@ impl IntervalsMcpHandler {
     }
 
     pub fn tool_count(&self) -> usize {
-        let cached = self.dynamic_runtime.cached_tool_count();
-        if cached > 0 {
-            cached + self.compat_aliases.len() + dynamic::internal_tools().len()
-        } else {
-            self.compat_aliases.len() + dynamic::internal_tools().len()
-        }
+        self.dynamic_runtime.cached_tool_count() + dynamic::internal_tools().len()
     }
 
     pub fn prompt_count(&self) -> usize {
         7
+    }
+
+    pub async fn preload_dynamic_registry(&self) -> usize {
+        match self.dynamic_runtime.ensure_registry().await {
+            Ok(registry) => registry.len(),
+            Err(err) => {
+                tracing::warn!(
+                    "failed to preload dynamic OpenAPI registry: {}",
+                    err.message
+                );
+                0
+            }
+        }
     }
 
     fn download_service(&self) -> services::DownloadService {
@@ -172,53 +178,6 @@ impl IntervalsMcpHandler {
                         ErrorData::internal_error(format!("webhook processing failed: {e}"), None)
                     })?;
                 Ok(Some(CallToolResult::structured(result.value)))
-            }
-            _ => Ok(None),
-        }
-    }
-
-    async fn call_compat_alias(
-        &self,
-        request: &CallToolRequestParams,
-    ) -> Result<Option<CallToolResult>, ErrorData> {
-        match request.name.as_ref() {
-            "get_athlete_profile" => {
-                let profile = self.client.get_athlete_profile().await.map_err(|e| {
-                    ErrorData::internal_error(format!("failed to get athlete profile: {e}"), None)
-                })?;
-                let value = serde_json::json!({
-                    "id": profile.id,
-                    "name": profile.name,
-                });
-                Ok(Some(CallToolResult::structured(value)))
-            }
-            "get_recent_activities" => {
-                let args = request.arguments.clone().unwrap_or_default();
-                let limit = args
-                    .get("limit")
-                    .and_then(serde_json::Value::as_u64)
-                    .map(|v| v as u32);
-                let days_back = args
-                    .get("days_back")
-                    .and_then(serde_json::Value::as_i64)
-                    .map(|v| v as i32);
-                let activities = self
-                    .client
-                    .get_recent_activities(limit, days_back)
-                    .await
-                    .map_err(|e| {
-                        ErrorData::internal_error(
-                            format!("failed to get recent activities: {e}"),
-                            None,
-                        )
-                    })?;
-                let compact = activities
-                    .into_iter()
-                    .map(|a| serde_json::json!({"id": a.id, "name": a.name}))
-                    .collect::<Vec<_>>();
-                Ok(Some(CallToolResult::structured(
-                    serde_json::json!({"activities": compact}),
-                )))
             }
             _ => Ok(None),
         }
@@ -464,10 +423,8 @@ impl ServerHandler for IntervalsMcpHandler {
                 Vec::new()
             }
         };
-
         Ok(dynamic::merge_tools(
             dynamic_tools,
-            &self.compat_aliases,
             dynamic::internal_tools(),
         ))
     }
@@ -480,10 +437,6 @@ impl ServerHandler for IntervalsMcpHandler {
         if let Some(result) = self.call_internal_tool(&request).await? {
             return Ok(result);
         }
-        if let Some(result) = self.call_compat_alias(&request).await? {
-            return Ok(result);
-        }
-
         let registry = self.dynamic_runtime.ensure_registry().await?;
         let op = registry.operation(request.name.as_ref()).ok_or_else(|| {
             ErrorData::invalid_params(
@@ -911,5 +864,11 @@ mod tests {
         let handler = IntervalsMcpHandler::new(Arc::new(MockClient));
         assert!(handler.tool_count() > 0);
         assert_eq!(handler.prompt_count(), 7);
+    }
+
+    #[test]
+    fn tool_count_matches_internal_tools_without_cache() {
+        let handler = IntervalsMcpHandler::new(Arc::new(MockClient));
+        assert_eq!(handler.tool_count(), dynamic::internal_tools().len());
     }
 }

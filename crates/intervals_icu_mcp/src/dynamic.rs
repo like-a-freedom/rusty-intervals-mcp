@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -10,6 +9,7 @@ use rmcp::model::{CallToolResult, JsonObject, ListToolsResult, Tool, ToolAnnotat
 use serde_json::{Map, Value};
 
 const OPENAPI_DEFAULT_PATH: &str = "/api/v1/docs";
+const OPENAPI_FETCH_TIMEOUT_SECS: u64 = 10;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ParamLocation {
@@ -367,6 +367,10 @@ impl DynamicRuntime {
 
         let mut write = self.registry.write().await;
         *write = Some(parsed.clone());
+
+        let mut last_refresh = self.last_refresh_attempt.lock().await;
+        *last_refresh = Some(Instant::now());
+
         Ok(parsed)
     }
 
@@ -507,12 +511,7 @@ impl DynamicRuntime {
             ErrorData::internal_error(format!("failed to read HTTP response body: {e}"), None)
         })?;
 
-        let body_json = if content_type.contains("json") {
-            serde_json::from_slice::<Value>(&bytes)
-                .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).into_owned()))
-        } else {
-            Value::String(String::from_utf8_lossy(&bytes).into_owned())
-        };
+        let body_json = parse_response_body(&bytes, &content_type);
 
         let compact_enabled = args
             .get("compact")
@@ -549,6 +548,7 @@ impl DynamicRuntime {
 
         let wrapper = serde_json::json!({
             "status": status.as_u16(),
+            "content_type": content_type,
             "body": normalized_body,
         });
 
@@ -557,6 +557,26 @@ impl DynamicRuntime {
         } else {
             Ok(CallToolResult::structured_error(wrapper))
         }
+    }
+}
+
+fn parse_response_body(bytes: &[u8], content_type: &str) -> Value {
+    if bytes.is_empty() {
+        return Value::Null;
+    }
+
+    if let Ok(json) = serde_json::from_slice::<Value>(bytes) {
+        return json;
+    }
+
+    match std::str::from_utf8(bytes) {
+        Ok(text) => Value::String(text.to_string()),
+        Err(_) => serde_json::json!({
+            "binary": true,
+            "content_type": content_type,
+            "byte_length": bytes.len(),
+            "message": "Non-UTF8 response body omitted from MCP payload"
+        }),
     }
 }
 
@@ -574,6 +594,7 @@ async fn load_spec_from_source(http: &reqwest::Client, source: &str) -> Result<V
     if source.starts_with("http://") || source.starts_with("https://") {
         let resp = http
             .get(source)
+            .timeout(Duration::from_secs(OPENAPI_FETCH_TIMEOUT_SECS))
             .send()
             .await
             .map_err(|e| format!("request error: {e}"))?;
@@ -733,60 +754,6 @@ fn should_filter_operation(
     false
 }
 
-#[derive(Debug, Clone)]
-pub struct CompatAlias {
-    pub alias_name: Cow<'static, str>,
-    pub description: Cow<'static, str>,
-    pub target_operation: Cow<'static, str>,
-    pub input_schema: Arc<JsonObject>,
-}
-
-impl CompatAlias {
-    pub fn as_tool(&self) -> Tool {
-        Tool::new(
-            self.alias_name.clone(),
-            self.description.clone(),
-            self.input_schema.clone(),
-        )
-    }
-}
-
-pub fn default_compat_aliases() -> Vec<CompatAlias> {
-    let profile_schema: JsonObject = serde_json::from_value(serde_json::json!({
-        "type": "object",
-        "properties": {}
-    }))
-    .unwrap_or_default();
-
-    let recent_schema: JsonObject = serde_json::from_value(serde_json::json!({
-        "type": "object",
-        "properties": {
-            "limit": { "type": "integer", "minimum": 1, "maximum": 100 },
-            "days_back": { "type": "integer", "minimum": 0 }
-        }
-    }))
-    .unwrap_or_default();
-
-    vec![
-        CompatAlias {
-            alias_name: Cow::Borrowed("get_athlete_profile"),
-            description: Cow::Borrowed(
-                "Compatibility alias. Get athlete profile including id and name.",
-            ),
-            target_operation: Cow::Borrowed("getAthleteProfile"),
-            input_schema: Arc::new(profile_schema),
-        },
-        CompatAlias {
-            alias_name: Cow::Borrowed("get_recent_activities"),
-            description: Cow::Borrowed(
-                "Compatibility alias. Get recent activities with optional limit and days_back.",
-            ),
-            target_operation: Cow::Borrowed("listActivities"),
-            input_schema: Arc::new(recent_schema),
-        },
-    ]
-}
-
 pub fn internal_tools() -> Vec<Tool> {
     let set_webhook_schema: JsonObject = serde_json::from_value(serde_json::json!({
         "type": "object",
@@ -860,19 +827,11 @@ pub fn internal_tools() -> Vec<Tool> {
     ]
 }
 
-pub fn merge_tools(
-    dynamic: Vec<Tool>,
-    aliases: &[CompatAlias],
-    internal: Vec<Tool>,
-) -> ListToolsResult {
+pub fn merge_tools(dynamic: Vec<Tool>, internal: Vec<Tool>) -> ListToolsResult {
     let mut by_name: BTreeMap<String, Tool> = BTreeMap::new();
 
     for tool in dynamic {
         by_name.insert(tool.name.to_string(), tool);
-    }
-    for alias in aliases {
-        let t = alias.as_tool();
-        by_name.insert(t.name.to_string(), t);
     }
     for tool in internal {
         by_name.insert(tool.name.to_string(), tool);
@@ -888,6 +847,8 @@ pub fn merge_tools(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn spec_with_tagged_operations() -> Value {
         serde_json::json!({
@@ -985,5 +946,166 @@ mod tests {
         assert!(second.operation("getWellness").is_some());
 
         let _ = tokio::fs::remove_file(&tmp_file).await;
+    }
+
+    #[tokio::test]
+    async fn initial_load_sets_refresh_timestamp() {
+        let tmp_file =
+            std::env::temp_dir().join(format!("intervals_openapi_{}.json", uuid::Uuid::new_v4()));
+
+        let initial_spec = serde_json::to_string(&spec_with_tagged_operations())
+            .expect("spec serialization should succeed");
+        tokio::fs::write(&tmp_file, initial_spec)
+            .await
+            .expect("initial spec file should be written");
+
+        let runtime = DynamicRuntime::new(
+            "https://intervals.icu".to_string(),
+            "i123".to_string(),
+            "api_key".to_string(),
+            Some(tmp_file.to_string_lossy().to_string()),
+            None,
+            None,
+            Duration::from_secs(300),
+        );
+
+        runtime
+            .ensure_registry()
+            .await
+            .expect("initial load should work");
+
+        let refresh_marker = runtime.last_refresh_attempt.lock().await;
+        assert!(
+            refresh_marker.is_some(),
+            "initial load should set last_refresh_attempt"
+        );
+
+        let _ = tokio::fs::remove_file(&tmp_file).await;
+    }
+
+    #[test]
+    fn parse_response_body_parses_json_with_wildcard_content_type() {
+        let bytes = br#"{"ok":true,"items":[1,2,3]}"#;
+        let parsed = parse_response_body(bytes, "*/*");
+
+        assert_eq!(parsed["ok"], Value::Bool(true));
+        assert_eq!(parsed["items"][0], Value::from(1));
+    }
+
+    #[test]
+    fn parse_response_body_reports_non_utf8_binary_payloads() {
+        let bytes = [0_u8, 159, 146, 150];
+        let parsed = parse_response_body(&bytes, "application/octet-stream");
+
+        assert_eq!(parsed["binary"], Value::Bool(true));
+        assert_eq!(parsed["byte_length"], Value::from(bytes.len()));
+    }
+
+    #[tokio::test]
+    async fn dispatch_openapi_parses_json_even_when_content_type_is_wildcard() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/activity/42/map"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "*/*")
+                    .set_body_string(r#"{"type":"FeatureCollection","features":[]}"#),
+            )
+            .mount(&server)
+            .await;
+
+        let runtime = DynamicRuntime::new(
+            server.uri(),
+            "ath-1".to_string(),
+            "secret".to_string(),
+            None,
+            None,
+            None,
+            Duration::from_secs(300),
+        );
+
+        let schema = JsonObject::new();
+        let operation = DynamicOperation {
+            name: "getActivityMap".to_string(),
+            method: reqwest::Method::GET,
+            path_template: "/api/v1/activity/{id}/map".to_string(),
+            description: "Get activity map data".to_string(),
+            params: vec![ParamSpec {
+                name: "id".to_string(),
+                location: ParamLocation::Path,
+                auto_injected: false,
+            }],
+            has_json_body: false,
+            tool: Tool::new("getActivityMap", "Get activity map", Arc::new(schema)),
+        };
+
+        let mut args = JsonObject::new();
+        args.insert("id".to_string(), Value::String("42".to_string()));
+        let result = runtime
+            .dispatch_openapi(&operation, Some(&args))
+            .await
+            .expect("dispatch should succeed");
+
+        let as_value = serde_json::to_value(&result).expect("result should serialize");
+        assert_eq!(as_value["structuredContent"]["status"], Value::from(200));
+        assert_eq!(
+            as_value["structuredContent"]["body"]["type"],
+            Value::String("FeatureCollection".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_openapi_training_plan_uses_auto_injected_athlete_id() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/athlete/ath-42/training-plan"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "*/*")
+                    .set_body_string(r#"{"weeks":4,"items":[]}"#),
+            )
+            .mount(&server)
+            .await;
+
+        let runtime = DynamicRuntime::new(
+            server.uri(),
+            "ath-42".to_string(),
+            "secret".to_string(),
+            None,
+            None,
+            None,
+            Duration::from_secs(300),
+        );
+
+        let schema = JsonObject::new();
+        let operation = DynamicOperation {
+            name: "getAthleteTrainingPlan".to_string(),
+            method: reqwest::Method::GET,
+            path_template: "/api/v1/athlete/{id}/training-plan".to_string(),
+            description: "Get athlete training plan".to_string(),
+            params: vec![ParamSpec {
+                name: "id".to_string(),
+                location: ParamLocation::Path,
+                auto_injected: true,
+            }],
+            has_json_body: false,
+            tool: Tool::new(
+                "getAthleteTrainingPlan",
+                "Get athlete training plan",
+                Arc::new(schema),
+            ),
+        };
+
+        let result = runtime
+            .dispatch_openapi(&operation, Some(&JsonObject::new()))
+            .await
+            .expect("dispatch should succeed");
+
+        let as_value = serde_json::to_value(&result).expect("result should serialize");
+        assert_eq!(as_value["structuredContent"]["status"], Value::from(200));
+        assert_eq!(
+            as_value["structuredContent"]["body"]["weeks"],
+            Value::from(4)
+        );
     }
 }
