@@ -22,6 +22,14 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 - Prepare for next release.
+- Dynamic OpenAPI MCP runtime in `intervals_icu_mcp`: tools are generated from OpenAPI, dispatched through a generic HTTP path, and merged with compatibility aliases and internal webhook/download tools.
+- Preserved MCP prompts/resources and compact-aware response filtering in the new dynamic dispatch flow.
+
+### Changed
+- Replaced legacy hardcoded runtime tool routing with `ServerHandler`-based dynamic `list_tools`/`call_tool` implementation.
+
+### Quality
+- Validation gates pass locally: `cargo fmt --all -- --check`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo test --all-targets --all-features`.
 
 ## [1.0.2] - 2026-03-01
 - Chore: bump crate versions to 1.0.2 for patch release.
