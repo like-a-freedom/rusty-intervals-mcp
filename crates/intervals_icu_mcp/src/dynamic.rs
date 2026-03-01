@@ -164,7 +164,17 @@ impl DynamicRegistry {
                         continue;
                     }
 
-                    schema_props.insert(name_s.to_string(), parameter_schema(p));
+                    let mut schema = parameter_schema(p);
+                    if (name_s == "ext" || name_s == "format")
+                        && schema.get("default").is_none()
+                        && let Some(schema_obj) = schema.as_object_mut()
+                    {
+                        schema_obj.insert("default".to_string(), Value::String(String::new()));
+                        if let Some(Value::String(desc)) = schema_obj.get_mut("description") {
+                            desc.push_str(" Omit to use default JSON endpoint suffix.");
+                        }
+                    }
+                    schema_props.insert(name_s.to_string(), schema);
                     // if we have an "id" path param, also offer "activity_id" alias
                     if name_s == "id" && !schema_props.contains_key("activity_id") {
                         schema_props.insert("activity_id".to_string(), parameter_schema(p));
@@ -479,6 +489,13 @@ impl DynamicRuntime {
                             }
                         })
                         .and_then(stringify_argument)
+                        .or_else(|| {
+                            if p.name == "ext" || p.name == "format" {
+                                Some(String::new())
+                            } else {
+                                None
+                            }
+                        })
                         .ok_or_else(|| {
                             ErrorData::invalid_params(
                                 format!("missing required path parameter: {}", p.name),
@@ -1160,6 +1177,104 @@ mod tests {
         assert_eq!(as_val["structuredContent"], serde_json::json!({}));
     }
 
+    #[tokio::test]
+    async fn dispatch_openapi_ext_defaults_to_empty_suffix() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/athlete/ath-1/athlete-summary"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("[]"))
+            .mount(&server)
+            .await;
+
+        let runtime = DynamicRuntime::new(
+            server.uri(),
+            "ath-1".to_string(),
+            "secret".to_string(),
+            None,
+            None,
+            None,
+            Duration::from_secs(300),
+        );
+
+        let schema = JsonObject::new();
+        let operation = DynamicOperation {
+            name: "getAthleteSummary".to_string(),
+            method: reqwest::Method::GET,
+            path_template: "/api/v1/athlete/{id}/athlete-summary{ext}".to_string(),
+            description: "".to_string(),
+            params: vec![
+                ParamSpec {
+                    name: "id".to_string(),
+                    location: ParamLocation::Path,
+                    auto_injected: true,
+                },
+                ParamSpec {
+                    name: "ext".to_string(),
+                    location: ParamLocation::Path,
+                    auto_injected: false,
+                },
+            ],
+            has_json_body: false,
+            tool: Tool::new("getAthleteSummary", "", Arc::new(schema)),
+        };
+
+        let result = runtime
+            .dispatch_openapi(&operation, Some(&JsonObject::new()))
+            .await
+            .expect("ext should default to empty suffix");
+        let as_val = serde_json::to_value(&result).unwrap();
+        assert_eq!(as_val["structuredContent"], serde_json::json!([]));
+    }
+
+    #[tokio::test]
+    async fn dispatch_openapi_format_defaults_to_empty_suffix() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/athlete/ath-1/events"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("[]"))
+            .mount(&server)
+            .await;
+
+        let runtime = DynamicRuntime::new(
+            server.uri(),
+            "ath-1".to_string(),
+            "secret".to_string(),
+            None,
+            None,
+            None,
+            Duration::from_secs(300),
+        );
+
+        let schema = JsonObject::new();
+        let operation = DynamicOperation {
+            name: "listEvents".to_string(),
+            method: reqwest::Method::GET,
+            path_template: "/api/v1/athlete/{id}/events{format}".to_string(),
+            description: "".to_string(),
+            params: vec![
+                ParamSpec {
+                    name: "id".to_string(),
+                    location: ParamLocation::Path,
+                    auto_injected: true,
+                },
+                ParamSpec {
+                    name: "format".to_string(),
+                    location: ParamLocation::Path,
+                    auto_injected: false,
+                },
+            ],
+            has_json_body: false,
+            tool: Tool::new("listEvents", "", Arc::new(schema)),
+        };
+
+        let result = runtime
+            .dispatch_openapi(&operation, Some(&JsonObject::new()))
+            .await
+            .expect("format should default to empty suffix");
+        let as_val = serde_json::to_value(&result).unwrap();
+        assert_eq!(as_val["structuredContent"], serde_json::json!([]));
+    }
+
     #[test]
     fn dynamic_tool_schema_includes_compact_and_fields_controls() {
         let spec = serde_json::json!({
@@ -1226,6 +1341,58 @@ mod tests {
         assert!(
             props.get("activity_id").is_some(),
             "alias property should exist"
+        );
+    }
+
+    #[test]
+    fn dynamic_schema_for_ext_and_format_has_empty_default() {
+        let spec = serde_json::json!({
+            "openapi": "3.0.0",
+            "paths": {
+                "/api/v1/athlete/{id}/athlete-summary{ext}": {
+                    "get": {
+                        "operationId": "getAthleteSummary",
+                        "parameters": [
+                            {"name":"id","in":"path","required":true,"schema":{"type":"string"}},
+                            {"name":"ext","in":"path","required":true,"schema":{"type":"string"}}
+                        ]
+                    }
+                },
+                "/api/v1/athlete/{id}/events{format}": {
+                    "get": {
+                        "operationId": "listEvents",
+                        "parameters": [
+                            {"name":"id","in":"path","required":true,"schema":{"type":"string"}},
+                            {"name":"format","in":"path","required":true,"schema":{"type":"string"}}
+                        ]
+                    }
+                }
+            }
+        });
+
+        let registry = DynamicRegistry::from_openapi(&spec).expect("registry should parse");
+
+        let summary_tool = registry
+            .operation("getAthleteSummary")
+            .expect("operation should exist")
+            .tool
+            .clone();
+        let summary_props =
+            &serde_json::to_value(summary_tool).unwrap()["inputSchema"]["properties"];
+        assert_eq!(
+            summary_props["ext"]["default"],
+            Value::String(String::new())
+        );
+
+        let events_tool = registry
+            .operation("listEvents")
+            .expect("operation should exist")
+            .tool
+            .clone();
+        let events_props = &serde_json::to_value(events_tool).unwrap()["inputSchema"]["properties"];
+        assert_eq!(
+            events_props["format"]["default"],
+            Value::String(String::new())
         );
     }
 
