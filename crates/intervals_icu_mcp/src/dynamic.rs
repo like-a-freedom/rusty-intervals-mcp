@@ -165,6 +165,10 @@ impl DynamicRegistry {
                     }
 
                     schema_props.insert(name_s.to_string(), parameter_schema(p));
+                    // if we have an "id" path param, also offer "activity_id" alias
+                    if name_s == "id" && !schema_props.contains_key("activity_id") {
+                        schema_props.insert("activity_id".to_string(), parameter_schema(p));
+                    }
 
                     let treat_format_as_optional = name_s == "ext" || name_s == "format";
                     if required_param && !treat_format_as_optional {
@@ -464,15 +468,23 @@ impl DynamicRuntime {
                     }
 
                     // require explicit value for non-injected path parameters
-                    let replacement =
-                        args.get(&p.name)
-                            .and_then(stringify_argument)
-                            .ok_or_else(|| {
-                                ErrorData::invalid_params(
-                                    format!("missing required path parameter: {}", p.name),
-                                    None,
-                                )
-                            })?;
+                    // support aliases for common param names (e.g. activity_id)
+                    let replacement = args
+                        .get(&p.name)
+                        .or_else(|| {
+                            if p.name == "id" {
+                                args.get("activity_id").or_else(|| args.get("activityId"))
+                            } else {
+                                None
+                            }
+                        })
+                        .and_then(stringify_argument)
+                        .ok_or_else(|| {
+                            ErrorData::invalid_params(
+                                format!("missing required path parameter: {}", p.name),
+                                None,
+                            )
+                        })?;
                     path = path.replace(&format!("{{{}}}", p.name), &replacement);
                 }
                 ParamLocation::Query => {
@@ -1223,6 +1235,50 @@ mod tests {
         assert!(err.message.contains("missing required path parameter"));
     }
 
+    #[tokio::test]
+    async fn dispatch_openapi_alias_for_id_works() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/activity/XYZ/interval-stats"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("{}"))
+            .mount(&server)
+            .await;
+
+        let runtime = DynamicRuntime::new(
+            server.uri(),
+            "ath".to_string(),
+            "secret".to_string(),
+            None,
+            None,
+            None,
+            Duration::from_secs(300),
+        );
+
+        let schema = JsonObject::new();
+        let operation = DynamicOperation {
+            name: "getIntervalStats".to_string(),
+            method: reqwest::Method::GET,
+            path_template: "/api/v1/activity/{id}/interval-stats".to_string(),
+            description: "".to_string(),
+            params: vec![ParamSpec {
+                name: "id".to_string(),
+                location: ParamLocation::Path,
+                auto_injected: false,
+            }],
+            has_json_body: false,
+            tool: Tool::new("getIntervalStats", "", Arc::new(schema)),
+        };
+
+        let mut args = JsonObject::new();
+        args.insert("activity_id".to_string(), Value::String("XYZ".to_string()));
+        let result = runtime
+            .dispatch_openapi(&operation, Some(&args))
+            .await
+            .expect("alias should be accepted");
+        let as_val = serde_json::to_value(&result).unwrap();
+        assert_eq!(as_val["structuredContent"], serde_json::json!({}));
+    }
+
     #[test]
     fn dynamic_tool_schema_includes_compact_and_fields_controls() {
         let spec = serde_json::json!({
@@ -1264,6 +1320,31 @@ mod tests {
         assert_eq!(
             properties["body_only"]["type"],
             Value::String("boolean".to_string())
+        );
+    }
+
+    #[test]
+    fn dynamic_schema_for_interval_stats_has_alias_property() {
+        let spec = serde_json::json!({
+            "openapi": "3.0.0",
+            "paths": {
+                "/api/v1/activity/{id}/interval-stats": {
+                    "get": {
+                        "operationId": "getIntervalStats",
+                        "parameters": [
+                            {"name":"id","in":"path","required":true,"schema":{"type":"string"}}
+                        ]
+                    }
+                }
+            }
+        });
+        let registry = DynamicRegistry::from_openapi(&spec).unwrap();
+        let tool = registry.operation("getIntervalStats").unwrap().tool.clone();
+        let props = &serde_json::to_value(tool).unwrap()["inputSchema"]["properties"];
+        assert!(props.get("id").is_some());
+        assert!(
+            props.get("activity_id").is_some(),
+            "alias property should exist"
         );
     }
 
