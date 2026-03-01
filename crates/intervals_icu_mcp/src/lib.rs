@@ -460,7 +460,8 @@ impl ServerHandler for IntervalsMcpHandler {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        let registry = self.dynamic_runtime.ensure_registry().await;
+        let registry: Result<Arc<dynamic::DynamicRegistry>, ErrorData> =
+            self.dynamic_runtime.ensure_registry().await;
         let dynamic_tools = match registry {
             Ok(r) => r.list_tools(),
             Err(err) => {
@@ -482,7 +483,8 @@ impl ServerHandler for IntervalsMcpHandler {
         if let Some(result) = self.call_internal_tool(&request).await? {
             return Ok(result);
         }
-        let registry = self.dynamic_runtime.ensure_registry().await?;
+        let registry: Arc<dynamic::DynamicRegistry> =
+            self.dynamic_runtime.ensure_registry().await?;
         let op = registry.operation(request.name.as_ref()).ok_or_else(|| {
             ErrorData::invalid_params(
                 format!(
