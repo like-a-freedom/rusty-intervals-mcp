@@ -472,106 +472,39 @@ Several tools support **compact mode** to reduce token usage:
 
 ## Available Tools
 
-> Tool availability is generated dynamically from OpenAPI and can change with spec updates and tag scoping (`INTERVALS_INCLUDE_TAGS` / `INTERVALS_EXCLUDE_TAGS`). The list below is a practical reference of commonly available tools.
+Tool availability is generated dynamically from OpenAPI and can change with spec updates.
 
-### Activities (11 tools)
+For practical control, use **tag filtering**. Tags map to sections in the Intervals.icu API docs.
 
-| Tool | Description |
-|------|-------------|
-| `get_recent_activities` | List recent activities with summary metrics |
-| `get_activity_details` | Get activity details (compact by default, use `expand=true` for full) |
-| `search_activities` | Search activities by name or tag |
-| `search_activities_full` | Search activities with full details |
-| `get_activities_csv` | Download activities as CSV |
-| `get_activities_around` | Get activities before and after a specific one |
-| `update_activity` | Update activity name, description, or metadata |
-| `delete_activity` | Delete an activity |
-| `download_activity_file` | Download original activity file |
-| `download_fit_file` | Download activity as FIT file |
-| `download_gpx_file` | Download activity as GPX file |
+`INTERVALS_INCLUDE_TAGS` and `INTERVALS_EXCLUDE_TAGS` are mutually exclusive — set one or neither.
 
-### Activity Analysis (8 tools)
+Include only wellness and activity endpoints:
 
-| Tool | Description |
-|------|-------------|
-| `get_activity_streams` | Get time-series data with compact options (`max_points`, `summary`, `streams`) |
-| `get_activity_intervals` | Get structured workout intervals with targets and performance |
-| `get_best_efforts` | Find peak performances across all durations in an activity |
-| `search_intervals` | Find similar intervals across activity history |
-| `get_power_histogram` | Get power distribution histogram for an activity |
-| `get_hr_histogram` | Get heart rate distribution histogram for an activity |
-| `get_pace_histogram` | Get pace distribution histogram for an activity |
-| `get_gap_histogram` | Get grade-adjusted pace histogram for an activity |
+```sh
+INTERVALS_INCLUDE_TAGS="Wellness,Activities"
+```
 
-### Athlete (2 tools)
+Exclude gear-related endpoints:
 
-| Tool | Description |
-|------|-------------|
-| `get_athlete_profile` | Get athlete profile with fitness metrics and sport settings |
-| `get_fitness_summary` | Get detailed CTL/ATL/TSB analysis with training recommendations |
+```sh
+INTERVALS_EXCLUDE_TAGS="Gear"
+```
 
-### Wellness (3 tools)
+Common tag groups you can scope by:
 
-| Tool | Description |
-|------|-------------|
-| `get_wellness` | Get recent wellness metrics with trends (HRV, sleep, mood, fatigue) |
-| `get_wellness_for_date` | Get complete wellness data for a specific date |
-| `update_wellness` | Update or create wellness data for a date |
+| Tag (OpenAPI section) | Typical domain |
+|---|---|
+| `Activities` | Activities, streams, intervals, curves/histograms |
+| `Wellness` | Recovery and wellness metrics |
+| `Events` | Calendar, workouts, planned events |
+| `Gear` | Gear inventory and reminders |
+| `Sports` | Sport settings and thresholds |
+| `Athletes` | Athlete profile and related athlete endpoints |
+| `Library` | Workout library, folders, plans |
 
-### Events/Calendar (9 tools)
+> Other tags seen in the current spec include `Shared Events`, `Chats`, `Weather`, `Routes`, `Custom Items`, `o-auth-server-controller`, etc.  Use the exact casing shown in the OpenAPI document when setting the environment variable.
 
-Note: Intervals.icu event IDs are numeric; the MCP tools accept either numbers or strings and forward them as required by the API.
-
-| Tool | Description |
-|------|-------------|
-| `get_events` | Get planned events and workouts from calendar |
-| `get_upcoming_workouts` | Get upcoming workouts (defaults to `WORKOUT`, supports `category=all`, and applies `limit` in compact/full modes) |
-| `get_event` | Get details for a specific event |
-| `create_event` | Create new calendar events (workouts, races, notes, goals) |
-| `update_event` | Modify existing calendar events |
-| `delete_event` | Remove events from calendar |
-| `bulk_create_events` | Create multiple events in a single operation |
-| `bulk_delete_events` | Delete multiple events in a single operation |
-| `duplicate_event` | Duplicate an event to a new date |
-
-### Performance/Curves (3 tools)
-
-| Tool | Description |
-|------|-------------|
-| `get_power_curves` | Analyze power curves with FTP estimation and power zones |
-| `get_hr_curves` | Analyze heart rate curves with HR zones |
-| `get_pace_curves` | Analyze running/swimming pace curves with optional GAP |
-
-### Workout Library (5 tools)
-
-| Tool | Description |
-|------|-------------|
-| `get_workout_library` | Browse workout folders and training plans |
-| `get_workouts_in_folder` | View all workouts in a specific folder |
-| `create_folder` | Create new folder (training plan) |
-| `update_folder` | Update existing folder details |
-| `delete_folder` | Delete a folder (training plan) |
-
-### Gear Management (6 tools)
-
-| Tool | Description |
-|------|-------------|
-| `get_gear_list` | Get all gear items with usage and status |
-| `create_gear` | Add new gear to tracking |
-| `update_gear` | Update gear details, mileage, or status |
-| `delete_gear` | Remove gear from tracking |
-| `create_gear_reminder` | Create maintenance reminders for gear |
-| `update_gear_reminder` | Update existing gear maintenance reminders |
-
-### Sport Settings (5 tools)
-
-| Tool | Description |
-|------|-------------|
-| `get_sport_settings` | Get sport-specific settings and thresholds |
-| `update_sport_settings` | Update FTP, FTHR, pace threshold, or zone configuration |
-| `apply_sport_settings` | Apply updated settings to historical activities |
-| `create_sport_settings` | Create new sport-specific settings |
-| `delete_sport_settings` | Delete sport-specific settings |
+Note: Intervals.icu event IDs are numeric; MCP event tools accept number/string and normalize automatically.
 
 ### API Compliance Notes
 
