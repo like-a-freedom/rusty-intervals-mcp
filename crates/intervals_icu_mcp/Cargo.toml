@@ -1,6 +1,6 @@
 [package]
 name = "intervals_icu_mcp"
-version = "1.0.1"
+version = "1.0.2"
 edition = "2024"
 
 [dependencies]
