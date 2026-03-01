@@ -154,7 +154,12 @@ async fn e2e_stdio_lists_tools_and_calls_profile() {
     let structured = res.structured_content;
     assert!(structured.is_some());
     let v = structured.unwrap();
-    assert_eq!(v.get("athlete").and_then(|a| a.get("id")).and_then(|id| id.as_str()), Some("ath123"));
+    assert_eq!(
+        v.get("athlete")
+            .and_then(|a| a.get("id"))
+            .and_then(|id| id.as_str()),
+        Some("ath123")
+    );
 
     tokio::time::timeout(std::time::Duration::from_secs(10), service.cancel())
         .await
