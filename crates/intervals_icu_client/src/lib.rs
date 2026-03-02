@@ -32,8 +32,8 @@ pub mod utils;
 pub use error::{ApiError, ConfigError, IntervalsError, Result, ValidationError};
 // Service traits are available in the `traits` module for modular usage
 pub use traits::{
-    AthleteService, ActivityService, EventService, FitnessService,
-    GearService, WellnessService, WorkoutService, SportSettingsService,
+    ActivityService, AthleteService, EventService, FitnessService, GearService,
+    SportSettingsService, WellnessService, WorkoutService,
 };
 
 /// Options for finding best efforts in an activity.
@@ -117,11 +117,9 @@ where
     }
 }
 
-// The IntervalsClient trait is now defined in the `traits` module as separate service traits.
-// We re-export it here for backward compatibility.
-// Note: The blanket implementation was removed; implement IntervalsClient directly or use service traits.
+// The IntervalsClient trait is defined here for backward compatibility.
+// For better modularity, use the service traits in the `traits` module.
 
-// Re-define the monolithic trait for backward compatibility
 #[async_trait::async_trait]
 #[allow(clippy::too_many_arguments)]
 pub trait IntervalsClient: Send + Sync + 'static {
@@ -134,30 +132,20 @@ pub trait IntervalsClient: Send + Sync + 'static {
     async fn create_event(&self, event: Event) -> Result<Event>;
     async fn get_event(&self, event_id: &str) -> Result<Event>;
     async fn delete_event(&self, event_id: &str) -> Result<()>;
-    async fn get_events(
-        &self,
-        days_back: Option<i32>,
-        limit: Option<u32>,
-    ) -> Result<Vec<Event>>;
+    async fn get_events(&self, days_back: Option<i32>, limit: Option<u32>) -> Result<Vec<Event>>;
     async fn bulk_create_events(&self, events: Vec<Event>) -> Result<Vec<Event>>;
     async fn get_activity_streams(
         &self,
         activity_id: &str,
         streams: Option<Vec<String>>,
     ) -> Result<serde_json::Value>;
-    async fn get_activity_intervals(
-        &self,
-        activity_id: &str,
-    ) -> Result<serde_json::Value>;
+    async fn get_activity_intervals(&self, activity_id: &str) -> Result<serde_json::Value>;
     async fn get_best_efforts(
         &self,
         activity_id: &str,
         options: Option<BestEffortsOptions>,
     ) -> Result<serde_json::Value>;
-    async fn get_activity_details(
-        &self,
-        activity_id: &str,
-    ) -> Result<serde_json::Value>;
+    async fn get_activity_details(&self, activity_id: &str) -> Result<serde_json::Value>;
     async fn search_activities(
         &self,
         query: &str,
@@ -251,11 +239,8 @@ pub trait IntervalsClient: Send + Sync + 'static {
         num_copies: Option<u32>,
         weeks_between: Option<u32>,
     ) -> Result<Vec<Event>>;
-    async fn get_hr_curves(
-        &self,
-        days_back: Option<i32>,
-        sport: &str,
-    ) -> Result<serde_json::Value>;
+    async fn get_hr_curves(&self, days_back: Option<i32>, sport: &str)
+    -> Result<serde_json::Value>;
     async fn get_pace_curves(
         &self,
         days_back: Option<i32>,
@@ -297,7 +282,10 @@ pub trait IntervalsClient: Send + Sync + 'static {
         fields: &serde_json::Value,
     ) -> Result<serde_json::Value>;
     async fn apply_sport_settings(&self, sport_type: &str) -> Result<serde_json::Value>;
-    async fn create_sport_settings(&self, settings: &serde_json::Value) -> Result<serde_json::Value>;
+    async fn create_sport_settings(
+        &self,
+        settings: &serde_json::Value,
+    ) -> Result<serde_json::Value>;
     async fn delete_sport_settings(&self, sport_type: &str) -> Result<()>;
 }
 

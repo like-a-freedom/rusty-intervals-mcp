@@ -130,7 +130,9 @@ impl DynamicRuntimeConfigBuilder {
 
     pub fn build(self) -> DynamicRuntimeConfig {
         DynamicRuntimeConfig {
-            base_url: self.base_url.unwrap_or_else(|| "https://intervals.icu".to_string()),
+            base_url: self
+                .base_url
+                .unwrap_or_else(|| "https://intervals.icu".to_string()),
             athlete_id: self.athlete_id.unwrap_or_default(),
             api_key: self.api_key.unwrap_or_default(),
             spec_source: self.spec_source,
@@ -326,7 +328,10 @@ fn default_local_spec_path() -> PathBuf {
     workspace_root.join("docs").join("intervals_icu_api.json")
 }
 
-async fn load_spec_from_source(http: &reqwest::Client, source: &str) -> Result<serde_json::Value, String> {
+async fn load_spec_from_source(
+    http: &reqwest::Client,
+    source: &str,
+) -> Result<serde_json::Value, String> {
     if source.starts_with("http://") || source.starts_with("https://") {
         let resp = http
             .get(source)

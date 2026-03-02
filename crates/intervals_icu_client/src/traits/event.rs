@@ -15,11 +15,7 @@ pub trait EventService: Send + Sync + 'static {
     async fn delete_event(&self, event_id: &str) -> Result<()>;
 
     /// Get events with optional filtering.
-    async fn get_events(
-        &self,
-        days_back: Option<i32>,
-        limit: Option<u32>,
-    ) -> Result<Vec<Event>>;
+    async fn get_events(&self, days_back: Option<i32>, limit: Option<u32>) -> Result<Vec<Event>>;
 
     /// Create multiple events in bulk.
     async fn bulk_create_events(&self, events: Vec<Event>) -> Result<Vec<Event>>;

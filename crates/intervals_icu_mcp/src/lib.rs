@@ -54,7 +54,8 @@ impl IntervalsMcpHandler {
     }
 
     pub async fn preload_dynamic_registry(&self) -> usize {
-        let result: Result<std::sync::Arc<dynamic::DynamicRegistry>, _> = self.dynamic_runtime.ensure_registry().await;
+        let result: Result<std::sync::Arc<dynamic::DynamicRegistry>, _> =
+            self.dynamic_runtime.ensure_registry().await;
         match result {
             Ok(registry) => registry.len(),
             Err(err) => {

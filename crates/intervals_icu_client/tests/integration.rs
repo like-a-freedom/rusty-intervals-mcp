@@ -1041,7 +1041,12 @@ async fn bulk_create_events_propagates_error_body() {
     // Error should mention the invalid date
     let err = format!("{}", res.err().unwrap());
     eprintln!("bulk_create error: {}", err);
-    assert!(err.contains("2026-13-01") || err.contains("invalid") || err.contains("date") || err.contains("API"));
+    assert!(
+        err.contains("2026-13-01")
+            || err.contains("invalid")
+            || err.contains("date")
+            || err.contains("API")
+    );
 }
 
 #[tokio::test]
@@ -1112,7 +1117,9 @@ async fn gear_reminder_update_sends_required_query() {
         .and(path("/api/v1/athlete/ath/gear/g1/reminder/5"))
         .and(query_param("reset", "true"))
         .and(query_param("snoozeDays", "7"))
-        .and(wiremock::matchers::body_json(serde_json::json!({"note": "hi"})))
+        .and(wiremock::matchers::body_json(
+            serde_json::json!({"note": "hi"}),
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"id": 5})))
         .mount(&server)
         .await;
@@ -1135,7 +1142,9 @@ async fn sport_settings_update_includes_recalc_flag() {
     let server = MockServer::start().await;
     Mock::given(method("PUT"))
         .and(path("/api/v1/athlete/ath/sport-settings/Run"))
-        .and(wiremock::matchers::body_json(serde_json::json!({"ftp": 250, "recalc_hr_zones": true})))
+        .and(wiremock::matchers::body_json(
+            serde_json::json!({"ftp": 250, "recalc_hr_zones": true}),
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true})))
         .mount(&server)
         .await;
