@@ -85,6 +85,9 @@ pub fn parse_openapi_spec(
             let has_suffix = final_schema_props.get("ext").is_some()
                 || final_schema_props.get("format").is_some();
 
+            // Build output schema from OpenAPI responses
+            let output_schema = build_output_schema(op);
+
             let tool = build_tool(
                 &name,
                 &description,
@@ -92,6 +95,7 @@ pub fn parse_openapi_spec(
                 &required,
                 &method,
                 has_suffix,
+                output_schema.clone(),
             )?;
 
             registry.insert(
@@ -104,6 +108,7 @@ pub fn parse_openapi_spec(
                     params,
                     has_json_body,
                     tool,
+                    output_schema: output_schema.map(|s| std::sync::Arc::new(s)),
                 },
             );
         }
@@ -296,6 +301,7 @@ fn build_tool(
     required: &[Value],
     method: &reqwest::Method,
     has_suffix: bool,
+    output_schema: Option<Map<String, Value>>,
 ) -> Result<Tool, String> {
     let mut input_schema = Map::new();
     input_schema.insert("type".to_string(), Value::String("object".to_string()));
@@ -320,6 +326,15 @@ fn build_tool(
 
     let mut tool = Tool::new(name.to_string(), full_desc, std::sync::Arc::new(schema_obj));
     tool.annotations = Some(method_to_annotations(method));
+    
+    // Set output schema if available
+    if let Some(output_schema_obj) = output_schema {
+        if let Ok(output_schema_arc) = serde_json::from_value::<rmcp::model::JsonObject>(
+            Value::Object(output_schema_obj)
+        ) {
+            tool.output_schema = Some(std::sync::Arc::new(output_schema_arc));
+        }
+    }
 
     Ok(tool)
 }
@@ -368,6 +383,54 @@ fn generate_human_readable_description(method: &str, path: &str) -> String {
 
     let path_clean = path.trim_matches('/').replace(['{', '}'], "");
     format!("{action} {path_clean}")
+}
+
+/// Build output schema from OpenAPI operation responses.
+/// Extracts schema from responses.200.content.application/json.schema
+fn build_output_schema(op: &Map<String, Value>) -> Option<Map<String, Value>> {
+    op.get("responses")
+        .and_then(Value::as_object)
+        .and_then(|responses| {
+            // Try 200, then 201, then 204, then any 2xx
+            responses
+                .get("200")
+                .or_else(|| responses.get("201"))
+                .or_else(|| responses.get("204"))
+                .or_else(|| {
+                    responses
+                        .iter()
+                        .find(|(k, _)| k.starts_with('2'))
+                        .map(|(_, v)| v)
+                })
+        })
+        .and_then(Value::as_object)
+        .and_then(|response| response.get("content"))
+        .and_then(Value::as_object)
+        .and_then(|content| {
+            // Try application/json first, then any JSON-like content type
+            content
+                .get("application/json")
+                .or_else(|| content.iter().find(|(k, _)| k.contains("json")).map(|(_, v)| v))
+        })
+        .and_then(Value::as_object)
+        .and_then(|media_type| media_type.get("schema"))
+        .and_then(Value::as_object)
+        .map(|schema| {
+            // Convert $ref to inline type if present
+            let mut schema = schema.clone();
+            if let Some(ref_val) = schema.get("$ref").and_then(Value::as_str) {
+                // For $ref, create a generic object schema
+                let mut ref_schema = Map::new();
+                ref_schema.insert("type".to_string(), Value::String("object".to_string()));
+                ref_schema.insert(
+                    "description".to_string(),
+                    Value::String(format!("Response schema (ref: {})", ref_val)),
+                );
+                ref_schema
+            } else {
+                schema
+            }
+        })
 }
 
 /// Get enhanced description for known operation IDs.

@@ -28,6 +28,7 @@ pub struct DynamicOperation {
     pub params: Vec<ParamSpec>,
     pub has_json_body: bool,
     pub tool: Tool,
+    pub output_schema: Option<std::sync::Arc<rmcp::model::JsonObject>>,
 }
 
 /// Registry of dynamically generated operations.
