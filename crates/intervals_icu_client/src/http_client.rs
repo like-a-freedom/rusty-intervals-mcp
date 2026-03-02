@@ -708,7 +708,8 @@ impl ActivityService for ReqwestIntervalsClient {
         max_reps: Option<u32>,
         limit: Option<u32>,
     ) -> Result<serde_json::Value> {
-        let url = format!("{}/api/v1/athlete/{}/intervals/search", self.base_url, self.athlete_id);
+        // API endpoint: /api/v1/athlete/{id}/activities/interval-search
+        let url = self.api_url(&["athlete", &self.athlete_id, "activities", "interval-search"]);
         let pairs = crate::utils::QueryBuilder::new()
             .add("minSecs", min_secs)
             .add("maxSecs", max_secs)
@@ -835,10 +836,13 @@ impl EventService for ReqwestIntervalsClient {
     }
 
     async fn bulk_delete_events(&self, event_ids: Vec<String>) -> Result<()> {
-        let url = self.api_url(&["athlete", &self.athlete_id, "events", "bulk"]);
-        self.execute_empty(self.post_request(&url).json(&serde_json::json!({
-            "event_ids": event_ids
-        }))).await
+        // API endpoint: /api/v1/athlete/{id}/events/bulk-delete (PUT with array of DoomedEvent objects)
+        let url = self.api_url(&["athlete", &self.athlete_id, "events", "bulk-delete"]);
+        // Convert string IDs to DoomedEvent objects
+        let doomed: Vec<serde_json::Value> = event_ids.iter()
+            .map(|id| serde_json::json!({ "id": id.parse::<i32>().unwrap_or(0) }))
+            .collect();
+        self.execute_empty(self.put_request(&url).json(&doomed)).await
     }
 
     async fn duplicate_event(
@@ -847,10 +851,12 @@ impl EventService for ReqwestIntervalsClient {
         num_copies: Option<u32>,
         weeks_between: Option<u32>,
     ) -> Result<Vec<crate::Event>> {
-        let url = self.api_url(&["athlete", &self.athlete_id, "events", event_id, "duplicate"]);
+        // API endpoint: /api/v1/athlete/{id}/duplicate-events (POST with DTO)
+        let url = self.api_url(&["athlete", &self.athlete_id, "duplicate-events"]);
         let body = serde_json::json!({
-            "num_copies": num_copies,
-            "weeks_between": weeks_between
+            "eventIds": [event_id],
+            "numCopies": num_copies,
+            "weeksBetween": weeks_between
         });
         self.execute_json(self.post_request(&url).json(&body)).await
     }
@@ -859,6 +865,7 @@ impl EventService for ReqwestIntervalsClient {
 #[async_trait]
 impl FitnessService for ReqwestIntervalsClient {
     async fn get_fitness_summary(&self) -> Result<serde_json::Value> {
+        // API endpoint: /api/v1/athlete/{id}/athlete-summary.json
         let url = format!("{}/api/v1/athlete/{}/athlete-summary.json", self.base_url, self.athlete_id);
         self.execute_json(self.get_request(&url)).await
     }
@@ -868,13 +875,24 @@ impl FitnessService for ReqwestIntervalsClient {
         days_back: Option<i32>,
         sport: &str,
     ) -> Result<serde_json::Value> {
-        let url = self.api_url(&["athlete", &self.athlete_id, "power-curves"]);
-        let mut pairs: Vec<(&str, String)> = vec![("sport", Self::normalize_sport(sport))];
-        if let Some(d) = days_back {
-            pairs.push(("days_back", d.to_string()));
-        }
-        self.execute_json(self.get_request(&url).query(&self.build_query(&pairs)))
-            .await
+        // API endpoint: /api/v1/athlete/{id}/activity-power-curves{ext}
+        // Requires oldest and newest dates, type filter
+        let url = format!("{}/api/v1/athlete/{}/activity-power-curves", self.base_url, self.athlete_id);
+        let today = chrono::Utc::now().date_naive();
+        let oldest = if let Some(days) = days_back {
+            today - chrono::Duration::days(days as i64)
+        } else {
+            today - chrono::Duration::days(90)
+        };
+        
+        let pairs = crate::utils::QueryBuilder::new()
+            .add("ext", "")
+            .add("oldest", oldest.to_string())
+            .add("newest", today.to_string())
+            .add("type", sport)
+            .build_owned();
+        let qp: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        self.execute_json(self.get_request(&url).query(&qp)).await
     }
 
     async fn get_hr_curves(
@@ -882,13 +900,23 @@ impl FitnessService for ReqwestIntervalsClient {
         days_back: Option<i32>,
         sport: &str,
     ) -> Result<serde_json::Value> {
-        let url = self.api_url(&["athlete", &self.athlete_id, "hr-curves"]);
-        let mut pairs: Vec<(&str, String)> = vec![("sport", Self::normalize_sport(sport))];
-        if let Some(d) = days_back {
-            pairs.push(("days_back", d.to_string()));
-        }
-        self.execute_json(self.get_request(&url).query(&self.build_query(&pairs)))
-            .await
+        // API endpoint: /api/v1/athlete/{id}/activity-hr-curves{ext}
+        let url = format!("{}/api/v1/athlete/{}/activity-hr-curves", self.base_url, self.athlete_id);
+        let today = chrono::Utc::now().date_naive();
+        let oldest = if let Some(days) = days_back {
+            today - chrono::Duration::days(days as i64)
+        } else {
+            today - chrono::Duration::days(90)
+        };
+        
+        let pairs = crate::utils::QueryBuilder::new()
+            .add("ext", "")
+            .add("oldest", oldest.to_string())
+            .add("newest", today.to_string())
+            .add("type", sport)
+            .build_owned();
+        let qp: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        self.execute_json(self.get_request(&url).query(&qp)).await
     }
 
     async fn get_pace_curves(
@@ -896,13 +924,23 @@ impl FitnessService for ReqwestIntervalsClient {
         days_back: Option<i32>,
         sport: &str,
     ) -> Result<serde_json::Value> {
-        let url = self.api_url(&["athlete", &self.athlete_id, "pace-curves"]);
-        let mut pairs: Vec<(&str, String)> = vec![("sport", Self::normalize_sport(sport))];
-        if let Some(d) = days_back {
-            pairs.push(("days_back", d.to_string()));
-        }
-        self.execute_json(self.get_request(&url).query(&self.build_query(&pairs)))
-            .await
+        // API endpoint: /api/v1/athlete/{id}/activity-pace-curves{ext}
+        let url = format!("{}/api/v1/athlete/{}/activity-pace-curves", self.base_url, self.athlete_id);
+        let today = chrono::Utc::now().date_naive();
+        let oldest = if let Some(days) = days_back {
+            today - chrono::Duration::days(days as i64)
+        } else {
+            today - chrono::Duration::days(90)
+        };
+        
+        let pairs = crate::utils::QueryBuilder::new()
+            .add("ext", "")
+            .add("oldest", oldest.to_string())
+            .add("newest", today.to_string())
+            .add("type", sport)
+            .build_owned();
+        let qp: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        self.execute_json(self.get_request(&url).query(&qp)).await
     }
 }
 
@@ -949,13 +987,15 @@ impl GearService for ReqwestIntervalsClient {
         snooze_days: u32,
         fields: &serde_json::Value,
     ) -> Result<serde_json::Value> {
-        let url = self.api_url(&["athlete", &self.athlete_id, "gear", gear_id, "reminders", reminder_id]);
-        let mut body = fields.clone();
-        if let Some(obj) = body.as_object_mut() {
-            obj.insert("reset".to_string(), serde_json::json!(reset));
-            obj.insert("snooze_days".to_string(), serde_json::json!(snooze_days));
-        }
-        self.execute_json(self.put_request(&url).json(&body)).await
+        // API endpoint: /api/v1/athlete/{id}/gear/{gearId}/reminder/{reminderId}
+        // Uses query parameters reset and snoozeDays
+        let url = self.api_url(&["athlete", &self.athlete_id, "gear", gear_id, "reminder", reminder_id]);
+        let pairs = crate::utils::QueryBuilder::new()
+            .add("reset", reset)
+            .add("snoozeDays", snooze_days)
+            .build_owned();
+        let qp: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        self.execute_json(self.put_request(&url).query(&qp).json(fields)).await
     }
 }
 

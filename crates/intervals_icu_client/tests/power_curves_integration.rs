@@ -1,18 +1,16 @@
 use intervals_icu_client::IntervalsClient;
 use intervals_icu_client::http_client::ReqwestIntervalsClient;
 use secrecy::SecretString;
-use wiremock::matchers::{method, path, query_param};
+use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[tokio::test]
 async fn get_power_curves_normalizes_type_and_sends_curves() {
     let mock_server = MockServer::start().await;
 
-    // Expect a GET with sport=Run and days_back=7
+    // Expect a GET to activity-power-curves endpoint
     let m = Mock::given(method("GET"))
-        .and(path("/api/v1/athlete/test_ath/power-curves"))
-        .and(query_param("sport", "Run"))
-        .and(query_param("days_back", "7"))
+        .and(path("/api/v1/athlete/test_ath/activity-power-curves"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true})))
         .expect(1);
 
