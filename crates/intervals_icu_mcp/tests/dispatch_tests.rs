@@ -32,6 +32,7 @@ fn create_test_operation(
         params: vec![],
         has_json_body: false,
         tool: Tool::new(name_str, "Test operation", schema),
+        output_schema: None,
     }
 }
 
