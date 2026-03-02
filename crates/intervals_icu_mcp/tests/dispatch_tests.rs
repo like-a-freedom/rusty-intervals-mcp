@@ -583,8 +583,18 @@ async fn test_dispatch_without_arguments() {
 }
 
 #[tokio::test]
-async fn test_dispatch_curve_rejects_unsupported_query_aliases_with_guidance() {
+async fn test_dispatch_curve_forwards_query_aliases_without_local_validation() {
     let mock_server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/v1/athlete/test_athlete/power-curves"))
+        .and(query_param("type", "Ride"))
+        .and(query_param("newest", "2026-03-01"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "ok": true
+        })))
+        .mount(&mock_server)
+        .await;
 
     let mut operation = with_path_param(
         create_test_operation(
@@ -618,14 +628,11 @@ async fn test_dispatch_curve_rejects_unsupported_query_aliases_with_guidance() {
     )
     .await;
 
-    assert!(result.is_err());
-    let error = result.unwrap_err();
-    assert!(error.message.contains("newest"));
-    assert!(error.message.contains("listActivities"));
+    assert!(result.is_ok());
 }
 
 #[tokio::test]
-async fn test_dispatch_curve_422_includes_structured_recovery_hints() {
+async fn test_dispatch_curve_422_returns_upstream_error_without_local_augmentation() {
     let mock_server = MockServer::start().await;
 
     Mock::given(method("GET"))
@@ -672,7 +679,7 @@ async fn test_dispatch_curve_422_includes_structured_recovery_hints() {
     let response = result.unwrap();
     let content = serde_json::to_string(&response.content).unwrap();
 
-    assert!(content.contains("likely_wrong_tool_or_params"));
-    assert!(content.contains("do_not_retry_same_arguments"));
-    assert!(content.contains("listActivities"));
+    assert!(content.contains("Invalid newest"));
+    assert!(!content.contains("likely_wrong_tool_or_params"));
+    assert!(!content.contains("do_not_retry_same_arguments"));
 }

@@ -256,16 +256,16 @@ fn test_registry_list_tools_sorted() {
 
     let tools = result.list_tools();
 
-    // Tools should be sorted by intent-aware priority and then by name
+    // Tools should be sorted by tool name
     let names: Vec<_> = tools.iter().map(|t| &t.name).collect();
     assert_eq!(
         names,
-        vec!["listActivities", "getAthleteProfile", "listWellness"]
+        vec!["getAthleteProfile", "listActivities", "listWellness"]
     );
 }
 
 #[test]
-fn test_registry_list_tools_deprioritizes_curve_tools() {
+fn test_registry_list_tools_sorted_by_name_with_curve_tools() {
     let spec = json!({
         "openapi": "3.0.0",
         "info": {"title": "Test API", "version": "1.0.0"},
@@ -308,8 +308,8 @@ fn test_registry_list_tools_deprioritizes_curve_tools() {
         .map(|t| t.name.to_string())
         .collect();
 
-    assert_eq!(names[0], "listActivities");
-    assert_eq!(names[1], "getAthleteProfile");
+    assert_eq!(names[0], "getAthleteProfile");
+    assert_eq!(names[1], "listActivities");
     assert_eq!(names[2], "listAthletePowerCurves");
 }
 
