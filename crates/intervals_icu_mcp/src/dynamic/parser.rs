@@ -108,7 +108,7 @@ pub fn parse_openapi_spec(
                     params,
                     has_json_body,
                     tool,
-                    output_schema: output_schema.map(|s| std::sync::Arc::new(s)),
+                    output_schema: output_schema.map(std::sync::Arc::new),
                 },
             );
         }
@@ -328,12 +328,11 @@ fn build_tool(
     tool.annotations = Some(method_to_annotations(method));
 
     // Set output schema if available
-    if let Some(output_schema_obj) = output_schema {
-        if let Ok(output_schema_arc) =
+    if let Some(output_schema_obj) = output_schema
+        && let Ok(output_schema_arc) =
             serde_json::from_value::<rmcp::model::JsonObject>(Value::Object(output_schema_obj))
-        {
-            tool.output_schema = Some(std::sync::Arc::new(output_schema_arc));
-        }
+    {
+        tool.output_schema = Some(std::sync::Arc::new(output_schema_arc));
     }
 
     Ok(tool)
@@ -442,10 +441,10 @@ fn get_operation_description(operation_id: &str) -> Option<&'static str> {
     Some(match operation_id {
         // === Activities ===
         "listActivities" => {
-            "List athlete's recent activities. Returns activity summaries with id, name, date, distance, moving_time. Use this tool to browse or search activities by date range."
+            "Primary activity discovery tool. Start here for most activity-related requests. Returns recent activity summaries (id, name, date, distance, moving_time) and supports date-range browsing."
         }
         "getActivity" => {
-            "Get detailed information about a specific activity by ID. Returns full activity data including metadata, laps, and streams availability."
+            "Get full details for a known activity ID. Use after listActivities/searchForActivities when you already selected a specific activity."
         }
         "searchForActivities" => {
             "Search activities by text query. Use for finding activities by name, location, notes, or other text criteria."
@@ -501,13 +500,13 @@ fn get_operation_description(operation_id: &str) -> Option<&'static str> {
 
         // === Power/HR/Pace Curves — критично! Не для listing activities ===
         "listAthletePowerCurves" => {
-            "Get athlete's power duration curves. REQUIRED: type='Run'|'Ride'|'Swim'. OPTIONAL: days_back (positive integer, default 365). Returns activityReferences (NOT activities list) and curve data (secs, watts, powerModels). Use listActivities to browse activities."
+            "Specialized analytics tool for power-duration curves only (critical power modeling). REQUIRED: type='Run'|'Ride'|'Swim'. OPTIONAL: days_back (positive integer, default 365). Returns curve points and activityReferences (not an activities list). Do NOT use this to browse or search recent activities; use listActivities instead."
         }
         "listAthleteHRCurves" => {
-            "Get athlete's heart rate curves. REQUIRED: type='Run'|'Ride'|'Swim'. OPTIONAL: days_back. Returns HR curve data with activityReferences (NOT activities list). Use listActivities to browse activities."
+            "Specialized analytics tool for heart-rate curve modeling only. REQUIRED: type='Run'|'Ride'|'Swim'. OPTIONAL: days_back. Returns HR curves and activityReferences (not an activities list). For activity browsing, use listActivities."
         }
         "listAthletePaceCurves" => {
-            "Get athlete's pace curves for running. REQUIRED: type='Run'|'Ride'|'Swim'. OPTIONAL: days_back. Returns pace curve data with activityReferences (NOT activities list). Use listActivities to browse activities."
+            "Specialized analytics tool for pace-curve modeling only. REQUIRED: type='Run'|'Ride'|'Swim'. OPTIONAL: days_back. Returns pace curves and activityReferences (not an activities list). For activity browsing, use listActivities."
         }
 
         // === Athlete Profile ===

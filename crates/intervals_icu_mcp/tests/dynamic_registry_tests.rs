@@ -256,12 +256,61 @@ fn test_registry_list_tools_sorted() {
 
     let tools = result.list_tools();
 
-    // Tools should be sorted by name
+    // Tools should be sorted by intent-aware priority and then by name
     let names: Vec<_> = tools.iter().map(|t| &t.name).collect();
     assert_eq!(
         names,
-        vec!["getAthleteProfile", "listActivities", "listWellness"]
+        vec!["listActivities", "getAthleteProfile", "listWellness"]
     );
+}
+
+#[test]
+fn test_registry_list_tools_deprioritizes_curve_tools() {
+    let spec = json!({
+        "openapi": "3.0.0",
+        "info": {"title": "Test API", "version": "1.0.0"},
+        "paths": {
+            "/api/v1/athlete/{id}/activities": {
+                "get": {
+                    "operationId": "listActivities",
+                    "parameters": [
+                        {"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}
+                    ],
+                    "responses": {"200": {"description": "Success"}}
+                }
+            },
+            "/api/v1/athlete/{id}/power-curves": {
+                "get": {
+                    "operationId": "listAthletePowerCurves",
+                    "parameters": [
+                        {"name": "id", "in": "path", "required": true, "schema": {"type": "string"}},
+                        {"name": "type", "in": "query", "required": true, "schema": {"type": "string"}}
+                    ],
+                    "responses": {"200": {"description": "Success"}}
+                }
+            },
+            "/api/v1/athlete/{id}/profile": {
+                "get": {
+                    "operationId": "getAthleteProfile",
+                    "parameters": [
+                        {"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}
+                    ],
+                    "responses": {"200": {"description": "Success"}}
+                }
+            }
+        }
+    });
+
+    let result = parse_openapi_spec(&spec, &empty_tags(), &empty_tags()).unwrap();
+    let names: Vec<String> = result
+        .list_tools()
+        .iter()
+        .map(|t| t.name.to_string())
+        .collect();
+
+    assert_eq!(names[0], "listActivities");
+    assert_eq!(names[1], "getAthleteProfile");
+    assert_eq!(names[2], "listAthletePowerCurves");
 }
 
 #[test]

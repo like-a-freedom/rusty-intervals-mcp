@@ -25,10 +25,12 @@ pub async fn dispatch_operation(
 
     // Validate parameters before sending to API
     if let Err(e) = validate_curve_parameters(&operation.name, &args) {
-        return Err(ErrorData::invalid_params(
-            format!("Invalid parameters for {}: {}", operation.name, e),
-            None,
-        ));
+        let mut message = format!("Invalid parameters for {}: {}", operation.name, e);
+        if let Some(hint) = curve_recovery_hint(&operation.name) {
+            message.push(' ');
+            message.push_str(hint);
+        }
+        return Err(ErrorData::invalid_params(message, None));
     }
     let mut path = operation.path_template.clone();
     let mut query = Vec::<(String, String)>::new();
@@ -118,6 +120,7 @@ pub async fn dispatch_operation(
     // listAthletePowerCurves returns {"activities": {...}, "list": [...]}
     // Model confuses "activities" with activities list, so rename to "activityReferences"
     let transformed_body = transform_confusing_fields(&body_json, &operation.name);
+    let transformed_body = augment_curve_error_response(&transformed_body, &operation.name, status);
 
     let compact_enabled = args
         .get("compact")
@@ -211,20 +214,32 @@ fn parse_response_body(bytes: &[u8], content_type: &str) -> Value {
     }
 }
 
+fn is_curve_operation(operation_name: &str) -> bool {
+    operation_name == "listAthletePowerCurves"
+        || operation_name == "listAthleteHRCurves"
+        || operation_name == "listAthletePaceCurves"
+}
+
+fn curve_recovery_hint(operation_name: &str) -> Option<&'static str> {
+    if !is_curve_operation(operation_name) {
+        return None;
+    }
+
+    Some(
+        "If you need activity browsing/search, use listActivities or searchForActivities instead. \
+         Curve tools require type='Run'|'Ride'|'Swim' and optional days_back only.",
+    )
+}
+
 /// Transform confusing field names in API responses to prevent model confusion.
-/// 
+///
 /// Specifically:
 /// - listAthletePowerCurves, listAthleteHRCurves, listAthletePaceCurves return
 ///   {"activities": {...}, "list": [...]} where "activities" is a map of activity
 ///   references, NOT an activities list. Rename to "activityReferences" to avoid
 ///   confusion with listActivities response.
 fn transform_confusing_fields(body: &Value, operation_name: &str) -> Value {
-    // Only transform curve-related operations
-    let should_transform = operation_name == "listAthletePowerCurves"
-        || operation_name == "listAthleteHRCurves"
-        || operation_name == "listAthletePaceCurves";
-
-    if !should_transform {
+    if !is_curve_operation(operation_name) {
         return body.clone();
     }
 
@@ -242,20 +257,50 @@ fn transform_confusing_fields(body: &Value, operation_name: &str) -> Value {
     Value::Object(transformed)
 }
 
+fn augment_curve_error_response(
+    body: &Value,
+    operation_name: &str,
+    status: reqwest::StatusCode,
+) -> Value {
+    let should_augment = is_curve_operation(operation_name)
+        && (status == reqwest::StatusCode::UNPROCESSABLE_ENTITY
+            || status == reqwest::StatusCode::BAD_REQUEST);
+
+    if !should_augment {
+        return body.clone();
+    }
+
+    let mut obj = match body {
+        Value::Object(map) => map.clone(),
+        _ => {
+            let mut map = Map::new();
+            map.insert("upstream_error".to_string(), body.clone());
+            map
+        }
+    };
+
+    obj.entry("errorCategory".to_string())
+        .or_insert_with(|| Value::String("likely_wrong_tool_or_params".to_string()));
+    obj.entry("recovery".to_string()).or_insert_with(|| {
+        serde_json::json!({
+            "message": "Curve tools are specialized. Use type='Run'|'Ride'|'Swim' and optional days_back. Do not send empty strings for optional params.",
+            "recommended_tools": ["listActivities", "searchForActivities", "getActivity"],
+            "do_not_retry_same_arguments": true
+        })
+    });
+
+    Value::Object(obj)
+}
+
 /// Validate parameters for curve-related operations before sending to API.
-/// 
+///
 /// This prevents common model mistakes:
 /// - Empty string parameters (now: "", newest: "")
 /// - Missing required 'type' parameter
 /// - Invalid parameter formats
 /// - Unknown/unsupported parameters
 fn validate_curve_parameters(operation_name: &str, args: &JsonObject) -> Result<(), String> {
-    // Only validate curve operations
-    let is_curve_op = operation_name == "listAthletePowerCurves"
-        || operation_name == "listAthleteHRCurves"
-        || operation_name == "listAthletePaceCurves";
-
-    if !is_curve_op {
+    if !is_curve_operation(operation_name) {
         return Ok(());
     }
 
@@ -280,28 +325,40 @@ fn validate_curve_parameters(operation_name: &str, args: &JsonObject) -> Result<
     if let Some(days_back) = args.get("days_back") {
         if let Some(days) = days_back.as_i64() {
             if days <= 0 {
-                return Err("Parameter 'days_back' must be a positive integer (e.g., 30, 90, 365)".to_string());
+                return Err(
+                    "Parameter 'days_back' must be a positive integer (e.g., 30, 90, 365)"
+                        .to_string(),
+                );
             }
         } else {
             return Err("Parameter 'days_back' must be an integer".to_string());
         }
     }
 
+    // REJECT: unsupported query aliases that commonly trigger 422 loops upstream
+    for key in ["now", "newest"] {
+        if args.contains_key(key) {
+            return Err(format!(
+                "Parameter '{}' is not supported for curve tools. Use 'days_back' and 'type' instead.",
+                key
+            ));
+        }
+    }
+
     // REJECT: Empty string parameters (now, newest, etc.)
     // These are common model mistakes - passing empty strings instead of omitting
     for (key, value) in args {
-        if let Some(s) = value.as_str() {
-            if s.trim().is_empty()
-                && !["ext", "format"].contains(&key.as_str())
-                && key != "type" // type already validated above
-            {
-                return Err(format!(
-                    "Parameter '{}' cannot be an empty string. \
-                     Omit optional parameters or provide valid values. \
-                     Common mistake: passing empty string for 'now', 'newest', etc.",
-                    key
-                ));
-            }
+        if let Some(s) = value.as_str()
+            && s.trim().is_empty()
+            && !["ext", "format"].contains(&key.as_str())
+            && key != "type"
+        {
+            return Err(format!(
+                "Parameter '{}' cannot be an empty string. \
+                 Omit optional parameters or provide valid values. \
+                 Common mistake: passing empty string for 'now', 'newest', etc.",
+                key
+            ));
         }
     }
 
