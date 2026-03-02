@@ -54,7 +54,8 @@ impl IntervalsMcpHandler {
     }
 
     pub async fn preload_dynamic_registry(&self) -> usize {
-        match self.dynamic_runtime.ensure_registry().await {
+        let result: Result<std::sync::Arc<dynamic::DynamicRegistry>, _> = self.dynamic_runtime.ensure_registry().await;
+        match result {
             Ok(registry) => registry.len(),
             Err(err) => {
                 tracing::warn!(
@@ -302,9 +303,9 @@ impl ServerHandler for IntervalsMcpHandler {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        let registry: Result<Arc<dynamic::DynamicRegistry>, ErrorData> =
+        let registry_result: Result<Arc<dynamic::DynamicRegistry>, ErrorData> =
             self.dynamic_runtime.ensure_registry().await;
-        let dynamic_tools = match registry {
+        let dynamic_tools = match registry_result {
             Ok(r) => r.list_tools(),
             Err(err) => {
                 tracing::warn!("dynamic OpenAPI registry unavailable: {}", err.message);
