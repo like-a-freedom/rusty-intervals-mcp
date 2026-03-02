@@ -11,8 +11,8 @@
 use intervals_icu_mcp::dynamic::{DynamicOperation, ParamLocation, ParamSpec};
 use rmcp::model::JsonObject;
 use serde_json::json;
-use wiremock::{MockServer, Mock, ResponseTemplate};
 use wiremock::matchers::{method, path, query_param};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 /// Helper to create a test DynamicOperation
 fn create_test_operation(
@@ -21,7 +21,7 @@ fn create_test_operation(
     path_template: &str,
 ) -> DynamicOperation {
     use rmcp::model::Tool;
-    
+
     let schema: JsonObject = serde_json::Map::new();
     let name_str = name.into();
     DynamicOperation {
@@ -70,14 +70,23 @@ async fn test_dispatch_get_request() {
         .await;
 
     let operation = with_path_param(
-        create_test_operation("getProfile", reqwest::Method::GET, "/api/v1/athlete/{id}/profile"),
+        create_test_operation(
+            "getProfile",
+            reqwest::Method::GET,
+            "/api/v1/athlete/{id}/profile",
+        ),
         "id",
         false,
     );
 
-    let args = Some(json!({
-        "id": "test_athlete"
-    }).as_object().unwrap().clone());
+    let args = Some(
+        json!({
+            "id": "test_athlete"
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+    );
 
     let result = intervals_icu_mcp::dynamic::dispatch_operation(
         &reqwest::Client::new(),
@@ -107,14 +116,23 @@ async fn test_dispatch_path_parameter_substitution() {
         .await;
 
     let operation = with_path_param(
-        create_test_operation("getStreams", reqwest::Method::GET, "/api/v1/activity/{id}/streams"),
+        create_test_operation(
+            "getStreams",
+            reqwest::Method::GET,
+            "/api/v1/activity/{id}/streams",
+        ),
         "id",
         false,
     );
 
-    let args = Some(json!({
-        "id": "act123"
-    }).as_object().unwrap().clone());
+    let args = Some(
+        json!({
+            "id": "act123"
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+    );
 
     let result = intervals_icu_mcp::dynamic::dispatch_operation(
         &reqwest::Client::new(),
@@ -144,17 +162,26 @@ async fn test_dispatch_query_parameters() {
         .await;
 
     let mut operation = with_path_param(
-        create_test_operation("listActivities", reqwest::Method::GET, "/api/v1/athlete/{id}/activities"),
+        create_test_operation(
+            "listActivities",
+            reqwest::Method::GET,
+            "/api/v1/athlete/{id}/activities",
+        ),
         "id",
         true, // auto-injected athlete_id
     );
     operation = with_query_param(operation, "limit");
     operation = with_query_param(operation, "days_back");
 
-    let args = Some(json!({
-        "limit": 5,
-        "days_back": 7
-    }).as_object().unwrap().clone());
+    let args = Some(
+        json!({
+            "limit": 5,
+            "days_back": 7
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+    );
 
     let result = intervals_icu_mcp::dynamic::dispatch_operation(
         &reqwest::Client::new(),
@@ -183,18 +210,27 @@ async fn test_dispatch_post_with_json_body() {
         .await;
 
     let mut operation = with_path_param(
-        create_test_operation("createEvent", reqwest::Method::POST, "/api/v1/athlete/{id}/events"),
+        create_test_operation(
+            "createEvent",
+            reqwest::Method::POST,
+            "/api/v1/athlete/{id}/events",
+        ),
         "id",
         true,
     );
     operation.has_json_body = true;
 
-    let args = Some(json!({
-        "body": {
-            "name": "Test Event",
-            "category": "WORKOUT"
-        }
-    }).as_object().unwrap().clone());
+    let args = Some(
+        json!({
+            "body": {
+                "name": "Test Event",
+                "category": "WORKOUT"
+            }
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+    );
 
     let result = intervals_icu_mcp::dynamic::dispatch_operation(
         &reqwest::Client::new(),
@@ -223,7 +259,11 @@ async fn test_dispatch_auto_injected_athlete_id() {
         .await;
 
     let operation = with_path_param(
-        create_test_operation("getProfile", reqwest::Method::GET, "/api/v1/athlete/{id}/profile"),
+        create_test_operation(
+            "getProfile",
+            reqwest::Method::GET,
+            "/api/v1/athlete/{id}/profile",
+        ),
         "id",
         true, // auto-injected
     );
@@ -249,7 +289,11 @@ async fn test_dispatch_missing_required_path_param() {
     let mock_server = MockServer::start().await;
 
     let operation = with_path_param(
-        create_test_operation("getProfile", reqwest::Method::GET, "/api/v1/athlete/{id}/profile"),
+        create_test_operation(
+            "getProfile",
+            reqwest::Method::GET,
+            "/api/v1/athlete/{id}/profile",
+        ),
         "id",
         false, // not auto-injected
     );
@@ -288,17 +332,26 @@ async fn test_dispatch_response_compact_mode() {
         .await;
 
     let operation = with_path_param(
-        create_test_operation("getProfile", reqwest::Method::GET, "/api/v1/athlete/{id}/profile"),
+        create_test_operation(
+            "getProfile",
+            reqwest::Method::GET,
+            "/api/v1/athlete/{id}/profile",
+        ),
         "id",
         false,
     );
 
     // Request with compact=true and fields filter
-    let args = Some(json!({
-        "id": "test_athlete",
-        "compact": true,
-        "fields": ["id", "name"]
-    }).as_object().unwrap().clone());
+    let args = Some(
+        json!({
+            "id": "test_athlete",
+            "compact": true,
+            "fields": ["id", "name"]
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+    );
 
     let result = intervals_icu_mcp::dynamic::dispatch_operation(
         &reqwest::Client::new(),
@@ -312,7 +365,7 @@ async fn test_dispatch_response_compact_mode() {
 
     assert!(result.is_ok());
     let response = result.unwrap();
-    
+
     // Response should be filtered to only id and name
     let content_str = serde_json::to_string(&response.content).unwrap();
     assert!(content_str.contains("id"));
@@ -336,16 +389,25 @@ async fn test_dispatch_response_body_only() {
         .await;
 
     let operation = with_path_param(
-        create_test_operation("getProfile", reqwest::Method::GET, "/api/v1/athlete/{id}/profile"),
+        create_test_operation(
+            "getProfile",
+            reqwest::Method::GET,
+            "/api/v1/athlete/{id}/profile",
+        ),
         "id",
         false,
     );
 
     // Request with body_only=true
-    let args = Some(json!({
-        "id": "test_athlete",
-        "body_only": true
-    }).as_object().unwrap().clone());
+    let args = Some(
+        json!({
+            "id": "test_athlete",
+            "body_only": true
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+    );
 
     let result = intervals_icu_mcp::dynamic::dispatch_operation(
         &reqwest::Client::new(),
@@ -359,7 +421,7 @@ async fn test_dispatch_response_body_only() {
 
     assert!(result.is_ok());
     let response = result.unwrap();
-    
+
     // With body_only=true, should return structured response with just the body
     // Content is Vec<Annotated<RawContent>>, check it's not empty
     assert!(!response.content.is_empty());
@@ -378,14 +440,23 @@ async fn test_dispatch_http_error_handling() {
         .await;
 
     let operation = with_path_param(
-        create_test_operation("getProfile", reqwest::Method::GET, "/api/v1/athlete/{id}/profile"),
+        create_test_operation(
+            "getProfile",
+            reqwest::Method::GET,
+            "/api/v1/athlete/{id}/profile",
+        ),
         "id",
         false,
     );
 
-    let args = Some(json!({
-        "id": "test_athlete"
-    }).as_object().unwrap().clone());
+    let args = Some(
+        json!({
+            "id": "test_athlete"
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+    );
 
     let result = intervals_icu_mcp::dynamic::dispatch_operation(
         &reqwest::Client::new(),
@@ -412,9 +483,14 @@ async fn test_dispatch_missing_api_key() {
         "/api/v1/athlete/{id}/profile",
     );
 
-    let args = Some(json!({
-        "id": "test_athlete"
-    }).as_object().unwrap().clone());
+    let args = Some(
+        json!({
+            "id": "test_athlete"
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+    );
 
     let result = intervals_icu_mcp::dynamic::dispatch_operation(
         &reqwest::Client::new(),
@@ -444,7 +520,11 @@ async fn test_dispatch_with_empty_arguments() {
         .await;
 
     let operation = with_path_param(
-        create_test_operation("getProfile", reqwest::Method::GET, "/api/v1/athlete/{id}/profile"),
+        create_test_operation(
+            "getProfile",
+            reqwest::Method::GET,
+            "/api/v1/athlete/{id}/profile",
+        ),
         "id",
         true, // auto-injected
     );
@@ -478,7 +558,11 @@ async fn test_dispatch_without_arguments() {
         .await;
 
     let operation = with_path_param(
-        create_test_operation("getProfile", reqwest::Method::GET, "/api/v1/athlete/{id}/profile"),
+        create_test_operation(
+            "getProfile",
+            reqwest::Method::GET,
+            "/api/v1/athlete/{id}/profile",
+        ),
         "id",
         true, // auto-injected
     );
