@@ -199,7 +199,7 @@ async fn best_efforts_all_fallbacks_422_returns_error() {
     // After exhausting fallbacks and finding no available streams, returns InvalidInput
     assert!(matches!(
         err,
-        intervals_icu_client::IntervalsError::InvalidInput(_)
+        intervals_icu_client::IntervalsError::Validation(_)
     ));
 }
 
@@ -307,7 +307,7 @@ async fn best_efforts_stream_lookup_without_candidates_returns_error() {
     // After exhausting fallbacks and finding no suitable streams, returns InvalidInput
     assert!(matches!(
         err,
-        intervals_icu_client::IntervalsError::InvalidInput(_)
+        intervals_icu_client::IntervalsError::Validation(_)
     ));
 }
 
@@ -492,7 +492,8 @@ async fn get_event_returns_helpful_error_on_unexpected_body() {
     assert!(res.is_err());
     let err = res.err().unwrap();
     match err {
-        intervals_icu_client::IntervalsError::Config(msg) => {
+        intervals_icu_client::IntervalsError::Config(cfg_err) => {
+            let msg = cfg_err.to_string();
             assert!(msg.contains("decoding event"));
         }
         _ => panic!("expected Config error with decoding message"),
@@ -1205,8 +1206,8 @@ async fn get_athlete_profile_handles_non_success() {
     let res = client.get_athlete_profile().await;
     assert!(res.is_err());
     match res.err().unwrap() {
-        intervals_icu_client::IntervalsError::Api { status, .. } => {
-            assert_eq!(status, 500);
+        intervals_icu_client::IntervalsError::Api(api_err) => {
+            assert_eq!(api_err.status, 500);
         }
         _ => panic!("expected Api error"),
     }
@@ -1644,7 +1645,10 @@ async fn download_activity_file_with_progress_can_be_cancelled() {
     let res = handle.await.unwrap();
     assert!(res.is_err());
     match res.err().unwrap() {
-        IntervalsError::Config(msg) => assert!(msg.contains("download cancelled")),
+        IntervalsError::Config(cfg_err) => {
+            let msg = cfg_err.to_string();
+            assert!(msg.contains("download cancelled"));
+        }
         e => panic!("expected Config error, got: {:?}", e),
     }
 }

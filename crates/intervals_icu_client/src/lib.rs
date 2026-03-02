@@ -1,16 +1,45 @@
 //! Minimal `IntervalsClient` trait and basic reqwest-based skeleton.
+//!
+//! This crate provides a trait-based API for interacting with the Intervals.icu service,
+//! along with a reqwest-based implementation and utilities for configuration, retry logic,
+//! and observability.
+//!
+//! # Modular Service Traits
+//!
+//! For better modularity and testability, the `IntervalsClient` trait is composed of
+//! domain-specific service traits:
+//!
+//! - [`traits::AthleteService`] - Athlete profile operations
+//! - [`traits::ActivityService`] - Activity-related operations
+//! - [`traits::EventService`] - Calendar/event operations
+//! - [`traits::FitnessService`] - Fitness metrics and curves
+//! - [`traits::GearService`] - Equipment management
+//! - [`traits::WellnessService`] - Wellness data
+//! - [`traits::WorkoutService`] - Workout library
+//! - [`traits::SportSettingsService`] - Sport configuration
 
-use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
-use thiserror::Error;
 
 pub mod config;
+pub mod error;
 pub mod http_client;
 pub mod observability;
 pub mod retry;
+pub mod traits;
 pub mod utils;
 
+pub use error::{ApiError, ConfigError, IntervalsError, Result, ValidationError};
+// Service traits are available in the `traits` module for modular usage
+pub use traits::{
+    AthleteService, ActivityService, EventService, FitnessService,
+    GearService, WellnessService, WorkoutService, SportSettingsService,
+};
+
+/// Options for finding best efforts in an activity.
+///
+/// If `options` is `Some`, at least `stream` must be provided along with
+/// either `duration` or `distance` per API contract.
 #[derive(Clone, Debug)]
 pub struct BestEffortsOptions {
     pub stream: Option<String>,
@@ -21,58 +50,6 @@ pub struct BestEffortsOptions {
     pub exclude_intervals: Option<bool>,
     pub start_index: Option<i32>,
     pub end_index: Option<i32>,
-}
-
-/// Error types for Intervals.icu API operations.
-#[derive(Debug, Error)]
-pub enum IntervalsError {
-    /// HTTP client or network error.
-    #[error("HTTP error: {0}")]
-    Http(#[from] reqwest::Error),
-
-    /// Configuration error (missing env vars, invalid settings).
-    #[error("configuration error: {0}")]
-    Config(String),
-
-    /// API returned an unexpected status code.
-    #[error("API error: status {status}, message: {message}")]
-    Api { status: u16, message: String },
-
-    /// Failed to parse API response.
-    #[error("JSON decode error: {0}")]
-    JsonDecode(#[from] serde_json::Error),
-
-    /// Invalid input provided by the caller.
-    #[error("invalid input: {0}")]
-    InvalidInput(String),
-
-    /// Resource not found.
-    #[error("resource not found: {0}")]
-    NotFound(String),
-
-    /// Authentication or authorization failed.
-    #[error("authentication error: {0}")]
-    Auth(String),
-}
-
-impl IntervalsError {
-    /// Create an API error from a response status and body.
-    pub fn from_status(status: u16, body: impl Into<String>) -> Self {
-        Self::Api {
-            status,
-            message: body.into(),
-        }
-    }
-
-    /// Check if this error represents a 404 Not Found response.
-    pub fn is_not_found(&self) -> bool {
-        matches!(self, Self::Api { status: 404, .. })
-    }
-
-    /// Check if this error represents a 422 Unprocessable Entity response.
-    pub fn is_validation_error(&self) -> bool {
-        matches!(self, Self::Api { status: 422, .. })
-    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -124,7 +101,7 @@ pub struct Event {
     pub r#type: Option<String>,
 }
 
-fn deserialize_opt_string<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+fn deserialize_opt_string<'de, D>(deserializer: D) -> std::result::Result<Option<String>, D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -140,116 +117,100 @@ where
     }
 }
 
-#[async_trait]
+// The IntervalsClient trait is now defined in the `traits` module as separate service traits.
+// We re-export it here for backward compatibility.
+// Note: The blanket implementation was removed; implement IntervalsClient directly or use service traits.
+
+// Re-define the monolithic trait for backward compatibility
+#[async_trait::async_trait]
+#[allow(clippy::too_many_arguments)]
 pub trait IntervalsClient: Send + Sync + 'static {
-    async fn get_athlete_profile(&self) -> Result<AthleteProfile, IntervalsError>;
+    async fn get_athlete_profile(&self) -> Result<AthleteProfile>;
     async fn get_recent_activities(
         &self,
         limit: Option<u32>,
         days_back: Option<i32>,
-    ) -> Result<Vec<ActivitySummary>, IntervalsError>;
-    async fn create_event(&self, event: Event) -> Result<Event, IntervalsError>;
-    async fn get_event(&self, event_id: &str) -> Result<Event, IntervalsError>;
-    async fn delete_event(&self, event_id: &str) -> Result<(), IntervalsError>;
+    ) -> Result<Vec<ActivitySummary>>;
+    async fn create_event(&self, event: Event) -> Result<Event>;
+    async fn get_event(&self, event_id: &str) -> Result<Event>;
+    async fn delete_event(&self, event_id: &str) -> Result<()>;
     async fn get_events(
         &self,
         days_back: Option<i32>,
         limit: Option<u32>,
-    ) -> Result<Vec<Event>, IntervalsError>;
-    async fn bulk_create_events(&self, events: Vec<Event>) -> Result<Vec<Event>, IntervalsError>;
+    ) -> Result<Vec<Event>>;
+    async fn bulk_create_events(&self, events: Vec<Event>) -> Result<Vec<Event>>;
     async fn get_activity_streams(
         &self,
         activity_id: &str,
         streams: Option<Vec<String>>,
-    ) -> Result<serde_json::Value, IntervalsError>;
+    ) -> Result<serde_json::Value>;
     async fn get_activity_intervals(
         &self,
         activity_id: &str,
-    ) -> Result<serde_json::Value, IntervalsError>;
-    /// Find best efforts in an activity.
-    ///
-    /// If `options` is `Some` it is treated as an explicit query; `stream` must be supplied
-    /// and at least one of `duration` or `distance` must be supplied per API contract.
+    ) -> Result<serde_json::Value>;
     async fn get_best_efforts(
         &self,
         activity_id: &str,
         options: Option<BestEffortsOptions>,
-    ) -> Result<serde_json::Value, IntervalsError>;
-
+    ) -> Result<serde_json::Value>;
     async fn get_activity_details(
         &self,
         activity_id: &str,
-    ) -> Result<serde_json::Value, IntervalsError>;
+    ) -> Result<serde_json::Value>;
     async fn search_activities(
         &self,
         query: &str,
         limit: Option<u32>,
-    ) -> Result<Vec<crate::ActivitySummary>, IntervalsError>;
+    ) -> Result<Vec<crate::ActivitySummary>>;
     async fn search_activities_full(
         &self,
         query: &str,
         limit: Option<u32>,
-    ) -> Result<serde_json::Value, IntervalsError>;
-    /// Download activities as CSV
-    async fn get_activities_csv(&self) -> Result<String, IntervalsError>;
+    ) -> Result<serde_json::Value>;
+    async fn get_activities_csv(&self) -> Result<String>;
     async fn update_activity(
         &self,
         activity_id: &str,
         fields: &serde_json::Value,
-    ) -> Result<serde_json::Value, IntervalsError>;
+    ) -> Result<serde_json::Value>;
     async fn download_activity_file(
         &self,
         activity_id: &str,
         output_path: Option<std::path::PathBuf>,
-    ) -> Result<Option<String>, IntervalsError>;
-    /// Download activity file with progress notifications.
-    ///
-    /// The implementor should send `DownloadProgress` messages on `progress_tx` while
-    /// downloading and should respect `cancel_rx` to abort early.
+    ) -> Result<Option<String>>;
     async fn download_activity_file_with_progress(
         &self,
         activity_id: &str,
         output_path: Option<std::path::PathBuf>,
         progress_tx: tokio::sync::mpsc::Sender<DownloadProgress>,
-        mut cancel_rx: tokio::sync::watch::Receiver<bool>,
-    ) -> Result<Option<String>, IntervalsError>;
+        cancel_rx: tokio::sync::watch::Receiver<bool>,
+    ) -> Result<Option<String>>;
     async fn download_fit_file(
         &self,
         activity_id: &str,
         output_path: Option<std::path::PathBuf>,
-    ) -> Result<Option<String>, IntervalsError>;
+    ) -> Result<Option<String>>;
     async fn download_gpx_file(
         &self,
         activity_id: &str,
         output_path: Option<std::path::PathBuf>,
-    ) -> Result<Option<String>, IntervalsError>;
-    async fn get_gear_list(&self) -> Result<serde_json::Value, IntervalsError>;
-    async fn get_sport_settings(&self) -> Result<serde_json::Value, IntervalsError>;
+    ) -> Result<Option<String>>;
+    async fn get_gear_list(&self) -> Result<serde_json::Value>;
+    async fn get_sport_settings(&self) -> Result<serde_json::Value>;
     async fn get_power_curves(
         &self,
         days_back: Option<i32>,
         sport: &str,
-    ) -> Result<serde_json::Value, IntervalsError>;
-    async fn get_gap_histogram(
-        &self,
-        activity_id: &str,
-    ) -> Result<serde_json::Value, IntervalsError>;
-
-    // === Activities: Missing Methods ===
-
-    /// Delete an activity by ID
-    async fn delete_activity(&self, activity_id: &str) -> Result<(), IntervalsError>;
-
-    /// Get activities around a specific activity (for context)
+    ) -> Result<serde_json::Value>;
+    async fn get_gap_histogram(&self, activity_id: &str) -> Result<serde_json::Value>;
+    async fn delete_activity(&self, activity_id: &str) -> Result<()>;
     async fn get_activities_around(
         &self,
         activity_id: &str,
         limit: Option<u32>,
         route_id: Option<i64>,
-    ) -> Result<serde_json::Value, IntervalsError>;
-
-    /// Search intervals within activities
-    #[allow(clippy::too_many_arguments)]
+    ) -> Result<serde_json::Value>;
     async fn search_intervals(
         &self,
         min_secs: u32,
@@ -260,146 +221,67 @@ pub trait IntervalsClient: Send + Sync + 'static {
         min_reps: Option<u32>,
         max_reps: Option<u32>,
         limit: Option<u32>,
-    ) -> Result<serde_json::Value, IntervalsError>;
-
-    /// Get power histogram for an activity
-    async fn get_power_histogram(
-        &self,
-        activity_id: &str,
-    ) -> Result<serde_json::Value, IntervalsError>;
-
-    /// Get heart rate histogram for an activity
-    async fn get_hr_histogram(
-        &self,
-        activity_id: &str,
-    ) -> Result<serde_json::Value, IntervalsError>;
-
-    /// Get pace histogram for an activity
-    async fn get_pace_histogram(
-        &self,
-        activity_id: &str,
-    ) -> Result<serde_json::Value, IntervalsError>;
-
-    // === Fitness Summary ===
-
-    /// Get athlete fitness summary (CTL, ATL, TSB)
-    async fn get_fitness_summary(&self) -> Result<serde_json::Value, IntervalsError>;
-
-    // === Wellness ===
-
-    /// Get wellness data for recent days
-    async fn get_wellness(
-        &self,
-        days_back: Option<i32>,
-    ) -> Result<serde_json::Value, IntervalsError>;
-
-    /// Get wellness data for a specific date
-    async fn get_wellness_for_date(&self, date: &str) -> Result<serde_json::Value, IntervalsError>;
-
-    /// Update wellness data for a specific date
+    ) -> Result<serde_json::Value>;
+    async fn get_power_histogram(&self, activity_id: &str) -> Result<serde_json::Value>;
+    async fn get_hr_histogram(&self, activity_id: &str) -> Result<serde_json::Value>;
+    async fn get_pace_histogram(&self, activity_id: &str) -> Result<serde_json::Value>;
+    async fn get_fitness_summary(&self) -> Result<serde_json::Value>;
+    async fn get_wellness(&self, days_back: Option<i32>) -> Result<serde_json::Value>;
+    async fn get_wellness_for_date(&self, date: &str) -> Result<serde_json::Value>;
     async fn update_wellness(
         &self,
         date: &str,
         data: &serde_json::Value,
-    ) -> Result<serde_json::Value, IntervalsError>;
-
-    // === Events/Calendar: Missing Methods ===
-
-    /// Get upcoming workouts and events
+    ) -> Result<serde_json::Value>;
     async fn get_upcoming_workouts(
         &self,
         days_ahead: Option<u32>,
         limit: Option<u32>,
         category: Option<String>,
-    ) -> Result<serde_json::Value, IntervalsError>;
-
-    /// Update an existing event
+    ) -> Result<serde_json::Value>;
     async fn update_event(
         &self,
         event_id: &str,
         fields: &serde_json::Value,
-    ) -> Result<serde_json::Value, IntervalsError>;
-
-    /// Bulk delete events by IDs
-    async fn bulk_delete_events(&self, event_ids: Vec<String>) -> Result<(), IntervalsError>;
-
-    /// Duplicate an event
+    ) -> Result<serde_json::Value>;
+    async fn bulk_delete_events(&self, event_ids: Vec<String>) -> Result<()>;
     async fn duplicate_event(
         &self,
         event_id: &str,
         num_copies: Option<u32>,
         weeks_between: Option<u32>,
-    ) -> Result<Vec<Event>, IntervalsError>;
-
-    // === Performance Curves ===
-
-    /// Get heart rate curves
+    ) -> Result<Vec<Event>>;
     async fn get_hr_curves(
         &self,
         days_back: Option<i32>,
         sport: &str,
-    ) -> Result<serde_json::Value, IntervalsError>;
-
-    /// Get pace curves
+    ) -> Result<serde_json::Value>;
     async fn get_pace_curves(
         &self,
         days_back: Option<i32>,
         sport: &str,
-    ) -> Result<serde_json::Value, IntervalsError>;
-
-    // === Workout Library ===
-
-    /// Get workout library folders and plans
-    async fn get_workout_library(&self) -> Result<serde_json::Value, IntervalsError>;
-
-    /// Get workouts in a specific folder
-    async fn get_workouts_in_folder(
-        &self,
-        folder_id: &str,
-    ) -> Result<serde_json::Value, IntervalsError>;
-
-    /// Create a new folder (training plan)
-    async fn create_folder(
-        &self,
-        folder: &serde_json::Value,
-    ) -> Result<serde_json::Value, IntervalsError>;
-
-    /// Update an existing folder
+    ) -> Result<serde_json::Value>;
+    async fn get_workout_library(&self) -> Result<serde_json::Value>;
+    async fn get_workouts_in_folder(&self, folder_id: &str) -> Result<serde_json::Value>;
+    async fn create_folder(&self, folder: &serde_json::Value) -> Result<serde_json::Value>;
     async fn update_folder(
         &self,
         folder_id: &str,
         fields: &serde_json::Value,
-    ) -> Result<serde_json::Value, IntervalsError>;
-
-    /// Delete a folder
-    async fn delete_folder(&self, folder_id: &str) -> Result<(), IntervalsError>;
-
-    // === Gear Management ===
-
-    /// Create a new gear item
-    async fn create_gear(
-        &self,
-        gear: &serde_json::Value,
-    ) -> Result<serde_json::Value, IntervalsError>;
-
-    /// Update an existing gear item
+    ) -> Result<serde_json::Value>;
+    async fn delete_folder(&self, folder_id: &str) -> Result<()>;
+    async fn create_gear(&self, gear: &serde_json::Value) -> Result<serde_json::Value>;
     async fn update_gear(
         &self,
         gear_id: &str,
         fields: &serde_json::Value,
-    ) -> Result<serde_json::Value, IntervalsError>;
-
-    /// Delete a gear item
-    async fn delete_gear(&self, gear_id: &str) -> Result<(), IntervalsError>;
-
-    /// Create a gear maintenance reminder
+    ) -> Result<serde_json::Value>;
+    async fn delete_gear(&self, gear_id: &str) -> Result<()>;
     async fn create_gear_reminder(
         &self,
         gear_id: &str,
         reminder: &serde_json::Value,
-    ) -> Result<serde_json::Value, IntervalsError>;
-
-    /// Update a gear maintenance reminder
+    ) -> Result<serde_json::Value>;
     async fn update_gear_reminder(
         &self,
         gear_id: &str,
@@ -407,32 +289,16 @@ pub trait IntervalsClient: Send + Sync + 'static {
         reset: bool,
         snooze_days: u32,
         fields: &serde_json::Value,
-    ) -> Result<serde_json::Value, IntervalsError>;
-
-    // === Sport Settings Management ===
-
-    /// Update sport settings
+    ) -> Result<serde_json::Value>;
     async fn update_sport_settings(
         &self,
         sport_type: &str,
         recalc_hr_zones: bool,
         fields: &serde_json::Value,
-    ) -> Result<serde_json::Value, IntervalsError>;
-
-    /// Apply sport settings to historical activities
-    async fn apply_sport_settings(
-        &self,
-        sport_type: &str,
-    ) -> Result<serde_json::Value, IntervalsError>;
-
-    /// Create new sport settings
-    async fn create_sport_settings(
-        &self,
-        settings: &serde_json::Value,
-    ) -> Result<serde_json::Value, IntervalsError>;
-
-    /// Delete sport settings
-    async fn delete_sport_settings(&self, sport_type: &str) -> Result<(), IntervalsError>;
+    ) -> Result<serde_json::Value>;
+    async fn apply_sport_settings(&self, sport_type: &str) -> Result<serde_json::Value>;
+    async fn create_sport_settings(&self, settings: &serde_json::Value) -> Result<serde_json::Value>;
+    async fn delete_sport_settings(&self, sport_type: &str) -> Result<()>;
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, JsonSchema)]

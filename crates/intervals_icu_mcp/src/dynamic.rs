@@ -793,29 +793,21 @@ fn generate_human_readable_description(method: &str, path: &str) -> String {
         ("put", p) if p.contains("activity") => {
             "Update activity metadata (name, type, gear, etc.)".to_string()
         }
-        ("delete", p) if p.contains("activity") => {
-            "Delete an activity permanently".to_string()
-        }
+        ("delete", p) if p.contains("activity") => "Delete an activity permanently".to_string(),
 
         // Wellness
         ("get", p) if p.contains("wellness") && p.contains("athlete") => {
             "Get wellness records for date range".to_string()
         }
-        ("get", p) if p.contains("wellness") => {
-            "Get wellness data for a specific date".to_string()
-        }
-        ("put", p) if p.contains("wellness") => {
-            "Update or create wellness record".to_string()
-        }
+        ("get", p) if p.contains("wellness") => "Get wellness data for a specific date".to_string(),
+        ("put", p) if p.contains("wellness") => "Update or create wellness record".to_string(),
 
         // Events/Calendar
         ("get", p) if p.contains("events") && p.contains("upcoming") => {
             "Get upcoming planned workouts".to_string()
         }
         ("get", p) if p.contains("events") => "List calendar events".to_string(),
-        ("get", p) if p.contains("event") => {
-            "Get details of a specific calendar event".to_string()
-        }
+        ("get", p) if p.contains("event") => "Get details of a specific calendar event".to_string(),
         ("post", p) if p.contains("events") && p.contains("bulk") => {
             "Create multiple calendar events at once".to_string()
         }
@@ -826,9 +818,7 @@ fn generate_human_readable_description(method: &str, path: &str) -> String {
         ("put", p) if p.contains("event") && p.contains("bulk") => {
             "Delete multiple calendar events".to_string()
         }
-        ("put", p) if p.contains("event") => {
-            "Update calendar event details".to_string()
-        }
+        ("put", p) if p.contains("event") => "Update calendar event details".to_string(),
         ("delete", p) if p.contains("event") => "Delete a calendar event".to_string(),
 
         // Athlete/Profile
@@ -885,9 +875,7 @@ fn generate_human_readable_description(method: &str, path: &str) -> String {
         ("post", p) if p.contains("folders") => {
             "Create new workout folder or training plan".to_string()
         }
-        ("put", p) if p.contains("folders") => {
-            "Update workout folder or training plan".to_string()
-        }
+        ("put", p) if p.contains("folders") => "Update workout folder or training plan".to_string(),
         ("delete", p) if p.contains("folders") => {
             "Delete workout folder and all contained workouts".to_string()
         }

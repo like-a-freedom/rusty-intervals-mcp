@@ -17,7 +17,6 @@ pub mod compact;
 pub mod domains;
 pub mod dynamic;
 mod event_id;
-pub mod middleware;
 pub mod prompts;
 mod services;
 mod state;
@@ -25,7 +24,6 @@ mod transforms;
 pub mod types;
 
 pub use event_id::{EventId, FolderId};
-pub use middleware::LoggingMiddleware;
 pub use state::{DownloadState, DownloadStatus, WebhookEvent};
 pub use types::*;
 
