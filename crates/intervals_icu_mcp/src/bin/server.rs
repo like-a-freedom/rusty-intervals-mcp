@@ -521,7 +521,7 @@ async fn delete_event(
 
 fn map_err(e: intervals_icu_client::IntervalsError) -> (StatusCode, String) {
     use intervals_icu_client::IntervalsError;
-    
+
     match e {
         IntervalsError::Http(_) => (StatusCode::BAD_GATEWAY, e.to_string()),
         IntervalsError::Config(_) => (StatusCode::BAD_REQUEST, e.to_string()),
@@ -534,9 +534,7 @@ fn map_err(e: intervals_icu_client::IntervalsError) -> (StatusCode, String) {
             };
             (code, api_err.message)
         }
-        IntervalsError::JsonDecode(_) => {
-            (StatusCode::BAD_GATEWAY, e.to_string())
-        }
+        IntervalsError::JsonDecode(_) => (StatusCode::BAD_GATEWAY, e.to_string()),
         IntervalsError::Validation(_) => (StatusCode::BAD_REQUEST, e.to_string()),
         IntervalsError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
         IntervalsError::Auth(msg) => (StatusCode::UNAUTHORIZED, msg),
@@ -1109,7 +1107,7 @@ mod tests {
     #[test]
     fn map_err_config_returns_bad_request() {
         let err = intervals_icu_client::IntervalsError::Config(
-            intervals_icu_client::ConfigError::Other("missing key".to_string())
+            intervals_icu_client::ConfigError::Other("missing key".to_string()),
         );
         let (code, _msg) = map_err(err);
         assert_eq!(code, StatusCode::BAD_REQUEST);
