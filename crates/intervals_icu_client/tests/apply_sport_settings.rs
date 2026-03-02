@@ -10,7 +10,7 @@ async fn apply_sport_settings_uses_put() {
     let sport = "RUNNING";
     let athlete = "ath";
 
-    Mock::given(method("PUT"))
+    Mock::given(method("POST"))
         .and(path(format!(
             "/api/v1/athlete/{}/sport-settings/{}/apply",
             athlete, sport

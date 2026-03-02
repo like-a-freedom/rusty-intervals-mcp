@@ -1,4 +1,4 @@
-use crate::IntervalsError;
+use crate::error::{ConfigError, IntervalsError, Result};
 use secrecy::SecretString;
 
 #[derive(Clone, Debug)]
@@ -9,21 +9,31 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn from_env() -> Result<Self, IntervalsError> {
+    /// Load configuration from environment variables.
+    ///
+    /// # Errors
+    /// Returns `ConfigError::MissingEnvVar` if required variables are not set.
+    pub fn from_env() -> Result<Self> {
         Self::from_env_with(|k| std::env::var(k).ok())
     }
 
     /// Testable helper that reads configuration values using the provided
     /// function. This avoids mutating global environment in tests and keeps
     /// `from_env()` small and safe.
-    pub fn from_env_with<F>(mut get: F) -> Result<Self, IntervalsError>
+    pub fn from_env_with<F>(mut get: F) -> Result<Self>
     where
         F: FnMut(&str) -> Option<String>,
     {
-        let api = get("INTERVALS_ICU_API_KEY")
-            .ok_or_else(|| IntervalsError::Config("INTERVALS_ICU_API_KEY missing".into()))?;
-        let athlete_id = get("INTERVALS_ICU_ATHLETE_ID")
-            .ok_or_else(|| IntervalsError::Config("INTERVALS_ICU_ATHLETE_ID missing".into()))?;
+        let api = get("INTERVALS_ICU_API_KEY").ok_or_else(|| {
+            IntervalsError::Config(ConfigError::MissingEnvVar(
+                "INTERVALS_ICU_API_KEY".to_string(),
+            ))
+        })?;
+        let athlete_id = get("INTERVALS_ICU_ATHLETE_ID").ok_or_else(|| {
+            IntervalsError::Config(ConfigError::MissingEnvVar(
+                "INTERVALS_ICU_ATHLETE_ID".to_string(),
+            ))
+        })?;
         let base_url =
             get("INTERVALS_ICU_BASE_URL").unwrap_or_else(|| "https://intervals.icu".into());
         Ok(Self {
@@ -37,6 +47,7 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::ConfigError;
 
     #[test]
     fn from_env_missing_api_key() {
@@ -48,8 +59,10 @@ mod tests {
         };
         let res = Config::from_env_with(get);
         assert!(res.is_err());
-        if let Err(IntervalsError::Config(msg)) = res {
-            assert!(msg.contains("API_KEY"));
+        if let Err(IntervalsError::Config(ConfigError::MissingEnvVar(var))) = res {
+            assert!(var.contains("API_KEY"));
+        } else {
+            panic!("Expected ConfigError::MissingEnvVar");
         }
     }
 
@@ -63,8 +76,10 @@ mod tests {
         };
         let res = Config::from_env_with(get);
         assert!(res.is_err());
-        if let Err(IntervalsError::Config(msg)) = res {
-            assert!(msg.contains("ATHLETE_ID"));
+        if let Err(IntervalsError::Config(ConfigError::MissingEnvVar(var))) = res {
+            assert!(var.contains("ATHLETE_ID"));
+        } else {
+            panic!("Expected ConfigError::MissingEnvVar");
         }
     }
 
@@ -108,13 +123,10 @@ mod tests {
 
     #[test]
     fn from_env_uses_real_env() {
-        // Avoid mutating global environment in tests.
-        // Use the testable `from_env_with` helper to simulate environment variables
         use std::collections::HashMap;
         let mut m = HashMap::new();
         m.insert("INTERVALS_ICU_API_KEY", "sekrit");
         m.insert("INTERVALS_ICU_ATHLETE_ID", "99");
-        // INTERVALS_ICU_BASE_URL intentionally absent to exercise the default
         let get = |k: &str| m.get(k).map(|v| v.to_string());
         let cfg = Config::from_env_with(get).expect("cfg from env");
         assert_eq!(cfg.athlete_id, "99");

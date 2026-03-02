@@ -520,24 +520,26 @@ async fn delete_event(
 }
 
 fn map_err(e: intervals_icu_client::IntervalsError) -> (StatusCode, String) {
+    use intervals_icu_client::IntervalsError;
+    
     match e {
-        intervals_icu_client::IntervalsError::Http(_) => (StatusCode::BAD_GATEWAY, e.to_string()),
-        intervals_icu_client::IntervalsError::Config(_) => (StatusCode::BAD_REQUEST, e.to_string()),
-        intervals_icu_client::IntervalsError::Api { status, message } => {
-            let code = match status {
+        IntervalsError::Http(_) => (StatusCode::BAD_GATEWAY, e.to_string()),
+        IntervalsError::Config(_) => (StatusCode::BAD_REQUEST, e.to_string()),
+        IntervalsError::Api(api_err) => {
+            let code = match api_err.status {
                 404 => StatusCode::NOT_FOUND,
                 401 | 403 => StatusCode::UNAUTHORIZED,
                 422 => StatusCode::UNPROCESSABLE_ENTITY,
                 _ => StatusCode::BAD_GATEWAY,
             };
-            (code, message)
+            (code, api_err.message)
         }
-        intervals_icu_client::IntervalsError::JsonDecode(_) => {
+        IntervalsError::JsonDecode(_) => {
             (StatusCode::BAD_GATEWAY, e.to_string())
         }
-        intervals_icu_client::IntervalsError::InvalidInput(msg) => (StatusCode::BAD_REQUEST, msg),
-        intervals_icu_client::IntervalsError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
-        intervals_icu_client::IntervalsError::Auth(msg) => (StatusCode::UNAUTHORIZED, msg),
+        IntervalsError::Validation(_) => (StatusCode::BAD_REQUEST, e.to_string()),
+        IntervalsError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
+        IntervalsError::Auth(msg) => (StatusCode::UNAUTHORIZED, msg),
     }
 }
 
@@ -1106,7 +1108,9 @@ mod tests {
 
     #[test]
     fn map_err_config_returns_bad_request() {
-        let err = intervals_icu_client::IntervalsError::Config("missing key".into());
+        let err = intervals_icu_client::IntervalsError::Config(
+            intervals_icu_client::ConfigError::Other("missing key".to_string())
+        );
         let (code, _msg) = map_err(err);
         assert_eq!(code, StatusCode::BAD_REQUEST);
     }

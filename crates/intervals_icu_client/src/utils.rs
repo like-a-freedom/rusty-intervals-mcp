@@ -1,5 +1,73 @@
 //! Utility functions for date/time normalization and other common operations.
 
+use std::fmt::Display;
+
+/// Builder for constructing query parameter vectors.
+///
+/// This utility implements the **DRY** principle by eliminating repetitive
+/// patterns for building `Vec<(&str, &str)>` query parameters throughout
+/// the codebase.
+///
+/// # Example
+/// ```rust,ignore
+/// use crate::utils::QueryBuilder;
+///
+/// let query = QueryBuilder::new()
+///     .add("oldest", &oldest.to_string())
+///     .add("newest", &today.to_string())
+///     .add_opt("limit", limit.as_ref())
+///     .build();
+/// ```
+#[derive(Debug, Default)]
+pub struct QueryBuilder<'a> {
+    params: Vec<(&'a str, String)>,
+}
+
+impl<'a> QueryBuilder<'a> {
+    /// Create a new empty query builder.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Add a required parameter.
+    ///
+    /// # Arguments
+    /// * `key` - Parameter name
+    /// * `value` - Parameter value (anything that implements `Display`)
+    pub fn add(mut self, key: &'a str, value: impl Display) -> Self {
+        self.params.push((key, value.to_string()));
+        self
+    }
+
+    /// Add an optional parameter (only if `Some`).
+    ///
+    /// # Arguments
+    /// * `key` - Parameter name
+    /// * `opt` - Optional value
+    pub fn add_opt(mut self, key: &'a str, opt: Option<impl Display>) -> Self {
+        if let Some(value) = opt {
+            self.params.push((key, value.to_string()));
+        }
+        self
+    }
+
+    /// Add multiple parameters at once.
+    pub fn extend<I>(mut self, params: I) -> Self
+    where
+        I: IntoIterator<Item = (&'a str, String)>,
+    {
+        self.params.extend(params);
+        self
+    }
+
+    /// Build the query parameter vector with owned strings.
+    ///
+    /// Returns a `Vec<(&'a str, String)>` which owns the values.
+    pub fn build_owned(self) -> Vec<(&'a str, String)> {
+        self.params
+    }
+}
+
 /// Normalize start_date_local for events: preserve time when provided;
 /// if only date is given, set time to 00:00:00.
 ///
@@ -23,6 +91,53 @@ pub fn normalize_event_start(s: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn query_builder_empty() {
+        let query = QueryBuilder::new().build_owned();
+        assert!(query.is_empty());
+    }
+
+    #[test]
+    fn query_builder_add_required() {
+        let query = QueryBuilder::new()
+            .add("key", "value")
+            .add("num", 42)
+            .build_owned();
+        assert_eq!(query.len(), 2);
+        assert_eq!(query[0], ("key", "value".to_string()));
+        assert_eq!(query[1], ("num", "42".to_string()));
+    }
+
+    #[test]
+    fn query_builder_add_optional_some() {
+        let query = QueryBuilder::new()
+            .add("required", "value")
+            .add_opt("optional", Some(123))
+            .build_owned();
+        assert_eq!(query.len(), 2);
+        assert_eq!(query[1], ("optional", "123".to_string()));
+    }
+
+    #[test]
+    fn query_builder_add_optional_none() {
+        let query = QueryBuilder::new()
+            .add("required", "value")
+            .add_opt("optional", None::<i32>)
+            .build_owned();
+        assert_eq!(query.len(), 1);
+        assert_eq!(query[0], ("required", "value".to_string()));
+    }
+
+    #[test]
+    fn query_builder_extend() {
+        let extra = vec![("extra1", "val1".to_string())];
+        let query = QueryBuilder::new()
+            .add("base", "value")
+            .extend(extra)
+            .build_owned();
+        assert_eq!(query.len(), 2);
+    }
 
     #[test]
     fn normalize_event_start_accepts_date_only() {
