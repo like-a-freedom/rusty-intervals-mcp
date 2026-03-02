@@ -6,7 +6,7 @@
 //! - Tag-based filtering (include/exclude)
 //! - Tool metadata generation (JSON Schema, descriptions)
 
-use intervals_icu_mcp::dynamic::{parse_openapi_spec, DynamicRegistry};
+use intervals_icu_mcp::dynamic::{DynamicRegistry, parse_openapi_spec};
 use serde_json::json;
 use std::collections::HashSet;
 
@@ -117,7 +117,11 @@ fn test_parse_openapi_spec_basic() {
     let spec = create_test_spec();
     let result = parse_openapi_spec(&spec, &empty_tags(), &empty_tags());
 
-    assert!(result.is_ok(), "Failed to parse valid spec: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to parse valid spec: {:?}",
+        result.err()
+    );
     let registry = result.unwrap();
 
     // Should have 3 operations
@@ -138,7 +142,10 @@ fn test_parse_openapi_spec_generates_tool_metadata() {
     assert_eq!(tools.len(), 3);
 
     // Check tool has proper metadata
-    let profile_tool = tools.iter().find(|t| t.name == "getAthleteProfile").unwrap();
+    let profile_tool = tools
+        .iter()
+        .find(|t| t.name == "getAthleteProfile")
+        .unwrap();
     assert!(profile_tool.description.is_some());
     // input_schema is Arc<Map<String, Value>>, just check it exists
     assert!(!profile_tool.input_schema.is_empty());
@@ -153,7 +160,11 @@ fn test_parse_openapi_spec_path_parameters() {
 
     // Should have path parameter 'id'
     assert!(!op.params.is_empty());
-    let path_params: Vec<_> = op.params.iter().filter(|p| matches!(p.location, intervals_icu_mcp::dynamic::ParamLocation::Path)).collect();
+    let path_params: Vec<_> = op
+        .params
+        .iter()
+        .filter(|p| matches!(p.location, intervals_icu_mcp::dynamic::ParamLocation::Path))
+        .collect();
     assert!(!path_params.is_empty());
 
     // Check path template contains {id}
@@ -168,7 +179,11 @@ fn test_parse_openapi_spec_query_parameters() {
     let op = result.operation("listActivities").unwrap();
 
     // Should have query parameter 'limit'
-    let query_params: Vec<_> = op.params.iter().filter(|p| matches!(p.location, intervals_icu_mcp::dynamic::ParamLocation::Query)).collect();
+    let query_params: Vec<_> = op
+        .params
+        .iter()
+        .filter(|p| matches!(p.location, intervals_icu_mcp::dynamic::ParamLocation::Query))
+        .collect();
     assert!(!query_params.is_empty());
 
     let limit_param = query_params.iter().find(|p| p.name == "limit").unwrap();
@@ -243,7 +258,10 @@ fn test_registry_list_tools_sorted() {
 
     // Tools should be sorted by name
     let names: Vec<_> = tools.iter().map(|t| &t.name).collect();
-    assert_eq!(names, vec!["getAthleteProfile", "listActivities", "listWellness"]);
+    assert_eq!(
+        names,
+        vec!["getAthleteProfile", "listActivities", "listWellness"]
+    );
 }
 
 #[test]
@@ -289,7 +307,10 @@ fn test_parse_spec_with_missing_operation_id() {
     });
 
     let result = parse_openapi_spec(&spec, &empty_tags(), &empty_tags());
-    assert!(result.is_ok(), "Should handle missing operationId gracefully");
+    assert!(
+        result.is_ok(),
+        "Should handle missing operationId gracefully"
+    );
 
     let registry = result.unwrap();
     assert_eq!(registry.len(), 1);
@@ -368,12 +389,11 @@ async fn test_dynamic_registry_from_real_api() {
     // Run with: cargo test test_dynamic_registry_from_real_api -- --ignored
 
     let client = reqwest::Client::new();
-    let response = client
-        .get("https://intervals.icu/api/v1/docs")
-        .send()
-        .await;
+    let response = client.get("https://intervals.icu/api/v1/docs").send().await;
 
-    if let Ok(resp) = response && resp.status().is_success() {
+    if let Ok(resp) = response
+        && resp.status().is_success()
+    {
         let spec: serde_json::Value = resp.json().await.unwrap();
         let result = parse_openapi_spec(&spec, &empty_tags(), &empty_tags());
 
