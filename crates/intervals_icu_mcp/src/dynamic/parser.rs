@@ -326,12 +326,12 @@ fn build_tool(
 
     let mut tool = Tool::new(name.to_string(), full_desc, std::sync::Arc::new(schema_obj));
     tool.annotations = Some(method_to_annotations(method));
-    
+
     // Set output schema if available
     if let Some(output_schema_obj) = output_schema {
-        if let Ok(output_schema_arc) = serde_json::from_value::<rmcp::model::JsonObject>(
-            Value::Object(output_schema_obj)
-        ) {
+        if let Ok(output_schema_arc) =
+            serde_json::from_value::<rmcp::model::JsonObject>(Value::Object(output_schema_obj))
+        {
             tool.output_schema = Some(std::sync::Arc::new(output_schema_arc));
         }
     }
@@ -408,16 +408,19 @@ fn build_output_schema(op: &Map<String, Value>) -> Option<Map<String, Value>> {
         .and_then(Value::as_object)
         .and_then(|content| {
             // Try application/json first, then any JSON-like content type
-            content
-                .get("application/json")
-                .or_else(|| content.iter().find(|(k, _)| k.contains("json")).map(|(_, v)| v))
+            content.get("application/json").or_else(|| {
+                content
+                    .iter()
+                    .find(|(k, _)| k.contains("json"))
+                    .map(|(_, v)| v)
+            })
         })
         .and_then(Value::as_object)
         .and_then(|media_type| media_type.get("schema"))
         .and_then(Value::as_object)
         .map(|schema| {
             // Convert $ref to inline type if present
-            let mut schema = schema.clone();
+            let schema = schema.clone();
             if let Some(ref_val) = schema.get("$ref").and_then(Value::as_str) {
                 // For $ref, create a generic object schema
                 let mut ref_schema = Map::new();
@@ -498,13 +501,13 @@ fn get_operation_description(operation_id: &str) -> Option<&'static str> {
 
         // === Power/HR/Pace Curves — критично! Не для listing activities ===
         "listAthletePowerCurves" => {
-            "Get athlete's power duration curves across ALL activities. Returns peak power for durations 1s-24000s, FTP estimates, and power models. NOT for listing activities — use listActivities to browse activities."
+            "Get athlete's power duration curves. REQUIRED: type='Run'|'Ride'|'Swim'. OPTIONAL: days_back (positive integer, default 365). Returns activityReferences (NOT activities list) and curve data (secs, watts, powerModels). Use listActivities to browse activities."
         }
         "listAthleteHRCurves" => {
-            "Get athlete's heart rate curves across ALL activities. Returns HR data for power/pace durations. NOT for listing activities — use listActivities to browse activities."
+            "Get athlete's heart rate curves. REQUIRED: type='Run'|'Ride'|'Swim'. OPTIONAL: days_back. Returns HR curve data with activityReferences (NOT activities list). Use listActivities to browse activities."
         }
         "listAthletePaceCurves" => {
-            "Get athlete's pace curves across ALL running activities. Returns best pace for durations. NOT for listing activities — use listActivities to browse activities."
+            "Get athlete's pace curves for running. REQUIRED: type='Run'|'Ride'|'Swim'. OPTIONAL: days_back. Returns pace curve data with activityReferences (NOT activities list). Use listActivities to browse activities."
         }
 
         // === Athlete Profile ===
