@@ -75,8 +75,8 @@ pub fn parse_openapi_spec(
 
             add_response_control_properties(&mut final_schema_props);
 
-            let has_suffix =
-                final_schema_props.get("ext").is_some() || final_schema_props.get("format").is_some();
+            let has_suffix = final_schema_props.get("ext").is_some()
+                || final_schema_props.get("format").is_some();
 
             let tool = build_tool(
                 &name,

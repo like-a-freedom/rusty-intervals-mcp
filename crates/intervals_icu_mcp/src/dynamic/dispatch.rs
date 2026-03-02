@@ -106,14 +106,20 @@ pub async fn dispatch_operation(
 
     let body_json = parse_response_body(&bytes, &content_type);
 
-    let compact_enabled = args.get("compact").and_then(Value::as_bool).unwrap_or(false);
+    let compact_enabled = args
+        .get("compact")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let response_fields = args.get("fields").and_then(Value::as_array).map(|a| {
         a.iter()
             .filter_map(Value::as_str)
             .map(ToOwned::to_owned)
             .collect::<Vec<_>>()
     });
-    let body_only = args.get("body_only").and_then(Value::as_bool).unwrap_or(true);
+    let body_only = args
+        .get("body_only")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
 
     let normalized_body = if compact_enabled {
         match &body_json {

@@ -20,7 +20,10 @@ pub trait SportSettingsService: Send + Sync + 'static {
     async fn apply_sport_settings(&self, sport_type: &str) -> Result<serde_json::Value>;
 
     /// Create new sport settings.
-    async fn create_sport_settings(&self, settings: &serde_json::Value) -> Result<serde_json::Value>;
+    async fn create_sport_settings(
+        &self,
+        settings: &serde_json::Value,
+    ) -> Result<serde_json::Value>;
 
     /// Delete sport settings.
     async fn delete_sport_settings(&self, sport_type: &str) -> Result<()>;

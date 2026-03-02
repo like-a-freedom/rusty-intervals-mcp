@@ -9,23 +9,23 @@
 //! - **Composability**: Mix and match service implementations
 //! - **Maintainability**: Easier to understand and modify
 
-mod athlete;
 mod activity;
+mod athlete;
 mod event;
 mod fitness;
 mod gear;
+mod sport_settings;
 mod wellness;
 mod workout;
-mod sport_settings;
 
-pub use athlete::AthleteService;
 pub use activity::ActivityService;
+pub use athlete::AthleteService;
 pub use event::EventService;
 pub use fitness::FitnessService;
 pub use gear::GearService;
+pub use sport_settings::SportSettingsService;
 pub use wellness::WellnessService;
 pub use workout::WorkoutService;
-pub use sport_settings::SportSettingsService;
 
 // Re-export the main IntervalsClient trait from the parent module
 // The blanket implementation was removed to avoid conflicts with existing code.

@@ -10,10 +10,7 @@ async fn get_activities_around_uses_activities_around_path() {
     let athlete = "ath";
 
     Mock::given(method("GET"))
-        .and(path(format!(
-            "/api/v1/activity/{}/around",
-            "a1"
-        )))
+        .and(path(format!("/api/v1/activity/{}/around", "a1")))
         .and(query_param("limit", "5"))
         .respond_with(
             ResponseTemplate::new(200)

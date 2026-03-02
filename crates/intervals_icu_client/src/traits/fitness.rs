@@ -16,11 +16,8 @@ pub trait FitnessService: Send + Sync + 'static {
     ) -> Result<serde_json::Value>;
 
     /// Get heart rate curves for a sport.
-    async fn get_hr_curves(
-        &self,
-        days_back: Option<i32>,
-        sport: &str,
-    ) -> Result<serde_json::Value>;
+    async fn get_hr_curves(&self, days_back: Option<i32>, sport: &str)
+    -> Result<serde_json::Value>;
 
     /// Get pace curves for a sport.
     async fn get_pace_curves(
