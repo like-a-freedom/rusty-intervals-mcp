@@ -7,13 +7,13 @@
 
 use async_trait::async_trait;
 use intervals_icu_client::{
-    AthleteProfile, ActivitySummary, Event, EventCategory, IntervalsClient, IntervalsError,
-    BestEffortsOptions, DownloadProgress,
+    ActivitySummary, AthleteProfile, BestEffortsOptions, DownloadProgress, Event, EventCategory,
+    IntervalsClient, IntervalsError,
 };
 use serde_json::Value;
 use std::sync::Arc;
-use wiremock::{MockServer, Mock, ResponseTemplate};
 use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 /// Mock implementation of IntervalsClient for unit testing.
 ///
@@ -262,11 +262,7 @@ impl IntervalsClient for MockClient {
         Ok(serde_json::json!({}))
     }
 
-    async fn update_wellness(
-        &self,
-        _date: &str,
-        _data: &Value,
-    ) -> Result<Value, IntervalsError> {
+    async fn update_wellness(&self, _date: &str, _data: &Value) -> Result<Value, IntervalsError> {
         Ok(serde_json::json!({
             "updated": true
         }))

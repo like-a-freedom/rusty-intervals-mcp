@@ -41,9 +41,8 @@ pub fn parse_openapi_spec(
                 continue;
             }
 
-            let name = op
-                .get("operationId")
-                .and_then(Value::as_str)
+            let operation_id = op.get("operationId").and_then(Value::as_str);
+            let name = operation_id
                 .map(ToOwned::to_owned)
                 .unwrap_or_else(|| generate_operation_name(method_name, path));
 
@@ -52,11 +51,19 @@ pub fn parse_openapi_spec(
                 Err(_) => continue,
             };
 
-            let description = op
-                .get("summary")
-                .and_then(Value::as_str)
-                .or_else(|| op.get("description").and_then(Value::as_str))
+            // Use enhanced description if available, otherwise fallback to OpenAPI summary/description
+            let description = get_operation_description(&name)
                 .map(ToOwned::to_owned)
+                .or_else(|| {
+                    op.get("summary")
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned)
+                })
+                .or_else(|| {
+                    op.get("description")
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned)
+                })
                 .unwrap_or_else(|| generate_human_readable_description(method_name, path));
 
             let (params, schema_props, mut required) =
@@ -361,4 +368,165 @@ fn generate_human_readable_description(method: &str, path: &str) -> String {
 
     let path_clean = path.trim_matches('/').replace(['{', '}'], "");
     format!("{action} {path_clean}")
+}
+
+/// Get enhanced description for known operation IDs.
+/// Returns None if no enhanced description is available.
+fn get_operation_description(operation_id: &str) -> Option<&'static str> {
+    Some(match operation_id {
+        // === Activities ===
+        "listActivities" => {
+            "List athlete's recent activities. Returns activity summaries with id, name, date, distance, moving_time. Use this tool to browse or search activities by date range."
+        }
+        "getActivity" => {
+            "Get detailed information about a specific activity by ID. Returns full activity data including metadata, laps, and streams availability."
+        }
+        "searchForActivities" => {
+            "Search activities by text query. Use for finding activities by name, location, notes, or other text criteria."
+        }
+        "searchForActivitiesFull" => {
+            "Full-text search across all activity fields. More comprehensive than searchForActivities but may be slower."
+        }
+        "downloadActivitiesAsCSV" => {
+            "Download all activities as CSV format. Useful for bulk export and external analysis."
+        }
+        "listActivitiesAround" => {
+            "Get activities before and after a specific activity. Returns context activities for comparison."
+        }
+        "updateActivity" => {
+            "Update activity metadata (name, description, gear, etc.). Requires activity ID and fields to update."
+        }
+        "deleteActivity" => "Permanently delete an activity. This action cannot be undone.",
+        "downloadActivityFile" => {
+            "Download original activity file (FIT, TCX, GPX). Returns file content or saves to disk."
+        }
+        "downloadActivityFitFile" => {
+            "Download activity as FIT file format. Standard format for cycling computers."
+        }
+        "downloadActivityGpxFile" => {
+            "Download activity as GPX file format. Standard format for GPS data exchange."
+        }
+
+        // === Activity Analysis — критично! Не для listing activities ===
+        "getActivityStreams" => {
+            "Get time-series data streams from activity (power, heartrate, cadence, speed, etc.). Returns arrays of data points over time. For large activities, use compact=true or max_points to reduce response size."
+        }
+        "getIntervals" => {
+            "Get structured workout intervals from activity. Returns interval analysis with power/HR/duration data for each detected interval."
+        }
+        "findBestEfforts" => {
+            "Find best efforts from activity for standard durations (5min, 20min, 1hr, etc.). Returns peak power/pace efforts."
+        }
+        "searchForIntervals" => {
+            "Search intervals across all activities by duration and intensity. Returns matching intervals from multiple activities."
+        }
+        "getPowerHistogram" => {
+            "Get power distribution histogram for activity. Returns time/power bins showing power zone distribution."
+        }
+        "getHRHistogram" => {
+            "Get heart rate distribution histogram for activity. Returns time/HR bins showing HR zone distribution."
+        }
+        "getPaceHistogram" => {
+            "Get pace distribution histogram for activity. Returns time/pace bins for running activities."
+        }
+        "getGapHistogram" => {
+            "Get graded adjusted pace (GAP) histogram for activity. Shows effort-adjusted pace distribution for trail/road running."
+        }
+
+        // === Power/HR/Pace Curves — критично! Не для listing activities ===
+        "listAthletePowerCurves" => {
+            "Get athlete's power duration curves across ALL activities. Returns peak power for durations 1s-24000s, FTP estimates, and power models. NOT for listing activities — use listActivities to browse activities."
+        }
+        "listAthleteHRCurves" => {
+            "Get athlete's heart rate curves across ALL activities. Returns HR data for power/pace durations. NOT for listing activities — use listActivities to browse activities."
+        }
+        "listAthletePaceCurves" => {
+            "Get athlete's pace curves across ALL running activities. Returns best pace for durations. NOT for listing activities — use listActivities to browse activities."
+        }
+
+        // === Athlete Profile ===
+        "getAthlete" => {
+            "Get athlete profile information. Returns name, athlete ID, and basic profile data."
+        }
+        "getAthleteProfile" => {
+            "Get complete athlete profile including fitness metrics (CTL/ATL/TSB), fatigue, form, and sport settings."
+        }
+
+        // === Events/Calendar ===
+        "listEvents" => {
+            "List calendar events for athlete. Returns planned workouts, races, notes, holidays, and other calendar items."
+        }
+        "getEvent" => {
+            "Get specific calendar event by ID. Returns event details including workout data, date, category. Note: expects event ID, not activity ID."
+        }
+        "createEvent" => {
+            "Create new calendar event (workout, race, note, etc.). Requires event object with start_date_local, name, and category."
+        }
+        "updateEvent" => "Update existing calendar event. Requires event ID and fields to update.",
+        "deleteEvent" => "Delete calendar event. Requires event ID.",
+        "createMultipleEvents" => {
+            "Create multiple calendar events in bulk. Useful for importing training plans."
+        }
+        "deleteEventsBulk" => {
+            "Delete multiple calendar events in bulk. Requires array of event IDs or external IDs."
+        }
+        "duplicateEvents" => {
+            "Duplicate calendar events (e.g., recurring workouts). Requires event IDs and copy parameters."
+        }
+
+        // === Wellness ===
+        "listWellnessRecords" => {
+            "List wellness records (HRV, resting HR, sleep, weight). Returns wellness data for date range."
+        }
+        "getRecord" => {
+            "Get wellness record for specific date. Returns HRV, resting HR, sleep data, and subjective metrics for that date."
+        }
+        "updateWellness" => {
+            "Update or create wellness record for a date. Requires date and wellness data (HRV, sleep, etc.)."
+        }
+
+        // === Gear ===
+        "listGear" => {
+            "List athlete's gear (bikes, shoes, etc.). Returns gear list with distance, dates, and usage statistics."
+        }
+        "createGear" => {
+            "Create new gear entry. Requires gear name, type, and optional initial distance."
+        }
+        "updateGear" => "Update gear information. Requires gear ID and fields to update.",
+        "deleteGear" => "Delete gear entry. Requires gear ID.",
+        "createReminder" => {
+            "Create gear maintenance reminder. Requires gear ID and reminder parameters."
+        }
+        "updateReminder" => {
+            "Update gear reminder. Requires gear ID, reminder ID, and update parameters."
+        }
+
+        // === Sport Settings ===
+        "listSettings" => {
+            "Get athlete's sport settings (FTP, FTHR, zones, etc.). Returns settings for all configured sports."
+        }
+        "updateSettings" => "Update sport settings. Requires sport type and settings object.",
+        "applyToActivities" => {
+            "Apply sport settings to existing activities. Recalculates power/HR zones for affected activities."
+        }
+        "createSettings" => {
+            "Create new sport settings. Requires settings object with sport type and thresholds."
+        }
+        "deleteSettings" => "Delete sport settings. Requires sport type.",
+
+        // === Workout Library ===
+        "listFolders" => {
+            "List workout library folders and training plans. Returns folder structure with workouts and plans."
+        }
+        "listWorkouts" => {
+            "List workouts in athlete's library. Returns workout definitions, structures, and metadata."
+        }
+
+        // === Other ===
+        "getFitnessSummary" => {
+            "Get aggregated fitness summary (CTL/ATL/TSB trends). Returns fitness metrics over time period."
+        }
+
+        _ => return None,
+    })
 }
