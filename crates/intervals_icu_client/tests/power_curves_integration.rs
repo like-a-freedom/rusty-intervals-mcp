@@ -8,11 +8,11 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 async fn get_power_curves_normalizes_type_and_sends_curves() {
     let mock_server = MockServer::start().await;
 
-    // Expect a GET with type=Run and curves=7d
+    // Expect a GET with sport=Run and days_back=7
     let m = Mock::given(method("GET"))
         .and(path("/api/v1/athlete/test_ath/power-curves"))
-        .and(query_param("type", "Run"))
-        .and(query_param("curves", "7d"))
+        .and(query_param("sport", "Run"))
+        .and(query_param("days_back", "7"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true})))
         .expect(1);
 

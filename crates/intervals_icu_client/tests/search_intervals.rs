@@ -11,7 +11,7 @@ async fn search_intervals_calls_interval_search_path() {
 
     Mock::given(method("GET"))
         .and(path(format!(
-            "/api/v1/athlete/{}/activities/interval-search",
+            "/api/v1/athlete/{}/intervals/search",
             athlete
         )))
         .and(query_param("minSecs", "30"))

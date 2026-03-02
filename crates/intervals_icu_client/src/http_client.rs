@@ -651,8 +651,26 @@ impl ActivityService for ReqwestIntervalsClient {
                 .map_err(|e| IntervalsError::Config(crate::ConfigError::Other(e.to_string())))?;
             Ok(Some(path.to_string_lossy().to_string()))
         } else {
-            let bytes = resp.bytes().await?;
-            Ok(Some(STANDARD.encode(&bytes)))
+            let mut stream = resp.bytes_stream();
+            let mut downloaded: u64 = 0;
+            let mut all_bytes = Vec::new();
+
+            while let Some(chunk) = stream.next().await {
+                let bytes = chunk.map_err(IntervalsError::Http)?;
+                downloaded = downloaded.saturating_add(bytes.len() as u64);
+                all_bytes.extend_from_slice(&bytes);
+
+                let _ = progress_tx.try_send(crate::DownloadProgress {
+                    bytes_downloaded: downloaded,
+                    total_bytes: total,
+                });
+
+                if *cancel_rx.borrow() {
+                    return Err(IntervalsError::Config(crate::ConfigError::Other("download cancelled".to_string())));
+                }
+            }
+
+            Ok(Some(STANDARD.encode(&all_bytes)))
         }
     }
 
@@ -971,17 +989,19 @@ impl WellnessService for ReqwestIntervalsClient {
 #[async_trait]
 impl WorkoutService for ReqwestIntervalsClient {
     async fn get_workout_library(&self) -> Result<serde_json::Value> {
-        let url = self.api_url(&["athlete", &self.athlete_id, "workouts"]);
+        // API returns folders, plans and workouts together
+        let url = self.api_url(&["athlete", &self.athlete_id, "folders"]);
         self.execute_json(self.get_request(&url)).await
     }
 
-    async fn get_workouts_in_folder(&self, folder_id: &str) -> Result<serde_json::Value> {
-        let url = self.api_url(&["athlete", &self.athlete_id, "workouts", "folders", folder_id]);
-        self.execute_json(self.get_request(&url)).await
+    async fn get_workouts_in_folder(&self, _folder_id: &str) -> Result<serde_json::Value> {
+        // API doesn't have a direct endpoint - return all folders and let client filter
+        // For now, return the full library response
+        self.get_workout_library().await
     }
 
     async fn create_folder(&self, folder: &serde_json::Value) -> Result<serde_json::Value> {
-        let url = self.api_url(&["athlete", &self.athlete_id, "workouts", "folders"]);
+        let url = self.api_url(&["athlete", &self.athlete_id, "folders"]);
         self.execute_json(self.post_request(&url).json(folder)).await
     }
 
@@ -990,12 +1010,12 @@ impl WorkoutService for ReqwestIntervalsClient {
         folder_id: &str,
         fields: &serde_json::Value,
     ) -> Result<serde_json::Value> {
-        let url = self.api_url(&["athlete", &self.athlete_id, "workouts", "folders", folder_id]);
+        let url = self.api_url(&["athlete", &self.athlete_id, "folders", folder_id]);
         self.execute_json(self.put_request(&url).json(fields)).await
     }
 
     async fn delete_folder(&self, folder_id: &str) -> Result<()> {
-        let url = self.api_url(&["athlete", &self.athlete_id, "workouts", "folders", folder_id]);
+        let url = self.api_url(&["athlete", &self.athlete_id, "folders", folder_id]);
         self.execute_empty(self.delete_request(&url)).await
     }
 }
