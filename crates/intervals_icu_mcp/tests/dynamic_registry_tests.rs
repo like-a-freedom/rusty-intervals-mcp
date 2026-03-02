@@ -373,26 +373,24 @@ async fn test_dynamic_registry_from_real_api() {
         .send()
         .await;
 
-    if let Ok(resp) = response {
-        if resp.status().is_success() {
-            let spec: serde_json::Value = resp.json().await.unwrap();
-            let result = parse_openapi_spec(&spec, &empty_tags(), &empty_tags());
+    if let Ok(resp) = response && resp.status().is_success() {
+        let spec: serde_json::Value = resp.json().await.unwrap();
+        let result = parse_openapi_spec(&spec, &empty_tags(), &empty_tags());
 
-            assert!(
-                result.is_ok(),
-                "Failed to parse real Intervals.icu OpenAPI spec"
-            );
+        assert!(
+            result.is_ok(),
+            "Failed to parse real Intervals.icu OpenAPI spec"
+        );
 
-            let registry = result.unwrap();
-            assert!(
-                registry.len() > 0,
-                "Real API spec should produce at least one tool"
-            );
+        let registry = result.unwrap();
+        assert!(
+            !registry.is_empty(),
+            "Real API spec should produce at least one tool"
+        );
 
-            println!(
-                "Successfully parsed {} tools from real Intervals.icu API",
-                registry.len()
-            );
-        }
+        println!(
+            "Successfully parsed {} tools from real Intervals.icu API",
+            registry.len()
+        );
     }
 }

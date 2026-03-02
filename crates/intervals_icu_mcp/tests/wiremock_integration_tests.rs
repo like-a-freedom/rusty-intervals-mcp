@@ -11,8 +11,8 @@
 
 use intervals_icu_mcp::dynamic::{DynamicRuntime, DynamicRuntimeConfig};
 use serde_json::json;
-use wiremock::{Mock, MockServer, ResponseTemplate};
 use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 /// Setup mock server with OpenAPI spec and common endpoints
 async fn setup_mock_api() -> MockServer {
@@ -133,7 +133,7 @@ async fn test_dynamic_runtime_loads_openapi_spec() {
     let mock_server = setup_mock_api().await;
 
     let config = DynamicRuntimeConfig::builder()
-        .base_url(&mock_server.uri())
+        .base_url(mock_server.uri())
         .athlete_id("test_athlete")
         .api_key("test_key")
         .spec_source(format!("{}/api/v1/docs", mock_server.uri()))
@@ -156,7 +156,7 @@ async fn test_dynamic_runtime_tool_dispatch() {
     let mock_server = setup_mock_api().await;
 
     let config = DynamicRuntimeConfig::builder()
-        .base_url(&mock_server.uri())
+        .base_url(mock_server.uri())
         .athlete_id("test_athlete")
         .api_key("test_key")
         .spec_source(format!("{}/api/v1/docs", mock_server.uri()))
@@ -169,9 +169,7 @@ async fn test_dynamic_runtime_tool_dispatch() {
 
     // Dispatch getAthleteProfile tool
     let op = registry.operation("getAthleteProfile").unwrap();
-    let result = runtime
-        .dispatch_openapi(op, None)
-        .await;
+    let result = runtime.dispatch_openapi(op, None).await;
 
     assert!(result.is_ok(), "Dispatch failed: {:?}", result.err());
     let response = result.unwrap();
@@ -188,7 +186,7 @@ async fn test_dynamic_runtime_tool_with_arguments() {
     let mock_server = setup_mock_api().await;
 
     let config = DynamicRuntimeConfig::builder()
-        .base_url(&mock_server.uri())
+        .base_url(mock_server.uri())
         .athlete_id("test_athlete")
         .api_key("test_key")
         .spec_source(format!("{}/api/v1/docs", mock_server.uri()))
@@ -199,9 +197,14 @@ async fn test_dynamic_runtime_tool_with_arguments() {
 
     // Dispatch listActivities with limit argument
     let op = registry.operation("listActivities").unwrap();
-    let args = Some(json!({
-        "limit": 5
-    }).as_object().unwrap().clone());
+    let args = Some(
+        json!({
+            "limit": 5
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+    );
 
     let result = runtime.dispatch_openapi(op, args.as_ref()).await;
 
@@ -219,7 +222,7 @@ async fn test_dynamic_runtime_tool_not_found() {
     let mock_server = setup_mock_api().await;
 
     let config = DynamicRuntimeConfig::builder()
-        .base_url(&mock_server.uri())
+        .base_url(mock_server.uri())
         .athlete_id("test_athlete")
         .api_key("test_key")
         .spec_source(format!("{}/api/v1/docs", mock_server.uri()))
@@ -240,7 +243,7 @@ async fn test_dynamic_runtime_tag_filtering() {
 
     // Only include Athlete tag
     let config = DynamicRuntimeConfig::builder()
-        .base_url(&mock_server.uri())
+        .base_url(mock_server.uri())
         .athlete_id("test_athlete")
         .api_key("test_key")
         .spec_source(format!("{}/api/v1/docs", mock_server.uri()))
@@ -261,7 +264,7 @@ async fn test_dynamic_runtime_cache_refresh() {
     let mock_server = setup_mock_api().await;
 
     let config = DynamicRuntimeConfig::builder()
-        .base_url(&mock_server.uri())
+        .base_url(mock_server.uri())
         .athlete_id("test_athlete")
         .api_key("test_key")
         .spec_source(format!("{}/api/v1/docs", mock_server.uri()))
