@@ -581,3 +581,98 @@ async fn test_dispatch_without_arguments() {
 
     assert!(result.is_ok());
 }
+
+#[tokio::test]
+async fn test_dispatch_curve_rejects_unsupported_query_aliases_with_guidance() {
+    let mock_server = MockServer::start().await;
+
+    let mut operation = with_path_param(
+        create_test_operation(
+            "listAthletePowerCurves",
+            reqwest::Method::GET,
+            "/api/v1/athlete/{id}/power-curves",
+        ),
+        "id",
+        true,
+    );
+    operation = with_query_param(operation, "type");
+    operation = with_query_param(operation, "newest");
+
+    let args = Some(
+        json!({
+            "type": "Ride",
+            "newest": "2026-03-01"
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+    );
+
+    let result = intervals_icu_mcp::dynamic::dispatch_operation(
+        &reqwest::Client::new(),
+        &mock_server.uri(),
+        "test_athlete",
+        "test_api_key",
+        &operation,
+        args.as_ref(),
+    )
+    .await;
+
+    assert!(result.is_err());
+    let error = result.unwrap_err();
+    assert!(error.message.contains("newest"));
+    assert!(error.message.contains("listActivities"));
+}
+
+#[tokio::test]
+async fn test_dispatch_curve_422_includes_structured_recovery_hints() {
+    let mock_server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/v1/athlete/test_athlete/power-curves"))
+        .and(query_param("type", "Ride"))
+        .respond_with(ResponseTemplate::new(422).set_body_json(json!({
+            "message": "Invalid newest"
+        })))
+        .mount(&mock_server)
+        .await;
+
+    let mut operation = with_path_param(
+        create_test_operation(
+            "listAthletePowerCurves",
+            reqwest::Method::GET,
+            "/api/v1/athlete/{id}/power-curves",
+        ),
+        "id",
+        true,
+    );
+    operation = with_query_param(operation, "type");
+
+    let args = Some(
+        json!({
+            "type": "Ride",
+            "body_only": false
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+    );
+
+    let result = intervals_icu_mcp::dynamic::dispatch_operation(
+        &reqwest::Client::new(),
+        &mock_server.uri(),
+        "test_athlete",
+        "test_api_key",
+        &operation,
+        args.as_ref(),
+    )
+    .await;
+
+    assert!(result.is_ok());
+    let response = result.unwrap();
+    let content = serde_json::to_string(&response.content).unwrap();
+
+    assert!(content.contains("likely_wrong_tool_or_params"));
+    assert!(content.contains("do_not_retry_same_arguments"));
+    assert!(content.contains("listActivities"));
+}
