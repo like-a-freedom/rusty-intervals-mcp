@@ -22,7 +22,7 @@ A high-performance **Rust MCP server for Intervals.icu** designed around one ide
 - [Quick start](#quick-start)
 - [VS Code / Copilot setup](#vs-code--copilot-setup)
 - [Claude Desktop setup](#claude-desktop-setup)
-- [Example prompts](#example-prompts)
+- [Example asks](#example-asks)
 - [Deterministic coaching analytics](#deterministic-coaching-analytics)
 - [Runtime configuration](#runtime-configuration)
 - [Development](#development)
@@ -303,7 +303,7 @@ Add a local MCP entry pointing at the stdio binary:
 
 If you prefer not to hardcode credentials in the MCP client config, use an environment file and a launcher script or shell wrapper instead.
 
-## Example prompts
+## Example asks
 
 The best way to use this MCP server is to ask for **outcomes**, not API mechanics.
 
@@ -427,7 +427,7 @@ This repository is a Cargo workspace with two main crates:
 | Path | Purpose |
 |---|---|
 | `crates/intervals_icu_client` | HTTP client, retries, observability, API compatibility helpers |
-| `crates/intervals_icu_mcp` | MCP server, intent layer, dynamic runtime, resources, prompts, tests |
+| `crates/intervals_icu_mcp` | MCP server, intent layer, dynamic runtime, resources, and tests |
 
 ### Recommended verification commands
 
