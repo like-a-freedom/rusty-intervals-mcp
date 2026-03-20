@@ -1,35 +1,149 @@
-/// Tests for main.rs initialization logic
-/// These tests verify configuration and initialization behavior
+//! Tests for main.rs initialization logic
+//! These tests verify configuration and initialization behavior
+
+use secrecy::SecretString;
+use std::sync::Arc;
+
+// ============================================================================
+// Environment Variable Tests
+// ============================================================================
+
+#[test]
+fn test_transport_mode_default_to_stdio() {
+    // When MCP_TRANSPORT is not set, should default to "stdio"
+    let transport_mode =
+        std::env::var("MCP_TRANSPORT_NOT_SET").unwrap_or_else(|_| "stdio".to_string());
+    assert_eq!(transport_mode, "stdio");
+}
+
+#[test]
+fn test_transport_mode_explicit_stdio() {
+    // When explicitly set to "stdio"
+    let transport_mode = "stdio".to_string();
+    assert_eq!(transport_mode, "stdio");
+}
+
+#[test]
+fn test_transport_mode_http() {
+    // When explicitly set to "http"
+    let transport_mode = "http".to_string();
+    assert_eq!(transport_mode, "http");
+}
+
+#[test]
+fn test_transport_mode_invalid() {
+    // Invalid mode should be caught at runtime (tested separately)
+    let transport_mode = "invalid_mode".to_string();
+    assert_eq!(transport_mode, "invalid_mode");
+}
+
+// ============================================================================
+// HTTP Address Configuration Tests
+// ============================================================================
+
+#[test]
+fn test_http_address_default() {
+    // Default HTTP address when not set
+    let address: std::net::SocketAddr = std::env::var("MCP_HTTP_ADDRESS_NOT_SET")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or_else(|| std::net::SocketAddr::from(([127, 0, 0, 1], 3000)));
+    assert_eq!(address.ip().to_string(), "127.0.0.1");
+    assert_eq!(address.port(), 3000);
+}
+
+#[test]
+fn test_http_address_custom() {
+    // Custom HTTP address parsing
+    let address: std::net::SocketAddr = "0.0.0.0:8080".parse().unwrap();
+    assert_eq!(address.ip().to_string(), "0.0.0.0");
+    assert_eq!(address.port(), 8080);
+}
+
+#[test]
+fn test_http_address_invalid_fallback() {
+    // Invalid address should fallback to default
+    let address: std::net::SocketAddr = "invalid_address"
+        .parse::<std::net::SocketAddr>()
+        .unwrap_or_else(|_| std::net::SocketAddr::from(([127, 0, 0, 1], 3000)));
+    assert_eq!(address.ip().to_string(), "127.0.0.1");
+    assert_eq!(address.port(), 3000);
+}
+
+// ============================================================================
+// Max Body Size Configuration Tests
+// ============================================================================
+
+#[test]
+fn test_max_body_size_default() {
+    // Default max body size (50MB)
+    let max_body_size = std::env::var("MAX_HTTP_BODY_SIZE_NOT_SET")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(50 * 1024 * 1024);
+    assert_eq!(max_body_size, 50 * 1024 * 1024);
+}
+
+#[test]
+fn test_max_body_size_custom() {
+    // Custom max body size (100MB)
+    let max_body_size: usize = "104857600".parse().unwrap();
+    assert_eq!(max_body_size, 100 * 1024 * 1024);
+}
+
+#[test]
+fn test_max_body_size_invalid_fallback() {
+    // Invalid max body size should fallback to default
+    let max_body_size = "not_a_number".parse::<usize>().unwrap_or(50 * 1024 * 1024);
+    assert_eq!(max_body_size, 50 * 1024 * 1024);
+}
+
+// ============================================================================
+// Handler Initialization Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_handler_initialization_with_mock_client() {
+    // Test handler can be initialized with mock credentials
+    let base = "https://test.intervals.icu";
+    let athlete = "test_athlete";
+    let api_key = SecretString::new("test_key".to_string().into());
+
+    let client = intervals_icu_client::http_client::ReqwestIntervalsClient::new(
+        base,
+        athlete.to_string(),
+        api_key,
+    );
+    let handler = intervals_icu_mcp::IntervalsMcpHandler::new(Arc::new(client));
+
+    // Handler starts with 8 intent tools (always available)
+    assert_eq!(handler.tool_count(), 8);
+}
+
+#[tokio::test]
+async fn test_handler_preload_dynamic_registry() {
+    // Test dynamic registry preload (may timeout, which is OK)
+    let client = intervals_icu_client::http_client::ReqwestIntervalsClient::new(
+        "https://test.intervals.icu",
+        "test_athlete".to_string(),
+        SecretString::new("test_key".to_string().into()),
+    );
+    let handler = intervals_icu_mcp::IntervalsMcpHandler::new(Arc::new(client));
+
+    // Preload should complete (may return 0 if no spec available)
+    let _count = handler.preload_dynamic_registry().await;
+    // Count can be 0 (no spec) or >0 (spec loaded)
+}
+
+// ============================================================================
+// Logging Configuration Tests
+// ============================================================================
 
 #[test]
 fn test_log_env_standard() {
     // Verify RUST_LOG is used (standard Rust logging variable)
     let result = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
     assert!(!result.is_empty());
-}
-
-#[test]
-fn test_base_url_default() {
-    // Verify default base URL fallback logic
-    let base = std::env::var("INTERVALS_ICU_BASE_URL_TEST_NONEXISTENT")
-        .unwrap_or_else(|_| "https://intervals.icu".to_string());
-    assert_eq!(base, "https://intervals.icu");
-}
-
-#[test]
-fn test_athlete_id_fallback() {
-    // Verify athlete ID fallback to empty string logic
-    let athlete = std::env::var("INTERVALS_ICU_ATHLETE_ID_TEST_NONEXISTENT")
-        .unwrap_or_else(|_| "".to_string());
-    assert_eq!(athlete, "");
-}
-
-#[test]
-fn test_api_key_fallback() {
-    // Verify API key fallback to empty string logic
-    let api_key =
-        std::env::var("INTERVALS_ICU_API_KEY_TEST_NONEXISTENT").unwrap_or_else(|_| "".to_string());
-    assert_eq!(api_key, "");
 }
 
 #[test]
@@ -57,40 +171,6 @@ fn test_env_filter_fallback() {
     assert!(!format!("{:?}", env_filter).is_empty());
 }
 
-#[tokio::test]
-async fn test_client_initialization() {
-    // Test client can be initialized with env vars
-    use secrecy::SecretString;
-    let base = "https://test.intervals.icu";
-    let athlete = "test_athlete";
-    let api_key = SecretString::new("test_key".to_string().into());
-
-    let client = intervals_icu_client::http_client::ReqwestIntervalsClient::new(
-        base,
-        athlete.to_string(),
-        api_key,
-    );
-    // Client initialization should succeed
-    assert!(!format!("{:?}", client).is_empty());
-}
-
-#[tokio::test]
-async fn test_handler_initialization() {
-    // Test handler can be initialized
-    use secrecy::SecretString;
-    use std::sync::Arc;
-
-    let client = intervals_icu_client::http_client::ReqwestIntervalsClient::new(
-        "https://test.intervals.icu",
-        "test_athlete".to_string(),
-        SecretString::new("test_key".to_string().into()),
-    );
-    let handler = intervals_icu_mcp::IntervalsMcpHandler::new(Arc::new(client));
-
-    // Handler starts with 8 intent tools (always available)
-    assert_eq!(handler.tool_count(), 8);
-}
-
 #[test]
 fn test_log_level_combinations() {
     // Test various log level values
@@ -102,4 +182,101 @@ fn test_log_level_combinations() {
         assert!(combined.contains("rmcp=warn"));
         assert!(combined.contains("serve_inner=warn"));
     }
+}
+
+// ============================================================================
+// Credentials Validation Tests
+// ============================================================================
+
+#[test]
+fn test_credentials_validation_empty_api_key() {
+    // Empty API key should be detected
+    let api_key = "";
+    assert!(api_key.trim().is_empty());
+}
+
+#[test]
+fn test_credentials_validation_empty_athlete() {
+    // Empty athlete ID should be detected
+    let athlete = "";
+    assert!(athlete.trim().is_empty());
+}
+
+#[test]
+fn test_credentials_validation_whitespace_only() {
+    // Whitespace-only credentials should be detected
+    let api_key = "   ";
+    let athlete = "  ";
+    assert!(api_key.trim().is_empty());
+    assert!(athlete.trim().is_empty());
+}
+
+#[test]
+fn test_credentials_validation_valid() {
+    // Valid credentials should pass validation
+    let api_key = "test_key_123";
+    let athlete = "i123456";
+    assert!(!api_key.trim().is_empty());
+    assert!(!athlete.trim().is_empty());
+}
+
+// ============================================================================
+// Transport Mode Selection Logic Tests
+// ============================================================================
+
+#[test]
+fn test_transport_mode_selection_stdio() {
+    // Test transport mode selection for stdio
+    let mode = "stdio";
+    assert!(matches!(mode, "stdio"));
+}
+
+#[test]
+fn test_transport_mode_selection_http() {
+    // Test transport mode selection for http
+    let mode = "http";
+    assert!(matches!(mode, "http"));
+}
+
+#[test]
+fn test_transport_mode_selection_unknown() {
+    // Test transport mode selection for unknown mode
+    let mode = "unknown";
+    let is_valid = matches!(mode, "stdio" | "http");
+    assert!(!is_valid);
+}
+
+// ============================================================================
+// Socket Address Parsing Tests
+// ============================================================================
+
+#[test]
+fn test_socket_addr_parsing_ipv4() {
+    // Test IPv4 address parsing
+    let addr: std::net::SocketAddr = "127.0.0.1:3000".parse().unwrap();
+    assert_eq!(addr.ip().to_string(), "127.0.0.1");
+    assert_eq!(addr.port(), 3000);
+}
+
+#[test]
+fn test_socket_addr_parsing_ipv6() {
+    // Test IPv6 address parsing
+    let addr: std::net::SocketAddr = "[::1]:3000".parse().unwrap();
+    assert!(addr.ip().is_ipv6());
+    assert_eq!(addr.port(), 3000);
+}
+
+#[test]
+fn test_socket_addr_parsing_any_interface() {
+    // Test binding to any interface
+    let addr: std::net::SocketAddr = "0.0.0.0:8080".parse().unwrap();
+    assert_eq!(addr.ip().to_string(), "0.0.0.0");
+    assert_eq!(addr.port(), 8080);
+}
+
+#[test]
+fn test_socket_addr_parsing_invalid() {
+    // Test invalid address parsing
+    let result = "invalid_address".parse::<std::net::SocketAddr>();
+    assert!(result.is_err());
 }

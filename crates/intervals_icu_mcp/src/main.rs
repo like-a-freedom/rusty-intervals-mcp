@@ -65,9 +65,7 @@ async fn initialize_handler() -> IntervalsMcpHandler {
     {
         Ok(count) => count,
         Err(_) => {
-            tracing::warn!(
-                "timed out preloading dynamic OpenAPI registry; continuing startup"
-            );
+            tracing::warn!("timed out preloading dynamic OpenAPI registry; continuing startup");
             0
         }
     };
@@ -165,8 +163,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Determine transport mode from environment variable.
     // Default to "stdio" for backward compatibility with local MCP clients.
-    let transport_mode =
-        std::env::var("MCP_TRANSPORT").unwrap_or_else(|_| "stdio".to_string());
+    let transport_mode = std::env::var("MCP_TRANSPORT").unwrap_or_else(|_| "stdio".to_string());
 
     tracing::info!(%transport_mode, "using transport mode");
 
