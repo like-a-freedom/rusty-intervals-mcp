@@ -295,9 +295,19 @@ fn format_pace_per_km(seconds: i64, distance_m: f64) -> Option<String> {
 }
 
 fn extract_exact_tss(object: &serde_json::Map<String, Value>) -> Option<f64> {
-    object
-        .get("tss")
-        .and_then(|value| value.as_f64().or_else(|| value.as_i64().map(|n| n as f64)))
+    // Try TSS field names in priority order: prefer exact TSS, then fall back to intervals.icu naming
+    [
+        "tss",
+        "icu_training_load",
+        "training_load",
+        "icuTrainingLoad",
+    ]
+    .iter()
+    .find_map(|key| {
+        object
+            .get(*key)
+            .and_then(|value| value.as_f64().or_else(|| value.as_i64().map(|n| n as f64)))
+    })
 }
 
 fn build_basic_workout_metric_rows(workout_detail: Option<&Value>) -> Vec<Vec<String>> {
