@@ -306,6 +306,7 @@ async fn load_spec_from_source(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{DYNAMIC_RUNTIME_ENV_VARS, EnvVarGuard};
 
     // ========================================================================
     // DynamicRuntimeConfig Tests
@@ -313,6 +314,8 @@ mod tests {
 
     #[test]
     fn test_config_from_env_defaults() {
+        let _env_guard = EnvVarGuard::acquire_blocking(DYNAMIC_RUNTIME_ENV_VARS);
+
         // Clear env vars to get defaults
         unsafe {
             std::env::remove_var("INTERVALS_ICU_BASE_URL");
@@ -388,6 +391,8 @@ mod tests {
 
     #[test]
     fn test_runtime_from_env() {
+        let _env_guard = EnvVarGuard::acquire_blocking(DYNAMIC_RUNTIME_ENV_VARS);
+
         // Clear env vars first
         unsafe {
             std::env::remove_var("INTERVALS_ICU_BASE_URL");

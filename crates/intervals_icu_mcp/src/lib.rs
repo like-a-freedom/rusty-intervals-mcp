@@ -30,6 +30,8 @@ pub mod intents;
 pub mod prompts;
 mod services;
 mod state;
+#[cfg(test)]
+mod test_support;
 pub mod types;
 
 pub use event_id::{EventId, FolderId};
@@ -47,6 +49,13 @@ pub struct IntervalsMcpHandler {
 
 impl IntervalsMcpHandler {
     pub fn new(client: Arc<dyn IntervalsClient>) -> Self {
+        Self::with_dynamic_runtime(client, dynamic::DynamicRuntime::from_env())
+    }
+
+    pub fn with_dynamic_runtime(
+        client: Arc<dyn IntervalsClient>,
+        dynamic_runtime: dynamic::DynamicRuntime,
+    ) -> Self {
         // Create idempotency middleware
         let idempotency = Arc::new(IdempotencyMiddleware::new());
 
@@ -67,7 +76,7 @@ impl IntervalsMcpHandler {
 
         Self {
             client: client.clone(),
-            dynamic_runtime: dynamic::DynamicRuntime::from_env(),
+            dynamic_runtime,
             intent_router,
             webhooks: Arc::new(Mutex::new(HashMap::new())),
             webhook_secret: Arc::new(Mutex::new(None)),
@@ -238,6 +247,13 @@ impl ServerHandler for IntervalsMcpHandler {
 mod tests {
     use super::*;
     use intervals_icu_client::{AthleteProfile, Event, EventCategory, IntervalsError};
+    use uuid::Uuid;
+
+    fn test_handler() -> IntervalsMcpHandler {
+        let runtime =
+            dynamic::DynamicRuntime::new(dynamic::DynamicRuntimeConfig::builder().build());
+        IntervalsMcpHandler::with_dynamic_runtime(Arc::new(MockClient), runtime)
+    }
 
     fn mock_event(event_id: Option<&str>) -> Event {
         Event {
@@ -635,13 +651,13 @@ mod tests {
 
     #[tokio::test]
     async fn handler_registers_tools() {
-        let handler = IntervalsMcpHandler::new(Arc::new(MockClient));
+        let handler = test_handler();
         assert_eq!(handler.tool_count(), 8);
     }
 
     #[test]
     fn handler_info_advertises_tools_and_resources_capabilities() {
-        let handler = IntervalsMcpHandler::new(Arc::new(MockClient));
+        let handler = test_handler();
         let info = handler.get_info();
 
         assert!(
@@ -656,7 +672,7 @@ mod tests {
 
     #[test]
     fn tool_count_matches_internal_tools_without_cache() {
-        let handler = IntervalsMcpHandler::new(Arc::new(MockClient));
+        let handler = test_handler();
         // tool_count() includes 8 intent tools even before dynamic registry load
         assert_eq!(handler.tool_count(), 8);
     }
@@ -664,7 +680,8 @@ mod tests {
     #[tokio::test]
     async fn handler_dynamic_tools_loaded_from_openapi() {
         // Create a minimal OpenAPI spec for testing
-        let tmp_file = std::env::temp_dir().join("intervals_openapi_test.json");
+        let tmp_file =
+            std::env::temp_dir().join(format!("intervals_openapi_test_{}.json", Uuid::new_v4()));
 
         let test_spec = serde_json::json!({
             "openapi": "3.0.0",
@@ -686,34 +703,18 @@ mod tests {
             .await
             .expect("should write test spec");
 
-        // Set env var for spec source
-        let original_spec = std::env::var("INTERVALS_ICU_OPENAPI_SPEC").ok();
-        #[allow(unsafe_code)]
-        unsafe {
-            std::env::set_var(
-                "INTERVALS_ICU_OPENAPI_SPEC",
-                tmp_file.to_string_lossy().to_string(),
-            );
-        }
-
-        let handler = IntervalsMcpHandler::new(Arc::new(MockClient));
+        let runtime = dynamic::DynamicRuntime::new(
+            dynamic::DynamicRuntimeConfig::builder()
+                .spec_source(tmp_file.to_string_lossy().to_string())
+                .build(),
+        );
+        let handler = IntervalsMcpHandler::with_dynamic_runtime(Arc::new(MockClient), runtime);
 
         // Preload should load the registry
         let count = handler.preload_dynamic_registry().await;
         assert!(count > 0, "should load at least one tool from test spec");
 
         // Cleanup
-        if let Some(original) = original_spec {
-            #[allow(unsafe_code)]
-            unsafe {
-                std::env::set_var("INTERVALS_ICU_OPENAPI_SPEC", original);
-            }
-        } else {
-            #[allow(unsafe_code)]
-            unsafe {
-                std::env::remove_var("INTERVALS_ICU_OPENAPI_SPEC");
-            }
-        }
         let _ = tokio::fs::remove_file(&tmp_file).await;
     }
 }

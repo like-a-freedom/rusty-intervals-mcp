@@ -8,7 +8,6 @@ on:
       debug:
         description: Enable debug mode
         required: false
-        default: false
   pull_request:
     branches: [main, master]
 
