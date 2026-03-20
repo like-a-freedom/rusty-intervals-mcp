@@ -307,6 +307,62 @@ async fn load_spec_from_source(
 mod tests {
     use super::*;
     use crate::test_support::{DYNAMIC_RUNTIME_ENV_VARS, EnvVarGuard};
+    use uuid::Uuid;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn minimal_openapi_spec() -> serde_json::Value {
+        serde_json::json!({
+            "openapi": "3.0.0",
+            "info": {
+                "title": "Test API",
+                "version": "1.0.0"
+            },
+            "paths": {
+                "/api/v1/athlete/{id}/activities": {
+                    "get": {
+                        "operationId": "getActivities",
+                        "summary": "List athlete activities",
+                        "parameters": [
+                            {
+                                "name": "id",
+                                "in": "path",
+                                "required": true,
+                                "schema": { "type": "string" }
+                            }
+                        ],
+                        "responses": {
+                            "200": {
+                                "description": "Success"
+                            }
+                        }
+                    }
+                }
+            }
+        })
+    }
+
+    async fn write_temp_openapi_spec() -> PathBuf {
+        let path =
+            std::env::temp_dir().join(format!("dynamic_runtime_spec_{}.json", Uuid::new_v4()));
+        let body = serde_json::to_vec(&minimal_openapi_spec()).expect("test spec should serialize");
+        tokio::fs::write(&path, body)
+            .await
+            .expect("test spec should be written");
+        path
+    }
+
+    async fn start_mock_openapi_server() -> MockServer {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/api/v1/docs"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(minimal_openapi_spec()))
+            .mount(&server)
+            .await;
+
+        server
+    }
 
     // ========================================================================
     // DynamicRuntimeConfig Tests
@@ -442,16 +498,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_runtime_try_build_registry() {
-        let spec_source = default_local_spec_path();
+    async fn test_runtime_try_build_registry_from_remote_spec_source() {
+        let mock_server = start_mock_openapi_server().await;
         let config = DynamicRuntimeConfig::builder()
-            .spec_source(spec_source.to_string_lossy())
+            .spec_source(format!("{}/api/v1/docs", mock_server.uri()))
             .build();
 
         let runtime = DynamicRuntime::new(config);
 
         let result = runtime.try_build_registry().await;
-        let registry = result.expect("local checked-in spec should build a registry");
+        let registry = result.expect("mock remote spec should build a registry");
         assert!(
             !registry.is_empty(),
             "registry should contain dynamic operations"
@@ -499,12 +555,40 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_load_spec_from_source_local_default_spec() {
+    async fn test_load_spec_from_source_local_file() {
         let http = reqwest::Client::new();
-        let spec_source = default_local_spec_path();
+        let spec_source = write_temp_openapi_spec().await;
 
         let result = load_spec_from_source(&http, &spec_source.to_string_lossy()).await;
-        let spec = result.expect("checked-in local OpenAPI spec should load");
+        let spec = result.expect("temporary local OpenAPI spec should load");
+
+        let openapi_version = spec
+            .get("openapi")
+            .and_then(serde_json::Value::as_str)
+            .expect("spec should declare an OpenAPI version");
+        assert!(
+            openapi_version.starts_with("3.0."),
+            "unexpected OpenAPI version: {openapi_version}"
+        );
+        assert!(
+            spec.get("paths")
+                .and_then(serde_json::Value::as_object)
+                .map(|paths| !paths.is_empty())
+                .unwrap_or(false),
+            "spec should contain at least one path"
+        );
+
+        let _ = tokio::fs::remove_file(&spec_source).await;
+    }
+
+    #[tokio::test]
+    async fn test_load_spec_from_source_remote_url() {
+        let http = reqwest::Client::new();
+        let mock_server = start_mock_openapi_server().await;
+
+        let result =
+            load_spec_from_source(&http, &format!("{}/api/v1/docs", mock_server.uri())).await;
+        let spec = result.expect("mock remote OpenAPI spec should load");
 
         let openapi_version = spec
             .get("openapi")
