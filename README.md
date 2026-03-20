@@ -211,9 +211,9 @@ Intent responses include `suggestions` and `next_actions` so the host model know
 4. Copy your API key
 5. Note your athlete ID from your profile URL (format: `i123456`)
 
-### Install and run the stdio MCP server
+### Install and run the MCP server
 
-The default local MCP binary is `intervals_icu_mcp`.
+The server supports both **STDIO** (for local MCP clients) and **HTTP** (for remote clients) transport modes via the `MCP_TRANSPORT` environment variable.
 
 ```sh
 git clone https://github.com/like-a-freedom/rusty-intervals-mcp.git
@@ -225,28 +225,32 @@ cp .env.example .env
 # INTERVALS_ICU_ATHLETE_ID=i123456
 
 cargo install --locked --path crates/intervals_icu_mcp
-
-export INTERVALS_ICU_API_KEY=your_api_key_here
-export INTERVALS_ICU_ATHLETE_ID=i123456
-intervals_icu_mcp
 ```
 
-### Run the HTTP server
+#### STDIO mode (default)
 
-The repository also includes an HTTP server binary named `server`.
+For local MCP clients like VS Code Copilot or Claude Desktop:
 
 ```sh
 export INTERVALS_ICU_API_KEY=your_api_key_here
 export INTERVALS_ICU_ATHLETE_ID=i123456
-
-cargo run -p intervals_icu_mcp --bin server
+export MCP_TRANSPORT=stdio  # optional: stdio is the default
+intervals_icu_mcp
 ```
 
-Default endpoints:
+#### HTTP mode
 
-- `/mcp` — HTTP MCP endpoint
-- `/health` — health check
-- `/metrics` — Prometheus metrics
+For remote MCP clients or when running as a service:
+
+```sh
+export INTERVALS_ICU_API_KEY=your_api_key_here
+export INTERVALS_ICU_ATHLETE_ID=i123456
+export MCP_TRANSPORT=http
+export MCP_HTTP_ADDRESS=127.0.0.1:3000  # optional: default is 127.0.0.1:3000
+intervals_icu_mcp
+```
+
+The MCP endpoint is available at `http://<address>/mcp`.
 
 ## VS Code / Copilot setup
 
@@ -403,6 +407,9 @@ See `.env.example` for the standard environment layout.
 | `INTERVALS_ICU_OPENAPI_SPEC` | unset | Explicit OpenAPI source (HTTP(S) URL or local file) |
 | `INTERVALS_ICU_SPEC_REFRESH_SECS` | `300` | Refresh cadence for the cached OpenAPI runtime |
 | `RUST_LOG` | unset | Standard Rust logging control |
+| `MCP_TRANSPORT` | `stdio` | Transport mode: `stdio` or `http` |
+| `MCP_HTTP_ADDRESS` | `127.0.0.1:3000` | Listen address for HTTP mode |
+| `MAX_HTTP_BODY_SIZE` | `52428800` | Max request body size in bytes (HTTP mode) |
 
 ### OpenAPI runtime behavior
 
@@ -444,11 +451,11 @@ cargo test --all-targets --all-features
 cargo run -p intervals_icu_client --example basic_client
 cargo run -p intervals_icu_client --example list_recent_activities
 
-# MCP stdio server
-cargo run -p intervals_icu_mcp --bin intervals_icu_mcp
+# MCP stdio mode (default)
+cargo run -p intervals_icu_mcp
 
-# MCP HTTP server
-cargo run -p intervals_icu_mcp --bin server
+# MCP http mode
+MCP_TRANSPORT=http cargo run -p intervals_icu_mcp
 ```
 
 ### Testing notes
@@ -470,21 +477,26 @@ docker build -t rusty-intervals:latest .
 
 ### Run locally with environment variables
 
+#### STDIO mode (default)
+
 ```sh
 docker run -i --rm \
   -e INTERVALS_ICU_API_KEY=your_key \
   -e INTERVALS_ICU_ATHLETE_ID=i123456 \
+  -e MCP_TRANSPORT=stdio \
   rusty-intervals:latest
 ```
 
-### Run the HTTP server container
+#### HTTP mode
 
 ```sh
 docker run -i --rm \
-  -p 8080:8080 \
+  -p 3000:3000 \
   -e INTERVALS_ICU_API_KEY=your_key \
   -e INTERVALS_ICU_ATHLETE_ID=i123456 \
-  ghcr.io/<your-org-or-user>/rusty-intervals:latest
+  -e MCP_TRANSPORT=http \
+  -e MCP_HTTP_ADDRESS=0.0.0.0:3000 \
+  rusty-intervals:latest
 ```
 
 ### Remote MCP clients
