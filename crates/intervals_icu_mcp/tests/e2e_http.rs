@@ -4,6 +4,17 @@ use std::sync::Arc;
 use intervals_icu_client::AthleteProfile;
 use intervals_icu_client::IntervalsClient;
 
+fn mock_event(event_id: Option<&str>) -> intervals_icu_client::Event {
+    intervals_icu_client::Event {
+        id: event_id.map(str::to_owned),
+        start_date_local: "2026-03-04".to_string(),
+        name: "Mock event".to_string(),
+        category: intervals_icu_client::EventCategory::Workout,
+        description: None,
+        r#type: None,
+    }
+}
+
 struct LocalMockClient;
 
 #[async_trait::async_trait]
@@ -26,15 +37,15 @@ impl IntervalsClient for LocalMockClient {
     }
     async fn create_event(
         &self,
-        _event: intervals_icu_client::Event,
+        event: intervals_icu_client::Event,
     ) -> Result<intervals_icu_client::Event, intervals_icu_client::IntervalsError> {
-        unimplemented!()
+        Ok(event)
     }
     async fn get_event(
         &self,
-        _event_id: &str,
+        event_id: &str,
     ) -> Result<intervals_icu_client::Event, intervals_icu_client::IntervalsError> {
-        unimplemented!()
+        Ok(mock_event(Some(event_id)))
     }
     async fn delete_event(
         &self,

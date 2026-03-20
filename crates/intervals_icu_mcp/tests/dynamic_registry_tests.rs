@@ -431,6 +431,55 @@ fn test_parse_spec_with_request_body() {
     assert!(op.has_json_body);
 }
 
+#[test]
+fn test_parse_current_spec_sport_settings_apply_auto_injects_athlete_id() {
+    let spec = json!({
+        "openapi": "3.0.0",
+        "info": {"title": "Test", "version": "1.0.0"},
+        "paths": {
+            "/api/v1/athlete/{athleteId}/sport-settings/{id}/apply": {
+                "put": {
+                    "operationId": "applyToActivities",
+                    "tags": ["Sports"],
+                    "parameters": [
+                        {
+                            "name": "athleteId",
+                            "in": "path",
+                            "required": true,
+                            "schema": {"type": "string"}
+                        },
+                        {
+                            "name": "id",
+                            "in": "path",
+                            "required": true,
+                            "schema": {"type": "string"}
+                        }
+                    ],
+                    "responses": {"200": {"description": "Success"}}
+                }
+            }
+        }
+    });
+
+    let registry = parse_openapi_spec(&spec, &empty_tags(), &empty_tags()).unwrap();
+    let op = registry.operation("applyToActivities").unwrap();
+
+    let athlete_param = op
+        .params
+        .iter()
+        .find(|param| param.name == "athleteId")
+        .expect("athleteId path parameter should exist");
+    assert!(athlete_param.auto_injected);
+
+    let schema = op.tool.input_schema.as_ref();
+    let required = schema
+        .get("required")
+        .and_then(|value| value.as_array())
+        .expect("required array should exist");
+    assert!(!required.iter().any(|value| value == "athleteId"));
+    assert!(required.iter().any(|value| value == "id"));
+}
+
 #[tokio::test]
 async fn test_dynamic_registry_from_real_api() {
     // This test fetches real OpenAPI spec from intervals.icu

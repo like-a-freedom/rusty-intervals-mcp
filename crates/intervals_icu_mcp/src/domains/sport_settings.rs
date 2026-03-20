@@ -14,8 +14,7 @@ use crate::resolve_fields;
 
 /// Default fields for sport settings in compact responses.
 ///
-/// This constant is used by both the compaction functions and can be
-/// referenced by implementations of the `Compact` trait for sport settings types.
+/// This constant is used by the shared compaction helpers for sport-settings payloads.
 pub const DEFAULT_FIELDS: &[&str] = &["type", "ftp", "fthr", "hrZones", "powerZones"];
 
 /// Compact sport settings to essential fields

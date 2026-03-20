@@ -17,4 +17,7 @@ pub trait WellnessService: Send + Sync + 'static {
         date: &str,
         data: &serde_json::Value,
     ) -> Result<serde_json::Value>;
+
+    /// Update multiple wellness records for the same athlete.
+    async fn update_wellness_bulk(&self, entries: &[serde_json::Value]) -> Result<()>;
 }

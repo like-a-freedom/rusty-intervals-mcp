@@ -22,7 +22,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_env_filter(env_filter)
         .init();
 
-    tracing::info!("intervals_icu_mcp: log filter: {}", combined_filter);
+    let version = env!("CARGO_PKG_VERSION");
+    tracing::info!(
+        "intervals_icu_mcp v{}: log filter: {}",
+        version,
+        combined_filter
+    );
+    tracing::debug!(
+        "intervals_icu_mcp v{}: starting with debug logging enabled",
+        version
+    );
+    tracing::trace!("intervals_icu_mcp v{}: trace logging initialized", version);
+    tracing::warn!(
+        "intervals_icu_mcp v{}: server starting (warnings may appear during operation)",
+        version
+    );
 
     // Fail-fast validation: ensure required credentials are set before proceeding
     let base = std::env::var("INTERVALS_ICU_BASE_URL")
@@ -74,10 +88,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     tracing::info!(
-        "intervals_icu_mcp: discovered {} dynamic tools; advertising {} tools and {} prompts",
+        "intervals_icu_mcp: discovered {} dynamic tools; advertising {} tools (8 intents + dynamic)",
         dynamic_tools,
-        handler.tool_count(),
-        handler.prompt_count()
+        handler.tool_count()
     );
 
     // Start RMCP server over stdio transport so it's immediately usable with MCP clients

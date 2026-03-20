@@ -19,7 +19,24 @@ async fn main() -> Result<(), anyhow::Error> {
     let env_filter = tracing_subscriber::EnvFilter::try_new(&log_env)
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
     tracing_subscriber::fmt().with_env_filter(env_filter).init();
-    tracing::info!("intervals_icu_mcp:example:http: log filter = {}", log_env);
+    let version = env!("CARGO_PKG_VERSION");
+    tracing::info!(
+        "intervals_icu_mcp v{}:example:http: log filter = {}",
+        version,
+        log_env
+    );
+    tracing::debug!(
+        "intervals_icu_mcp v{}: example HTTP server debug logging enabled",
+        version
+    );
+    tracing::trace!(
+        "intervals_icu_mcp v{}: example HTTP server trace logging initialized",
+        version
+    );
+    tracing::warn!(
+        "intervals_icu_mcp v{}: example HTTP server starting (warnings may appear)",
+        version
+    );
 
     // Install prometheus recorder
     let builder = PrometheusBuilder::new();

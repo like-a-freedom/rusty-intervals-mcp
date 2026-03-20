@@ -38,6 +38,7 @@ impl IntervalsClient for MockClient {
         Ok(vec![ActivitySummary {
             id: "test_activity".to_string(),
             name: Some("Test Activity".to_string()),
+            start_date_local: "2026-03-04".to_string(),
         }])
     }
 

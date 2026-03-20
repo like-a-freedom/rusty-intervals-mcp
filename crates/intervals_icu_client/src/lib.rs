@@ -14,7 +14,9 @@
 //! - [`traits::EventService`] - Calendar/event operations
 //! - [`traits::FitnessService`] - Fitness metrics and curves
 //! - [`traits::GearService`] - Equipment management
+//! - [`traits::RouteService`] - Route listing and similarity
 //! - [`traits::WellnessService`] - Wellness data
+//! - [`traits::WeatherService`] - Weather configuration
 //! - [`traits::WorkoutService`] - Workout library
 //! - [`traits::SportSettingsService`] - Sport configuration
 
@@ -32,8 +34,8 @@ pub mod utils;
 pub use error::{ApiError, ConfigError, IntervalsError, Result, ValidationError};
 // Service traits are available in the `traits` module for modular usage
 pub use traits::{
-    ActivityService, AthleteService, EventService, FitnessService, GearService,
-    SportSettingsService, WellnessService, WorkoutService,
+    ActivityService, AthleteService, EventService, FitnessService, GearService, RouteService,
+    SportSettingsService, WeatherService, WellnessService, WorkoutService,
 };
 
 /// Options for finding best efforts in an activity.
@@ -62,6 +64,24 @@ pub struct AthleteProfile {
 pub struct ActivitySummary {
     pub id: String,
     pub name: Option<String>,
+    pub start_date_local: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ActivityMessage {
+    pub id: i64,
+    pub athlete_id: Option<String>,
+    pub name: Option<String>,
+    pub created: Option<String>,
+    #[serde(rename = "type")]
+    pub message_type: Option<String>,
+    pub content: Option<String>,
+    pub activity_id: Option<String>,
+    pub start_index: Option<i32>,
+    pub end_index: Option<i32>,
+    pub attachment_url: Option<String>,
+    pub attachment_mime_type: Option<String>,
+    pub deleted: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
@@ -146,6 +166,11 @@ pub trait IntervalsClient: Send + Sync + 'static {
         options: Option<BestEffortsOptions>,
     ) -> Result<serde_json::Value>;
     async fn get_activity_details(&self, activity_id: &str) -> Result<serde_json::Value>;
+    async fn get_activity_messages(&self, _activity_id: &str) -> Result<Vec<ActivityMessage>> {
+        Err(IntervalsError::Config(ConfigError::Other(
+            "get_activity_messages is not implemented for this client".to_string(),
+        )))
+    }
     async fn search_activities(
         &self,
         query: &str,
@@ -221,6 +246,11 @@ pub trait IntervalsClient: Send + Sync + 'static {
         date: &str,
         data: &serde_json::Value,
     ) -> Result<serde_json::Value>;
+    async fn update_wellness_bulk(&self, _entries: &[serde_json::Value]) -> Result<()> {
+        Err(IntervalsError::Config(ConfigError::Other(
+            "update_wellness_bulk is not implemented for this client".to_string(),
+        )))
+    }
     async fn get_upcoming_workouts(
         &self,
         days_ahead: Option<u32>,
@@ -287,6 +317,47 @@ pub trait IntervalsClient: Send + Sync + 'static {
         settings: &serde_json::Value,
     ) -> Result<serde_json::Value>;
     async fn delete_sport_settings(&self, sport_type: &str) -> Result<()>;
+    async fn get_weather_config(&self) -> Result<serde_json::Value> {
+        Err(IntervalsError::Config(ConfigError::Other(
+            "get_weather_config is not implemented for this client".to_string(),
+        )))
+    }
+    async fn update_weather_config(
+        &self,
+        _config: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        Err(IntervalsError::Config(ConfigError::Other(
+            "update_weather_config is not implemented for this client".to_string(),
+        )))
+    }
+    async fn list_routes(&self) -> Result<serde_json::Value> {
+        Err(IntervalsError::Config(ConfigError::Other(
+            "list_routes is not implemented for this client".to_string(),
+        )))
+    }
+    async fn get_route(&self, _route_id: i64, _include_path: bool) -> Result<serde_json::Value> {
+        Err(IntervalsError::Config(ConfigError::Other(
+            "get_route is not implemented for this client".to_string(),
+        )))
+    }
+    async fn update_route(
+        &self,
+        _route_id: i64,
+        _route: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        Err(IntervalsError::Config(ConfigError::Other(
+            "update_route is not implemented for this client".to_string(),
+        )))
+    }
+    async fn get_route_similarity(
+        &self,
+        _route_id: i64,
+        _other_id: i64,
+    ) -> Result<serde_json::Value> {
+        Err(IntervalsError::Config(ConfigError::Other(
+            "get_route_similarity is not implemented for this client".to_string(),
+        )))
+    }
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, JsonSchema)]

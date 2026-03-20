@@ -11,8 +11,7 @@ use serde_json::Value;
 
 /// Default fields for gear items in compact responses.
 ///
-/// This constant is used by both the compaction functions and can be
-/// referenced by implementations of the `Compact` trait for gear-related types.
+/// This constant is used by the shared compaction helpers for gear-related payloads.
 pub const DEFAULT_FIELDS: &[&str] = &["id", "name", "type", "distance", "brand", "model"];
 
 /// Compact gear list to essential fields.

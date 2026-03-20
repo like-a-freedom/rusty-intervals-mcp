@@ -55,13 +55,14 @@ mod test_helpers {
             Ok(vec![intervals_icu_client::ActivitySummary {
                 id: "a1".into(),
                 name: Some("A1".into()),
+                start_date_local: "2026-03-04".into(),
             }])
         }
         async fn create_event(
             &self,
-            _event: intervals_icu_client::Event,
+            event: intervals_icu_client::Event,
         ) -> Result<intervals_icu_client::Event, intervals_icu_client::IntervalsError> {
-            unimplemented!()
+            Ok(event)
         }
         async fn get_event(
             &self,
@@ -565,6 +566,17 @@ mod tests {
     use super::*;
     use crate::test_helpers::MockClient;
 
+    fn mock_event(event_id: Option<&str>) -> intervals_icu_client::Event {
+        intervals_icu_client::Event {
+            id: event_id.map(str::to_owned),
+            start_date_local: "2026-03-04".to_string(),
+            name: "Mock event".to_string(),
+            category: intervals_icu_client::EventCategory::Workout,
+            description: None,
+            r#type: None,
+        }
+    }
+
     fn test_prometheus_handle() -> metrics_exporter_prometheus::PrometheusHandle {
         use once_cell::sync::OnceCell;
         static HANDLE: OnceCell<metrics_exporter_prometheus::PrometheusHandle> = OnceCell::new();
@@ -617,7 +629,10 @@ mod tests {
                 &self,
             ) -> Result<intervals_icu_client::AthleteProfile, intervals_icu_client::IntervalsError>
             {
-                unimplemented!()
+                Ok(intervals_icu_client::AthleteProfile {
+                    id: "me".into(),
+                    name: Some("Test".into()),
+                })
             }
             async fn get_recent_activities(
                 &self,
@@ -630,21 +645,22 @@ mod tests {
                 Ok(vec![intervals_icu_client::ActivitySummary {
                     id: "a1".into(),
                     name: Some("Run".into()),
+                    start_date_local: "2026-03-04".into(),
                 }])
             }
             async fn create_event(
                 &self,
-                _event: intervals_icu_client::Event,
+                event: intervals_icu_client::Event,
             ) -> Result<intervals_icu_client::Event, intervals_icu_client::IntervalsError>
             {
-                unimplemented!()
+                Ok(event)
             }
             async fn get_event(
                 &self,
-                _event_id: &str,
+                event_id: &str,
             ) -> Result<intervals_icu_client::Event, intervals_icu_client::IntervalsError>
             {
-                unimplemented!()
+                Ok(mock_event(Some(event_id)))
             }
             async fn delete_event(
                 &self,
@@ -1049,7 +1065,7 @@ mod tests {
         let client: Arc<dyn intervals_icu_client::IntervalsClient> = Arc::new(MockClient);
         let handler = IntervalsMcpHandler::new(client.clone());
         let handle = test_prometheus_handle();
-        let _state = Arc::new(AppState {
+        let state = Arc::new(AppState {
             client,
             metrics: handle.clone(),
             handler,
@@ -1064,10 +1080,10 @@ mod tests {
             r#type: None,
         };
 
-        // This will panic because MockClient has unimplemented!() for create_event
-        // We're just verifying the handler compiles and accepts the event structure
-        // Skip the actual call since mock doesn't implement it
-        let _event_for_test = event;
+        let response = create_event(State(state), Json(event.clone()))
+            .await
+            .unwrap();
+        assert_eq!(response.0, event);
     }
 
     #[tokio::test]
@@ -1161,6 +1177,21 @@ async fn main() -> Result<(), anyhow::Error> {
         .init();
 
     tracing::info!(%combined_filter, "intervals_icu_mcp:http: log filter");
+
+    let version = env!("CARGO_PKG_VERSION");
+    tracing::info!("intervals_icu_mcp v{}: HTTP server starting", version);
+    tracing::debug!(
+        "intervals_icu_mcp v{}: debug logging enabled for HTTP server",
+        version
+    );
+    tracing::trace!(
+        "intervals_icu_mcp v{}: trace logging initialized for HTTP server",
+        version
+    );
+    tracing::warn!(
+        "intervals_icu_mcp v{}: HTTP server starting (warnings may appear during operation)",
+        version
+    );
 
     let builder = PrometheusBuilder::new();
     let handle = builder.install_recorder()?;

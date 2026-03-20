@@ -3,24 +3,33 @@ use std::sync::Arc;
 
 use rmcp::ErrorData;
 use rmcp::model::{
-    AnnotateAble, CallToolRequestParams, CallToolResult, GetPromptRequestParams, GetPromptResult,
-    ListPromptsResult, ListResourcesResult, ListToolsResult, PaginatedRequestParams, Prompt,
-    PromptArgument, ReadResourceRequestParams, ReadResourceResult, ResourceContents,
+    AnnotateAble, CallToolRequestParams, CallToolResult, ListResourcesResult, ListToolsResult,
+    PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResult, ResourceContents,
+    ServerCapabilities, ServerInfo,
 };
 use rmcp::service::RequestContext;
 use rmcp::{RoleServer, ServerHandler};
 use tokio::sync::Mutex;
 
+use crate::intents::handlers::{
+    AnalyzeRaceHandler, AnalyzeTrainingHandler, AssessRecoveryHandler, ComparePeriodsHandler,
+    ManageGearHandler, ManageProfileHandler, ModifyTrainingHandler, PlanTrainingHandler,
+};
+use crate::intents::{
+    IdempotencyMiddleware, IntentRouter, intent_error_to_error_data,
+    intent_output_to_call_tool_result,
+};
 use intervals_icu_client::IntervalsClient;
 
 pub mod compact;
 pub mod domains;
 pub mod dynamic;
+pub mod engines;
 mod event_id;
+pub mod intents;
 pub mod prompts;
 mod services;
 mod state;
-mod transforms;
 pub mod types;
 
 pub use event_id::{EventId, FolderId};
@@ -31,26 +40,44 @@ pub use types::*;
 pub struct IntervalsMcpHandler {
     client: Arc<dyn IntervalsClient>,
     dynamic_runtime: dynamic::DynamicRuntime,
+    intent_router: Arc<IntentRouter>,
     webhooks: Arc<Mutex<HashMap<String, WebhookEvent>>>,
     webhook_secret: Arc<Mutex<Option<String>>>,
 }
 
 impl IntervalsMcpHandler {
     pub fn new(client: Arc<dyn IntervalsClient>) -> Self {
+        // Create idempotency middleware
+        let idempotency = Arc::new(IdempotencyMiddleware::new());
+
+        // Create all 8 intent handlers
+        let handlers = vec![
+            Box::new(PlanTrainingHandler::new()) as Box<dyn intents::IntentHandler>,
+            Box::new(AnalyzeTrainingHandler::new()) as Box<dyn intents::IntentHandler>,
+            Box::new(ModifyTrainingHandler::new()) as Box<dyn intents::IntentHandler>,
+            Box::new(ComparePeriodsHandler::new()) as Box<dyn intents::IntentHandler>,
+            Box::new(AssessRecoveryHandler::new()) as Box<dyn intents::IntentHandler>,
+            Box::new(ManageProfileHandler::new()) as Box<dyn intents::IntentHandler>,
+            Box::new(ManageGearHandler::new()) as Box<dyn intents::IntentHandler>,
+            Box::new(AnalyzeRaceHandler::new()) as Box<dyn intents::IntentHandler>,
+        ];
+
+        // Create intent router
+        let intent_router = Arc::new(IntentRouter::new(handlers, client.clone(), idempotency));
+
         Self {
-            client,
+            client: client.clone(),
             dynamic_runtime: dynamic::DynamicRuntime::from_env(),
+            intent_router,
             webhooks: Arc::new(Mutex::new(HashMap::new())),
             webhook_secret: Arc::new(Mutex::new(None)),
         }
     }
 
     pub fn tool_count(&self) -> usize {
-        self.dynamic_runtime.cached_tool_count()
-    }
-
-    pub fn prompt_count(&self) -> usize {
-        7
+        // Return only intent tool count (8 high-level business intents)
+        // Dynamic OpenAPI tools are internal-only and NOT exposed to LLM host
+        self.intent_router.tool_definitions().len()
     }
 
     pub async fn preload_dynamic_registry(&self) -> usize {
@@ -72,202 +99,6 @@ impl IntervalsMcpHandler {
         services::WebhookService::new(self.webhooks.clone(), self.webhook_secret.clone())
     }
 
-    fn available_prompts() -> Vec<Prompt> {
-        vec![
-            Prompt::new(
-                "analyze-recent-training",
-                Some("Analyze recent training activities, load trends, and provide insights"),
-                Some(vec![PromptArgument {
-                    name: "days_back".to_string(),
-                    title: Some("Days Back".to_string()),
-                    description: Some("How many days to analyze".to_string()),
-                    required: Some(false),
-                }]),
-            ),
-            Prompt::new(
-                "performance-analysis",
-                Some("Analyze performance curves and training zones"),
-                Some(vec![
-                    PromptArgument {
-                        name: "days_back".to_string(),
-                        title: Some("Days Back".to_string()),
-                        description: Some("How many days to analyze".to_string()),
-                        required: Some(false),
-                    },
-                    PromptArgument {
-                        name: "metric".to_string(),
-                        title: Some("Metric".to_string()),
-                        description: Some("Metric: power/hr/pace".to_string()),
-                        required: Some(false),
-                    },
-                ]),
-            ),
-            Prompt::new(
-                "activity-deep-dive",
-                Some("Detailed analysis of a specific activity"),
-                Some(vec![PromptArgument {
-                    name: "activity_id".to_string(),
-                    title: Some("Activity ID".to_string()),
-                    description: Some("Intervals.icu activity id".to_string()),
-                    required: Some(true),
-                }]),
-            ),
-            Prompt::new(
-                "recovery-check",
-                Some("Assess recovery status and readiness to train"),
-                Some(vec![PromptArgument {
-                    name: "days_back".to_string(),
-                    title: Some("Days Back".to_string()),
-                    description: Some("How many days to analyze".to_string()),
-                    required: Some(false),
-                }]),
-            ),
-            Prompt::new(
-                "training-plan-review",
-                Some("Review planned workouts for the upcoming period"),
-                Some(vec![PromptArgument {
-                    name: "start_date".to_string(),
-                    title: Some("Start Date".to_string()),
-                    description: Some("ISO date YYYY-MM-DD".to_string()),
-                    required: Some(false),
-                }]),
-            ),
-            Prompt::new(
-                "plan-training-week",
-                Some("Create a training plan for the upcoming week"),
-                Some(vec![
-                    PromptArgument {
-                        name: "start_date".to_string(),
-                        title: Some("Start Date".to_string()),
-                        description: Some("ISO date YYYY-MM-DD".to_string()),
-                        required: Some(false),
-                    },
-                    PromptArgument {
-                        name: "focus".to_string(),
-                        title: Some("Focus".to_string()),
-                        description: Some("Training focus".to_string()),
-                        required: Some(false),
-                    },
-                ]),
-            ),
-            Prompt::new(
-                "analyze-and-adapt-plan",
-                Some("Analyze recent training and adapt current plan based on actual load"),
-                Some(vec![
-                    PromptArgument {
-                        name: "period".to_string(),
-                        title: Some("Period Label".to_string()),
-                        description: Some("Human-friendly period label".to_string()),
-                        required: Some(false),
-                    },
-                    PromptArgument {
-                        name: "days_back".to_string(),
-                        title: Some("Days Back".to_string()),
-                        description: Some("How many days to analyze".to_string()),
-                        required: Some(false),
-                    },
-                    PromptArgument {
-                        name: "focus".to_string(),
-                        title: Some("Focus".to_string()),
-                        description: Some("Adaptation focus".to_string()),
-                        required: Some(false),
-                    },
-                ]),
-            ),
-        ]
-    }
-
-    fn prompt_from_request(request: &GetPromptRequestParams) -> Result<GetPromptResult, ErrorData> {
-        let args = request.arguments.clone().unwrap_or_default();
-        let result = match request.name.as_str() {
-            "analyze-recent-training" => {
-                let days_back = args
-                    .get("days_back")
-                    .and_then(serde_json::Value::as_i64)
-                    .map(|v| v.max(0) as u32)
-                    .unwrap_or(30);
-                prompts::analyze_recent_training_prompt(days_back)
-            }
-            "performance-analysis" => {
-                let days_back = args
-                    .get("days_back")
-                    .and_then(serde_json::Value::as_i64)
-                    .map(|v| v.max(0) as u32)
-                    .unwrap_or(90);
-                let metric = args
-                    .get("metric")
-                    .and_then(serde_json::Value::as_str)
-                    .or_else(|| args.get("sport_type").and_then(serde_json::Value::as_str))
-                    .unwrap_or("power");
-                prompts::performance_analysis_prompt(metric, days_back)
-            }
-            "activity-deep-dive" => {
-                let activity_id = args
-                    .get("activity_id")
-                    .and_then(serde_json::Value::as_str)
-                    .ok_or_else(|| {
-                        ErrorData::invalid_params("missing required argument: activity_id", None)
-                    })?;
-                prompts::activity_deep_dive_prompt(activity_id)
-            }
-            "recovery-check" => {
-                let days_back = args
-                    .get("days_back")
-                    .and_then(serde_json::Value::as_i64)
-                    .map(|v| v.max(0) as u32)
-                    .unwrap_or(7);
-                prompts::recovery_check_prompt(days_back)
-            }
-            "training-plan-review" => {
-                let start_date = args
-                    .get("start_date")
-                    .and_then(serde_json::Value::as_str)
-                    .map(ToOwned::to_owned)
-                    .unwrap_or_else(|| chrono::Local::now().format("%Y-%m-%d").to_string());
-                prompts::training_plan_review_prompt(&start_date)
-            }
-            "plan-training-week" => {
-                let start_date = args
-                    .get("start_date")
-                    .and_then(serde_json::Value::as_str)
-                    .map(ToOwned::to_owned)
-                    .unwrap_or_else(|| chrono::Local::now().format("%Y-%m-%d").to_string());
-                let focus = args
-                    .get("focus")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("general fitness")
-                    .to_string();
-                prompts::plan_training_week_prompt(&start_date, &focus)
-            }
-            "analyze-and-adapt-plan" => {
-                let days_back = args
-                    .get("days_back")
-                    .and_then(serde_json::Value::as_i64)
-                    .map(|v| v.max(0) as i32)
-                    .unwrap_or(30);
-                let period = args
-                    .get("period")
-                    .and_then(serde_json::Value::as_str)
-                    .map(ToOwned::to_owned)
-                    .unwrap_or_else(|| format!("the last {} days", days_back));
-                let focus = args
-                    .get("focus")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("balanced progression")
-                    .to_string();
-                prompts::analyze_and_adapt_plan_prompt(&period, &focus)
-            }
-            _ => {
-                return Err(ErrorData::invalid_params(
-                    format!("unknown prompt: {}", request.name),
-                    None,
-                ));
-            }
-        };
-
-        Ok(result)
-    }
-
     pub async fn process_webhook(
         &self,
         signature: &str,
@@ -284,19 +115,18 @@ impl IntervalsMcpHandler {
 }
 
 impl ServerHandler for IntervalsMcpHandler {
-    fn get_info(&self) -> rmcp::model::ServerInfo {
-        rmcp::model::ServerInfo {
-            instructions: Some(
-                "Intervals.icu MCP server with dynamic OpenAPI tool generation and compact-aware responses."
-                    .into(),
-            ),
-            capabilities: rmcp::model::ServerCapabilities::builder()
+    fn get_info(&self) -> ServerInfo {
+        ServerInfo::new(
+            ServerCapabilities::builder()
                 .enable_tools()
-                .enable_prompts()
                 .enable_resources()
                 .build(),
-            ..Default::default()
-        }
+        )
+        .with_instructions(
+            "Intervals.icu MCP server with intent-driven architecture. \
+                 Provides 8 high-level intents for training planning, analysis, and management. \
+                 Dynamic OpenAPI tools are available for advanced usage.",
+        )
     }
 
     async fn list_tools(
@@ -304,17 +134,40 @@ impl ServerHandler for IntervalsMcpHandler {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        let registry_result: Result<Arc<dynamic::DynamicRegistry>, ErrorData> =
-            self.dynamic_runtime.ensure_registry().await;
-        let dynamic_tools = match registry_result {
-            Ok(r) => r.list_tools(),
-            Err(err) => {
-                tracing::warn!("dynamic OpenAPI registry unavailable: {}", err.message);
-                Vec::new()
+        // Return only intent tools (8 high-level business intents)
+        // Dynamic OpenAPI tools are internal-only and NOT exposed to LLM host
+        let intent_tools = self.intent_router.tool_definitions();
+        let mut all_tools = Vec::with_capacity(intent_tools.len());
+
+        for tool_def in intent_tools {
+            let input_schema_arc = std::sync::Arc::new(
+                tool_def
+                    .input_schema
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_default(),
+            );
+            let output_schema_arc = tool_def
+                .output_schema
+                .as_ref()
+                .map(|schema| std::sync::Arc::new(schema.as_object().cloned().unwrap_or_default()));
+
+            let mut tool = rmcp::model::Tool::new(
+                tool_def.name.clone(),
+                tool_def.description.clone(),
+                input_schema_arc,
+            )
+            .with_title(tool_def.name.clone());
+
+            if let Some(output_schema) = output_schema_arc {
+                tool = tool.with_raw_output_schema(output_schema);
             }
-        };
+
+            all_tools.push(tool);
+        }
+
         Ok(ListToolsResult {
-            tools: dynamic_tools,
+            tools: all_tools,
             next_cursor: None,
             meta: None,
         })
@@ -325,45 +178,23 @@ impl ServerHandler for IntervalsMcpHandler {
         request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
-        let registry: Arc<dynamic::DynamicRegistry> =
-            self.dynamic_runtime.ensure_registry().await?;
-        let op = registry.operation(request.name.as_ref()).ok_or_else(|| {
-            ErrorData::invalid_params(
-                format!(
-                    "unknown tool '{}': not found in dynamic OpenAPI registry",
-                    request.name
-                ),
-                None,
-            )
-        })?;
+        // Route to intent handler by name
+        let intent_name = request.name.as_ref();
+        let args = request.arguments.unwrap_or_default();
 
-        self.dynamic_runtime
-            .dispatch_openapi(op, request.arguments.as_ref())
+        match self
+            .intent_router
+            .route(intent_name, serde_json::Value::Object(args))
             .await
+        {
+            Ok(output) => intent_output_to_call_tool_result(&output)
+                .map_err(|e| ErrorData::internal_error(e.to_string(), None)),
+            Err(e) => Err(intent_error_to_error_data(&e)),
+        }
     }
 
     fn get_tool(&self, _name: &str) -> Option<rmcp::model::Tool> {
         None
-    }
-
-    async fn list_prompts(
-        &self,
-        _request: Option<PaginatedRequestParams>,
-        _context: RequestContext<RoleServer>,
-    ) -> Result<ListPromptsResult, ErrorData> {
-        Ok(ListPromptsResult {
-            prompts: Self::available_prompts(),
-            next_cursor: None,
-            meta: None,
-        })
-    }
-
-    async fn get_prompt(
-        &self,
-        request: GetPromptRequestParams,
-        _context: RequestContext<RoleServer>,
-    ) -> Result<GetPromptResult, ErrorData> {
-        Self::prompt_from_request(&request)
     }
 
     async fn list_resources(
@@ -390,14 +221,10 @@ impl ServerHandler for IntervalsMcpHandler {
                 .await
                 .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
 
-            Ok(ReadResourceResult {
-                contents: vec![ResourceContents::TextResourceContents {
-                    uri: request.uri.clone(),
-                    mime_type: Some("application/json".to_string()),
-                    text,
-                    meta: None,
-                }],
-            })
+            Ok(ReadResourceResult::new(vec![
+                ResourceContents::text(request.uri.clone(), text)
+                    .with_mime_type("application/json"),
+            ]))
         } else {
             Err(ErrorData::invalid_params(
                 format!("unknown resource URI: {}", request.uri),
@@ -410,7 +237,18 @@ impl ServerHandler for IntervalsMcpHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use intervals_icu_client::{AthleteProfile, IntervalsError};
+    use intervals_icu_client::{AthleteProfile, Event, EventCategory, IntervalsError};
+
+    fn mock_event(event_id: Option<&str>) -> Event {
+        Event {
+            id: event_id.map(str::to_owned),
+            start_date_local: "2026-03-04".to_string(),
+            name: "Mock event".to_string(),
+            category: EventCategory::Workout,
+            description: None,
+            r#type: None,
+        }
+    }
 
     struct MockClient;
 
@@ -431,23 +269,24 @@ mod tests {
             Ok(vec![intervals_icu_client::ActivitySummary {
                 id: "a1".to_string(),
                 name: Some("Run".to_string()),
+                start_date_local: "2026-03-04".to_string(),
             }])
         }
 
         async fn create_event(
             &self,
-            _event: intervals_icu_client::Event,
+            event: intervals_icu_client::Event,
         ) -> Result<intervals_icu_client::Event, IntervalsError> {
-            unimplemented!()
+            Ok(event)
         }
         async fn get_event(
             &self,
-            _event_id: &str,
+            event_id: &str,
         ) -> Result<intervals_icu_client::Event, IntervalsError> {
-            unimplemented!()
+            Ok(mock_event(Some(event_id)))
         }
         async fn delete_event(&self, _event_id: &str) -> Result<(), IntervalsError> {
-            unimplemented!()
+            Ok(())
         }
         async fn get_events(
             &self,
@@ -746,22 +585,80 @@ mod tests {
         async fn delete_sport_settings(&self, _sport_type: &str) -> Result<(), IntervalsError> {
             Ok(())
         }
+
+        async fn update_wellness_bulk(
+            &self,
+            _entries: &[serde_json::Value],
+        ) -> Result<(), IntervalsError> {
+            Ok(())
+        }
+
+        async fn get_weather_config(&self) -> Result<serde_json::Value, IntervalsError> {
+            Ok(serde_json::json!({}))
+        }
+
+        async fn update_weather_config(
+            &self,
+            _config: &serde_json::Value,
+        ) -> Result<serde_json::Value, IntervalsError> {
+            Ok(serde_json::json!({}))
+        }
+
+        async fn list_routes(&self) -> Result<serde_json::Value, IntervalsError> {
+            Ok(serde_json::json!([]))
+        }
+
+        async fn get_route(
+            &self,
+            _route_id: i64,
+            _include_path: bool,
+        ) -> Result<serde_json::Value, IntervalsError> {
+            Ok(serde_json::json!({}))
+        }
+
+        async fn update_route(
+            &self,
+            _route_id: i64,
+            _route: &serde_json::Value,
+        ) -> Result<serde_json::Value, IntervalsError> {
+            Ok(serde_json::json!({}))
+        }
+
+        async fn get_route_similarity(
+            &self,
+            _route_id: i64,
+            _other_id: i64,
+        ) -> Result<serde_json::Value, IntervalsError> {
+            Ok(serde_json::json!({}))
+        }
     }
 
     #[tokio::test]
-    async fn handler_registers_tools_and_prompts() {
+    async fn handler_registers_tools() {
         let handler = IntervalsMcpHandler::new(Arc::new(MockClient));
-        // tool_count() returns 0 initially because dynamic registry is not loaded yet
-        // tools are generated from OpenAPI spec on first ensure_registry() call
-        assert_eq!(handler.tool_count(), 0);
-        assert_eq!(handler.prompt_count(), 7);
+        assert_eq!(handler.tool_count(), 8);
+    }
+
+    #[test]
+    fn handler_info_advertises_tools_and_resources_capabilities() {
+        let handler = IntervalsMcpHandler::new(Arc::new(MockClient));
+        let info = handler.get_info();
+
+        assert!(
+            info.capabilities.tools.is_some(),
+            "server must advertise tool capability during initialize"
+        );
+        assert!(
+            info.capabilities.resources.is_some(),
+            "server must advertise resource capability during initialize"
+        );
     }
 
     #[test]
     fn tool_count_matches_internal_tools_without_cache() {
         let handler = IntervalsMcpHandler::new(Arc::new(MockClient));
-        // tool_count() reflects cached dynamic registry; returns 0 before first load
-        assert_eq!(handler.tool_count(), 0);
+        // tool_count() includes 8 intent tools even before dynamic registry load
+        assert_eq!(handler.tool_count(), 8);
     }
 
     #[tokio::test]

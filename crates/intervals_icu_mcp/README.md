@@ -7,6 +7,7 @@ Current status:
 	- Athlete/profile: `get_athlete_profile`
 	- Activities: `get_recent_activities`, `get_activity_details`, `search_activities`, `update_activity`
 	- Events: `get_events`, `create_event`, `get_event`, `delete_event`, `bulk_create_events`
+	- Coach analysis: period analysis now carries calendar events alongside activity data so race, sick, injured, note, and planned workout items can be retrieved without collapsing them into training load metrics
 	- Streams & intervals: `get_activity_streams`, `get_activity_intervals`, `get_best_efforts`
 	- Files: `start_download`, `get_download_status`, `list_downloads`, `cancel_download` (progress & cancellation supported)
 	- Webhooks: `receive_webhook` (HMAC verification + dedupe) and a programmatic `process_webhook`
@@ -21,13 +22,13 @@ export INTERVALS_ICU_ATHLETE_ID=...
 cargo run -p intervals_icu_mcp --bin server
 ```
 
-Or install the binary locally using `cargo install --path` and run it directly:
+Or install the binary locally using `cargo install --locked --path` and run it directly:
 
 ```sh
 # From inside the crate directory
-cargo install --path .
+cargo install --locked --path .
 # Or from the repository root
-cargo install --path crates/intervals_icu_mcp
+cargo install --locked --path crates/intervals_icu_mcp
 
 # The binary will be installed to $CARGO_HOME/bin (usually ~/.cargo/bin)
 # Run the installed server:
