@@ -1,7 +1,7 @@
 use serde_json::{Map, Value};
 
 // Re-export date normalization utilities from transforms
-pub use crate::transforms::{normalize_date_str, normalize_event_start};
+pub use crate::intents::utils::{normalize_date_str, normalize_event_start};
 
 /// Default fields for compact event listings
 const DEFAULT_COMPACT_FIELDS: &[&str] = &["id", "start_date_local", "name", "category", "type"];

@@ -14,7 +14,9 @@ mod athlete;
 mod event;
 mod fitness;
 mod gear;
+mod route;
 mod sport_settings;
+mod weather;
 mod wellness;
 mod workout;
 
@@ -23,7 +25,9 @@ pub use athlete::AthleteService;
 pub use event::EventService;
 pub use fitness::FitnessService;
 pub use gear::GearService;
+pub use route::RouteService;
 pub use sport_settings::SportSettingsService;
+pub use weather::WeatherService;
 pub use wellness::WellnessService;
 pub use workout::WorkoutService;
 

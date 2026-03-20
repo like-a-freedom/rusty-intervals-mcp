@@ -18,14 +18,34 @@ All notable changes to this project will be documented in this file.
 ## [1.0.0] - 2026-02-23
 - Bump crate versions to 1.0.0 for initial stable release.
 
+## [2.0.0] - 2026-03-07
+
+### Changed
+- Bump crate versions to 2.0.0 for both `intervals_icu_client` and `intervals_icu_mcp`.
+- Major version bump reflects completed dynamic OpenAPI runtime alignment, athleteId auto-injection fix, and extensive test hardening.
+
 ## [Unreleased]
 
 ### Added
+- `intervals_icu_client`: add spec-aligned weather config and athlete route client methods, plus `update_wellness_bulk` for the current wellness bulk endpoint.
+- `intervals_icu_client`: add an ignored live OpenAPI smoke test in `src/http_client.rs` that validates critical client contracts against `https://intervals.icu/api/v1/docs`.
+- `intervals_icu_mcp`: add dynamic registry regression coverage for current-spec athlete path placeholders, including `/api/v1/athlete/{athleteId}/sport-settings/{id}/apply`.
+- `intervals_icu_mcp`: add deterministic runtime coverage for explicit OpenAPI source failures and successful loading/building from the checked-in fallback spec.
+
+### Changed
+- Move new unit-level contract regression coverage inline into `crates/intervals_icu_client/src/http_client.rs` and remove standalone test files for those checks.
+- Document the strict workspace validation gate as `cargo fmt --all -- --check`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo test --all-targets --all-features`.
+- `intervals_icu_mcp`: treat `athleteId` as an auto-injected athlete path parameter in the dynamic OpenAPI runtime, but stop auto-injecting nested resource ids such as `/sport-settings/{id}`.
+- `intervals_icu_mcp`: replace several production-adjacent test mocks that previously panicked via `unimplemented!()` with deterministic event stubs so MCP/client alignment regressions fail informatively.
+- `intervals_icu_mcp`: intent tools now return schema-only MCP results (`structuredContent` + empty `content`) instead of duplicating the same payload as markdown text, improving token efficiency and matching the declared output contract.
+
+## [1.1.2] - 2026-03-02
+
+### Added
 - Prepare for next release.
-- Bump crate versions to 1.1.0 for both `intervals_icu_client` and `intervals_icu_mcp`.
+- Bump crate versions to 1.1.2 for both `intervals_icu_client` and `intervals_icu_mcp`.
 - Dynamic OpenAPI MCP runtime in `intervals_icu_mcp`: tools are generated from OpenAPI, dispatched through a generic HTTP path, and merged with compatibility aliases and internal webhook/download tools.
 - Preserved MCP prompts/resources and compact-aware response filtering in the new dynamic dispatch flow.
-- OpenAPI tag-scoping controls via `INTERVALS_INCLUDE_TAGS` and `INTERVALS_EXCLUDE_TAGS` (default scope: all tags).
 - Dynamic runtime tests for tag filtering and cache fallback on failed OpenAPI refresh.
 
 ### Changed

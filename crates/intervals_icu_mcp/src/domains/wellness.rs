@@ -11,8 +11,7 @@ use serde_json::Value;
 
 /// Default fields for wellness entries in compact responses.
 ///
-/// This constant is used by both the compaction functions and can be
-/// referenced by implementations of the `Compact` trait for wellness types.
+/// This constant is used by the shared compaction helpers for wellness payloads.
 pub const DEFAULT_FIELDS: &[&str] = &[
     "id",
     "sleepSecs",
@@ -30,7 +29,7 @@ pub const DEFAULT_FIELDS: &[&str] = &[
 /// This follows the **Information Expert** principle by keeping
 /// date normalization logic in the domain module.
 pub fn normalize_date(date_str: &str) -> Option<String> {
-    crate::transforms::normalize_date_str(date_str)
+    crate::intents::utils::normalize_date_str(date_str)
 }
 
 pub fn transform_wellness(value: &Value, summary_only: bool, fields: Option<&[String]>) -> Value {

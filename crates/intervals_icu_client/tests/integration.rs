@@ -49,8 +49,8 @@ async fn get_athlete_profile_passes_basic_auth_and_parses() {
 async fn get_recent_activities_parses_list() {
     let server = MockServer::start().await;
     let body = serde_json::json!([
-        {"id":"a1","name":"Ride 1"},
-        {"id":"a2","name":"Run"}
+        {"id":"a1","name":"Ride 1","start_date_local":"2024-01-15T10:00:00"},
+        {"id":"a2","name":"Run","start_date_local":"2024-01-16T09:00:00"}
     ]);
     Mock::given(method("GET"))
         .and(path("/api/v1/athlete/ath/activities"))
@@ -103,6 +103,57 @@ async fn streams_and_intervals_endpoints_return_json() {
         .await
         .expect("intervals");
     assert!(intervals.get("intervals").is_some());
+}
+
+#[tokio::test]
+async fn get_activity_messages_reads_activity_comments() {
+    let server = MockServer::start().await;
+    let body = serde_json::json!([
+        {
+            "id": 101,
+            "athlete_id": "ath",
+            "name": "Alice",
+            "created": "2026-03-08T09:15:00Z",
+            "type": "TEXT",
+            "content": "Felt controlled until the final climb.",
+            "activity_id": "act-comments-1"
+        },
+        {
+            "id": 102,
+            "athlete_id": "coach-1",
+            "name": "Coach Bob",
+            "created": "2026-03-08T10:00:00Z",
+            "type": "TEXT",
+            "content": "Nice restraint early on.",
+            "activity_id": "act-comments-1"
+        }
+    ]);
+
+    Mock::given(method("GET"))
+        .and(path("/api/v1/activity/act-comments-1/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&body))
+        .mount(&server)
+        .await;
+
+    let client = intervals_icu_client::http_client::ReqwestIntervalsClient::new(
+        &server.uri(),
+        "ath",
+        SecretString::new("tok".into()),
+    );
+
+    let messages = client
+        .get_activity_messages("act-comments-1")
+        .await
+        .expect("activity messages");
+
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0].id, 101);
+    assert_eq!(messages[0].name.as_deref(), Some("Alice"));
+    assert_eq!(messages[0].message_type.as_deref(), Some("TEXT"));
+    assert_eq!(
+        messages[0].content.as_deref(),
+        Some("Felt controlled until the final climb.")
+    );
 }
 
 #[tokio::test]
@@ -528,11 +579,12 @@ async fn base_url_trailing_slash_is_handled() {
 async fn get_activities_around_includes_route_and_limit_query() {
     let server = MockServer::start().await;
 
-    let payload = serde_json::json!({ "items": [] });
+    let payload = serde_json::json!([]);
     Mock::given(method("GET"))
-        .and(path("/api/v1/activity/a1/around"))
-        // Don't assert exact query string here (wiremock currently matches only when requested),
-        // returning 200 is enough to exercise the client code path that adds the params.
+        .and(path("/api/v1/athlete/ath/activities-around"))
+        .and(query_param("activity_id", "a1"))
+        .and(query_param("limit", "5"))
+        .and(query_param("route_id", "42"))
         .respond_with(ResponseTemplate::new(200).set_body_json(&payload))
         .mount(&server)
         .await;
@@ -547,7 +599,7 @@ async fn get_activities_around_includes_route_and_limit_query() {
         .get_activities_around("a1", Some(5), Some(42))
         .await
         .expect("ok");
-    assert!(res.get("items").is_some());
+    assert!(res.is_array());
 }
 
 #[tokio::test]
@@ -873,7 +925,7 @@ async fn power_curves_and_histogram_ok() {
 async fn search_activities_uses_search_endpoints() {
     let server = MockServer::start().await;
 
-    let list_body = serde_json::json!([{ "id": "a1", "name": "Ride" }]);
+    let list_body = serde_json::json!([{ "id": "a1", "name": "Ride", "start_date_local": "2024-01-15T10:00:00" }]);
     Mock::given(method("GET"))
         .and(path("/api/v1/athlete/ath/activities/search"))
         .and(query_param("q", "run"))
@@ -881,7 +933,8 @@ async fn search_activities_uses_search_endpoints() {
         .mount(&server)
         .await;
 
-    let full_body = serde_json::json!({ "items": [ {"id": "a2"} ] });
+    let full_body =
+        serde_json::json!({ "items": [ {"id": "a2", "start_date_local": "2024-01-16T09:00:00"} ] });
     Mock::given(method("GET"))
         .and(path("/api/v1/athlete/ath/activities/search-full"))
         .and(query_param("q", "ride"))
@@ -1140,8 +1193,16 @@ async fn gear_reminder_update_sends_required_query() {
 #[tokio::test]
 async fn sport_settings_update_includes_recalc_flag() {
     let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/athlete/ath/sport-settings"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            {"id": 1783043, "types": ["Run", "VirtualRun", "TrailRun"]}
+        ])))
+        .mount(&server)
+        .await;
+
     Mock::given(method("PUT"))
-        .and(path("/api/v1/athlete/ath/sport-settings/Run"))
+        .and(path("/api/v1/athlete/ath/sport-settings/1783043"))
         .and(wiremock::matchers::body_json(
             serde_json::json!({"ftp": 250, "recalc_hr_zones": true}),
         ))
@@ -1149,8 +1210,8 @@ async fn sport_settings_update_includes_recalc_flag() {
         .mount(&server)
         .await;
 
-    Mock::given(method("POST"))
-        .and(path("/api/v1/athlete/ath/sport-settings/Run/apply"))
+    Mock::given(method("PUT"))
+        .and(path("/api/v1/athlete/ath/sport-settings/1783043/apply"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true})))
         .mount(&server)
         .await;
@@ -1177,8 +1238,16 @@ async fn sport_settings_update_includes_recalc_flag() {
 #[tokio::test]
 async fn delete_sport_settings_handles_non_success() {
     let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/athlete/ath/sport-settings"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            {"id": 1783043, "types": ["Run", "VirtualRun", "TrailRun"]}
+        ])))
+        .mount(&server)
+        .await;
+
     Mock::given(method("DELETE"))
-        .and(path("/api/v1/athlete/ath/sport-settings/Run"))
+        .and(path("/api/v1/athlete/ath/sport-settings/1783043"))
         .respond_with(ResponseTemplate::new(500))
         .mount(&server)
         .await;
@@ -1422,9 +1491,13 @@ async fn download_activity_file_small_body_returns_base64() {
 #[tokio::test]
 async fn get_upcoming_workouts_includes_oldest_and_newest() {
     let server = MockServer::start().await;
-    let payload = serde_json::json!({ "items": [] });
+    let today = chrono::Utc::now().date_naive();
+    let newest = today + chrono::Duration::days(3);
+    let payload = serde_json::json!([]);
     Mock::given(method("GET"))
-        .and(path("/api/v1/athlete/ath/events/upcoming"))
+        .and(path("/api/v1/athlete/ath/events"))
+        .and(query_param("oldest", today.to_string()))
+        .and(query_param("newest", newest.to_string()))
         .and(query_param("limit", "100"))
         .and(query_param("category", "WORKOUT"))
         .respond_with(ResponseTemplate::new(200).set_body_json(&payload))
@@ -1441,7 +1514,7 @@ async fn get_upcoming_workouts_includes_oldest_and_newest() {
         .get_upcoming_workouts(Some(3), Some(100), Some("WORKOUT".to_string()))
         .await
         .expect("ok");
-    assert!(res.get("items").is_some());
+    assert!(res.is_array());
 }
 
 #[tokio::test]

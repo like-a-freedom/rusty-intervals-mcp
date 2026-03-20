@@ -241,22 +241,21 @@ async fn test_dynamic_runtime_tool_not_found() {
 async fn test_dynamic_runtime_tag_filtering() {
     let mock_server = setup_mock_api().await;
 
-    // Only include Athlete tag
+    // All tags included by default (no tag filtering)
     let config = DynamicRuntimeConfig::builder()
         .base_url(mock_server.uri())
         .athlete_id("test_athlete")
         .api_key("test_key")
         .spec_source(format!("{}/api/v1/docs", mock_server.uri()))
-        .include_tag("Athlete")
         .build();
 
     let runtime = DynamicRuntime::new(config);
     let registry = runtime.ensure_registry().await.unwrap();
 
-    // Should only have getAthleteProfile (tagged with "Athlete")
-    assert_eq!(registry.len(), 1);
+    // Should include all operations (no tag filtering)
+    assert!(registry.len() > 1);
     assert!(registry.operation("getAthleteProfile").is_some());
-    assert!(registry.operation("listActivities").is_none());
+    assert!(registry.operation("listActivities").is_some());
 }
 
 #[tokio::test]

@@ -1,6 +1,6 @@
 //! Activity service trait for activity-related operations.
 
-use crate::{ActivitySummary, BestEffortsOptions, Result};
+use crate::{ActivityMessage, ActivitySummary, BestEffortsOptions, Result};
 
 /// Service for activity-related operations.
 #[async_trait::async_trait]
@@ -15,6 +15,11 @@ pub trait ActivityService: Send + Sync + 'static {
 
     /// Get detailed information about a specific activity.
     async fn get_activity_details(&self, activity_id: &str) -> Result<serde_json::Value>;
+
+    /// Get read-only messages/comments for a specific activity.
+    async fn get_activity_messages(&self, _activity_id: &str) -> Result<Vec<ActivityMessage>> {
+        Ok(Vec::new())
+    }
 
     /// Get activity stream data (power, heart rate, etc.).
     async fn get_activity_streams(

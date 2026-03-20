@@ -102,7 +102,19 @@ async fn e2e_stdio_lists_tools_and_calls_profile() {
     // Give server a moment to initialize
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-    // List tools and ensure our tools are present
+    let peer_info = service
+        .peer_info()
+        .expect("client should capture initialize result from server");
+    assert!(
+        peer_info.capabilities.tools.is_some(),
+        "server initialize must advertise tool capability or MCP hosts may discover zero tools"
+    );
+    assert!(
+        peer_info.capabilities.resources.is_some(),
+        "server initialize must advertise resource capability"
+    );
+
+    // List tools and ensure intent tools are present (8 intents only)
     let tools = match tokio::time::timeout(
         std::time::Duration::from_secs(20),
         service.list_tools(Default::default()),
@@ -129,37 +141,96 @@ async fn e2e_stdio_lists_tools_and_calls_profile() {
             panic!("list tools timed out")
         }
     };
+    let expected_tool_names = [
+        "plan_training",
+        "analyze_training",
+        "modify_training",
+        "compare_periods",
+        "assess_recovery",
+        "manage_profile",
+        "manage_gear",
+        "analyze_race",
+    ];
+
+    for tool in &tools.tools {
+        assert!(
+            expected_tool_names.contains(&tool.name.as_ref()),
+            "unexpected MCP tool exposed: {}",
+            tool.name
+        );
+        assert!(
+            !tool.input_schema.is_empty(),
+            "{} should expose a non-empty input schema",
+            tool.name
+        );
+        assert_eq!(
+            tool.input_schema
+                .get("type")
+                .and_then(serde_json::Value::as_str),
+            Some("object"),
+            "{} input schema should be a JSON object schema",
+            tool.name
+        );
+        assert!(
+            tool.input_schema.contains_key("properties"),
+            "{} input schema should include properties",
+            tool.name
+        );
+
+        let output_schema = tool.output_schema.as_ref().unwrap_or_else(|| {
+            panic!(
+                "{} should expose an output schema to MCP clients",
+                tool.name
+            )
+        });
+        assert_eq!(
+            output_schema
+                .get("type")
+                .and_then(serde_json::Value::as_str),
+            Some("object"),
+            "{} output schema should be a JSON object schema",
+            tool.name
+        );
+
+        let output_properties = output_schema
+            .get("properties")
+            .and_then(serde_json::Value::as_object)
+            .unwrap_or_else(|| panic!("{} output schema should include properties", tool.name));
+        assert!(
+            output_properties.contains_key("content"),
+            "{} output schema should expose content blocks",
+            tool.name
+        );
+        assert!(
+            output_properties.contains_key("suggestions"),
+            "{} output schema should expose suggestions",
+            tool.name
+        );
+        assert!(
+            output_properties.contains_key("next_actions"),
+            "{} output schema should expose next_actions",
+            tool.name
+        );
+    }
+
     let names: Vec<_> = tools
         .tools
         .into_iter()
         .map(|t| t.name.to_string())
         .collect();
-    assert!(names.iter().any(|n| n == "getAthleteProfile"));
-    assert!(names.iter().any(|n| n == "listActivities"));
 
-    // Call dynamic OpenAPI tool for athlete profile
-    let res = tokio::time::timeout(
-        std::time::Duration::from_secs(20),
-        service.call_tool(rmcp::model::CallToolRequestParams {
-            name: "getAthleteProfile".into(),
-            arguments: None,
-            meta: None,
-            task: None,
-        }),
-    )
-    .await
-    .expect("call_tool timeout")
-    .expect("call_tool");
-    // Dynamic dispatcher returns body-only by default
-    let structured = res.structured_content;
-    assert!(structured.is_some());
-    let v = structured.unwrap();
-    assert_eq!(
-        v.get("athlete")
-            .and_then(|a| a.get("id"))
-            .and_then(|id| id.as_str()),
-        Some("ath123")
-    );
+    // Verify only 8 intent tools are exposed (no dynamic OpenAPI tools)
+    assert_eq!(names.len(), 8, "Should have exactly 8 intent tools");
+    for expected_name in expected_tool_names {
+        assert!(
+            names.iter().any(|name| name == expected_name),
+            "Missing {expected_name}"
+        );
+    }
+
+    // Note: Full intent execution testing requires mock API endpoints for all internal calls
+    // This test verifies the MCP layer correctly exposes only intent tools
+    // Integration tests in e2e_http.rs cover full intent execution with mocked APIs
 
     tokio::time::timeout(std::time::Duration::from_secs(10), service.cancel())
         .await

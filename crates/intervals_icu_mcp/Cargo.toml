@@ -1,16 +1,16 @@
 [package]
 name = "intervals_icu_mcp"
-version = "1.1.1"
+version = "2.0.0"
 edition = "2024"
 
 [dependencies]
-tokio = { version = "1.49.0", features = ["full"] }
+tokio = { version = "1.50.0", features = ["full"] }
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 secrecy = "0.10.3"
 schemars = "1.2.1"
-rmcp = { version = "0.17.0", features = [
+rmcp = { version = "1.1.0", features = [
     "server",
     "macros",
     "transport-streamable-http-server",
@@ -30,11 +30,12 @@ sha2 = "0.10.9"
 hex = "0.4.3"
 chrono = "0.4.44"
 async-trait = "0.1.89"
+thiserror = "2.0.18"
 
 [dev-dependencies]
-tokio = { version = "1.49.0", features = ["full"] }
+tokio = { version = "1.50.0", features = ["full"] }
 wiremock = "0.6.5"
-rmcp = { version = "0.17.0", features = [
+rmcp = { version = "1.1.0", features = [
     "client",
     "transport-io",
     "transport-child-process",

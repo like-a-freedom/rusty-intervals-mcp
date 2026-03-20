@@ -8,6 +8,7 @@
 //! # Modules
 //!
 //! - [`activity_analysis`]: Activity data transformations and analysis
+//! - [`coach`]: Shared deterministic coaching analytics contract
 //! - [`events`]: Event/calendar validation and compaction
 //! - [`fitness`]: Fitness metrics and CTL/ATL/TSB analysis
 //! - [`gear`]: Gear management and compaction
@@ -17,6 +18,7 @@
 //! - [`workouts`]: Workout library operations
 
 pub mod activity_analysis;
+pub mod coach;
 pub mod events;
 pub mod fitness;
 pub mod gear;

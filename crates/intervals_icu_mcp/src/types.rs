@@ -1,7 +1,6 @@
+use crate::{DownloadStatus, EventId, FolderId};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-
-use crate::{DownloadStatus, EventId, FolderId};
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct RecentParams {

@@ -451,6 +451,56 @@ mod tests {
         ) -> Result<(), intervals_icu_client::IntervalsError> {
             Ok(())
         }
+
+        async fn update_wellness_bulk(
+            &self,
+            _entries: &[serde_json::Value],
+        ) -> Result<(), intervals_icu_client::IntervalsError> {
+            Ok(())
+        }
+
+        async fn get_weather_config(
+            &self,
+        ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+            Ok(serde_json::json!({}))
+        }
+
+        async fn update_weather_config(
+            &self,
+            _config: &serde_json::Value,
+        ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+            Ok(serde_json::json!({}))
+        }
+
+        async fn list_routes(
+            &self,
+        ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+            Ok(serde_json::json!([]))
+        }
+
+        async fn get_route(
+            &self,
+            _route_id: i64,
+            _include_path: bool,
+        ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+            Ok(serde_json::json!({}))
+        }
+
+        async fn update_route(
+            &self,
+            _route_id: i64,
+            _route: &serde_json::Value,
+        ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+            Ok(serde_json::json!({}))
+        }
+
+        async fn get_route_similarity(
+            &self,
+            _route_id: i64,
+            _other_id: i64,
+        ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+            Ok(serde_json::json!({}))
+        }
     }
 
     #[tokio::test]
@@ -833,6 +883,56 @@ mod tests {
                 _sport: &str,
             ) -> Result<(), intervals_icu_client::IntervalsError> {
                 Ok(())
+            }
+
+            async fn update_wellness_bulk(
+                &self,
+                _entries: &[serde_json::Value],
+            ) -> Result<(), intervals_icu_client::IntervalsError> {
+                Ok(())
+            }
+
+            async fn get_weather_config(
+                &self,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(json!({}))
+            }
+
+            async fn update_weather_config(
+                &self,
+                _config: &serde_json::Value,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(json!({}))
+            }
+
+            async fn list_routes(
+                &self,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(json!([]))
+            }
+
+            async fn get_route(
+                &self,
+                _route_id: i64,
+                _include_path: bool,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(json!({}))
+            }
+
+            async fn update_route(
+                &self,
+                _route_id: i64,
+                _route: &serde_json::Value,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(json!({}))
+            }
+
+            async fn get_route_similarity(
+                &self,
+                _route_id: i64,
+                _other_id: i64,
+            ) -> Result<serde_json::Value, intervals_icu_client::IntervalsError> {
+                Ok(json!({}))
             }
         }
 
