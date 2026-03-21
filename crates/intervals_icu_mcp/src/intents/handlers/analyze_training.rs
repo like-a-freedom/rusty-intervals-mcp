@@ -24,7 +24,7 @@ use crate::engines::coach_metrics::{
 };
 use crate::intents::utils::{
     data_availability_block, filter_activities_by_date, filter_activities_by_range,
-    filter_events_by_range,
+    filter_events_by_range, parse_date,
 };
 use intervals_icu_client::EventCategory;
 
@@ -1140,15 +1140,15 @@ impl IntentHandler for AnalyzeTrainingHandler {
                 },
                 "date": {
                     "type": "string",
-                    "description": "Workout date (YYYY-MM-DD) for single analysis"
+                    "description": "Workout date (YYYY-MM-DD, 'today', 'tomorrow', or 'yesterday') for single analysis"
                 },
                 "period_start": {
                     "type": "string",
-                    "description": "Period start (YYYY-MM-DD) for period analysis and calendar-event context"
+                    "description": "Period start (YYYY-MM-DD, 'today', 'tomorrow', or 'yesterday') for period analysis and calendar-event context"
                 },
                 "period_end": {
                     "type": "string",
-                    "description": "Period end (YYYY-MM-DD) for period analysis and calendar-event context"
+                    "description": "Period end (YYYY-MM-DD, 'today', 'tomorrow', or 'yesterday') for period analysis and calendar-event context"
                 },
                 "description_contains": {
                     "type": "string",
@@ -1223,9 +1223,7 @@ impl AnalyzeTrainingHandler {
         let desc_filter = input.get("description_contains").and_then(Value::as_str);
 
         // Parse and validate date
-        NaiveDate::parse_from_str(date, "%Y-%m-%d").map_err(|_| {
-            IntentError::validation(format!("Invalid date format: {}. Use YYYY-MM-DD.", date))
-        })?;
+        let target_date = parse_date(date, "date")?;
 
         // Fetch recent activities
         let activities = client
@@ -1245,9 +1243,6 @@ impl AnalyzeTrainingHandler {
         }
 
         // Filter by date
-        let target_date = NaiveDate::parse_from_str(date, "%Y-%m-%d").map_err(|_| {
-            IntentError::validation(format!("Invalid date format: {}. Use YYYY-MM-DD.", date))
-        })?;
         let mut matching = filter_activities_by_date(&activities, &target_date);
 
         // Apply description filter if provided
@@ -1721,10 +1716,8 @@ impl AnalyzeTrainingHandler {
             ));
         }
 
-        let start_date = NaiveDate::parse_from_str(start, "%Y-%m-%d")
-            .map_err(|_| IntentError::validation(format!("Invalid start date: {}", start)))?;
-        let end_date = NaiveDate::parse_from_str(end, "%Y-%m-%d")
-            .map_err(|_| IntentError::validation(format!("Invalid end date: {}", end)))?;
+        let start_date = parse_date(start, "period_start")?;
+        let end_date = parse_date(end, "period_end")?;
 
         if start_date > end_date {
             return Err(IntentError::validation(

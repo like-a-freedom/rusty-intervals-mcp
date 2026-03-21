@@ -32,14 +32,18 @@ impl IntentRouter {
             client,
         }
     }
-pub async fn route(
-    &self,
-    name: &str,
-    input: Value,
-    athlete_id: Option<&str>,
-) -> Result<IntentOutput, IntentError> {
-    let start = std::time::Instant::now();
-    info!(tool = name, athlete_id = athlete_id.unwrap_or("unknown"), "Tool call started");
+    pub async fn route(
+        &self,
+        name: &str,
+        input: Value,
+        athlete_id: Option<&str>,
+    ) -> Result<IntentOutput, IntentError> {
+        let start = std::time::Instant::now();
+        info!(
+            tool = name,
+            athlete_id = athlete_id.unwrap_or("unknown"),
+            "Tool call started"
+        );
 
         debug!("Routing intent: {}", name);
         let handler = self
@@ -73,15 +77,16 @@ pub async fn route(
             handler.execute(input, self.client.clone(), None).await
         };
 
-    info!(
-        tool = name,
-        athlete_id = athlete_id.unwrap_or("unknown"),
-        duration_secs = start.elapsed().as_secs_f64(),
-        "Tool call completed"
-    );
+        info!(
+            tool = name,
+            athlete_id = athlete_id.unwrap_or("unknown"),
+            duration_secs = start.elapsed().as_secs_f64(),
+            "Tool call completed"
+        );
 
         result
     }
+
     pub fn tool_definitions(&self) -> Vec<ToolDefinition> {
         let output_schema = standard_output_schema();
         self.handlers
@@ -92,9 +97,11 @@ pub async fn route(
             })
             .collect()
     }
+
     pub fn get_handler(&self, name: &str) -> Option<&dyn IntentHandler> {
         self.handlers.get(name).map(|h| h.as_ref())
     }
+
     pub fn intent_names(&self) -> Vec<&str> {
         self.handlers.keys().map(|s| s.as_str()).collect()
     }
