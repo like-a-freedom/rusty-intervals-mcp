@@ -21,6 +21,15 @@ impl AnalyzeRaceHandler {
         Self
     }
 
+    fn parse_requested_date(value: &str) -> Result<NaiveDate, IntentError> {
+        if value.eq_ignore_ascii_case("today") {
+            return Ok(chrono::Local::now().date_naive());
+        }
+
+        NaiveDate::parse_from_str(value, "%Y-%m-%d")
+            .map_err(|_| IntentError::validation(format!("Invalid race date: {}", value)))
+    }
+
     fn parse_activity_date(value: &str) -> Option<NaiveDate> {
         NaiveDate::parse_from_str(value, "%Y-%m-%d")
             .ok()
@@ -82,7 +91,8 @@ impl IntentHandler for AnalyzeRaceHandler {
         json!({
             "type": "object",
             "properties": {
-                "date": {"type": "string", "description": "Race date (YYYY-MM-DD) or 'last_race'"},
+                "date": {"type": "string", "description": "Race date (YYYY-MM-DD) or 'last_race'. Preferred canonical field."},
+                "target_date": {"type": "string", "description": "Alias for date. Accepts YYYY-MM-DD or 'today'."},
                 "description_contains": {"type": "string", "description": "Search by description (e.g., '50K', 'marathon')"},
                 "analysis_type": {"type": "string", "enum": ["performance", "strategy", "recovery"], "default": "performance", "description": "Analysis type"},
                 "compare_to_planned": {"type": "boolean", "default": true, "description": "Compare to planned workout"}
@@ -96,7 +106,10 @@ impl IntentHandler for AnalyzeRaceHandler {
         client: Arc<dyn IntervalsClient>,
         _cache: Option<&IdempotencyCache>,
     ) -> Result<IntentOutput, IntentError> {
-        let date = input.get("date").and_then(Value::as_str);
+        let date = input
+            .get("date")
+            .and_then(Value::as_str)
+            .or_else(|| input.get("target_date").and_then(Value::as_str));
         let desc_filter = input.get("description_contains").and_then(Value::as_str);
         let analysis_mode =
             RaceAnalysisMode::parse(input.get("analysis_type").and_then(Value::as_str));
@@ -117,8 +130,7 @@ impl IntentHandler for AnalyzeRaceHandler {
                 .filter(|activity| Self::looks_like_race(activity.name.as_deref()))
                 .max_by_key(|activity| Self::parse_activity_date(&activity.start_date_local))
         } else if let Some(date) = date {
-            let target_date = NaiveDate::parse_from_str(date, "%Y-%m-%d")
-                .map_err(|_| IntentError::validation(format!("Invalid race date: {}", date)))?;
+            let target_date = Self::parse_requested_date(date)?;
             activities.iter().find(|activity| {
                 Self::parse_activity_date(&activity.start_date_local) == Some(target_date)
                     && desc_filter
@@ -462,6 +474,7 @@ mod tests {
 
         let props = schema.get("properties").unwrap().as_object().unwrap();
         assert!(props.contains_key("date"));
+        assert!(props.contains_key("target_date"));
         assert!(props.contains_key("description_contains"));
         assert!(props.contains_key("analysis_type"));
         assert!(props.contains_key("compare_to_planned"));
@@ -523,6 +536,27 @@ mod tests {
 
         let desc = input.get("description_contains").and_then(|v| v.as_str());
         assert_eq!(desc, Some("marathon"));
+    }
+
+    #[test]
+    fn test_target_date_alias_falls_back_when_date_missing() {
+        let input = json!({
+            "target_date": "2026-03-21"
+        });
+
+        let date = input
+            .get("date")
+            .and_then(Value::as_str)
+            .or_else(|| input.get("target_date").and_then(Value::as_str));
+
+        assert_eq!(date, Some("2026-03-21"));
+    }
+
+    #[test]
+    fn test_parse_requested_date_supports_today_alias() {
+        let parsed = AnalyzeRaceHandler::parse_requested_date("today").unwrap();
+
+        assert_eq!(parsed, chrono::Local::now().date_naive());
     }
 
     #[test]
