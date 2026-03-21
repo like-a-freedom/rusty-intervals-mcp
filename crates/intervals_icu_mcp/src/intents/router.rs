@@ -32,14 +32,14 @@ impl IntentRouter {
             client,
         }
     }
-    pub async fn route(
-        &self,
-        name: &str,
-        input: Value,
-        athlete_id: Option<&str>,
-    ) -> Result<IntentOutput, IntentError> {
-        let start = std::time::Instant::now();
-        info!(tool = name, athlete_id = ?athlete_id, "Tool call started");
+pub async fn route(
+    &self,
+    name: &str,
+    input: Value,
+    athlete_id: Option<&str>,
+) -> Result<IntentOutput, IntentError> {
+    let start = std::time::Instant::now();
+    info!(tool = name, athlete_id = athlete_id.unwrap_or("unknown"), "Tool call started");
 
         debug!("Routing intent: {}", name);
         let handler = self
@@ -73,12 +73,12 @@ impl IntentRouter {
             handler.execute(input, self.client.clone(), None).await
         };
 
-        info!(
-            tool = name,
-            athlete_id = ?athlete_id,
-            duration_secs = start.elapsed().as_secs_f64(),
-            "Tool call completed"
-        );
+    info!(
+        tool = name,
+        athlete_id = athlete_id.unwrap_or("unknown"),
+        duration_secs = start.elapsed().as_secs_f64(),
+        "Tool call completed"
+    );
 
         result
     }
