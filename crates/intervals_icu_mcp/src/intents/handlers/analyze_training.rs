@@ -2701,4 +2701,2239 @@ mod tests {
         let key_phrase = name.split(['-', '—', ':']).next().unwrap_or(name).trim();
         assert_eq!(key_phrase, "Recovery Run");
     }
+
+    // ========================================================================
+    // SingleAnalysisMode Enum Tests
+    // ========================================================================
+
+    #[test]
+    fn test_single_analysis_mode_parse_default() {
+        assert_eq!(SingleAnalysisMode::parse(None), SingleAnalysisMode::Summary);
+        assert_eq!(
+            SingleAnalysisMode::parse(Some("summary")),
+            SingleAnalysisMode::Summary
+        );
+        assert_eq!(
+            SingleAnalysisMode::parse(Some("unknown")),
+            SingleAnalysisMode::Summary
+        );
+    }
+
+    #[test]
+    fn test_single_analysis_mode_parse_detailed() {
+        assert_eq!(
+            SingleAnalysisMode::parse(Some("detailed")),
+            SingleAnalysisMode::Detailed
+        );
+    }
+
+    #[test]
+    fn test_single_analysis_mode_parse_intervals() {
+        assert_eq!(
+            SingleAnalysisMode::parse(Some("intervals")),
+            SingleAnalysisMode::Intervals
+        );
+    }
+
+    #[test]
+    fn test_single_analysis_mode_parse_streams() {
+        assert_eq!(
+            SingleAnalysisMode::parse(Some("streams")),
+            SingleAnalysisMode::Streams
+        );
+    }
+
+    #[test]
+    fn test_single_analysis_mode_as_str() {
+        assert_eq!(SingleAnalysisMode::Summary.as_str(), "summary");
+        assert_eq!(SingleAnalysisMode::Detailed.as_str(), "detailed");
+        assert_eq!(SingleAnalysisMode::Intervals.as_str(), "intervals");
+        assert_eq!(SingleAnalysisMode::Streams.as_str(), "streams");
+    }
+
+    #[test]
+    fn test_single_analysis_mode_include_intervals() {
+        assert!(!SingleAnalysisMode::Summary.include_intervals());
+        assert!(!SingleAnalysisMode::Detailed.include_intervals());
+        assert!(SingleAnalysisMode::Intervals.include_intervals());
+        assert!(!SingleAnalysisMode::Streams.include_intervals());
+    }
+
+    #[test]
+    fn test_single_analysis_mode_include_streams() {
+        assert!(!SingleAnalysisMode::Summary.include_streams());
+        assert!(SingleAnalysisMode::Detailed.include_streams());
+        assert!(SingleAnalysisMode::Intervals.include_streams());
+        assert!(SingleAnalysisMode::Streams.include_streams());
+    }
+
+    #[test]
+    fn test_single_analysis_mode_show_methods() {
+        // Summary mode
+        assert!(!SingleAnalysisMode::Summary.show_execution_context());
+        assert!(!SingleAnalysisMode::Summary.show_interval_section());
+        assert!(!SingleAnalysisMode::Summary.show_stream_section());
+        assert!(!SingleAnalysisMode::Summary.show_quality_findings());
+        assert!(!SingleAnalysisMode::Summary.show_data_availability());
+        assert!(!SingleAnalysisMode::Summary.show_detailed_breakdown());
+
+        // Detailed mode
+        assert!(SingleAnalysisMode::Detailed.show_execution_context());
+        assert!(!SingleAnalysisMode::Detailed.show_interval_section());
+        assert!(!SingleAnalysisMode::Detailed.show_stream_section());
+        assert!(SingleAnalysisMode::Detailed.show_quality_findings());
+        assert!(SingleAnalysisMode::Detailed.show_data_availability());
+        assert!(SingleAnalysisMode::Detailed.show_detailed_breakdown());
+
+        // Intervals mode
+        assert!(!SingleAnalysisMode::Intervals.show_execution_context());
+        assert!(SingleAnalysisMode::Intervals.show_interval_section());
+        assert!(!SingleAnalysisMode::Intervals.show_stream_section());
+        assert!(!SingleAnalysisMode::Intervals.show_quality_findings());
+        assert!(!SingleAnalysisMode::Intervals.show_data_availability());
+        assert!(!SingleAnalysisMode::Intervals.show_detailed_breakdown());
+
+        // Streams mode
+        assert!(SingleAnalysisMode::Streams.show_execution_context());
+        assert!(!SingleAnalysisMode::Streams.show_interval_section());
+        assert!(SingleAnalysisMode::Streams.show_stream_section());
+        assert!(SingleAnalysisMode::Streams.show_quality_findings());
+        assert!(SingleAnalysisMode::Streams.show_data_availability());
+        assert!(!SingleAnalysisMode::Streams.show_detailed_breakdown());
+    }
+
+    // ========================================================================
+    // Date Parsing Helper Tests
+    // ========================================================================
+
+    #[test]
+    fn test_parse_activity_date_with_timestamp() {
+        let result = parse_activity_date("2026-03-01T10:30:00");
+        assert!(result.is_some());
+        assert_eq!(
+            result.unwrap(),
+            NaiveDate::from_ymd_opt(2026, 3, 1).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_parse_activity_date_date_only() {
+        let result = parse_activity_date("2026-03-01");
+        assert!(result.is_some());
+        assert_eq!(
+            result.unwrap(),
+            NaiveDate::from_ymd_opt(2026, 3, 1).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_parse_activity_date_invalid() {
+        assert!(parse_activity_date("invalid").is_none());
+        assert!(parse_activity_date("").is_none());
+    }
+
+    // ========================================================================
+    // Requested Metrics Tests
+    // ========================================================================
+
+    #[test]
+    fn test_requested_metrics_empty_input() {
+        let input = json!({});
+        let metrics = requested_metrics(&input);
+        assert!(metrics.is_empty());
+    }
+
+    #[test]
+    fn test_requested_metrics_with_array() {
+        let input = json!({
+            "metrics": ["time", "distance", "HR"]
+        });
+        let metrics = requested_metrics(&input);
+        assert_eq!(metrics, vec!["time", "distance", "hr"]);
+    }
+
+    #[test]
+    fn test_requested_metrics_non_string_values() {
+        let input = json!({
+            "metrics": ["time", 123, null, "distance"]
+        });
+        let metrics = requested_metrics(&input);
+        assert_eq!(metrics, vec!["time", "distance"]);
+    }
+
+    // ========================================================================
+    // Duration Formatting Tests
+    // ========================================================================
+
+    #[test]
+    fn test_format_duration_hhmm_under_hour() {
+        assert_eq!(format_duration_hhmm(0), "0:00");
+        assert_eq!(format_duration_hhmm(60), "1:00");
+        assert_eq!(format_duration_hhmm(3661), "1:01:01");
+        assert_eq!(format_duration_hhmm(7265), "2:01:05");
+    }
+
+    #[test]
+    fn test_format_duration_hhmm_over_hour() {
+        assert_eq!(format_duration_hhmm(3600), "1:00:00");
+        assert_eq!(format_duration_hhmm(7200), "2:00:00");
+        assert_eq!(format_duration_hhmm(3661), "1:01:01");
+    }
+
+    #[test]
+    fn test_format_duration_compact_matches_hhmm() {
+        // format_duration_compact should behave identically to format_duration_hhmm
+        assert_eq!(format_duration_compact(0), format_duration_hhmm(0));
+        assert_eq!(format_duration_compact(3661), format_duration_hhmm(3661));
+        assert_eq!(format_duration_compact(7265), format_duration_hhmm(7265));
+    }
+
+    // ========================================================================
+    // Planned Workout ID Detection Tests
+    // ========================================================================
+
+    #[test]
+    fn test_is_planned_workout_id_event_prefix() {
+        assert!(is_planned_workout_id("event:12345"));
+        assert!(is_planned_workout_id("event:94131802"));
+    }
+
+    #[test]
+    fn test_is_planned_workout_id_regular_activity() {
+        assert!(!is_planned_workout_id("12345"));
+        assert!(!is_planned_workout_id("a1"));
+        assert!(!is_planned_workout_id(""));
+    }
+
+    // ========================================================================
+    // Calendar Event Row Building Tests
+    // ========================================================================
+
+    #[test]
+    fn test_build_calendar_event_rows_empty() {
+        let events: Vec<&intervals_icu_client::Event> = vec![];
+        let rows = build_calendar_event_rows(&events);
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn test_build_calendar_event_rows_with_events() {
+        let events = [
+            intervals_icu_client::Event {
+                id: Some("e1".to_string()),
+                start_date_local: "2026-03-01T10:00:00".to_string(),
+                name: "Race Day".to_string(),
+                category: EventCategory::RaceA,
+                description: Some("Marathon".to_string()),
+                r#type: None,
+            },
+            intervals_icu_client::Event {
+                id: Some("e2".to_string()),
+                start_date_local: "2026-03-02".to_string(),
+                name: "Recovery".to_string(),
+                category: EventCategory::Workout,
+                description: None,
+                r#type: None,
+            },
+        ];
+        let refs = events.iter().collect::<Vec<_>>();
+        let rows = build_calendar_event_rows(&refs);
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0][0], "2026-03-01");
+        assert_eq!(rows[0][1], "RaceA");
+        assert_eq!(rows[0][2], "Race Day");
+        assert_eq!(rows[0][3], "Marathon");
+        assert_eq!(rows[1][3], "n/a");
+    }
+
+    // ========================================================================
+    // Interval Output Value Tests
+    // ========================================================================
+
+    #[test]
+    fn test_interval_output_value_kind() {
+        let power_value = IntervalOutputValue::Power(250.0);
+        assert_eq!(power_value.kind(), IntervalOutputKind::Power);
+
+        let pace_value = IntervalOutputValue::Pace(2.5);
+        assert_eq!(pace_value.kind(), IntervalOutputKind::Pace);
+    }
+
+    #[test]
+    fn test_interval_output_value_format_power() {
+        let value = IntervalOutputValue::Power(245.7);
+        assert_eq!(value.format(), "246 W");
+    }
+
+    #[test]
+    fn test_interval_output_value_format_pace() {
+        let value = IntervalOutputValue::Pace(2.778); // 10 km/h = 6:00 /km
+        let formatted = value.format();
+        assert!(formatted.contains("/km"));
+    }
+
+    #[test]
+    fn test_interval_output_value_format_invalid_pace() {
+        let value = IntervalOutputValue::Pace(0.0);
+        assert_eq!(value.format(), "n/a");
+    }
+
+    // ========================================================================
+    // Numeric Value Helper Tests
+    // ========================================================================
+
+    #[test]
+    fn test_numeric_value_from_f64() {
+        let obj_value = serde_json::json!({"key": 42.5});
+        let obj = obj_value.as_object().unwrap();
+        assert_eq!(numeric_value(obj, "key"), Some(42.5));
+    }
+
+    #[test]
+    fn test_numeric_value_from_i64() {
+        let obj_value = serde_json::json!({"key": 42});
+        let obj = obj_value.as_object().unwrap();
+        assert_eq!(numeric_value(obj, "key"), Some(42.0));
+    }
+
+    #[test]
+    fn test_numeric_value_missing_key() {
+        let obj_value = serde_json::json!({"other": 42});
+        let obj = obj_value.as_object().unwrap();
+        assert_eq!(numeric_value(obj, "key"), None);
+    }
+
+    #[test]
+    fn test_numeric_value_non_numeric() {
+        let obj_value = serde_json::json!({"key": "text"});
+        let obj = obj_value.as_object().unwrap();
+        assert_eq!(numeric_value(obj, "key"), None);
+    }
+
+    // ========================================================================
+    // Histogram and Zone Distribution Tests
+    // ========================================================================
+
+    #[test]
+    fn test_format_histogram_number_integer() {
+        assert_eq!(format_histogram_number(100.0), "100");
+        assert_eq!(format_histogram_number(42.0), "42");
+    }
+
+    #[test]
+    fn test_format_histogram_number_decimal() {
+        assert_eq!(format_histogram_number(42.5), "42.50");
+        assert_eq!(format_histogram_number(0.123), "0.12");
+    }
+
+    #[test]
+    fn test_build_range_histogram_rows_empty() {
+        let buckets: Vec<Value> = vec![];
+        let rows = build_range_histogram_rows(&buckets, "bpm");
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn test_build_range_histogram_rows_with_data() {
+        let buckets = vec![
+            json!({"min": 100, "max": 120, "secs": 600}),
+            json!({"min": 120, "max": 140, "secs": 1200}),
+        ];
+        let rows = build_range_histogram_rows(&buckets, "bpm");
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0][0], "100-120 bpm");
+        assert_eq!(rows[0][1], "10:00");
+        assert_eq!(rows[1][0], "120-140 bpm");
+        assert_eq!(rows[1][1], "20:00");
+    }
+
+    #[test]
+    fn test_build_bucket_histogram_rows_empty() {
+        let buckets: Vec<Value> = vec![];
+        let rows = build_bucket_histogram_rows(&buckets, Some("avg"), "bpm");
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn test_build_bucket_histogram_rows_with_data() {
+        let buckets = vec![
+            json!({"start": 100, "secs": 300, "movingSecs": 280, "avg": 110}),
+            json!({"start": 120, "secs": 600, "movingSecs": 580, "avg": 130}),
+        ];
+        let rows = build_bucket_histogram_rows(&buckets, Some("avg"), "bpm");
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0][0], "100 bpm");
+        assert_eq!(rows[0][1], "5:00");
+        assert_eq!(rows[0][2], "4:40");
+        assert_eq!(rows[0][3], "110");
+    }
+
+    #[test]
+    fn test_build_bucket_histogram_rows_without_average_key() {
+        let buckets = vec![json!({"start": 100, "secs": 300})];
+        let rows = build_bucket_histogram_rows(&buckets, None, "");
+
+        assert_eq!(rows[0][3], "n/a");
+    }
+
+    #[test]
+    fn test_build_zone_distribution_rows_empty() {
+        let zones_value = serde_json::json!({});
+        let zones = zones_value.as_object().unwrap();
+        let rows = build_zone_distribution_rows(zones);
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn test_build_zone_distribution_rows_with_data() {
+        let zones_value = serde_json::json!({
+            "z1": 600,
+            "z2": 1200,
+            "z3": 300
+        });
+        let zones = zones_value.as_object().unwrap();
+        let rows = build_zone_distribution_rows(zones);
+
+        assert_eq!(rows.len(), 3);
+        // Total: 2100 seconds
+        // z1: 600/2100 = 28.57% -> 29%
+        // z2: 1200/2100 = 57.14% -> 57%
+        // z3: 300/2100 = 14.28% -> 14%
+        assert_eq!(rows[0][0], "Z1");
+        assert_eq!(rows[0][1], "10:00");
+        assert!(rows[0][2].contains("%"));
+    }
+
+    // ========================================================================
+    // Best Efforts Helper Tests
+    // ========================================================================
+
+    #[test]
+    fn test_best_efforts_array_direct_array() {
+        let value = json!([{"seconds": 60}, {"seconds": 300}]);
+        let arr = best_efforts_array(&value);
+        assert!(arr.is_some());
+        assert_eq!(arr.unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_best_efforts_array_nested_best_efforts() {
+        let value = json!({"best_efforts": [{"seconds": 60}]});
+        let arr = best_efforts_array(&value);
+        assert!(arr.is_some());
+        assert_eq!(arr.unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_best_efforts_array_nested_efforts() {
+        let value = json!({"efforts": [{"seconds": 60}]});
+        let arr = best_efforts_array(&value);
+        assert!(arr.is_some());
+        assert_eq!(arr.unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_best_efforts_array_invalid() {
+        let value = json!("not an array");
+        assert!(best_efforts_array(&value).is_none());
+
+        let value = json!({"other": "field"});
+        assert!(best_efforts_array(&value).is_none());
+    }
+
+    #[test]
+    fn test_format_best_effort_duration_seconds_only() {
+        assert_eq!(format_best_effort_duration(5), "5s");
+        assert_eq!(format_best_effort_duration(59), "59s");
+    }
+
+    #[test]
+    fn test_format_best_effort_duration_minutes_seconds() {
+        assert_eq!(format_best_effort_duration(60), "1:00");
+        assert_eq!(format_best_effort_duration(125), "2:05");
+        assert_eq!(format_best_effort_duration(3599), "59:59");
+    }
+
+    #[test]
+    fn test_format_best_effort_duration_hours() {
+        assert_eq!(format_best_effort_duration(3600), "1:00:00");
+        assert_eq!(format_best_effort_duration(3661), "1:01:01");
+    }
+
+    #[test]
+    fn test_format_best_effort_average_power() {
+        let best_efforts = json!({"stream": "watts"});
+        let effort_value = json!({"watts": 250.0});
+        let effort = effort_value.as_object().unwrap();
+        let avg = format_best_effort_average(&best_efforts, effort);
+        assert_eq!(avg, Some("250 W".to_string()));
+    }
+
+    #[test]
+    fn test_format_best_effort_average_pace() {
+        let best_efforts = json!({"stream": "speed"});
+        let effort_value = json!({"average": 2.778});
+        let effort = effort_value.as_object().unwrap();
+        let avg = format_best_effort_average(&best_efforts, effort);
+        assert!(avg.unwrap().contains("/km"));
+    }
+
+    #[test]
+    fn test_format_best_effort_average_heartrate() {
+        let best_efforts = json!({});
+        let effort_value = json!({"heartrate": 155.0});
+        let effort = effort_value.as_object().unwrap();
+        let avg = format_best_effort_average(&best_efforts, effort);
+        assert_eq!(avg, Some("155 bpm".to_string()));
+    }
+
+    #[test]
+    fn test_format_best_effort_average_no_data() {
+        let best_efforts = json!({});
+        let effort_value = json!({});
+        let effort = effort_value.as_object().unwrap();
+        assert!(format_best_effort_average(&best_efforts, effort).is_none());
+    }
+
+    // ========================================================================
+    // Activity Message Row Building Tests
+    // ========================================================================
+
+    #[test]
+    fn test_build_activity_message_rows_empty() {
+        let messages: Vec<intervals_icu_client::ActivityMessage> = vec![];
+        let rows = build_activity_message_rows(&messages);
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn test_build_activity_message_rows_with_messages() {
+        use intervals_icu_client::ActivityMessage;
+        let messages = vec![
+            ActivityMessage {
+                id: 1,
+                athlete_id: Some("athlete1".to_string()),
+                name: Some("John".to_string()),
+                created: Some("2026-03-01T12:00:00Z".to_string()),
+                message_type: Some("TEXT".to_string()),
+                content: Some("Great workout!".to_string()),
+                activity_id: Some("a1".to_string()),
+                start_index: None,
+                end_index: None,
+                attachment_url: None,
+                attachment_mime_type: None,
+                deleted: None,
+            },
+            ActivityMessage {
+                id: 2,
+                athlete_id: Some("athlete2".to_string()),
+                name: None,
+                created: None,
+                message_type: None,
+                content: Some("Keep it up!".to_string()),
+                activity_id: Some("a1".to_string()),
+                start_index: None,
+                end_index: None,
+                attachment_url: None,
+                attachment_mime_type: None,
+                deleted: None,
+            },
+        ];
+        let rows = build_activity_message_rows(&messages);
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0][1], "John");
+        assert_eq!(rows[0][3], "Great workout!");
+        assert_eq!(rows[1][1], "athlete2");
+    }
+
+    #[test]
+    fn test_build_activity_message_rows_filters_deleted() {
+        use intervals_icu_client::ActivityMessage;
+        let messages = vec![
+            ActivityMessage {
+                id: 1,
+                athlete_id: Some("athlete1".to_string()),
+                name: None,
+                created: None,
+                message_type: None,
+                content: Some("Visible".to_string()),
+                activity_id: Some("a1".to_string()),
+                start_index: None,
+                end_index: None,
+                attachment_url: None,
+                attachment_mime_type: None,
+                deleted: None,
+            },
+            ActivityMessage {
+                id: 2,
+                athlete_id: Some("athlete1".to_string()),
+                name: None,
+                created: None,
+                message_type: None,
+                content: Some("Deleted".to_string()),
+                activity_id: Some("a1".to_string()),
+                start_index: None,
+                end_index: None,
+                attachment_url: None,
+                attachment_mime_type: None,
+                deleted: Some("true".to_string()),
+            },
+        ];
+        let rows = build_activity_message_rows(&messages);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0][3], "Visible");
+    }
+
+    #[test]
+    fn test_build_activity_message_rows_filters_empty_content() {
+        use intervals_icu_client::ActivityMessage;
+        let messages = vec![
+            ActivityMessage {
+                id: 1,
+                athlete_id: Some("athlete1".to_string()),
+                name: None,
+                created: None,
+                message_type: None,
+                content: Some("   ".to_string()),
+                activity_id: Some("a1".to_string()),
+                start_index: None,
+                end_index: None,
+                attachment_url: None,
+                attachment_mime_type: None,
+                deleted: None,
+            },
+            ActivityMessage {
+                id: 2,
+                athlete_id: Some("athlete1".to_string()),
+                name: None,
+                created: None,
+                message_type: None,
+                content: None,
+                activity_id: Some("a1".to_string()),
+                start_index: None,
+                end_index: None,
+                attachment_url: None,
+                attachment_mime_type: None,
+                deleted: None,
+            },
+        ];
+        let rows = build_activity_message_rows(&messages);
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn test_build_activity_message_rows_handles_missing_fields() {
+        use intervals_icu_client::ActivityMessage;
+        let messages = vec![ActivityMessage {
+            id: 1,
+            athlete_id: Some("athlete1".to_string()),
+            name: None,
+            created: None,
+            message_type: None,
+            content: Some("Test".to_string()),
+            activity_id: Some("a1".to_string()),
+            start_index: None,
+            end_index: None,
+            attachment_url: None,
+            attachment_mime_type: None,
+            deleted: None,
+        }];
+        let rows = build_activity_message_rows(&messages);
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0][1], "athlete1"); // Falls back to athlete_id
+        assert_eq!(rows[0][2], "TEXT"); // Default type
+    }
+
+    // ========================================================================
+    // Execute() Path Tests - analyze_single()
+    // ========================================================================
+
+    use async_trait::async_trait;
+    use intervals_icu_client::{
+        ActivitySummary, AthleteProfile, BestEffortsOptions, DownloadProgress, Event,
+        EventCategory, IntervalsClient, IntervalsError,
+    };
+    use std::sync::Arc;
+
+    struct AnalyzeSingleMockClient {
+        activities: Vec<ActivitySummary>,
+        fitness_summary: Option<Value>,
+        workout_detail: Option<Value>,
+        streams: Option<Value>,
+        intervals: Option<Value>,
+        best_efforts: Option<Value>,
+        hr_histogram: Option<Value>,
+        power_histogram: Option<Value>,
+        pace_histogram: Option<Value>,
+        activity_messages: Vec<intervals_icu_client::ActivityMessage>,
+    }
+
+    impl AnalyzeSingleMockClient {
+        fn with_activity(activity_id: &str, date: &str, name: &str) -> Self {
+            Self {
+                activities: vec![ActivitySummary {
+                    id: activity_id.to_string(),
+                    name: Some(name.to_string()),
+                    start_date_local: date.to_string(),
+                }],
+                fitness_summary: None,
+                workout_detail: None,
+                streams: None,
+                intervals: None,
+                best_efforts: None,
+                hr_histogram: None,
+                power_histogram: None,
+                pace_histogram: None,
+                activity_messages: vec![],
+            }
+        }
+
+        fn with_workout_detail(mut self, detail: Value) -> Self {
+            self.workout_detail = Some(detail);
+            self
+        }
+
+        fn with_streams(mut self, streams: Value) -> Self {
+            self.streams = Some(streams);
+            self
+        }
+
+        fn with_intervals(mut self, intervals: Value) -> Self {
+            self.intervals = Some(intervals);
+            self
+        }
+
+        fn with_best_efforts(mut self, best_efforts: Value) -> Self {
+            self.best_efforts = Some(best_efforts);
+            self
+        }
+
+        fn with_hr_histogram(mut self, histogram: Value) -> Self {
+            self.hr_histogram = Some(histogram);
+            self
+        }
+
+        fn with_power_histogram(mut self, histogram: Value) -> Self {
+            self.power_histogram = Some(histogram);
+            self
+        }
+
+        fn with_activity_messages(
+            mut self,
+            messages: Vec<intervals_icu_client::ActivityMessage>,
+        ) -> Self {
+            self.activity_messages = messages;
+            self
+        }
+    }
+
+    #[async_trait]
+    impl IntervalsClient for AnalyzeSingleMockClient {
+        async fn get_athlete_profile(&self) -> Result<AthleteProfile, IntervalsError> {
+            Ok(AthleteProfile {
+                id: "test_athlete".to_string(),
+                name: Some("Test Athlete".to_string()),
+            })
+        }
+
+        async fn get_recent_activities(
+            &self,
+            _limit: Option<u32>,
+            _days_back: Option<i32>,
+        ) -> Result<Vec<ActivitySummary>, IntervalsError> {
+            Ok(self.activities.clone())
+        }
+
+        async fn get_fitness_summary(&self) -> Result<Value, IntervalsError> {
+            Ok(self.fitness_summary.clone().unwrap_or_else(|| json!({})))
+        }
+
+        async fn get_activity_details(&self, _activity_id: &str) -> Result<Value, IntervalsError> {
+            Ok(self.workout_detail.clone().unwrap_or_else(|| json!({})))
+        }
+
+        async fn get_activity_streams(
+            &self,
+            _activity_id: &str,
+            _streams: Option<Vec<String>>,
+        ) -> Result<Value, IntervalsError> {
+            Ok(self.streams.clone().unwrap_or_else(|| json!({})))
+        }
+
+        async fn get_activity_intervals(
+            &self,
+            _activity_id: &str,
+        ) -> Result<Value, IntervalsError> {
+            Ok(self.intervals.clone().unwrap_or_else(|| json!({})))
+        }
+
+        async fn get_best_efforts(
+            &self,
+            _activity_id: &str,
+            _options: Option<BestEffortsOptions>,
+        ) -> Result<Value, IntervalsError> {
+            Ok(self.best_efforts.clone().unwrap_or_else(|| json!({})))
+        }
+
+        async fn get_hr_histogram(&self, _activity_id: &str) -> Result<Value, IntervalsError> {
+            Ok(self.hr_histogram.clone().unwrap_or_else(|| json!({})))
+        }
+
+        async fn get_power_histogram(&self, _activity_id: &str) -> Result<Value, IntervalsError> {
+            Ok(self.power_histogram.clone().unwrap_or_else(|| json!({})))
+        }
+
+        async fn get_pace_histogram(&self, _activity_id: &str) -> Result<Value, IntervalsError> {
+            Ok(self.pace_histogram.clone().unwrap_or_else(|| json!({})))
+        }
+
+        async fn get_activity_messages(
+            &self,
+            _activity_id: &str,
+        ) -> Result<Vec<intervals_icu_client::ActivityMessage>, IntervalsError> {
+            Ok(self.activity_messages.clone())
+        }
+
+        // Stub remaining methods
+        async fn create_event(&self, _event: Event) -> Result<Event, IntervalsError> {
+            Ok(Event {
+                id: Some("test".to_string()),
+                start_date_local: "2026-01-01".to_string(),
+                name: "Test".to_string(),
+                category: EventCategory::Workout,
+                description: None,
+                r#type: None,
+            })
+        }
+        async fn get_event(&self, _event_id: &str) -> Result<Event, IntervalsError> {
+            Err(IntervalsError::NotFound("event not found".to_string()))
+        }
+        async fn delete_event(&self, _event_id: &str) -> Result<(), IntervalsError> {
+            Ok(())
+        }
+        async fn get_events(
+            &self,
+            _days_back: Option<i32>,
+            _limit: Option<u32>,
+        ) -> Result<Vec<Event>, IntervalsError> {
+            Ok(vec![])
+        }
+        async fn bulk_create_events(
+            &self,
+            _events: Vec<Event>,
+        ) -> Result<Vec<Event>, IntervalsError> {
+            Ok(vec![])
+        }
+        async fn search_activities(
+            &self,
+            _query: &str,
+            _limit: Option<u32>,
+        ) -> Result<Vec<ActivitySummary>, IntervalsError> {
+            Ok(vec![])
+        }
+        async fn search_activities_full(
+            &self,
+            _query: &str,
+            _limit: Option<u32>,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+        async fn get_activities_csv(&self) -> Result<String, IntervalsError> {
+            Ok("id,name\n1,Test".to_string())
+        }
+        async fn update_activity(
+            &self,
+            _activity_id: &str,
+            _fields: &Value,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn download_activity_file(
+            &self,
+            _activity_id: &str,
+            _output_path: Option<std::path::PathBuf>,
+        ) -> Result<Option<String>, IntervalsError> {
+            Ok(None)
+        }
+        async fn download_activity_file_with_progress(
+            &self,
+            _activity_id: &str,
+            _output_path: Option<std::path::PathBuf>,
+            _progress_tx: tokio::sync::mpsc::Sender<DownloadProgress>,
+            _cancel_rx: tokio::sync::watch::Receiver<bool>,
+        ) -> Result<Option<String>, IntervalsError> {
+            Ok(None)
+        }
+        async fn download_fit_file(
+            &self,
+            _activity_id: &str,
+            _output_path: Option<std::path::PathBuf>,
+        ) -> Result<Option<String>, IntervalsError> {
+            Ok(None)
+        }
+        async fn download_gpx_file(
+            &self,
+            _activity_id: &str,
+            _output_path: Option<std::path::PathBuf>,
+        ) -> Result<Option<String>, IntervalsError> {
+            Ok(None)
+        }
+        async fn get_gear_list(&self) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+        async fn get_sport_settings(&self) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+        async fn get_power_curves(
+            &self,
+            _days_back: Option<i32>,
+            _sport: &str,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+        async fn get_gap_histogram(&self, _activity_id: &str) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+        async fn delete_activity(&self, _activity_id: &str) -> Result<(), IntervalsError> {
+            Ok(())
+        }
+        async fn get_activities_around(
+            &self,
+            _activity_id: &str,
+            _limit: Option<u32>,
+            _route_id: Option<i64>,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+        async fn search_intervals(
+            &self,
+            _min_secs: u32,
+            _max_secs: u32,
+            _min_intensity: u32,
+            _max_intensity: u32,
+            _interval_type: Option<String>,
+            _min_reps: Option<u32>,
+            _max_reps: Option<u32>,
+            _limit: Option<u32>,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+        async fn get_wellness(&self, _days_back: Option<i32>) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+        async fn get_wellness_for_date(&self, _date: &str) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn update_wellness(
+            &self,
+            _date: &str,
+            _data: &Value,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn get_upcoming_workouts(
+            &self,
+            _days_ahead: Option<u32>,
+            _limit: Option<u32>,
+            _category: Option<String>,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+        async fn update_event(
+            &self,
+            _event_id: &str,
+            _fields: &Value,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn bulk_delete_events(&self, _event_ids: Vec<String>) -> Result<(), IntervalsError> {
+            Ok(())
+        }
+        async fn duplicate_event(
+            &self,
+            _event_id: &str,
+            _num_copies: Option<u32>,
+            _weeks_between: Option<u32>,
+        ) -> Result<Vec<Event>, IntervalsError> {
+            Ok(vec![])
+        }
+        async fn get_hr_curves(
+            &self,
+            _days_back: Option<i32>,
+            _sport: &str,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+        async fn get_pace_curves(
+            &self,
+            _days_back: Option<i32>,
+            _sport: &str,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+        async fn get_workout_library(&self) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+        async fn get_workouts_in_folder(&self, _folder_id: &str) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+        async fn create_folder(&self, _folder: &Value) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn update_folder(
+            &self,
+            _folder_id: &str,
+            _fields: &Value,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn delete_folder(&self, _folder_id: &str) -> Result<(), IntervalsError> {
+            Ok(())
+        }
+        async fn create_gear(&self, _gear: &Value) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn update_gear(
+            &self,
+            _gear_id: &str,
+            _fields: &Value,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn delete_gear(&self, _gear_id: &str) -> Result<(), IntervalsError> {
+            Ok(())
+        }
+        async fn create_gear_reminder(
+            &self,
+            _gear_id: &str,
+            _reminder: &Value,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn update_gear_reminder(
+            &self,
+            _gear_id: &str,
+            _reminder_id: &str,
+            _reset: bool,
+            _snooze_days: u32,
+            _fields: &Value,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn update_sport_settings(
+            &self,
+            _sport_type: &str,
+            _recalc_hr_zones: bool,
+            _fields: &Value,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn apply_sport_settings(&self, _sport_type: &str) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn create_sport_settings(&self, _settings: &Value) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn delete_sport_settings(&self, _sport_type: &str) -> Result<(), IntervalsError> {
+            Ok(())
+        }
+        async fn update_wellness_bulk(&self, _entries: &[Value]) -> Result<(), IntervalsError> {
+            Ok(())
+        }
+        async fn get_weather_config(&self) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn update_weather_config(&self, _config: &Value) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn list_routes(&self) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+        async fn get_route(
+            &self,
+            _route_id: i64,
+            _include_path: bool,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn update_route(
+            &self,
+            _route_id: i64,
+            _route: &Value,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn get_route_similarity(
+            &self,
+            _route_id: i64,
+            _other_id: i64,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_analyze_single_summary_mode() {
+        let handler = AnalyzeTrainingHandler::new();
+        let client = Arc::new(
+            AnalyzeSingleMockClient::with_activity("12345", "2026-03-01", "Test Workout")
+                .with_workout_detail(json!({
+                    "distance": 10000.0,
+                    "moving_time": 3600,
+                    "average_heartrate": 150.0,
+                    "average_watts": 250.0,
+                    "total_elevation_gain": 200.0,
+                })),
+        );
+
+        let input = json!({
+            "target_type": "single",
+            "date": "2026-03-01",
+            "analysis_type": "summary"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        assert!(!output.content.is_empty());
+        // Verify basic structure
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("Analysis"));
+        assert!(content_str.contains("Test Workout"));
+    }
+
+    #[tokio::test]
+    async fn test_analyze_single_detailed_mode() {
+        let handler = AnalyzeTrainingHandler::new();
+        let client = Arc::new(
+            AnalyzeSingleMockClient::with_activity("12345", "2026-03-01", "Test Workout")
+                .with_workout_detail(json!({
+                    "distance": 10000.0,
+                    "moving_time": 3600,
+                    "average_heartrate": 150.0,
+                    "average_watts": 250.0,
+                    "total_elevation_gain": 200.0,
+                    "average_cadence": 85.0,
+                    "average_speed": 2.78,
+                    "icu_training_load": 75.5,
+                    "average_temp": 18.5,
+                }))
+                .with_streams(json!({
+                    "watts": [200, 250, 300],
+                    "heartrate": [140, 150, 160],
+                })),
+        );
+
+        let input = json!({
+            "target_type": "single",
+            "date": "2026-03-01",
+            "analysis_type": "detailed"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("Detailed Breakdown"));
+        assert!(content_str.contains("Execution Context"));
+    }
+
+    #[tokio::test]
+    async fn test_analyze_single_intervals_mode() {
+        let handler = AnalyzeTrainingHandler::new();
+        let client = Arc::new(
+            AnalyzeSingleMockClient::with_activity("12345", "2026-03-01", "Interval Workout")
+                .with_workout_detail(json!({
+                    "distance": 12000.0,
+                    "moving_time": 4200,
+                    "average_heartrate": 155.0,
+                    "average_watts": 280.0,
+                }))
+                .with_intervals(json!([
+                    {"moving_time": 120, "average_heartrate": 165, "average_watts": 350},
+                    {"moving_time": 120, "average_heartrate": 162, "average_watts": 340},
+                    {"moving_time": 120, "average_heartrate": 168, "average_watts": 360},
+                ])),
+        );
+
+        let input = json!({
+            "target_type": "single",
+            "date": "2026-03-01",
+            "analysis_type": "intervals"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("Interval Analysis"));
+        assert!(content_str.contains("Detected Intervals"));
+    }
+
+    #[tokio::test]
+    async fn test_analyze_single_streams_mode() {
+        let handler = AnalyzeTrainingHandler::new();
+        let client = Arc::new(
+            AnalyzeSingleMockClient::with_activity("12345", "2026-03-01", "Test Workout")
+                .with_workout_detail(json!({
+                    "distance": 10000.0,
+                    "moving_time": 3600,
+                    "average_heartrate": 150.0,
+                    "average_watts": 250.0,
+                }))
+                .with_streams(json!({
+                    "watts": [200, 250, 300, 280],
+                    "heartrate": [140, 150, 160, 155],
+                    "velocity_smooth": [2.5, 2.8, 3.0, 2.7],
+                })),
+        );
+
+        let input = json!({
+            "target_type": "single",
+            "date": "2026-03-01",
+            "analysis_type": "streams"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("Stream Insights"));
+        assert!(content_str.contains("watts"));
+    }
+
+    #[tokio::test]
+    async fn test_analyze_single_with_histograms() {
+        let handler = AnalyzeTrainingHandler::new();
+        let client = Arc::new(
+            AnalyzeSingleMockClient::with_activity("12345", "2026-03-01", "Test Workout")
+                .with_workout_detail(json!({
+                    "distance": 10000.0,
+                    "moving_time": 3600,
+                    "average_heartrate": 150.0,
+                    "average_watts": 250.0,
+                }))
+                .with_hr_histogram(json!({
+                    "zones": {"z1": 600, "z2": 1800, "z3": 1200}
+                }))
+                .with_power_histogram(json!([
+                    {"start": 100, "secs": 300, "movingSecs": 280, "avgWatts": 150},
+                    {"start": 200, "secs": 1800, "movingSecs": 1700, "avgWatts": 250},
+                    {"start": 300, "secs": 1500, "movingSecs": 1400, "avgWatts": 350},
+                ])),
+        );
+
+        let input = json!({
+            "target_type": "single",
+            "date": "2026-03-01",
+            "analysis_type": "summary",
+            "include_histograms": true
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("HR Histogram"));
+        assert!(content_str.contains("Power Histogram"));
+    }
+
+    #[tokio::test]
+    async fn test_analyze_single_with_best_efforts() {
+        let handler = AnalyzeTrainingHandler::new();
+        let client = Arc::new(
+            AnalyzeSingleMockClient::with_activity("12345", "2026-03-01", "Test Workout")
+                .with_workout_detail(json!({
+                    "distance": 10000.0,
+                    "moving_time": 3600,
+                    "average_heartrate": 150.0,
+                    "average_watts": 250.0,
+                }))
+                .with_best_efforts(json!([
+                    {"seconds": 60, "watts": 400},
+                    {"seconds": 300, "watts": 350},
+                    {"seconds": 1200, "watts": 300},
+                ])),
+        );
+
+        let input = json!({
+            "target_type": "single",
+            "date": "2026-03-01",
+            "include_best_efforts": true
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("Best Efforts"));
+    }
+
+    #[tokio::test]
+    async fn test_analyze_single_no_activities_found() {
+        let handler = AnalyzeTrainingHandler::new();
+        let client = Arc::new(AnalyzeSingleMockClient {
+            activities: vec![],
+            fitness_summary: None,
+            workout_detail: None,
+            streams: None,
+            intervals: None,
+            best_efforts: None,
+            hr_histogram: None,
+            power_histogram: None,
+            pace_histogram: None,
+            activity_messages: vec![],
+        });
+
+        let input = json!({
+            "target_type": "single",
+            "date": "2026-03-01"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("No activities found"));
+        assert!(!output.suggestions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_analyze_single_multiple_activities_found() {
+        let handler = AnalyzeTrainingHandler::new();
+        let client = Arc::new(AnalyzeSingleMockClient {
+            activities: vec![
+                ActivitySummary {
+                    id: "12345".to_string(),
+                    name: Some("Morning Run".to_string()),
+                    start_date_local: "2026-03-01".to_string(),
+                },
+                ActivitySummary {
+                    id: "12346".to_string(),
+                    name: Some("Evening Ride".to_string()),
+                    start_date_local: "2026-03-01".to_string(),
+                },
+            ],
+            fitness_summary: None,
+            workout_detail: None,
+            streams: None,
+            intervals: None,
+            best_efforts: None,
+            hr_histogram: None,
+            power_histogram: None,
+            pace_histogram: None,
+            activity_messages: vec![],
+        });
+
+        let input = json!({
+            "target_type": "single",
+            "date": "2026-03-01"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("Multiple activities found"));
+        assert!(content_str.contains("Morning Run"));
+        assert!(content_str.contains("Evening Ride"));
+    }
+
+    #[tokio::test]
+    async fn test_analyze_single_with_description_filter() {
+        let handler = AnalyzeTrainingHandler::new();
+        let client = Arc::new(AnalyzeSingleMockClient {
+            activities: vec![
+                ActivitySummary {
+                    id: "12345".to_string(),
+                    name: Some("Easy Run".to_string()),
+                    start_date_local: "2026-03-01".to_string(),
+                },
+                ActivitySummary {
+                    id: "12346".to_string(),
+                    name: Some("Tempo Run".to_string()),
+                    start_date_local: "2026-03-01".to_string(),
+                },
+            ],
+            fitness_summary: None,
+            workout_detail: None,
+            streams: None,
+            intervals: None,
+            best_efforts: None,
+            hr_histogram: None,
+            power_histogram: None,
+            pace_histogram: None,
+            activity_messages: vec![],
+        });
+
+        let input = json!({
+            "target_type": "single",
+            "date": "2026-03-01",
+            "description_contains": "tempo"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        // Should only match the Tempo Run
+        assert!(content_str.contains("Tempo Run"));
+    }
+
+    #[tokio::test]
+    async fn test_analyze_single_with_requested_metrics() {
+        let handler = AnalyzeTrainingHandler::new();
+        let client = Arc::new(
+            AnalyzeSingleMockClient::with_activity("12345", "2026-03-01", "Test Workout")
+                .with_workout_detail(json!({
+                    "distance": 10000.0,
+                    "moving_time": 3600,
+                    "average_heartrate": 150.0,
+                    "average_watts": 250.0,
+                    "total_elevation_gain": 200.0,
+                })),
+        );
+
+        let input = json!({
+            "target_type": "single",
+            "date": "2026-03-01",
+            "metrics": ["time", "distance", "hr", "tss"]
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("Requested Metrics"));
+        assert!(content_str.contains("TIME"));
+        assert!(content_str.contains("DISTANCE"));
+    }
+
+    #[tokio::test]
+    async fn test_analyze_single_with_activity_messages() {
+        use intervals_icu_client::ActivityMessage;
+        let handler = AnalyzeTrainingHandler::new();
+        let client = Arc::new(
+            AnalyzeSingleMockClient::with_activity("12345", "2026-03-01", "Test Workout")
+                .with_workout_detail(json!({
+                    "distance": 10000.0,
+                    "moving_time": 3600,
+                    "average_heartrate": 150.0,
+                }))
+                .with_activity_messages(vec![ActivityMessage {
+                    id: 1,
+                    athlete_id: Some("athlete1".to_string()),
+                    name: Some("Coach".to_string()),
+                    created: Some("2026-03-01T12:00:00Z".to_string()),
+                    message_type: Some("TEXT".to_string()),
+                    content: Some("Great job!".to_string()),
+                    activity_id: Some("12345".to_string()),
+                    start_index: None,
+                    end_index: None,
+                    attachment_url: None,
+                    attachment_mime_type: None,
+                    deleted: None,
+                }]),
+        );
+
+        let input = json!({
+            "target_type": "single",
+            "date": "2026-03-01",
+            "analysis_type": "detailed"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("Workout Comments"));
+        assert!(content_str.contains("Great job!"));
+    }
+
+    #[tokio::test]
+    async fn test_analyze_single_invalid_date() {
+        let handler = AnalyzeTrainingHandler::new();
+        let client = Arc::new(AnalyzeSingleMockClient::with_activity(
+            "12345",
+            "2026-03-01",
+            "Test Workout",
+        ));
+
+        let input = json!({
+            "target_type": "single",
+            "date": "invalid-date"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_analyze_single_missing_date() {
+        let handler = AnalyzeTrainingHandler::new();
+        let client = Arc::new(AnalyzeSingleMockClient::with_activity(
+            "12345",
+            "2026-03-01",
+            "Test Workout",
+        ));
+
+        let input = json!({
+            "target_type": "single"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_err());
+    }
+
+    // ========================================================================
+    // Execute() Path Tests - analyze_period()
+    // ========================================================================
+
+    struct AnalyzePeriodMockClient {
+        activities: Vec<ActivitySummary>,
+        events: Vec<Event>,
+        fitness_summary: Option<Value>,
+        wellness: Option<Value>,
+        activity_details: std::collections::HashMap<String, Value>,
+    }
+
+    impl AnalyzePeriodMockClient {
+        fn new() -> Self {
+            Self {
+                activities: vec![],
+                events: vec![],
+                fitness_summary: None,
+                wellness: None,
+                activity_details: std::collections::HashMap::new(),
+            }
+        }
+
+        fn with_activities(mut self, activities: Vec<ActivitySummary>) -> Self {
+            self.activities = activities;
+            self
+        }
+
+        fn with_events(mut self, events: Vec<Event>) -> Self {
+            self.events = events;
+            self
+        }
+
+        fn with_fitness_summary(mut self, summary: Value) -> Self {
+            self.fitness_summary = Some(summary);
+            self
+        }
+
+        fn with_wellness(mut self, wellness: Value) -> Self {
+            self.wellness = Some(wellness);
+            self
+        }
+
+        fn with_activity_detail(mut self, id: &str, detail: Value) -> Self {
+            self.activity_details.insert(id.to_string(), detail);
+            self
+        }
+    }
+
+    impl Default for AnalyzePeriodMockClient {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    #[async_trait]
+    impl IntervalsClient for AnalyzePeriodMockClient {
+        async fn get_athlete_profile(&self) -> Result<AthleteProfile, IntervalsError> {
+            Ok(AthleteProfile {
+                id: "test_athlete".to_string(),
+                name: Some("Test Athlete".to_string()),
+            })
+        }
+
+        async fn get_recent_activities(
+            &self,
+            _limit: Option<u32>,
+            _days_back: Option<i32>,
+        ) -> Result<Vec<ActivitySummary>, IntervalsError> {
+            Ok(self.activities.clone())
+        }
+
+        async fn get_fitness_summary(&self) -> Result<Value, IntervalsError> {
+            Ok(self.fitness_summary.clone().unwrap_or_else(|| json!({})))
+        }
+
+        async fn get_wellness_for_date(&self, _date: &str) -> Result<Value, IntervalsError> {
+            Ok(self.wellness.clone().unwrap_or_else(|| json!({})))
+        }
+
+        async fn get_activity_details(&self, activity_id: &str) -> Result<Value, IntervalsError> {
+            Ok(self
+                .activity_details
+                .get(activity_id)
+                .cloned()
+                .unwrap_or_else(|| json!({})))
+        }
+
+        async fn get_events(
+            &self,
+            _days_back: Option<i32>,
+            _limit: Option<u32>,
+        ) -> Result<Vec<Event>, IntervalsError> {
+            Ok(self.events.clone())
+        }
+
+        // Stub remaining methods (same as above)
+        async fn create_event(&self, _event: Event) -> Result<Event, IntervalsError> {
+            Ok(Event {
+                id: Some("test".to_string()),
+                start_date_local: "2026-01-01".to_string(),
+                name: "Test".to_string(),
+                category: EventCategory::Workout,
+                description: None,
+                r#type: None,
+            })
+        }
+        async fn get_event(&self, _event_id: &str) -> Result<Event, IntervalsError> {
+            Err(IntervalsError::NotFound("event not found".to_string()))
+        }
+        async fn delete_event(&self, _event_id: &str) -> Result<(), IntervalsError> {
+            Ok(())
+        }
+        async fn bulk_create_events(
+            &self,
+            _events: Vec<Event>,
+        ) -> Result<Vec<Event>, IntervalsError> {
+            Ok(vec![])
+        }
+        async fn search_activities(
+            &self,
+            _query: &str,
+            _limit: Option<u32>,
+        ) -> Result<Vec<ActivitySummary>, IntervalsError> {
+            Ok(vec![])
+        }
+        async fn search_activities_full(
+            &self,
+            _query: &str,
+            _limit: Option<u32>,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+        async fn get_activities_csv(&self) -> Result<String, IntervalsError> {
+            Ok("id,name\n1,Test".to_string())
+        }
+        async fn update_activity(
+            &self,
+            _activity_id: &str,
+            _fields: &Value,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn download_activity_file(
+            &self,
+            _activity_id: &str,
+            _output_path: Option<std::path::PathBuf>,
+        ) -> Result<Option<String>, IntervalsError> {
+            Ok(None)
+        }
+        async fn download_activity_file_with_progress(
+            &self,
+            _activity_id: &str,
+            _output_path: Option<std::path::PathBuf>,
+            _progress_tx: tokio::sync::mpsc::Sender<DownloadProgress>,
+            _cancel_rx: tokio::sync::watch::Receiver<bool>,
+        ) -> Result<Option<String>, IntervalsError> {
+            Ok(None)
+        }
+        async fn download_fit_file(
+            &self,
+            _activity_id: &str,
+            _output_path: Option<std::path::PathBuf>,
+        ) -> Result<Option<String>, IntervalsError> {
+            Ok(None)
+        }
+        async fn download_gpx_file(
+            &self,
+            _activity_id: &str,
+            _output_path: Option<std::path::PathBuf>,
+        ) -> Result<Option<String>, IntervalsError> {
+            Ok(None)
+        }
+        async fn get_gear_list(&self) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+        async fn get_sport_settings(&self) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+        async fn get_power_curves(
+            &self,
+            _days_back: Option<i32>,
+            _sport: &str,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+        async fn get_gap_histogram(&self, _activity_id: &str) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+        async fn delete_activity(&self, _activity_id: &str) -> Result<(), IntervalsError> {
+            Ok(())
+        }
+        async fn get_activities_around(
+            &self,
+            _activity_id: &str,
+            _limit: Option<u32>,
+            _route_id: Option<i64>,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+        async fn search_intervals(
+            &self,
+            _min_secs: u32,
+            _max_secs: u32,
+            _min_intensity: u32,
+            _max_intensity: u32,
+            _interval_type: Option<String>,
+            _min_reps: Option<u32>,
+            _max_reps: Option<u32>,
+            _limit: Option<u32>,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+        async fn get_wellness(&self, _days_back: Option<i32>) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+        async fn update_wellness(
+            &self,
+            _date: &str,
+            _data: &Value,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn get_upcoming_workouts(
+            &self,
+            _days_ahead: Option<u32>,
+            _limit: Option<u32>,
+            _category: Option<String>,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+        async fn update_event(
+            &self,
+            _event_id: &str,
+            _fields: &Value,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn bulk_delete_events(&self, _event_ids: Vec<String>) -> Result<(), IntervalsError> {
+            Ok(())
+        }
+        async fn duplicate_event(
+            &self,
+            _event_id: &str,
+            _num_copies: Option<u32>,
+            _weeks_between: Option<u32>,
+        ) -> Result<Vec<Event>, IntervalsError> {
+            Ok(vec![])
+        }
+        async fn get_hr_curves(
+            &self,
+            _days_back: Option<i32>,
+            _sport: &str,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+        async fn get_pace_curves(
+            &self,
+            _days_back: Option<i32>,
+            _sport: &str,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+        async fn get_workout_library(&self) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+        async fn get_workouts_in_folder(&self, _folder_id: &str) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+        async fn create_folder(&self, _folder: &Value) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn update_folder(
+            &self,
+            _folder_id: &str,
+            _fields: &Value,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn delete_folder(&self, _folder_id: &str) -> Result<(), IntervalsError> {
+            Ok(())
+        }
+        async fn create_gear(&self, _gear: &Value) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn update_gear(
+            &self,
+            _gear_id: &str,
+            _fields: &Value,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn delete_gear(&self, _gear_id: &str) -> Result<(), IntervalsError> {
+            Ok(())
+        }
+        async fn create_gear_reminder(
+            &self,
+            _gear_id: &str,
+            _reminder: &Value,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn update_gear_reminder(
+            &self,
+            _gear_id: &str,
+            _reminder_id: &str,
+            _reset: bool,
+            _snooze_days: u32,
+            _fields: &Value,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn update_sport_settings(
+            &self,
+            _sport_type: &str,
+            _recalc_hr_zones: bool,
+            _fields: &Value,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn apply_sport_settings(&self, _sport_type: &str) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn create_sport_settings(&self, _settings: &Value) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn delete_sport_settings(&self, _sport_type: &str) -> Result<(), IntervalsError> {
+            Ok(())
+        }
+        async fn update_wellness_bulk(&self, _entries: &[Value]) -> Result<(), IntervalsError> {
+            Ok(())
+        }
+        async fn get_weather_config(&self) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn update_weather_config(&self, _config: &Value) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn list_routes(&self) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+        async fn get_route(
+            &self,
+            _route_id: i64,
+            _include_path: bool,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn update_route(
+            &self,
+            _route_id: i64,
+            _route: &Value,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn get_route_similarity(
+            &self,
+            _route_id: i64,
+            _other_id: i64,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn get_activity_streams(
+            &self,
+            _activity_id: &str,
+            _streams: Option<Vec<String>>,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn get_activity_intervals(
+            &self,
+            _activity_id: &str,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn get_best_efforts(
+            &self,
+            _activity_id: &str,
+            _options: Option<BestEffortsOptions>,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn get_hr_histogram(&self, _activity_id: &str) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn get_power_histogram(&self, _activity_id: &str) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn get_pace_histogram(&self, _activity_id: &str) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn get_activity_messages(
+            &self,
+            _activity_id: &str,
+        ) -> Result<Vec<intervals_icu_client::ActivityMessage>, IntervalsError> {
+            Ok(vec![])
+        }
+    }
+
+    #[tokio::test]
+    async fn test_analyze_period_basic() {
+        let handler = AnalyzeTrainingHandler::new();
+        let client = Arc::new(
+            AnalyzePeriodMockClient::new()
+                .with_activities(vec![
+                    ActivitySummary {
+                        id: "12345".to_string(),
+                        name: Some("Run 1".to_string()),
+                        start_date_local: "2026-03-01".to_string(),
+                    },
+                    ActivitySummary {
+                        id: "12346".to_string(),
+                        name: Some("Run 2".to_string()),
+                        start_date_local: "2026-03-03".to_string(),
+                    },
+                ])
+                .with_fitness_summary(json!({
+                    "fitness": 50,
+                    "fatigue": 30,
+                    "form": 20
+                }))
+                .with_wellness(json!({
+                    "monotony": 1.5,
+                    "strain": 500
+                })),
+        );
+
+        let input = json!({
+            "target_type": "period",
+            "period_start": "2026-03-01",
+            "period_end": "2026-03-07"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("Period Analysis"));
+        assert!(content_str.contains("2026-03-01"));
+        assert!(content_str.contains("2026-03-07"));
+    }
+
+    #[tokio::test]
+    async fn test_analyze_period_no_activities() {
+        let handler = AnalyzeTrainingHandler::new();
+        let client = Arc::new(AnalyzePeriodMockClient::new());
+
+        let input = json!({
+            "target_type": "period",
+            "period_start": "2026-03-01",
+            "period_end": "2026-03-07"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("No activities found"));
+    }
+
+    #[tokio::test]
+    async fn test_analyze_period_with_calendar_events() {
+        let handler = AnalyzeTrainingHandler::new();
+        let client = Arc::new(
+            AnalyzePeriodMockClient::new()
+                .with_activities(vec![ActivitySummary {
+                    id: "12345".to_string(),
+                    name: Some("Run".to_string()),
+                    start_date_local: "2026-03-01".to_string(),
+                }])
+                .with_events(vec![Event {
+                    id: Some("e1".to_string()),
+                    start_date_local: "2026-03-05".to_string(),
+                    name: "Race Day".to_string(),
+                    category: EventCategory::RaceA,
+                    description: Some("Marathon".to_string()),
+                    r#type: None,
+                }]),
+        );
+
+        let input = json!({
+            "target_type": "period",
+            "period_start": "2026-03-01",
+            "period_end": "2026-03-07"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("Calendar Events"));
+        assert!(content_str.contains("Race Day"));
+    }
+
+    #[tokio::test]
+    async fn test_analyze_period_invalid_start_date() {
+        let handler = AnalyzeTrainingHandler::new();
+        let client = Arc::new(AnalyzePeriodMockClient::new());
+
+        let input = json!({
+            "target_type": "period",
+            "period_start": "invalid",
+            "period_end": "2026-03-07"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_analyze_period_invalid_end_date() {
+        let handler = AnalyzeTrainingHandler::new();
+        let client = Arc::new(AnalyzePeriodMockClient::new());
+
+        let input = json!({
+            "target_type": "period",
+            "period_start": "2026-03-01",
+            "period_end": "invalid"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_analyze_period_start_after_end() {
+        let handler = AnalyzeTrainingHandler::new();
+        let client = Arc::new(AnalyzePeriodMockClient::new());
+
+        let input = json!({
+            "target_type": "period",
+            "period_start": "2026-03-07",
+            "period_end": "2026-03-01"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_analyze_period_missing_period_start() {
+        let handler = AnalyzeTrainingHandler::new();
+        let client = Arc::new(AnalyzePeriodMockClient::new());
+
+        let input = json!({
+            "target_type": "period",
+            "period_end": "2026-03-07"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_analyze_period_missing_period_end() {
+        let handler = AnalyzeTrainingHandler::new();
+        let client = Arc::new(AnalyzePeriodMockClient::new());
+
+        let input = json!({
+            "target_type": "period",
+            "period_start": "2026-03-01"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_analyze_period_with_histograms_rejected() {
+        let handler = AnalyzeTrainingHandler::new();
+        let client = Arc::new(AnalyzePeriodMockClient::new());
+
+        let input = json!({
+            "target_type": "period",
+            "period_start": "2026-03-01",
+            "period_end": "2026-03-07",
+            "include_histograms": true
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("include_histograms")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_analyze_period_with_description_filter() {
+        let handler = AnalyzeTrainingHandler::new();
+        let client = Arc::new(AnalyzePeriodMockClient::new().with_activities(vec![
+            ActivitySummary {
+                id: "12345".to_string(),
+                name: Some("Easy Run".to_string()),
+                start_date_local: "2026-03-01".to_string(),
+            },
+            ActivitySummary {
+                id: "12346".to_string(),
+                name: Some("Interval Run".to_string()),
+                start_date_local: "2026-03-03".to_string(),
+            },
+        ]));
+
+        let input = json!({
+            "target_type": "period",
+            "period_start": "2026-03-01",
+            "period_end": "2026-03-07",
+            "description_contains": "interval"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        // Should only include the interval run
+        assert!(content_str.contains("Period Analysis"));
+    }
+
+    #[tokio::test]
+    async fn test_analyze_period_with_requested_metrics() {
+        let handler = AnalyzeTrainingHandler::new();
+        let client = Arc::new(
+            AnalyzePeriodMockClient::new()
+                .with_activities(vec![ActivitySummary {
+                    id: "12345".to_string(),
+                    name: Some("Run".to_string()),
+                    start_date_local: "2026-03-01".to_string(),
+                }])
+                .with_activity_detail(
+                    "12345",
+                    json!({
+                        "moving_time": 3600,
+                        "distance": 10000.0,
+                        "total_elevation_gain": 200.0,
+                        "average_heartrate": 150.0,
+                        "icu_training_load": 75.0,
+                    }),
+                ),
+        );
+
+        let input = json!({
+            "target_type": "period",
+            "period_start": "2026-03-01",
+            "period_end": "2026-03-07",
+            "metrics": ["time", "distance", "hr"]
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("Requested Metrics"));
+    }
+
+    #[tokio::test]
+    async fn test_analyze_period_analysis_type_streams() {
+        let handler = AnalyzeTrainingHandler::new();
+        let client = Arc::new(
+            AnalyzePeriodMockClient::new()
+                .with_activities(vec![ActivitySummary {
+                    id: "12345".to_string(),
+                    name: Some("Run".to_string()),
+                    start_date_local: "2026-03-01".to_string(),
+                }])
+                .with_activity_detail(
+                    "12345",
+                    json!({
+                        "moving_time": 3600,
+                        "icu_training_load": 75.0,
+                    }),
+                ),
+        );
+
+        let input = json!({
+            "target_type": "period",
+            "period_start": "2026-03-01",
+            "period_end": "2026-03-07",
+            "analysis_type": "streams"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("Daily Load Series"));
+    }
+
+    #[tokio::test]
+    async fn test_analyze_period_analysis_type_intervals() {
+        let handler = AnalyzeTrainingHandler::new();
+        let client =
+            Arc::new(
+                AnalyzePeriodMockClient::new().with_activities(vec![ActivitySummary {
+                    id: "12345".to_string(),
+                    name: Some("Interval Session".to_string()),
+                    start_date_local: "2026-03-01".to_string(),
+                }]),
+            );
+
+        let input = json!({
+            "target_type": "period",
+            "period_start": "2026-03-01",
+            "period_end": "2026-03-07",
+            "analysis_type": "intervals"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        // Interval sessions section appears when interval workouts found
+        assert!(content_str.contains("Period Analysis"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_invalid_target_type() {
+        let handler = AnalyzeTrainingHandler::new();
+        let client = Arc::new(AnalyzePeriodMockClient::new());
+
+        let input = json!({
+            "target_type": "invalid"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid target_type")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_missing_target_type() {
+        let handler = AnalyzeTrainingHandler::new();
+        let client = Arc::new(AnalyzePeriodMockClient::new());
+
+        let input = json!({});
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("target_type"));
+    }
 }

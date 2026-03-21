@@ -589,6 +589,7 @@ pub async fn fetch_race_data(
 mod tests {
     use super::*;
     use chrono::NaiveDate;
+    use intervals_icu_client::EventCategory;
     use serde_json::json;
 
     #[test]
@@ -818,5 +819,612 @@ mod tests {
             object.get("watts").and_then(Value::as_array).map(Vec::len),
             Some(3)
         );
+    }
+
+    // ========================================================================
+    // PeriodFetchRequest Tests
+    // ========================================================================
+
+    #[test]
+    fn period_fetch_request_clone() {
+        let request = PeriodFetchRequest {
+            window: AnalysisWindow::new(
+                NaiveDate::from_ymd_opt(2026, 3, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2026, 3, 7).unwrap(),
+            ),
+            include_activity_details: true,
+            include_comparison_window: false,
+        };
+        let _cloned = request.clone();
+    }
+
+    #[test]
+    fn period_fetch_request_debug() {
+        let request = PeriodFetchRequest {
+            window: AnalysisWindow::new(
+                NaiveDate::from_ymd_opt(2026, 3, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2026, 3, 7).unwrap(),
+            ),
+            include_activity_details: true,
+            include_comparison_window: false,
+        };
+        let debug_str = format!("{:?}", request);
+        assert!(debug_str.contains("PeriodFetchRequest"));
+    }
+
+    // ========================================================================
+    // SingleWorkoutFetchRequest Tests
+    // ========================================================================
+
+    #[test]
+    fn single_workout_fetch_request_clone() {
+        let request = SingleWorkoutFetchRequest {
+            activity_id: "a123".to_string(),
+            include_intervals: true,
+            include_streams: true,
+            include_best_efforts: false,
+            include_hr_histogram: true,
+            include_power_histogram: true,
+            include_pace_histogram: false,
+        };
+        let _cloned = request.clone();
+    }
+
+    #[test]
+    fn single_workout_fetch_request_debug() {
+        let request = SingleWorkoutFetchRequest {
+            activity_id: "a123".to_string(),
+            include_intervals: true,
+            include_streams: false,
+            include_best_efforts: false,
+            include_hr_histogram: false,
+            include_power_histogram: false,
+            include_pace_histogram: false,
+        };
+        let debug_str = format!("{:?}", request);
+        assert!(debug_str.contains("SingleWorkoutFetchRequest"));
+    }
+
+    // ========================================================================
+    // RecoveryFetchRequest Tests
+    // ========================================================================
+
+    #[test]
+    fn recovery_fetch_request_clone() {
+        let request = RecoveryFetchRequest {
+            period_days: 7,
+            include_wellness: true,
+        };
+        let _cloned = request.clone();
+    }
+
+    #[test]
+    fn recovery_fetch_request_debug() {
+        let request = RecoveryFetchRequest {
+            period_days: 14,
+            include_wellness: false,
+        };
+        let debug_str = format!("{:?}", request);
+        assert!(debug_str.contains("RecoveryFetchRequest"));
+    }
+
+    // ========================================================================
+    // RaceFetchRequest Tests
+    // ========================================================================
+
+    #[test]
+    fn race_fetch_request_clone() {
+        let request = RaceFetchRequest {
+            activity_id: "r123".to_string(),
+            include_intervals: true,
+            include_streams: false,
+        };
+        let _cloned = request.clone();
+    }
+
+    #[test]
+    fn race_fetch_request_debug() {
+        let request = RaceFetchRequest {
+            activity_id: "r123".to_string(),
+            include_intervals: false,
+            include_streams: true,
+        };
+        let debug_str = format!("{:?}", request);
+        assert!(debug_str.contains("RaceFetchRequest"));
+    }
+
+    // ========================================================================
+    // FetchedAnalysisData Tests
+    // ========================================================================
+
+    #[test]
+    fn fetched_analysis_data_default() {
+        let data = FetchedAnalysisData::default();
+        assert!(data.activities.is_empty());
+        assert!(data.comparison_activities.is_empty());
+        assert!(data.calendar_events.is_empty());
+        assert!(data.activity_messages.is_empty());
+        assert!(data.activity_details.is_empty());
+        assert!(data.workout_detail.is_none());
+        assert!(data.fitness.is_none());
+        assert!(data.wellness.is_none());
+        assert!(data.intervals.is_none());
+        assert!(data.streams.is_none());
+        assert!(data.best_efforts.is_none());
+        assert!(data.hr_histogram.is_none());
+        assert!(data.power_histogram.is_none());
+        assert!(data.pace_histogram.is_none());
+    }
+
+    #[test]
+    fn fetched_analysis_data_clone() {
+        let data = FetchedAnalysisData {
+            activities: vec![ActivitySummary {
+                id: "a1".to_string(),
+                name: Some("Test".to_string()),
+                start_date_local: "2026-03-01".to_string(),
+            }],
+            ..Default::default()
+        };
+        let _cloned = data.clone();
+    }
+
+    #[test]
+    fn fetched_analysis_data_debug() {
+        let data = FetchedAnalysisData::default();
+        let debug_str = format!("{:?}", data);
+        assert!(debug_str.contains("FetchedAnalysisData"));
+    }
+
+    // ========================================================================
+    // Parse Activity Date Tests
+    // ========================================================================
+
+    #[test]
+    fn parse_activity_date_with_time() {
+        let result = parse_activity_date("2026-03-01T10:30:00");
+        assert!(result.is_some());
+        assert_eq!(
+            result.unwrap(),
+            NaiveDate::from_ymd_opt(2026, 3, 1).unwrap()
+        );
+    }
+
+    #[test]
+    fn parse_activity_date_without_time() {
+        let result = parse_activity_date("2026-03-01");
+        assert!(result.is_some());
+        assert_eq!(
+            result.unwrap(),
+            NaiveDate::from_ymd_opt(2026, 3, 1).unwrap()
+        );
+    }
+
+    #[test]
+    fn parse_activity_date_invalid_format() {
+        assert!(parse_activity_date("invalid").is_none());
+        assert!(parse_activity_date("01-03-2026").is_none());
+        assert!(parse_activity_date("").is_none());
+    }
+
+    // ========================================================================
+    // Parse Event Date Tests
+    // ========================================================================
+
+    #[test]
+    fn parse_event_date_with_time() {
+        let result = parse_event_date("2026-03-01T10:30:00");
+        assert!(result.is_some());
+        assert_eq!(
+            result.unwrap(),
+            NaiveDate::from_ymd_opt(2026, 3, 1).unwrap()
+        );
+    }
+
+    #[test]
+    fn parse_event_date_without_time() {
+        let result = parse_event_date("2026-03-01");
+        assert!(result.is_some());
+        assert_eq!(
+            result.unwrap(),
+            NaiveDate::from_ymd_opt(2026, 3, 1).unwrap()
+        );
+    }
+
+    #[test]
+    fn parse_event_date_invalid() {
+        assert!(parse_event_date("not-a-date").is_none());
+    }
+
+    // ========================================================================
+    // Dedupe and Sort Events Tests
+    // ========================================================================
+
+    #[test]
+    fn dedupe_and_sort_events_empty_list() {
+        let events: Vec<Event> = vec![];
+        let result = dedupe_and_sort_events(events);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn dedupe_and_sort_events_removes_duplicates_by_id() {
+        let events = vec![
+            Event {
+                id: Some("e1".to_string()),
+                start_date_local: "2026-03-01".to_string(),
+                name: "Event 1".to_string(),
+                category: EventCategory::Workout,
+                description: None,
+                r#type: None,
+            },
+            Event {
+                id: Some("e1".to_string()),
+                start_date_local: "2026-03-01".to_string(),
+                name: "Event 1 Duplicate".to_string(),
+                category: EventCategory::Workout,
+                description: None,
+                r#type: None,
+            },
+        ];
+        let result = dedupe_and_sort_events(events);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].id, Some("e1".to_string()));
+    }
+
+    #[test]
+    fn dedupe_and_sort_events_sorts_by_date() {
+        let events = vec![
+            Event {
+                id: Some("e2".to_string()),
+                start_date_local: "2026-03-02".to_string(),
+                name: "Event 2".to_string(),
+                category: EventCategory::Workout,
+                description: None,
+                r#type: None,
+            },
+            Event {
+                id: Some("e1".to_string()),
+                start_date_local: "2026-03-01".to_string(),
+                name: "Event 1".to_string(),
+                category: EventCategory::Workout,
+                description: None,
+                r#type: None,
+            },
+        ];
+        let result = dedupe_and_sort_events(events);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].id, Some("e1".to_string()));
+        assert_eq!(result[1].id, Some("e2".to_string()));
+    }
+
+    #[test]
+    fn dedupe_and_sort_events_without_id_uses_fallback_key() {
+        let events = vec![
+            Event {
+                id: None,
+                start_date_local: "2026-03-01".to_string(),
+                name: "Same Event".to_string(),
+                category: EventCategory::Workout,
+                description: None,
+                r#type: None,
+            },
+            Event {
+                id: None,
+                start_date_local: "2026-03-01".to_string(),
+                name: "Same Event".to_string(),
+                category: EventCategory::Workout,
+                description: None,
+                r#type: None,
+            },
+        ];
+        let result = dedupe_and_sort_events(events);
+        assert_eq!(result.len(), 1);
+    }
+
+    // ========================================================================
+    // Normalize Upcoming Events Payload Tests
+    // ========================================================================
+
+    #[test]
+    fn normalize_upcoming_events_payload_non_array_passthrough() {
+        let payload = json!({"not": "an array"});
+        let result = normalize_upcoming_events_payload(payload.clone());
+        assert_eq!(result, payload);
+    }
+
+    #[test]
+    fn normalize_upcoming_events_payload_with_name_unchanged() {
+        let payload = json!([
+            {
+                "id": 1,
+                "name": "Has Name",
+                "start_date_local": "2026-03-01"
+            }
+        ]);
+        let result = normalize_upcoming_events_payload(payload.clone());
+        assert_eq!(result, payload);
+    }
+
+    #[test]
+    fn normalize_upcoming_events_payload_empty_name_uses_description() {
+        let payload = json!([
+            {
+                "id": 1,
+                "name": "",
+                "description": "Fallback Description",
+                "category": "WORKOUT",
+                "start_date_local": "2026-03-01"
+            }
+        ]);
+        let result = normalize_upcoming_events_payload(payload);
+        let events: Vec<Event> = serde_json::from_value(result).unwrap();
+        assert_eq!(events[0].name, "Fallback Description");
+    }
+
+    #[test]
+    fn normalize_upcoming_events_payload_empty_name_uses_category() {
+        let payload = json!([
+            {
+                "id": 1,
+                "name": "  ",
+                "category": "WORKOUT",
+                "start_date_local": "2026-03-01"
+            }
+        ]);
+        let result = normalize_upcoming_events_payload(payload);
+        let events: Vec<Event> = serde_json::from_value(result).unwrap();
+        assert_eq!(events[0].name, "WORKOUT");
+    }
+
+    #[test]
+    fn normalize_upcoming_events_payload_no_name_fallback_to_default() {
+        let payload = json!([
+            {
+                "id": 1,
+                "name": "",
+                "description": "",
+                "category": "",
+                "start_date_local": "2026-03-01"
+            }
+        ]);
+        let result = normalize_upcoming_events_payload(payload);
+        let events: Vec<Event> = serde_json::from_value(result).unwrap();
+        assert_eq!(events[0].name, "Untitled event");
+    }
+
+    // ========================================================================
+    // Normalize Intervals Payload Tests
+    // ========================================================================
+
+    #[test]
+    fn normalize_intervals_payload_array_passthrough() {
+        let payload = json!([
+            {"moving_time": 300},
+            {"moving_time": 600}
+        ]);
+        let result = normalize_intervals_payload(payload.clone());
+        assert_eq!(result, payload);
+    }
+
+    #[test]
+    fn normalize_intervals_payload_non_object_passthrough() {
+        let payload = json!("not an object");
+        let result = normalize_intervals_payload(payload.clone());
+        assert_eq!(result, payload);
+    }
+
+    #[test]
+    fn normalize_intervals_payload_no_intervals_or_groups_passthrough() {
+        let payload = json!({
+            "id": "i123",
+            "other_field": "value"
+        });
+        let result = normalize_intervals_payload(payload.clone());
+        assert_eq!(result, payload);
+    }
+
+    // ========================================================================
+    // Normalize Streams Payload Tests
+    // ========================================================================
+
+    #[test]
+    fn normalize_streams_payload_array_passthrough() {
+        // Array input gets normalized to object by normalize_stream_descriptor_array
+        let payload = json!([
+            {"name": "heartrate", "data": [140, 145]}
+        ]);
+        let result = normalize_streams_payload(payload);
+        // Should normalize to object map
+        assert!(result.as_object().is_some());
+        assert!(result.as_object().unwrap().contains_key("heartrate"));
+    }
+
+    #[test]
+    fn normalize_streams_payload_non_object_passthrough() {
+        let payload = json!("not an object");
+        let result = normalize_streams_payload(payload.clone());
+        assert_eq!(result, payload);
+    }
+
+    #[test]
+    fn normalize_streams_payload_no_streams_key_passthrough() {
+        let payload = json!({
+            "other": "field"
+        });
+        let result = normalize_streams_payload(payload.clone());
+        assert_eq!(result, payload);
+    }
+
+    #[test]
+    fn normalize_streams_payload_streams_non_array_passthrough() {
+        let payload = json!({
+            "streams": "not an array"
+        });
+        let result = normalize_streams_payload(payload.clone());
+        assert_eq!(result, payload);
+    }
+
+    // ========================================================================
+    // Extract Activity Load Tests
+    // ========================================================================
+
+    #[test]
+    fn extract_activity_load_none_input() {
+        assert_eq!(extract_activity_load(None), None);
+    }
+
+    #[test]
+    fn extract_activity_load_non_object() {
+        let detail = json!("not an object");
+        assert_eq!(extract_activity_load(Some(&detail)), None);
+    }
+
+    #[test]
+    fn extract_activity_load_no_load_or_time() {
+        let detail = json!({"distance": 10000});
+        assert_eq!(extract_activity_load(Some(&detail)), None);
+    }
+
+    #[test]
+    fn extract_activity_load_alternate_load_field_names() {
+        let detail = json!({"training_load": 75.0});
+        assert_eq!(extract_activity_load(Some(&detail)), Some(75.0));
+    }
+
+    #[test]
+    fn extract_activity_load_camelcase_load_field() {
+        let detail = json!({"icuTrainingLoad": 88.0});
+        assert_eq!(extract_activity_load(Some(&detail)), Some(88.0));
+    }
+
+    #[test]
+    fn extract_activity_load_integer_load() {
+        let detail = json!({"icu_training_load": 90});
+        assert_eq!(extract_activity_load(Some(&detail)), Some(90.0));
+    }
+
+    #[test]
+    fn extract_activity_load_moving_time_integer() {
+        let detail = json!({"moving_time": 7200});
+        assert_eq!(extract_activity_load(Some(&detail)), Some(120.0));
+    }
+
+    // ========================================================================
+    // Build Previous Window Tests
+    // ========================================================================
+
+    #[test]
+    fn build_previous_window_correct_length() {
+        let current = AnalysisWindow::new(
+            NaiveDate::from_ymd_opt(2026, 3, 8).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 3, 14).unwrap(),
+        );
+        let previous = build_previous_window(&current);
+        assert_eq!(previous.window_days(), current.window_days());
+    }
+
+    #[test]
+    fn build_previous_window_adjacent_to_current() {
+        let current = AnalysisWindow::new(
+            NaiveDate::from_ymd_opt(2026, 3, 8).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 3, 14).unwrap(),
+        );
+        let previous = build_previous_window(&current);
+        assert_eq!(previous.end_date, current.start_date.pred_opt().unwrap());
+    }
+
+    #[test]
+    fn build_previous_window_7_day_example() {
+        let current = AnalysisWindow::new(
+            NaiveDate::from_ymd_opt(2026, 3, 8).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 3, 14).unwrap(),
+        );
+        let previous = build_previous_window(&current);
+        assert_eq!(
+            previous.start_date,
+            NaiveDate::from_ymd_opt(2026, 3, 1).unwrap()
+        );
+        assert_eq!(
+            previous.end_date,
+            NaiveDate::from_ymd_opt(2026, 3, 7).unwrap()
+        );
+    }
+
+    // ========================================================================
+    // Parse Planned Workout Tests
+    // ========================================================================
+
+    #[test]
+    fn parse_planned_workout_with_paired_activity_id_excluded() {
+        let known_ids = std::collections::HashSet::from(["a123".to_string()]);
+        let event = json!({
+            "id": 1,
+            "start_date_local": "2026-03-01",
+            "description": "Planned",
+            "paired_activity_id": "a123"
+        });
+        assert!(parse_planned_workout(&event, &known_ids).is_none());
+    }
+
+    #[test]
+    fn parse_planned_workout_missing_id() {
+        let known_ids = std::collections::HashSet::new();
+        let event = json!({
+            "start_date_local": "2026-03-01",
+            "description": "Planned"
+        });
+        assert!(parse_planned_workout(&event, &known_ids).is_none());
+    }
+
+    #[test]
+    fn parse_planned_workout_missing_start_date() {
+        let known_ids = std::collections::HashSet::new();
+        let event = json!({
+            "id": 1,
+            "description": "Planned"
+        });
+        assert!(parse_planned_workout(&event, &known_ids).is_none());
+    }
+
+    #[test]
+    fn parse_planned_workout_no_description_uses_fallback() {
+        let known_ids = std::collections::HashSet::new();
+        let event = json!({
+            "id": 1,
+            "start_date_local": "2026-03-01"
+        });
+        let result = parse_planned_workout(&event, &known_ids);
+        assert!(result.is_some());
+        let (activity, _) = result.unwrap();
+        assert_eq!(activity.name, Some("Planned workout".to_string()));
+    }
+
+    #[test]
+    fn parse_planned_workout_uses_name_if_description_missing() {
+        let known_ids = std::collections::HashSet::new();
+        let event = json!({
+            "id": 1,
+            "start_date_local": "2026-03-01",
+            "name": "Named Workout"
+        });
+        let result = parse_planned_workout(&event, &known_ids);
+        assert!(result.is_some());
+        let (activity, _) = result.unwrap();
+        assert_eq!(activity.name, Some("Named Workout".to_string()));
+    }
+
+    #[test]
+    fn parse_planned_workout_string_id() {
+        let known_ids = std::collections::HashSet::new();
+        let event = json!({
+            "id": "event_1",
+            "start_date_local": "2026-03-01",
+            "description": "Planned"
+        });
+        let result = parse_planned_workout(&event, &known_ids);
+        assert!(result.is_some());
+        let (activity, _) = result.unwrap();
+        assert_eq!(activity.id, "event:event_1");
     }
 }

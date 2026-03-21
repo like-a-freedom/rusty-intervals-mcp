@@ -478,4 +478,262 @@ mod tests {
             other => panic!("unexpected block: {:?}", other),
         }
     }
+
+    #[test]
+    fn test_data_availability_block_empty_reasons_not_all_available() {
+        let block = data_availability_block(&[], false);
+        assert!(block.is_none());
+    }
+
+    #[test]
+    fn test_filter_activities_by_date() {
+        let activities = vec![
+            ActivitySummary {
+                id: "1".to_string(),
+                name: Some("Run".to_string()),
+                start_date_local: "2026-03-01T10:00:00".to_string(),
+            },
+            ActivitySummary {
+                id: "2".to_string(),
+                name: Some("Ride".to_string()),
+                start_date_local: "2026-03-02T10:00:00".to_string(),
+            },
+            ActivitySummary {
+                id: "3".to_string(),
+                name: Some("Swim".to_string()),
+                start_date_local: "2026-03-01T14:00:00".to_string(),
+            },
+        ];
+
+        let target = NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
+        let filtered = filter_activities_by_date(&activities, &target);
+
+        assert_eq!(filtered.len(), 2);
+        assert_eq!(filtered[0].id, "1");
+        assert_eq!(filtered[1].id, "3");
+    }
+
+    #[test]
+    fn test_filter_activities_by_date_no_matches() {
+        let activities = vec![ActivitySummary {
+            id: "1".to_string(),
+            name: Some("Run".to_string()),
+            start_date_local: "2026-03-01T10:00:00".to_string(),
+        }];
+
+        let target = NaiveDate::from_ymd_opt(2026, 3, 15).unwrap();
+        let filtered = filter_activities_by_date(&activities, &target);
+
+        assert_eq!(filtered.len(), 0);
+    }
+
+    #[test]
+    fn test_filter_activities_by_date_empty_list() {
+        let activities: Vec<ActivitySummary> = vec![];
+        let target = NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
+        let filtered = filter_activities_by_date(&activities, &target);
+
+        assert_eq!(filtered.len(), 0);
+    }
+
+    #[test]
+    fn test_filter_activities_by_range() {
+        let activities = vec![
+            ActivitySummary {
+                id: "1".to_string(),
+                name: Some("Run".to_string()),
+                start_date_local: "2026-03-01T10:00:00".to_string(),
+            },
+            ActivitySummary {
+                id: "2".to_string(),
+                name: Some("Ride".to_string()),
+                start_date_local: "2026-03-15T10:00:00".to_string(),
+            },
+            ActivitySummary {
+                id: "3".to_string(),
+                name: Some("Swim".to_string()),
+                start_date_local: "2026-03-31T10:00:00".to_string(),
+            },
+        ];
+
+        let start = NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
+        let end = NaiveDate::from_ymd_opt(2026, 3, 15).unwrap();
+        let filtered = filter_activities_by_range(&activities, &start, &end);
+
+        assert_eq!(filtered.len(), 2);
+    }
+
+    #[test]
+    fn test_filter_activities_by_description() {
+        let activities = vec![
+            ActivitySummary {
+                id: "1".to_string(),
+                name: Some("Morning Run".to_string()),
+                start_date_local: "2026-03-01T10:00:00".to_string(),
+            },
+            ActivitySummary {
+                id: "2".to_string(),
+                name: Some("Easy Ride".to_string()),
+                start_date_local: "2026-03-02T10:00:00".to_string(),
+            },
+            ActivitySummary {
+                id: "3".to_string(),
+                name: Some("Long Run".to_string()),
+                start_date_local: "2026-03-03T10:00:00".to_string(),
+            },
+        ];
+
+        let filtered = filter_activities_by_description(&activities, "run");
+        assert_eq!(filtered.len(), 2);
+
+        let filtered = filter_activities_by_description(&activities, "RIDE");
+        assert_eq!(filtered.len(), 1);
+
+        let filtered = filter_activities_by_description(&activities, "swim");
+        assert_eq!(filtered.len(), 0);
+    }
+
+    #[test]
+    fn test_filter_activities_by_description_none_name() {
+        let activities = vec![
+            ActivitySummary {
+                id: "1".to_string(),
+                name: None,
+                start_date_local: "2026-03-01T10:00:00".to_string(),
+            },
+            ActivitySummary {
+                id: "2".to_string(),
+                name: Some("Run".to_string()),
+                start_date_local: "2026-03-02T10:00:00".to_string(),
+            },
+        ];
+
+        let filtered = filter_activities_by_description(&activities, "run");
+        assert_eq!(filtered.len(), 1);
+    }
+
+    #[test]
+    fn test_filter_events_by_date() {
+        let events = vec![
+            Event {
+                id: Some("1".to_string()),
+                name: "Workout 1".to_string(),
+                start_date_local: "2026-03-01T10:00:00".to_string(),
+                category: intervals_icu_client::EventCategory::Workout,
+                description: None,
+                r#type: None,
+            },
+            Event {
+                id: Some("2".to_string()),
+                name: "Workout 2".to_string(),
+                start_date_local: "2026-03-02T10:00:00".to_string(),
+                category: intervals_icu_client::EventCategory::Workout,
+                description: None,
+                r#type: None,
+            },
+        ];
+
+        let target = NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
+        let filtered = filter_events_by_date(&events, &target);
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].id, Some("1".to_string()));
+    }
+
+    #[test]
+    fn test_filter_events_by_date_date_only_format() {
+        let events = vec![Event {
+            id: Some("1".to_string()),
+            name: "Race".to_string(),
+            start_date_local: "2026-03-01".to_string(),
+            category: intervals_icu_client::EventCategory::RaceA,
+            description: None,
+            r#type: None,
+        }];
+
+        let target = NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
+        let filtered = filter_events_by_date(&events, &target);
+
+        assert_eq!(filtered.len(), 1);
+    }
+
+    #[test]
+    fn test_filter_events_by_range() {
+        let events = vec![
+            Event {
+                id: Some("1".to_string()),
+                name: "Workout 1".to_string(),
+                start_date_local: "2026-03-01T10:00:00".to_string(),
+                category: intervals_icu_client::EventCategory::Workout,
+                description: None,
+                r#type: None,
+            },
+            Event {
+                id: Some("2".to_string()),
+                name: "Workout 2".to_string(),
+                start_date_local: "2026-03-15T10:00:00".to_string(),
+                category: intervals_icu_client::EventCategory::Workout,
+                description: None,
+                r#type: None,
+            },
+            Event {
+                id: Some("3".to_string()),
+                name: "Workout 3".to_string(),
+                start_date_local: "2026-03-31T10:00:00".to_string(),
+                category: intervals_icu_client::EventCategory::Workout,
+                description: None,
+                r#type: None,
+            },
+        ];
+
+        let start = NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
+        let end = NaiveDate::from_ymd_opt(2026, 3, 15).unwrap();
+        let filtered = filter_events_by_range(&events, &start, &end);
+
+        assert_eq!(filtered.len(), 2);
+    }
+
+    #[test]
+    fn test_validate_date_range_max_days_exceeded() {
+        let start = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+        let end = NaiveDate::from_ymd_opt(2026, 6, 1).unwrap();
+        let result = validate_date_range(&start, &end, 30);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_date_range_same_day() {
+        let start = NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
+        let end = NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
+        let result = validate_date_range(&start, &end, 30);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_parse_date_invalid_format_with_slashes() {
+        let result = parse_date("2026/03/01", "test");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_optional_date_invalid() {
+        let result = parse_optional_date(Some("invalid"), "test");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_format_duration_seconds_zero() {
+        assert_eq!(format_duration_seconds(0), "0:00");
+    }
+
+    #[test]
+    fn test_format_duration_minutes_zero() {
+        assert_eq!(format_duration_minutes(0), "0:00");
+    }
+
+    #[test]
+    fn test_calculate_percent_change_negative_old_value() {
+        let result = calculate_percent_change(-100.0, -90.0);
+        assert!((result - (-10.0)).abs() < 0.1);
+    }
 }
