@@ -200,7 +200,7 @@ Intent responses include `suggestions` and `next_actions` so the host model know
 
 ### Prerequisites
 
-- **Rust 1.93+** with Cargo, or
+- **Rust 1.94+** with Cargo, or
 - **Docker**
 
 ### Get your Intervals.icu credentials
@@ -243,6 +243,10 @@ intervals_icu_mcp
 For remote MCP clients or when running as a service:
 
 ```sh
+# Generate secrets for JWT authentication
+export JWT_SECRET=$(openssl rand -hex 32)
+export JWT_ENCRYPTION_KEY=$(openssl rand -hex 32)
+
 export INTERVALS_ICU_API_KEY=your_api_key_here
 export INTERVALS_ICU_ATHLETE_ID=i123456
 export MCP_TRANSPORT=http
@@ -251,6 +255,15 @@ intervals_icu_mcp
 ```
 
 The MCP endpoint is available at `http://<address>/mcp`.
+
+Current HTTP security/runtime notes:
+- `/auth` is rate-limited separately for brute-force protection.
+- `/mcp` rate limiting is currently applied at the endpoint/peer-IP layer before request authentication, so it is **not** yet keyed by authenticated athlete identity.
+- HTTP mode requires `JWT_SECRET` and `JWT_ENCRYPTION_KEY` in addition to the Intervals.icu credentials used during `/auth`. Generate them with:
+  ```sh
+  export JWT_SECRET=$(openssl rand -hex 32)
+  export JWT_ENCRYPTION_KEY=$(openssl rand -hex 32)
+  ```
 
 ## VS Code / Copilot setup
 
@@ -409,7 +422,7 @@ See `.env.example` for the standard environment layout.
 | `RUST_LOG` | unset | Standard Rust logging control |
 | `MCP_TRANSPORT` | `stdio` | Transport mode: `stdio` or `http` |
 | `MCP_HTTP_ADDRESS` | `127.0.0.1:3000` | Listen address for HTTP mode |
-| `MAX_HTTP_BODY_SIZE` | `52428800` | Max request body size in bytes (HTTP mode) |
+| `MAX_HTTP_BODY_SIZE` | `4194304` | Max request body size in bytes (HTTP mode) |
 
 ### OpenAPI runtime behavior
 

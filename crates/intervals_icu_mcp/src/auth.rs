@@ -7,6 +7,7 @@ use jwt_simple::prelude::*;
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use thiserror::Error;
 
@@ -207,31 +208,43 @@ impl IntoResponse for AuthError {
     }
 }
 
-/// POST /auth - получить JWT токен
+/// POST /auth - get JWT token
 pub async fn auth_endpoint(
     State(state): State<Arc<AppState>>,
+    axum::extract::ConnectInfo(client_addr): axum::extract::ConnectInfo<SocketAddr>,
     Json(req): Json<AuthRequest>,
 ) -> Result<Json<AuthResponse>, AuthError> {
-    // Валидация credentials против intervals.icu API
+    let client_ip = client_addr.to_string();
+
+    // Validate credentials against intervals.icu API
     let client = intervals_icu_client::http_client::ReqwestIntervalsClient::new(
         &state.base_url,
         req.athlete_id.clone(),
         SecretString::new(req.api_key.clone().into()),
     );
 
-    // Простой validation call - get_athlete_profile
-    client
-        .get_athlete_profile()
-        .await
-        .map_err(|_| AuthError::InvalidCredentials)?;
+    // Simple validation call - get_athlete_profile
+    client.get_athlete_profile().await.map_err(|e| {
+        tracing::warn!(
+            client_ip = %client_ip,
+            athlete_id = %req.athlete_id,
+            error = %e,
+            "Invalid credentials at /auth"
+        );
+        AuthError::InvalidCredentials
+    })?;
 
-    // Валидация прошла успешно - выдаём JWT
+    // Validation successful - issue JWT
     let token =
         state
             .jwt_manager
             .issue_token(&req.athlete_id, &req.api_key, state.jwt_ttl_seconds)?;
 
-    tracing::info!(athlete_id = %req.athlete_id, "Issued JWT token");
+    tracing::info!(
+        client_ip = %client_ip,
+        athlete_id = %req.athlete_id,
+        "Issued JWT token"
+    );
 
     Ok(Json(AuthResponse {
         token,
@@ -240,13 +253,15 @@ pub async fn auth_endpoint(
     }))
 }
 
-/// Axum middleware для извлечения JWT из Authorization header
+/// Axum middleware for extracting JWT from Authorization header
 pub async fn auth_middleware(
     State(jwt_manager): State<Arc<JwtManager>>,
     mut request: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
+    use axum::extract::ConnectInfo;
     use axum::http::header::AUTHORIZATION;
+    use std::net::SocketAddr;
 
     let auth_header = request
         .headers()
@@ -254,11 +269,31 @@ pub async fn auth_middleware(
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "));
 
+    // Get client IP for logging
+    let client_ip = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|ci| ci.0)
+        .map(|addr| addr.to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+
     let credentials = match auth_header {
-        Some(token) => jwt_manager
-            .verify_token(token)
-            .map_err(|_| StatusCode::UNAUTHORIZED)?,
+        Some(token) => match jwt_manager.verify_token(token) {
+            Ok(creds) => creds,
+            Err(e) => {
+                tracing::warn!(
+                    client_ip = %client_ip,
+                    error = %e,
+                    "Failed JWT verification"
+                );
+                return Err(StatusCode::UNAUTHORIZED);
+            }
+        },
         None => {
+            tracing::warn!(
+                client_ip = %client_ip,
+                "Missing Authorization header"
+            );
             return Err(StatusCode::UNAUTHORIZED);
         }
     };
