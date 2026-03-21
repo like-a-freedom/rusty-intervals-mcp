@@ -251,6 +251,9 @@ export INTERVALS_ICU_API_KEY=your_api_key_here
 export INTERVALS_ICU_ATHLETE_ID=i123456
 export MCP_TRANSPORT=http
 export MCP_HTTP_ADDRESS=127.0.0.1:3000  # optional: default is 127.0.0.1:3000
+export MAX_HTTP_BODY_SIZE=4194304        # optional: 4 MiB request limit
+export REQUEST_TIMEOUT_SECONDS=30        # optional: per-request timeout
+export IDLE_TIMEOUT_SECONDS=60           # optional: idle connection timeout
 intervals_icu_mcp
 ```
 
@@ -259,7 +262,11 @@ The MCP endpoint is available at `http://<address>/mcp`.
 Current HTTP security/runtime notes:
 - `/auth` is rate-limited separately for brute-force protection.
 - `/mcp` rate limiting is currently applied at the endpoint/peer-IP layer before request authentication, so it is **not** yet keyed by authenticated athlete identity.
-- HTTP mode requires `JWT_SECRET` and `JWT_ENCRYPTION_KEY` in addition to the Intervals.icu credentials used during `/auth`. Generate them with:
+- HTTP mode requires `JWT_SECRET` and `JWT_ENCRYPTION_KEY` in addition to the Intervals.icu credentials used during `/auth`.
+- Container deployments are intended for **HTTP streamable MCP**. STDIO is for local child-process integrations and usually does not benefit from Docker.
+- The HTTP server also supports `REQUEST_TIMEOUT_SECONDS`, `IDLE_TIMEOUT_SECONDS`, and `JWT_TTL_SECONDS` for runtime tuning.
+
+Generate secrets with:
   ```sh
   export JWT_SECRET=$(openssl rand -hex 32)
   export JWT_ENCRYPTION_KEY=$(openssl rand -hex 32)
@@ -423,6 +430,11 @@ See `.env.example` for the standard environment layout.
 | `MCP_TRANSPORT` | `stdio` | Transport mode: `stdio` or `http` |
 | `MCP_HTTP_ADDRESS` | `127.0.0.1:3000` | Listen address for HTTP mode |
 | `MAX_HTTP_BODY_SIZE` | `4194304` | Max request body size in bytes (HTTP mode) |
+| `REQUEST_TIMEOUT_SECONDS` | `30` | Max time to process a single HTTP request |
+| `IDLE_TIMEOUT_SECONDS` | `60` | Idle connection timeout in HTTP mode |
+| `JWT_SECRET` | unset | JWT signing secret required in HTTP mode |
+| `JWT_ENCRYPTION_KEY` | unset | 32-byte hex key required to encrypt API keys in HTTP mode |
+| `JWT_TTL_SECONDS` | `86400` | JWT lifetime in seconds (capped at 7 days) |
 
 ### OpenAPI runtime behavior
 
@@ -482,6 +494,8 @@ The codebase includes:
 
 ## Docker and remote deployment
 
+Docker packaging in this repository is for the **HTTP streamable MCP** transport. For local STDIO clients such as VS Code or Claude Desktop, run the binary directly instead of containerizing it.
+
 ### Build the container
 
 ```sh
@@ -490,27 +504,41 @@ docker build -t rusty-intervals:latest .
 
 ### Run locally with environment variables
 
-#### STDIO mode (default)
-
-```sh
-docker run -i --rm \
-  -e INTERVALS_ICU_API_KEY=your_key \
-  -e INTERVALS_ICU_ATHLETE_ID=i123456 \
-  -e MCP_TRANSPORT=stdio \
-  rusty-intervals:latest
-```
-
 #### HTTP mode
 
 ```sh
-docker run -i --rm \
+docker run --rm \
   -p 3000:3000 \
   -e INTERVALS_ICU_API_KEY=your_key \
   -e INTERVALS_ICU_ATHLETE_ID=i123456 \
   -e MCP_TRANSPORT=http \
   -e MCP_HTTP_ADDRESS=0.0.0.0:3000 \
+  -e JWT_SECRET=$(openssl rand -hex 32) \
+  -e JWT_ENCRYPTION_KEY=$(openssl rand -hex 32) \
+  -e MAX_HTTP_BODY_SIZE=4194304 \
   rusty-intervals:latest
 ```
+
+The container exposes:
+
+- `GET /health` for liveness checks
+- `POST /auth` to exchange Intervals.icu credentials for a JWT
+- streamable MCP at `/mcp`
+
+### Docker Compose
+
+`docker-compose.yml` is preconfigured for HTTP mode. Provide the required secrets and credentials in your shell or `.env` file, then start the service:
+
+```sh
+docker compose up -d
+```
+
+At minimum, set these variables before launch:
+
+- `INTERVALS_ICU_API_KEY`
+- `INTERVALS_ICU_ATHLETE_ID`
+- `JWT_SECRET`
+- `JWT_ENCRYPTION_KEY`
 
 ### Remote MCP clients
 

@@ -6,13 +6,20 @@ services:
     image: ghcr.io/like-a-freedom/rusty-intervals-mcp:latest
     container_name: intervals_icu_mcp
     ports:
-      - "8080:8080"
+      - "3000:3000"
     environment:
+      MCP_TRANSPORT: http
+      MCP_HTTP_ADDRESS: ${MCP_HTTP_ADDRESS:-0.0.0.0:3000}
+      MAX_HTTP_BODY_SIZE: ${MAX_HTTP_BODY_SIZE:-4194304}
+      REQUEST_TIMEOUT_SECONDS: ${REQUEST_TIMEOUT_SECONDS:-30}
+      IDLE_TIMEOUT_SECONDS: ${IDLE_TIMEOUT_SECONDS:-60}
+      JWT_TTL_SECONDS: ${JWT_TTL_SECONDS:-86400}
+      JWT_SECRET: ${JWT_SECRET:-}
+      JWT_ENCRYPTION_KEY: ${JWT_ENCRYPTION_KEY:-}
       RUST_LOG: ${RUST_LOG:-info}
       INTERVALS_ICU_BASE_URL: ${INTERVALS_ICU_BASE_URL:-https://intervals.icu}
       INTERVALS_ICU_ATHLETE_ID: ${INTERVALS_ICU_ATHLETE_ID:-""}
       INTERVALS_ICU_API_KEY: ${INTERVALS_ICU_API_KEY:-""}
-      ADDRESS: ${ADDRESS:-0.0.0.0:8080}
     restart: unless-stopped
     logging:
       driver: "json-file"

@@ -14,12 +14,16 @@ Current status:
 
 Examples & usage
 
-- Run HTTP server (example binary `server`):
+- Run the main binary in HTTP streamable mode:
 
 ```sh
 export INTERVALS_ICU_API_KEY=...
 export INTERVALS_ICU_ATHLETE_ID=...
-cargo run -p intervals_icu_mcp --bin server
+export MCP_TRANSPORT=http
+export MCP_HTTP_ADDRESS=127.0.0.1:3000
+export JWT_SECRET=$(openssl rand -hex 32)
+export JWT_ENCRYPTION_KEY=$(openssl rand -hex 32)
+cargo run -p intervals_icu_mcp --bin intervals_icu_mcp
 ```
 
 Or install the binary locally using `cargo install --locked --path` and run it directly:
@@ -34,15 +38,29 @@ cargo install --locked --path crates/intervals_icu_mcp
 # Run the installed server:
 export INTERVALS_ICU_API_KEY=...
 export INTERVALS_ICU_ATHLETE_ID=...
+export MCP_TRANSPORT=http   # omit or set to stdio for local child-process use
+export MCP_HTTP_ADDRESS=127.0.0.1:3000
+export JWT_SECRET=$(openssl rand -hex 32)
+export JWT_ENCRYPTION_KEY=$(openssl rand -hex 32)
 intervals_icu_mcp
 ```
 
 (Use `--bin <name>` if you need to select a specific binary.)
 - Run MCP server for stdio or other transports:
 
-The crate supports RMCP transports (stdio, streamable HTTP). To run the server in a stdio/child-process mode, use the SDK examples (see top-level `examples/` or the RMCP SDK examples) or run the compiled binary as a child process. For HTTP usage, the server mounts the RMCP service at `/mcp`.
+The crate supports RMCP transports (stdio, streamable HTTP). In stdio mode, the binary reads `INTERVALS_ICU_API_KEY` and `INTERVALS_ICU_ATHLETE_ID` directly from the environment. In HTTP mode, the server mounts `/auth`, `/health`, and the streamable MCP service at `/mcp` and requires `JWT_SECRET` plus `JWT_ENCRYPTION_KEY`.
 
 If you need a concrete stdio example, run an example from the RMCP SDK or see the `tests/e2e_stdio.rs` test for an example of launching the server as a child process.
+
+Useful HTTP-mode environment variables:
+
+- `MCP_HTTP_ADDRESS` (default `127.0.0.1:3000`)
+- `MAX_HTTP_BODY_SIZE` (default `4194304` bytes)
+- `REQUEST_TIMEOUT_SECONDS` (default `30`)
+- `IDLE_TIMEOUT_SECONDS` (default `60`)
+- `JWT_TTL_SECONDS` (default `86400`, maximum 7 days)
+
+For containerized deployment, prefer the repository-level `Dockerfile` and `docker-compose.yml`; those artifacts are intended for HTTP streamable MCP, not stdio child-process usage.
 - Running tests:
 
 ```sh
