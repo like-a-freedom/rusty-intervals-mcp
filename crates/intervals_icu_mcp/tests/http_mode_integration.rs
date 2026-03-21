@@ -800,10 +800,10 @@ async fn test_auth_endpoint_issues_jwt_for_valid_credentials() {
         .mount(&mock_server)
         .await;
 
-    let jwt_manager = Arc::new(JwtManager::new(
-        b"test_jwt_secret_for_http_flow______________________________",
-        [7u8; 32],
-    ));
+    let master_key_hex = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+    let master_key_config =
+        intervals_icu_mcp::auth::MasterKeyConfig::from_hex(master_key_hex).unwrap();
+    let jwt_manager = Arc::new(JwtManager::from_master_key(&master_key_config));
     let app_state = Arc::new(AppState {
         jwt_manager: jwt_manager.clone(),
         jwt_ttl_seconds: 3600,
@@ -851,10 +851,10 @@ async fn test_auth_endpoint_issues_jwt_for_valid_credentials() {
 
 #[tokio::test]
 async fn test_mcp_route_requires_bearer_token_and_accepts_valid_jwt() {
-    let jwt_manager = Arc::new(JwtManager::new(
-        b"test_jwt_secret_for_http_flow______________________________",
-        [9u8; 32],
-    ));
+    let master_key_hex = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+    let master_key_config =
+        intervals_icu_mcp::auth::MasterKeyConfig::from_hex(master_key_hex).unwrap();
+    let jwt_manager = Arc::new(JwtManager::from_master_key(&master_key_config));
     let token = jwt_manager
         .issue_token("i777777", "test_api_key", 3600)
         .expect("token should issue");

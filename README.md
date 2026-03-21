@@ -243,9 +243,8 @@ intervals_icu_mcp
 For remote MCP clients or when running as a service:
 
 ```sh
-# Generate secrets for JWT authentication
-export JWT_SECRET=$(openssl rand -hex 32)
-export JWT_ENCRYPTION_KEY=$(openssl rand -hex 32)
+# Generate secret for JWT authentication
+export JWT_MASTER_KEY=$(openssl rand -hex 64)
 
 export INTERVALS_ICU_API_KEY=your_api_key_here
 export INTERVALS_ICU_ATHLETE_ID=i123456
@@ -260,17 +259,20 @@ intervals_icu_mcp
 The MCP endpoint is available at `http://<address>/mcp`.
 
 Current HTTP security/runtime notes:
-- `/auth` is rate-limited separately for brute-force protection.
-- `/mcp` rate limiting is currently applied at the endpoint/peer-IP layer before request authentication, so it is **not** yet keyed by authenticated athlete identity.
-- HTTP mode requires `JWT_SECRET` and `JWT_ENCRYPTION_KEY` in addition to the Intervals.icu credentials used during `/auth`.
+- `/auth` is rate-limited separately for brute-force protection (1 req/sec, burst size 3).
+- `/mcp` rate limiting is applied at the endpoint/peer-IP layer.
+- HTTP mode requires `JWT_MASTER_KEY` for JWT signing and encryption.
 - Container deployments are intended for **HTTP streamable MCP**. STDIO is for local child-process integrations and usually does not benefit from Docker.
 - The HTTP server also supports `REQUEST_TIMEOUT_SECONDS`, `IDLE_TIMEOUT_SECONDS`, and `JWT_TTL_SECONDS` for runtime tuning.
 
-Generate secrets with:
+Generate secret with:
   ```sh
-  export JWT_SECRET=$(openssl rand -hex 32)
-  export JWT_ENCRYPTION_KEY=$(openssl rand -hex 32)
+  export JWT_MASTER_KEY=$(openssl rand -hex 64)
   ```
+
+### Token lifetime
+- Default: 90 days (7776000 seconds)
+- Configurable via `JWT_TTL_SECONDS`
 
 ## VS Code / Copilot setup
 
@@ -432,9 +434,8 @@ See `.env.example` for the standard environment layout.
 | `MAX_HTTP_BODY_SIZE` | `4194304` | Max request body size in bytes (HTTP mode) |
 | `REQUEST_TIMEOUT_SECONDS` | `30` | Max time to process a single HTTP request |
 | `IDLE_TIMEOUT_SECONDS` | `60` | Idle connection timeout in HTTP mode |
-| `JWT_SECRET` | unset | JWT signing secret required in HTTP mode |
-| `JWT_ENCRYPTION_KEY` | unset | 32-byte hex key required to encrypt API keys in HTTP mode |
-| `JWT_TTL_SECONDS` | `86400` | JWT lifetime in seconds (capped at 7 days) |
+| `JWT_MASTER_KEY` | unset | 64-byte hex key (128 hex chars) required for JWT in HTTP mode |
+| `JWT_TTL_SECONDS` | `7776000` | JWT lifetime in seconds (default 90 days) |
 
 ### OpenAPI runtime behavior
 
@@ -513,8 +514,7 @@ docker run --rm \
   -e INTERVALS_ICU_ATHLETE_ID=i123456 \
   -e MCP_TRANSPORT=http \
   -e MCP_HTTP_ADDRESS=0.0.0.0:3000 \
-  -e JWT_SECRET=$(openssl rand -hex 32) \
-  -e JWT_ENCRYPTION_KEY=$(openssl rand -hex 32) \
+  -e JWT_MASTER_KEY=$(openssl rand -hex 64) \
   -e MAX_HTTP_BODY_SIZE=4194304 \
   rusty-intervals:latest
 ```
@@ -537,8 +537,7 @@ At minimum, set these variables before launch:
 
 - `INTERVALS_ICU_API_KEY`
 - `INTERVALS_ICU_ATHLETE_ID`
-- `JWT_SECRET`
-- `JWT_ENCRYPTION_KEY`
+- `JWT_MASTER_KEY`
 
 ### Remote MCP clients
 

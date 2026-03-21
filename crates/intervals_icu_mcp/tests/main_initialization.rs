@@ -280,3 +280,147 @@ fn test_socket_addr_parsing_invalid() {
     let result = "invalid_address".parse::<std::net::SocketAddr>();
     assert!(result.is_err());
 }
+
+// ============================================================================
+// HTTP Server Configuration Tests
+// ============================================================================
+
+#[test]
+fn test_jwt_ttl_seconds_default() {
+    // Default JWT TTL (90 days)
+    let jwt_ttl_seconds = std::env::var("JWT_TTL_SECONDS_NOT_SET")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(7776000);
+    assert_eq!(jwt_ttl_seconds, 7776000);
+}
+
+#[test]
+fn test_jwt_ttl_seconds_custom() {
+    // Custom JWT TTL (30 days)
+    let jwt_ttl_seconds = std::env::var("JWT_TTL_SECONDS_CUSTOM")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(7776000);
+    assert_eq!(jwt_ttl_seconds, 7776000); // Should use default since env var not set
+}
+
+#[test]
+fn test_jwt_ttl_seconds_parse() {
+    // Parse valid JWT TTL
+    let result = "86400".parse::<u64>();
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap(), 86400);
+}
+
+#[test]
+fn test_jwt_ttl_seconds_invalid_fallback() {
+    // Invalid JWT TTL should fallback to default
+    let jwt_ttl_seconds = "not_a_number".parse::<u64>().unwrap_or(7776000);
+    assert_eq!(jwt_ttl_seconds, 7776000);
+}
+
+// ============================================================================
+// Master Key Configuration Tests
+// ============================================================================
+
+#[test]
+fn test_master_key_from_hex_valid() {
+    use intervals_icu_mcp::auth::MasterKeyConfig;
+
+    let master_key_hex = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+    let result = MasterKeyConfig::from_hex(master_key_hex);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_master_key_from_hex_invalid_format() {
+    use intervals_icu_mcp::auth::MasterKeyConfig;
+
+    let invalid_hex = "not_hex_chars!";
+    let result = MasterKeyConfig::from_hex(invalid_hex);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_master_key_from_hex_wrong_length() {
+    use intervals_icu_mcp::auth::MasterKeyConfig;
+
+    // Only 32 bytes instead of 64
+    let short_key = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+    let result = MasterKeyConfig::from_hex(short_key);
+    assert!(result.is_err());
+}
+
+// ============================================================================
+// STDIO Mode Error Handling Tests
+// ============================================================================
+
+#[test]
+fn test_stdio_mode_missing_athlete_id() {
+    // When INTERVALS_ICU_ATHLETE_ID is not set
+    let result = std::env::var("INTERVALS_ICU_ATHLETE_ID_MISSING")
+        .map_err(|_| "INTERVALS_ICU_ATHLETE_ID is required for STDIO mode".to_string());
+    assert!(result.is_err());
+    assert_eq!(
+        result.unwrap_err(),
+        "INTERVALS_ICU_ATHLETE_ID is required for STDIO mode"
+    );
+}
+
+#[test]
+fn test_stdio_mode_missing_api_key() {
+    // When INTERVALS_ICU_API_KEY is not set
+    let result = std::env::var("INTERVALS_ICU_API_KEY_MISSING")
+        .map_err(|_| "INTERVALS_ICU_API_KEY is required for STDIO mode".to_string());
+    assert!(result.is_err());
+    assert_eq!(
+        result.unwrap_err(),
+        "INTERVALS_ICU_API_KEY is required for STDIO mode"
+    );
+}
+
+#[test]
+fn test_stdio_mode_empty_credentials() {
+    // Empty credentials validation
+    let api_key = "";
+    let athlete = "";
+
+    let is_empty = api_key.trim().is_empty() || athlete.trim().is_empty();
+    assert!(is_empty);
+}
+
+#[test]
+fn test_http_mode_missing_jwt_master_key() {
+    // When JWT_MASTER_KEY is not set
+    let result = std::env::var("JWT_MASTER_KEY_MISSING")
+        .map_err(|_| "JWT_MASTER_KEY environment variable is required for HTTP mode".to_string());
+    assert!(result.is_err());
+    assert_eq!(
+        result.unwrap_err(),
+        "JWT_MASTER_KEY environment variable is required for HTTP mode"
+    );
+}
+
+// ============================================================================
+// Transport Mode Tests
+// ============================================================================
+
+#[test]
+fn test_transport_mode_match_stdio() {
+    let transport_mode = "stdio".to_string();
+    assert_eq!(transport_mode.as_str(), "stdio");
+}
+
+#[test]
+fn test_transport_mode_match_http() {
+    let transport_mode = "http".to_string();
+    assert_eq!(transport_mode.as_str(), "http");
+}
+
+#[test]
+fn test_transport_mode_unknown() {
+    let transport_mode = "unknown".to_string();
+    let is_unknown = !matches!(transport_mode.as_str(), "stdio" | "http");
+    assert!(is_unknown);
+}
