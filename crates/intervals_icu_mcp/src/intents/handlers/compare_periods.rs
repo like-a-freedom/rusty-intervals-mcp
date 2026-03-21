@@ -437,6 +437,14 @@ impl Default for ComparePeriodsHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
+    use intervals_icu_client::{AthleteProfile, IntervalsError};
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    // ========================================================================
+    // Constructor Tests
+    // ========================================================================
 
     #[test]
     fn test_new_handler() {
@@ -448,6 +456,10 @@ mod tests {
     fn test_default_handler() {
         let _handler = ComparePeriodsHandler;
     }
+
+    // ========================================================================
+    // IntentHandler Trait Implementation Tests
+    // ========================================================================
 
     #[test]
     fn test_name() {
@@ -478,7 +490,6 @@ mod tests {
         assert!(props.contains_key("workout_type"));
         assert!(props.contains_key("metrics"));
 
-        // Required fields
         let required = schema.get("required").unwrap().as_array().unwrap();
         assert!(required.contains(&json!("period_a_start")));
         assert!(required.contains(&json!("period_a_end")));
@@ -492,27 +503,310 @@ mod tests {
         assert!(!IntentHandler::requires_idempotency_token(&handler));
     }
 
+    // ========================================================================
+    // matches_workout_type() Tests
+    // ========================================================================
+
     #[test]
-    fn test_default_labels() {
-        let input = json!({
-            "period_a_start": "2026-01-01",
-            "period_a_end": "2026-01-31",
-            "period_b_start": "2026-02-01",
-            "period_b_end": "2026-02-28"
-        });
-
-        let a_label = input
-            .get("period_a_label")
-            .and_then(|v| v.as_str())
-            .unwrap_or("Period A");
-        let b_label = input
-            .get("period_b_label")
-            .and_then(|v| v.as_str())
-            .unwrap_or("Period B");
-
-        assert_eq!(a_label, "Period A");
-        assert_eq!(b_label, "Period B");
+    fn test_matches_workout_type_intervals() {
+        let activity = ActivitySummary {
+            id: "a1".to_string(),
+            name: Some("Interval Training".to_string()),
+            start_date_local: "2026-03-01".to_string(),
+        };
+        assert!(matches_workout_type(&activity, "intervals"));
     }
+
+    #[test]
+    fn test_matches_workout_type_tempo() {
+        let activity = ActivitySummary {
+            id: "a1".to_string(),
+            name: Some("Tempo Run".to_string()),
+            start_date_local: "2026-03-01".to_string(),
+        };
+        assert!(matches_workout_type(&activity, "tempo"));
+    }
+
+    #[test]
+    fn test_matches_workout_type_long_run() {
+        let activity = ActivitySummary {
+            id: "a1".to_string(),
+            name: Some("Long Run".to_string()),
+            start_date_local: "2026-03-01".to_string(),
+        };
+        assert!(matches_workout_type(&activity, "long_run"));
+    }
+
+    #[test]
+    fn test_matches_workout_type_no_name() {
+        let activity = ActivitySummary {
+            id: "a1".to_string(),
+            name: None,
+            start_date_local: "2026-03-01".to_string(),
+        };
+        assert!(!matches_workout_type(&activity, "intervals"));
+    }
+
+    #[test]
+    fn test_matches_workout_type_no_match() {
+        let activity = ActivitySummary {
+            id: "a1".to_string(),
+            name: Some("Easy Run".to_string()),
+            start_date_local: "2026-03-01".to_string(),
+        };
+        assert!(!matches_workout_type(&activity, "intervals"));
+    }
+
+    #[test]
+    fn test_matches_workout_type_case_insensitive() {
+        let activity = ActivitySummary {
+            id: "a1".to_string(),
+            name: Some("INTERVAL SESSION".to_string()),
+            start_date_local: "2026-03-01".to_string(),
+        };
+        assert!(matches_workout_type(&activity, "intervals"));
+    }
+
+    // ========================================================================
+    // requested_metric_value() Tests
+    // ========================================================================
+
+    #[test]
+    fn test_requested_metric_value_volume() {
+        let stats = PeriodStats {
+            snapshot: TrendSnapshot {
+                activity_count: 5,
+                total_time_secs: 18000, // 5 hours
+                total_distance_m: 50000.0,
+                total_elevation_m: 500.0,
+            },
+            window_days: 7,
+            activities: vec![],
+            activity_details: HashMap::new(),
+        };
+
+        let (value, note) = requested_metric_value("volume", &stats);
+        assert!(value.contains("5.0"));
+        assert!(note.contains("derived from total moving time"));
+    }
+
+    #[test]
+    fn test_requested_metric_value_pace() {
+        let stats = PeriodStats {
+            snapshot: TrendSnapshot {
+                activity_count: 1,
+                total_time_secs: 3600,     // 1 hour
+                total_distance_m: 10000.0, // 10 km
+                total_elevation_m: 100.0,
+            },
+            window_days: 7,
+            activities: vec![],
+            activity_details: HashMap::new(),
+        };
+
+        let (value, note) = requested_metric_value("pace", &stats);
+        assert!(value.contains("6:00")); // 6 min/km
+        assert!(note.contains("derived"));
+    }
+
+    #[test]
+    fn test_requested_metric_value_pace_no_data() {
+        let stats = PeriodStats {
+            snapshot: TrendSnapshot {
+                activity_count: 0,
+                total_time_secs: 0,
+                total_distance_m: 0.0,
+                total_elevation_m: 0.0,
+            },
+            window_days: 7,
+            activities: vec![],
+            activity_details: HashMap::new(),
+        };
+
+        let (value, note) = requested_metric_value("pace", &stats);
+        assert_eq!(value, "n/a");
+        assert!(note.contains("unavailable"));
+    }
+
+    #[test]
+    fn test_requested_metric_value_hr() {
+        let stats = PeriodStats {
+            snapshot: TrendSnapshot {
+                activity_count: 1,
+                total_time_secs: 3600,
+                total_distance_m: 10000.0,
+                total_elevation_m: 100.0,
+            },
+            window_days: 7,
+            activities: vec![ActivitySummary {
+                id: "a1".to_string(),
+                name: Some("Run".to_string()),
+                start_date_local: "2026-03-01".to_string(),
+            }],
+            activity_details: HashMap::from([(
+                "a1".to_string(),
+                json!({"average_heartrate": 150.0}),
+            )]),
+        };
+
+        let (value, note) = requested_metric_value("hr", &stats);
+        assert!(value.contains("150"));
+        assert!(note.contains("average"));
+    }
+
+    #[test]
+    fn test_requested_metric_value_hr_no_data() {
+        let stats = PeriodStats {
+            snapshot: TrendSnapshot {
+                activity_count: 1,
+                total_time_secs: 3600,
+                total_distance_m: 10000.0,
+                total_elevation_m: 100.0,
+            },
+            window_days: 7,
+            activities: vec![ActivitySummary {
+                id: "a1".to_string(),
+                name: Some("Run".to_string()),
+                start_date_local: "2026-03-01".to_string(),
+            }],
+            activity_details: HashMap::new(),
+        };
+
+        let (value, note) = requested_metric_value("hr", &stats);
+        assert_eq!(value, "n/a");
+        assert!(note.contains("unavailable"));
+    }
+
+    #[test]
+    fn test_requested_metric_value_tss() {
+        let stats = PeriodStats {
+            snapshot: TrendSnapshot {
+                activity_count: 1,
+                total_time_secs: 3600,
+                total_distance_m: 10000.0,
+                total_elevation_m: 100.0,
+            },
+            window_days: 7,
+            activities: vec![ActivitySummary {
+                id: "a1".to_string(),
+                name: Some("Run".to_string()),
+                start_date_local: "2026-03-01".to_string(),
+            }],
+            activity_details: HashMap::from([(
+                "a1".to_string(),
+                json!({"icu_training_load": 75.0}),
+            )]),
+        };
+
+        let (value, note) = requested_metric_value("tss", &stats);
+        assert!(value.contains("75.0"));
+        assert!(note.contains("training load"));
+    }
+
+    #[test]
+    fn test_requested_metric_value_unknown() {
+        let stats = PeriodStats {
+            snapshot: TrendSnapshot {
+                activity_count: 0,
+                total_time_secs: 0,
+                total_distance_m: 0.0,
+                total_elevation_m: 0.0,
+            },
+            window_days: 7,
+            activities: vec![],
+            activity_details: HashMap::new(),
+        };
+
+        let (value, note) = requested_metric_value("unknown_metric", &stats);
+        assert_eq!(value, "n/a");
+        assert!(note.contains("not yet modeled"));
+    }
+
+    // ========================================================================
+    // requested_metric_label() Tests
+    // ========================================================================
+
+    #[test]
+    fn test_requested_metric_label_hr() {
+        assert_eq!(requested_metric_label("hr"), "HR");
+    }
+
+    #[test]
+    fn test_requested_metric_label_tss() {
+        assert_eq!(requested_metric_label("tss"), "TSS");
+    }
+
+    #[test]
+    fn test_requested_metric_label_pace() {
+        assert_eq!(requested_metric_label("pace"), "Pace");
+    }
+
+    #[test]
+    fn test_requested_metric_label_volume() {
+        assert_eq!(requested_metric_label("volume"), "Volume");
+    }
+
+    #[test]
+    fn test_requested_metric_label_custom() {
+        assert_eq!(requested_metric_label("custom_metric"), "CUSTOM METRIC");
+    }
+
+    // ========================================================================
+    // format_duration() Tests
+    // ========================================================================
+
+    #[test]
+    fn test_format_duration_one_hour() {
+        assert_eq!(format_duration(3600), "1:00");
+    }
+
+    #[test]
+    fn test_format_duration_two_hours_thirty() {
+        assert_eq!(format_duration(9000), "2:30");
+    }
+
+    #[test]
+    fn test_format_duration_zero() {
+        assert_eq!(format_duration(0), "0:00");
+    }
+
+    #[test]
+    fn test_format_duration_minutes_only() {
+        assert_eq!(format_duration(1800), "0:30");
+    }
+
+    #[test]
+    fn test_format_duration_with_seconds() {
+        assert_eq!(format_duration(3659), "1:00"); // Seconds are truncated
+    }
+
+    // ========================================================================
+    // format_pct() Tests
+    // ========================================================================
+
+    #[test]
+    fn test_format_pct_positive() {
+        assert_eq!(format_pct(Some(10.5)), "+10.5%");
+    }
+
+    #[test]
+    fn test_format_pct_negative() {
+        assert_eq!(format_pct(Some(-5.25)), "-5.2%");
+    }
+
+    #[test]
+    fn test_format_pct_zero() {
+        assert_eq!(format_pct(Some(0.0)), "+0.0%");
+    }
+
+    #[test]
+    fn test_format_pct_none() {
+        assert_eq!(format_pct(None), "n/a");
+    }
+
+    // ========================================================================
+    // PeriodStats Struct Tests
+    // ========================================================================
 
     #[test]
     fn test_period_stats_structure() {
@@ -554,6 +848,32 @@ mod tests {
         assert_eq!(stats.snapshot.total_elevation_m, 0.0);
     }
 
+    // ========================================================================
+    // Input Validation and Default Value Tests
+    // ========================================================================
+
+    #[test]
+    fn test_default_labels() {
+        let input = json!({
+            "period_a_start": "2026-01-01",
+            "period_a_end": "2026-01-31",
+            "period_b_start": "2026-02-01",
+            "period_b_end": "2026-02-28"
+        });
+
+        let a_label = input
+            .get("period_a_label")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Period A");
+        let b_label = input
+            .get("period_b_label")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Period B");
+
+        assert_eq!(a_label, "Period A");
+        assert_eq!(b_label, "Period B");
+    }
+
     #[test]
     fn test_date_parsing() {
         let valid_date = "2026-03-01";
@@ -567,13 +887,11 @@ mod tests {
 
     #[test]
     fn test_volume_change_calculation() {
-        // Test volume change percentage calculation
         let old_dist = 100.0;
         let new_dist = 110.0;
         let change = ((new_dist - old_dist) / old_dist * 100.0) as f32;
         assert!((change - 10.0).abs() < 0.1);
 
-        // Decrease
         let old_dist = 100.0;
         let new_dist = 90.0;
         let change = ((new_dist - old_dist) / old_dist * 100.0) as f32;
@@ -582,7 +900,6 @@ mod tests {
 
     #[test]
     fn test_delta_formatting() {
-        // Positive delta
         let delta = 5;
         let formatted = if delta >= 0 {
             format!("+{}", delta)
@@ -591,7 +908,6 @@ mod tests {
         };
         assert_eq!(formatted, "+5");
 
-        // Negative delta
         let delta = -5;
         let formatted = if delta >= 0 {
             format!("+{}", delta)
@@ -614,7 +930,6 @@ mod tests {
 
     #[test]
     fn test_suggestions_based_on_volume_change() {
-        // Normal range
         let volume_change: f32 = 5.0;
         let suggestion = if volume_change.abs() <= 10.0 {
             "within normal range"
@@ -625,7 +940,6 @@ mod tests {
         };
         assert_eq!(suggestion, "within normal range");
 
-        // High increase
         let volume_change: f32 = 15.0;
         let suggestion = if volume_change.abs() <= 10.0 {
             "within normal range"
@@ -635,5 +949,589 @@ mod tests {
             "decreased"
         };
         assert_eq!(suggestion, "increased");
+    }
+
+    // ========================================================================
+    // Mock Client for Integration Tests
+    // ========================================================================
+
+    struct MockClient;
+
+    impl Default for MockClient {
+        fn default() -> Self {
+            Self
+        }
+    }
+
+    #[async_trait]
+    impl IntervalsClient for MockClient {
+        async fn get_athlete_profile(&self) -> Result<AthleteProfile, IntervalsError> {
+            Ok(AthleteProfile {
+                id: "ath1".to_string(),
+                name: Some("Test".to_string()),
+            })
+        }
+
+        async fn get_recent_activities(
+            &self,
+            _limit: Option<u32>,
+            _days_back: Option<i32>,
+        ) -> Result<Vec<intervals_icu_client::ActivitySummary>, IntervalsError> {
+            Ok(vec![
+                ActivitySummary {
+                    id: "a1".to_string(),
+                    name: Some("Run".to_string()),
+                    start_date_local: "2026-03-01".to_string(),
+                },
+                ActivitySummary {
+                    id: "a2".to_string(),
+                    name: Some("Interval Run".to_string()),
+                    start_date_local: "2026-03-05".to_string(),
+                },
+            ])
+        }
+
+        async fn get_activity_details(&self, _activity_id: &str) -> Result<Value, IntervalsError> {
+            Ok(json!({
+                "moving_time": 3600,
+                "distance": 10000.0,
+                "average_heartrate": 150.0,
+                "icu_training_load": 75.0
+            }))
+        }
+
+        async fn get_fitness_summary(&self) -> Result<Value, IntervalsError> {
+            Ok(json!({
+                "ctl": 45.0,
+                "atl": 30.0,
+                "tsb": 15.0
+            }))
+        }
+
+        async fn get_events(
+            &self,
+            _days_back: Option<i32>,
+            _limit: Option<u32>,
+        ) -> Result<Vec<intervals_icu_client::Event>, IntervalsError> {
+            Ok(vec![])
+        }
+
+        async fn get_upcoming_workouts(
+            &self,
+            _days_ahead: Option<u32>,
+            _limit: Option<u32>,
+            _category: Option<String>,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+
+        // Stub implementations for other required methods
+        async fn create_event(
+            &self,
+            event: intervals_icu_client::Event,
+        ) -> Result<intervals_icu_client::Event, IntervalsError> {
+            Ok(event)
+        }
+
+        async fn get_event(
+            &self,
+            event_id: &str,
+        ) -> Result<intervals_icu_client::Event, IntervalsError> {
+            Ok(intervals_icu_client::Event {
+                id: Some(event_id.to_string()),
+                start_date_local: "2026-03-04".to_string(),
+                name: "Mock event".to_string(),
+                category: intervals_icu_client::EventCategory::Workout,
+                description: None,
+                r#type: None,
+            })
+        }
+
+        async fn delete_event(&self, _event_id: &str) -> Result<(), IntervalsError> {
+            Ok(())
+        }
+
+        async fn bulk_create_events(
+            &self,
+            _events: Vec<intervals_icu_client::Event>,
+        ) -> Result<Vec<intervals_icu_client::Event>, IntervalsError> {
+            Ok(vec![])
+        }
+
+        async fn get_activity_streams(
+            &self,
+            _activity_id: &str,
+            _streams: Option<Vec<String>>,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+
+        async fn get_activity_intervals(
+            &self,
+            _activity_id: &str,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+
+        async fn get_best_efforts(
+            &self,
+            _activity_id: &str,
+            _options: Option<intervals_icu_client::BestEffortsOptions>,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+
+        async fn search_activities(
+            &self,
+            _query: &str,
+            _limit: Option<u32>,
+        ) -> Result<Vec<intervals_icu_client::ActivitySummary>, IntervalsError> {
+            Ok(vec![])
+        }
+
+        async fn search_activities_full(
+            &self,
+            _query: &str,
+            _limit: Option<u32>,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+
+        async fn get_activities_csv(&self) -> Result<String, IntervalsError> {
+            Ok("id,name\n1,Run".to_string())
+        }
+
+        async fn update_activity(
+            &self,
+            _activity_id: &str,
+            _fields: &Value,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+
+        async fn download_activity_file(
+            &self,
+            _activity_id: &str,
+            _output_path: Option<std::path::PathBuf>,
+        ) -> Result<Option<String>, IntervalsError> {
+            Ok(None)
+        }
+
+        async fn download_activity_file_with_progress(
+            &self,
+            _activity_id: &str,
+            _output_path: Option<std::path::PathBuf>,
+            _progress_tx: tokio::sync::mpsc::Sender<intervals_icu_client::DownloadProgress>,
+            _cancel_rx: tokio::sync::watch::Receiver<bool>,
+        ) -> Result<Option<String>, IntervalsError> {
+            Ok(None)
+        }
+
+        async fn download_fit_file(
+            &self,
+            _activity_id: &str,
+            _output_path: Option<std::path::PathBuf>,
+        ) -> Result<Option<String>, IntervalsError> {
+            Ok(None)
+        }
+
+        async fn download_gpx_file(
+            &self,
+            _activity_id: &str,
+            _output_path: Option<std::path::PathBuf>,
+        ) -> Result<Option<String>, IntervalsError> {
+            Ok(None)
+        }
+
+        async fn get_gear_list(&self) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+
+        async fn get_sport_settings(&self) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+
+        async fn get_power_curves(
+            &self,
+            _days_back: Option<i32>,
+            _sport: &str,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+
+        async fn get_gap_histogram(&self, _activity_id: &str) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+
+        async fn delete_activity(&self, _activity_id: &str) -> Result<(), IntervalsError> {
+            Ok(())
+        }
+
+        async fn get_activities_around(
+            &self,
+            _activity_id: &str,
+            _limit: Option<u32>,
+            _route_id: Option<i64>,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+
+        async fn search_intervals(
+            &self,
+            _min_secs: u32,
+            _max_secs: u32,
+            _min_intensity: u32,
+            _max_intensity: u32,
+            _interval_type: Option<String>,
+            _min_reps: Option<u32>,
+            _max_reps: Option<u32>,
+            _limit: Option<u32>,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+
+        async fn get_power_histogram(&self, _activity_id: &str) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+
+        async fn get_hr_histogram(&self, _activity_id: &str) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+
+        async fn get_pace_histogram(&self, _activity_id: &str) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+
+        async fn get_wellness(&self, _days_back: Option<i32>) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+
+        async fn get_wellness_for_date(&self, _date: &str) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+
+        async fn update_wellness(
+            &self,
+            _date: &str,
+            _data: &Value,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+
+        async fn update_event(
+            &self,
+            _event_id: &str,
+            _fields: &Value,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+
+        async fn bulk_delete_events(&self, _event_ids: Vec<String>) -> Result<(), IntervalsError> {
+            Ok(())
+        }
+
+        async fn duplicate_event(
+            &self,
+            _event_id: &str,
+            _num_copies: Option<u32>,
+            _weeks_between: Option<u32>,
+        ) -> Result<Vec<intervals_icu_client::Event>, IntervalsError> {
+            Ok(vec![])
+        }
+
+        async fn get_hr_curves(
+            &self,
+            _days_back: Option<i32>,
+            _sport: &str,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+
+        async fn get_pace_curves(
+            &self,
+            _days_back: Option<i32>,
+            _sport: &str,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+
+        async fn get_workout_library(&self) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+
+        async fn get_workouts_in_folder(&self, _folder_id: &str) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+
+        async fn create_folder(&self, _folder: &Value) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+
+        async fn update_folder(
+            &self,
+            _folder_id: &str,
+            _fields: &Value,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+
+        async fn delete_folder(&self, _folder_id: &str) -> Result<(), IntervalsError> {
+            Ok(())
+        }
+
+        async fn create_gear(&self, _gear: &Value) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+
+        async fn update_gear(
+            &self,
+            _gear_id: &str,
+            _fields: &Value,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+
+        async fn delete_gear(&self, _gear_id: &str) -> Result<(), IntervalsError> {
+            Ok(())
+        }
+
+        async fn create_gear_reminder(
+            &self,
+            _gear_id: &str,
+            _reminder: &Value,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+
+        async fn update_gear_reminder(
+            &self,
+            _gear_id: &str,
+            _reminder_id: &str,
+            _reset: bool,
+            _snooze_days: u32,
+            _fields: &Value,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+
+        async fn update_sport_settings(
+            &self,
+            _sport_type: &str,
+            _recalc_hr_zones: bool,
+            _fields: &Value,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+
+        async fn apply_sport_settings(&self, _sport_type: &str) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+
+        async fn create_sport_settings(&self, _settings: &Value) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+
+        async fn delete_sport_settings(&self, _sport_type: &str) -> Result<(), IntervalsError> {
+            Ok(())
+        }
+
+        async fn update_wellness_bulk(&self, _entries: &[Value]) -> Result<(), IntervalsError> {
+            Ok(())
+        }
+
+        async fn get_weather_config(&self) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+
+        async fn update_weather_config(&self, _config: &Value) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+
+        async fn list_routes(&self) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+
+        async fn get_route(
+            &self,
+            _route_id: i64,
+            _include_path: bool,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+
+        async fn update_route(
+            &self,
+            _route_id: i64,
+            _route: &Value,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+
+        async fn get_route_similarity(
+            &self,
+            _route_id: i64,
+            _other_id: i64,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+    }
+
+    // ========================================================================
+    // Handler Execution Tests
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_execute_compare_periods_basic() {
+        let handler = ComparePeriodsHandler::new();
+        let client = Arc::new(MockClient);
+        let input = json!({
+            "period_a_start": "2026-03-01",
+            "period_a_end": "2026-03-07",
+            "period_b_start": "2026-03-08",
+            "period_b_end": "2026-03-14"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+
+        let output = result.unwrap();
+        assert!(!output.content.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_execute_compare_periods_with_labels() {
+        let handler = ComparePeriodsHandler::new();
+        let client = Arc::new(MockClient);
+        let input = json!({
+            "period_a_start": "2026-03-01",
+            "period_a_end": "2026-03-07",
+            "period_b_start": "2026-03-08",
+            "period_b_end": "2026-03-14",
+            "period_a_label": "Week 1",
+            "period_b_label": "Week 2"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+
+        let output = result.unwrap();
+        let content_text = format!("{:?}", output.content);
+        assert!(content_text.contains("Week 1"));
+        assert!(content_text.contains("Week 2"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_compare_periods_with_workout_type_filter() {
+        let handler = ComparePeriodsHandler::new();
+        let client = Arc::new(MockClient);
+        let input = json!({
+            "period_a_start": "2026-03-01",
+            "period_a_end": "2026-03-07",
+            "period_b_start": "2026-03-08",
+            "period_b_end": "2026-03-14",
+            "workout_type": "intervals"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_execute_compare_periods_with_metrics() {
+        let handler = ComparePeriodsHandler::new();
+        let client = Arc::new(MockClient);
+        let input = json!({
+            "period_a_start": "2026-03-01",
+            "period_a_end": "2026-03-07",
+            "period_b_start": "2026-03-08",
+            "period_b_end": "2026-03-14",
+            "metrics": ["volume", "pace", "hr", "tss"]
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+
+        let output = result.unwrap();
+        assert!(!output.content.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_execute_compare_periods_missing_required_field() {
+        let handler = ComparePeriodsHandler::new();
+        let client = Arc::new(MockClient);
+        let input = json!({
+            "period_a_start": "2026-03-01",
+            "period_a_end": "2026-03-07",
+            "period_b_start": "2026-03-08"
+            // Missing period_b_end
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            IntentError::ValidationError(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_execute_compare_periods_invalid_date() {
+        let handler = ComparePeriodsHandler::new();
+        let client = Arc::new(MockClient);
+        let input = json!({
+            "period_a_start": "invalid-date",
+            "period_a_end": "2026-03-07",
+            "period_b_start": "2026-03-08",
+            "period_b_end": "2026-03-14"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            IntentError::ValidationError(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_execute_compare_periods_suggestions() {
+        let handler = ComparePeriodsHandler::new();
+        let client = Arc::new(MockClient);
+        let input = json!({
+            "period_a_start": "2026-03-01",
+            "period_a_end": "2026-03-07",
+            "period_b_start": "2026-03-08",
+            "period_b_end": "2026-03-14"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+
+        let output = result.unwrap();
+        assert!(!output.suggestions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_execute_compare_periods_next_actions() {
+        let handler = ComparePeriodsHandler::new();
+        let client = Arc::new(MockClient);
+        let input = json!({
+            "period_a_start": "2026-03-01",
+            "period_a_end": "2026-03-07",
+            "period_b_start": "2026-03-08",
+            "period_b_end": "2026-03-14"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+
+        let output = result.unwrap();
+        assert!(!output.next_actions.is_empty());
+        assert!(
+            output
+                .next_actions
+                .iter()
+                .any(|a| a.contains("analyze_training"))
+        );
     }
 }

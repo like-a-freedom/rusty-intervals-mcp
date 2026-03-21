@@ -884,4 +884,1496 @@ mod tests {
         assert_eq!(metadata.events_modified, Some(3));
         assert_eq!(metadata.events_deleted, Some(1));
     }
+
+    // ========================================================================
+    // TargetScope Enum Tests
+    // ========================================================================
+
+    #[test]
+    fn test_target_scope_single_variant() {
+        let date = NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
+        let scope = TargetScope::Single(date);
+
+        match scope {
+            TargetScope::Single(d) => assert_eq!(d, date),
+            TargetScope::Range(_, _) => panic!("Expected Single variant"),
+        }
+    }
+
+    #[test]
+    fn test_target_scope_range_variant() {
+        let start = NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
+        let end = NaiveDate::from_ymd_opt(2026, 3, 7).unwrap();
+        let scope = TargetScope::Range(start, end);
+
+        match scope {
+            TargetScope::Range(s, e) => {
+                assert_eq!(s, start);
+                assert_eq!(e, end);
+            }
+            TargetScope::Single(_) => panic!("Expected Range variant"),
+        }
+    }
+
+    // ========================================================================
+    // Duration Parsing Tests
+    // ========================================================================
+
+    #[test]
+    fn test_parse_duration_to_seconds_valid() {
+        assert_eq!(
+            ModifyTrainingHandler::parse_duration_to_seconds("1:00").unwrap(),
+            3600
+        );
+        assert_eq!(
+            ModifyTrainingHandler::parse_duration_to_seconds("0:30").unwrap(),
+            1800
+        );
+        assert_eq!(
+            ModifyTrainingHandler::parse_duration_to_seconds("2:30").unwrap(),
+            9000
+        );
+        assert_eq!(
+            ModifyTrainingHandler::parse_duration_to_seconds("1:30").unwrap(),
+            5400
+        );
+    }
+
+    #[test]
+    fn test_parse_duration_to_seconds_invalid_format() {
+        let result = ModifyTrainingHandler::parse_duration_to_seconds("1:00:00");
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid duration format")
+        );
+    }
+
+    #[test]
+    fn test_parse_duration_to_seconds_invalid_hours() {
+        let result = ModifyTrainingHandler::parse_duration_to_seconds("abc:00");
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid duration hours")
+        );
+    }
+
+    #[test]
+    fn test_parse_duration_to_seconds_invalid_minutes() {
+        let result = ModifyTrainingHandler::parse_duration_to_seconds("1:abc");
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid duration minutes")
+        );
+    }
+
+    #[test]
+    fn test_parse_duration_to_seconds_negative_hours() {
+        let result = ModifyTrainingHandler::parse_duration_to_seconds("-1:00");
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid duration value")
+        );
+    }
+
+    #[test]
+    fn test_parse_duration_to_seconds_invalid_minutes_range() {
+        let result = ModifyTrainingHandler::parse_duration_to_seconds("1:60");
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid duration value")
+        );
+    }
+
+    // ========================================================================
+    // Build Update Fields Tests
+    // ========================================================================
+
+    #[test]
+    fn test_build_update_fields_new_date() {
+        let input = json!({
+            "new_date": "2026-03-15"
+        });
+        let result = ModifyTrainingHandler::build_update_fields(&input);
+        assert!(result.is_ok());
+        let fields = result.unwrap();
+        // Date gets normalized to include timestamp
+        assert!(
+            fields
+                .get("start_date_local")
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .starts_with("2026-03-15")
+        );
+    }
+
+    #[test]
+    fn test_build_update_fields_new_name() {
+        let input = json!({
+            "new_name": "New Workout Name"
+        });
+        let result = ModifyTrainingHandler::build_update_fields(&input);
+        assert!(result.is_ok());
+        let fields = result.unwrap();
+        assert_eq!(
+            fields.get("name").unwrap().as_str(),
+            Some("New Workout Name")
+        );
+    }
+
+    #[test]
+    fn test_build_update_fields_new_description() {
+        let input = json!({
+            "new_description": "Updated description"
+        });
+        let result = ModifyTrainingHandler::build_update_fields(&input);
+        assert!(result.is_ok());
+        let fields = result.unwrap();
+        assert_eq!(
+            fields.get("description").unwrap().as_str(),
+            Some("Updated description")
+        );
+    }
+
+    #[test]
+    fn test_build_update_fields_new_category() {
+        let input = json!({
+            "new_category": "RaceA"
+        });
+        let result = ModifyTrainingHandler::build_update_fields(&input);
+        assert!(result.is_ok());
+        let fields = result.unwrap();
+        assert_eq!(fields.get("category").unwrap().as_str(), Some("RaceA"));
+    }
+
+    #[test]
+    fn test_build_update_fields_new_type() {
+        let input = json!({
+            "new_type": "Ride"
+        });
+        let result = ModifyTrainingHandler::build_update_fields(&input);
+        assert!(result.is_ok());
+        let fields = result.unwrap();
+        assert_eq!(fields.get("type").unwrap().as_str(), Some("Ride"));
+    }
+
+    #[test]
+    fn test_build_update_fields_new_duration() {
+        let input = json!({
+            "new_duration": "1:30"
+        });
+        let result = ModifyTrainingHandler::build_update_fields(&input);
+        assert!(result.is_ok());
+        let fields = result.unwrap();
+        assert_eq!(fields.get("moving_time").unwrap().as_i64(), Some(5400));
+    }
+
+    #[test]
+    fn test_build_update_fields_multiple_fields() {
+        let input = json!({
+            "new_name": "Updated Name",
+            "new_date": "2026-03-20",
+            "new_duration": "2:00"
+        });
+        let result = ModifyTrainingHandler::build_update_fields(&input);
+        assert!(result.is_ok());
+        let fields = result.unwrap();
+        assert_eq!(fields.get("name").unwrap().as_str(), Some("Updated Name"));
+        // Date gets normalized to include timestamp
+        assert!(
+            fields
+                .get("start_date_local")
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .starts_with("2026-03-20")
+        );
+        assert_eq!(fields.get("moving_time").unwrap().as_i64(), Some(7200));
+    }
+
+    #[test]
+    fn test_build_update_fields_empty_rejected() {
+        let input = json!({});
+        let result = ModifyTrainingHandler::build_update_fields(&input);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("at least one new_* field")
+        );
+    }
+
+    #[test]
+    fn test_build_update_fields_invalid_date() {
+        let input = json!({
+            "new_date": "invalid-date"
+        });
+        let result = ModifyTrainingHandler::build_update_fields(&input);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid date format")
+        );
+    }
+
+    #[test]
+    fn test_build_update_fields_type_fallback_to_type_field() {
+        let input = json!({
+            "type": "Swim"
+        });
+        let result = ModifyTrainingHandler::build_update_fields(&input);
+        assert!(result.is_ok());
+        let fields = result.unwrap();
+        assert_eq!(fields.get("type").unwrap().as_str(), Some("Swim"));
+    }
+
+    #[test]
+    fn test_build_update_fields_category_fallback_to_category_field() {
+        let input = json!({
+            "category": "Note"
+        });
+        let result = ModifyTrainingHandler::build_update_fields(&input);
+        assert!(result.is_ok());
+        let fields = result.unwrap();
+        assert_eq!(fields.get("category").unwrap().as_str(), Some("Note"));
+    }
+
+    // ========================================================================
+    // Resolve Target Scope Tests
+    // ========================================================================
+
+    #[test]
+    fn test_resolve_target_scope_single_date() {
+        let input = json!({
+            "target_date": "2026-03-15"
+        });
+        let result = ModifyTrainingHandler::resolve_target_scope(&input);
+        assert!(result.is_ok());
+        match result.unwrap() {
+            TargetScope::Single(date) => {
+                assert_eq!(date, NaiveDate::from_ymd_opt(2026, 3, 15).unwrap())
+            }
+            TargetScope::Range(_, _) => panic!("Expected Single variant"),
+        }
+    }
+
+    #[test]
+    fn test_resolve_target_scope_range() {
+        let input = json!({
+            "target_date_from": "2026-03-01",
+            "target_date_to": "2026-03-07"
+        });
+        let result = ModifyTrainingHandler::resolve_target_scope(&input);
+        assert!(result.is_ok());
+        match result.unwrap() {
+            TargetScope::Range(start, end) => {
+                assert_eq!(start, NaiveDate::from_ymd_opt(2026, 3, 1).unwrap());
+                assert_eq!(end, NaiveDate::from_ymd_opt(2026, 3, 7).unwrap());
+            }
+            TargetScope::Single(_) => panic!("Expected Range variant"),
+        }
+    }
+
+    #[test]
+    fn test_resolve_target_scope_invalid_start_date() {
+        let input = json!({
+            "target_date_from": "invalid",
+            "target_date_to": "2026-03-07"
+        });
+        let result = ModifyTrainingHandler::resolve_target_scope(&input);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid date format")
+        );
+    }
+
+    #[test]
+    fn test_resolve_target_scope_invalid_end_date() {
+        let input = json!({
+            "target_date_from": "2026-03-01",
+            "target_date_to": "invalid"
+        });
+        let result = ModifyTrainingHandler::resolve_target_scope(&input);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid date format")
+        );
+    }
+
+    #[test]
+    fn test_resolve_target_scope_range_start_after_end() {
+        let input = json!({
+            "target_date_from": "2026-03-15",
+            "target_date_to": "2026-03-01"
+        });
+        let result = ModifyTrainingHandler::resolve_target_scope(&input);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Start date must be before end date")
+        );
+    }
+
+    #[test]
+    fn test_resolve_target_scope_only_target_date_from() {
+        let input = json!({
+            "target_date_from": "2026-03-01"
+        });
+        let result = ModifyTrainingHandler::resolve_target_scope(&input);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("target_date_from and target_date_to must be provided together")
+        );
+    }
+
+    #[test]
+    fn test_resolve_target_scope_only_target_date_to() {
+        let input = json!({
+            "target_date_to": "2026-03-07"
+        });
+        let result = ModifyTrainingHandler::resolve_target_scope(&input);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("target_date_from and target_date_to must be provided together")
+        );
+    }
+
+    #[test]
+    fn test_resolve_target_scope_no_date_fields() {
+        let input = json!({
+            "action": "modify"
+        });
+        let result = ModifyTrainingHandler::resolve_target_scope(&input);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Provide target_date or target_date_from/target_date_to")
+        );
+    }
+
+    #[test]
+    fn test_resolve_target_scope_invalid_single_date() {
+        let input = json!({
+            "target_date": "not-a-date"
+        });
+        let result = ModifyTrainingHandler::resolve_target_scope(&input);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid date format")
+        );
+    }
+
+    // ========================================================================
+    // Event Description Matching Tests
+    // ========================================================================
+
+    #[test]
+    fn test_event_matches_description_by_name() {
+        let event = Event {
+            id: Some("e1".to_string()),
+            start_date_local: "2026-03-01".to_string(),
+            name: "Tempo Run Session".to_string(),
+            category: EventCategory::Workout,
+            description: None,
+            r#type: None,
+        };
+        assert!(ModifyTrainingHandler::event_matches_description(
+            &event, "tempo"
+        ));
+        assert!(ModifyTrainingHandler::event_matches_description(
+            &event, "Tempo"
+        ));
+        assert!(ModifyTrainingHandler::event_matches_description(
+            &event, "run"
+        ));
+        assert!(!ModifyTrainingHandler::event_matches_description(
+            &event,
+            "intervals"
+        ));
+    }
+
+    #[test]
+    fn test_event_matches_description_by_description() {
+        let event = Event {
+            id: Some("e1".to_string()),
+            start_date_local: "2026-03-01".to_string(),
+            name: "Workout".to_string(),
+            category: EventCategory::Workout,
+            description: Some("Threshold intervals at lactate turnpoint".to_string()),
+            r#type: None,
+        };
+        assert!(ModifyTrainingHandler::event_matches_description(
+            &event,
+            "threshold"
+        ));
+        assert!(ModifyTrainingHandler::event_matches_description(
+            &event,
+            "intervals"
+        ));
+        assert!(!ModifyTrainingHandler::event_matches_description(
+            &event, "recovery"
+        ));
+    }
+
+    #[test]
+    fn test_event_matches_description_case_insensitive() {
+        let event = Event {
+            id: Some("e1".to_string()),
+            start_date_local: "2026-03-01".to_string(),
+            name: "LONG RUN Z2".to_string(),
+            category: EventCategory::Workout,
+            description: None,
+            r#type: None,
+        };
+        assert!(ModifyTrainingHandler::event_matches_description(
+            &event, "long"
+        ));
+        assert!(ModifyTrainingHandler::event_matches_description(
+            &event, "run"
+        ));
+        assert!(ModifyTrainingHandler::event_matches_description(
+            &event, "z2"
+        ));
+    }
+
+    // ========================================================================
+    // Constants Tests
+    // ========================================================================
+
+    #[test]
+    fn test_single_scope_limit_constant() {
+        assert_eq!(SINGLE_SCOPE_LIMIT, 200);
+    }
+
+    #[test]
+    fn test_range_scope_limit_constant() {
+        assert_eq!(RANGE_SCOPE_LIMIT, 500);
+    }
+
+    // ========================================================================
+    // Dedupe Events Edge Cases
+    // ========================================================================
+
+    #[test]
+    fn test_dedupe_events_empty_list() {
+        let events: Vec<Event> = vec![];
+        let deduped = ModifyTrainingHandler::dedupe_events(events);
+        assert!(deduped.is_empty());
+    }
+
+    #[test]
+    fn test_dedupe_events_all_unique() {
+        let events = vec![
+            Event {
+                id: Some("e1".to_string()),
+                start_date_local: "2026-03-01".to_string(),
+                name: "Event 1".to_string(),
+                category: EventCategory::Workout,
+                description: None,
+                r#type: None,
+            },
+            Event {
+                id: Some("e2".to_string()),
+                start_date_local: "2026-03-02".to_string(),
+                name: "Event 2".to_string(),
+                category: EventCategory::RaceA,
+                description: None,
+                r#type: None,
+            },
+        ];
+        let deduped = ModifyTrainingHandler::dedupe_events(events);
+        assert_eq!(deduped.len(), 2);
+    }
+
+    #[test]
+    fn test_dedupe_events_fallback_key_uses_date_name_category() {
+        let events = vec![
+            Event {
+                id: None,
+                start_date_local: "2026-03-01".to_string(),
+                name: "Same Name".to_string(),
+                category: EventCategory::Workout,
+                description: None,
+                r#type: None,
+            },
+            Event {
+                id: None,
+                start_date_local: "2026-03-01".to_string(),
+                name: "Same Name".to_string(),
+                category: EventCategory::Workout,
+                description: None,
+                r#type: None,
+            },
+        ];
+        let deduped = ModifyTrainingHandler::dedupe_events(events);
+        // Should be deduped because they have the same fallback key
+        assert_eq!(deduped.len(), 1);
+    }
+
+    // ========================================================================
+    // Execute() Path Tests - modify_training action
+    // ========================================================================
+
+    use async_trait::async_trait;
+    use intervals_icu_client::{
+        ActivitySummary, AthleteProfile, BestEffortsOptions, DownloadProgress, IntervalsClient,
+        IntervalsError,
+    };
+    use std::sync::Arc;
+
+    struct ModifyMockClient {
+        events: Vec<Event>,
+        update_error: Option<String>,
+    }
+
+    impl ModifyMockClient {
+        fn with_events(events: Vec<Event>) -> Self {
+            Self {
+                events,
+                update_error: None,
+            }
+        }
+
+        fn with_update_error(mut self, error_msg: &str) -> Self {
+            self.update_error = Some(error_msg.to_string());
+            self
+        }
+    }
+
+    #[async_trait]
+    impl IntervalsClient for ModifyMockClient {
+        async fn get_athlete_profile(&self) -> Result<AthleteProfile, IntervalsError> {
+            Ok(AthleteProfile {
+                id: "test_athlete".to_string(),
+                name: Some("Test Athlete".to_string()),
+            })
+        }
+
+        async fn get_recent_activities(
+            &self,
+            _limit: Option<u32>,
+            _days_back: Option<i32>,
+        ) -> Result<Vec<ActivitySummary>, IntervalsError> {
+            Ok(vec![])
+        }
+
+        async fn get_events(
+            &self,
+            _days_back: Option<i32>,
+            _limit: Option<u32>,
+        ) -> Result<Vec<Event>, IntervalsError> {
+            Ok(self.events.clone())
+        }
+
+        async fn update_event(
+            &self,
+            _event_id: &str,
+            _fields: &Value,
+        ) -> Result<Value, IntervalsError> {
+            if let Some(ref msg) = self.update_error {
+                Err(IntervalsError::from_status(500, msg.clone()))
+            } else {
+                Ok(json!({"updated": true}))
+            }
+        }
+
+        // Stub remaining methods
+        async fn create_event(&self, _event: Event) -> Result<Event, IntervalsError> {
+            Ok(Event {
+                id: Some("test".to_string()),
+                start_date_local: "2026-01-01".to_string(),
+                name: "Test".to_string(),
+                category: EventCategory::Workout,
+                description: None,
+                r#type: None,
+            })
+        }
+        async fn get_event(&self, _event_id: &str) -> Result<Event, IntervalsError> {
+            Err(IntervalsError::NotFound("event not found".to_string()))
+        }
+        async fn delete_event(&self, _event_id: &str) -> Result<(), IntervalsError> {
+            Ok(())
+        }
+        async fn bulk_create_events(
+            &self,
+            _events: Vec<Event>,
+        ) -> Result<Vec<Event>, IntervalsError> {
+            Ok(vec![])
+        }
+        async fn search_activities(
+            &self,
+            _query: &str,
+            _limit: Option<u32>,
+        ) -> Result<Vec<ActivitySummary>, IntervalsError> {
+            Ok(vec![])
+        }
+        async fn search_activities_full(
+            &self,
+            _query: &str,
+            _limit: Option<u32>,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+        async fn get_activity_details(&self, _activity_id: &str) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn get_activities_csv(&self) -> Result<String, IntervalsError> {
+            Ok("id,name\n1,Test".to_string())
+        }
+        async fn update_activity(
+            &self,
+            _activity_id: &str,
+            _fields: &Value,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn download_activity_file(
+            &self,
+            _activity_id: &str,
+            _output_path: Option<std::path::PathBuf>,
+        ) -> Result<Option<String>, IntervalsError> {
+            Ok(None)
+        }
+        async fn download_activity_file_with_progress(
+            &self,
+            _activity_id: &str,
+            _output_path: Option<std::path::PathBuf>,
+            _progress_tx: tokio::sync::mpsc::Sender<DownloadProgress>,
+            _cancel_rx: tokio::sync::watch::Receiver<bool>,
+        ) -> Result<Option<String>, IntervalsError> {
+            Ok(None)
+        }
+        async fn download_fit_file(
+            &self,
+            _activity_id: &str,
+            _output_path: Option<std::path::PathBuf>,
+        ) -> Result<Option<String>, IntervalsError> {
+            Ok(None)
+        }
+        async fn download_gpx_file(
+            &self,
+            _activity_id: &str,
+            _output_path: Option<std::path::PathBuf>,
+        ) -> Result<Option<String>, IntervalsError> {
+            Ok(None)
+        }
+        async fn get_gear_list(&self) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+        async fn get_sport_settings(&self) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+        async fn get_power_curves(
+            &self,
+            _days_back: Option<i32>,
+            _sport: &str,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+        async fn get_gap_histogram(&self, _activity_id: &str) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+        async fn delete_activity(&self, _activity_id: &str) -> Result<(), IntervalsError> {
+            Ok(())
+        }
+        async fn get_activities_around(
+            &self,
+            _activity_id: &str,
+            _limit: Option<u32>,
+            _route_id: Option<i64>,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+        async fn search_intervals(
+            &self,
+            _min_secs: u32,
+            _max_secs: u32,
+            _min_intensity: u32,
+            _max_intensity: u32,
+            _interval_type: Option<String>,
+            _min_reps: Option<u32>,
+            _max_reps: Option<u32>,
+            _limit: Option<u32>,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+        async fn get_fitness_summary(&self) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn get_wellness(&self, _days_back: Option<i32>) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+        async fn get_wellness_for_date(&self, _date: &str) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn update_wellness(
+            &self,
+            _date: &str,
+            _data: &Value,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn get_upcoming_workouts(
+            &self,
+            _days_ahead: Option<u32>,
+            _limit: Option<u32>,
+            _category: Option<String>,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+        async fn bulk_delete_events(&self, _event_ids: Vec<String>) -> Result<(), IntervalsError> {
+            Ok(())
+        }
+        async fn duplicate_event(
+            &self,
+            _event_id: &str,
+            _num_copies: Option<u32>,
+            _weeks_between: Option<u32>,
+        ) -> Result<Vec<Event>, IntervalsError> {
+            Ok(vec![])
+        }
+        async fn get_hr_curves(
+            &self,
+            _days_back: Option<i32>,
+            _sport: &str,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+        async fn get_pace_curves(
+            &self,
+            _days_back: Option<i32>,
+            _sport: &str,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+        async fn get_workout_library(&self) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+        async fn get_workouts_in_folder(&self, _folder_id: &str) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+        async fn create_folder(&self, _folder: &Value) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn update_folder(
+            &self,
+            _folder_id: &str,
+            _fields: &Value,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn delete_folder(&self, _folder_id: &str) -> Result<(), IntervalsError> {
+            Ok(())
+        }
+        async fn create_gear(&self, _gear: &Value) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn update_gear(
+            &self,
+            _gear_id: &str,
+            _fields: &Value,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn delete_gear(&self, _gear_id: &str) -> Result<(), IntervalsError> {
+            Ok(())
+        }
+        async fn create_gear_reminder(
+            &self,
+            _gear_id: &str,
+            _reminder: &Value,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn update_gear_reminder(
+            &self,
+            _gear_id: &str,
+            _reminder_id: &str,
+            _reset: bool,
+            _snooze_days: u32,
+            _fields: &Value,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn update_sport_settings(
+            &self,
+            _sport_type: &str,
+            _recalc_hr_zones: bool,
+            _fields: &Value,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn apply_sport_settings(&self, _sport_type: &str) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn create_sport_settings(&self, _settings: &Value) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn delete_sport_settings(&self, _sport_type: &str) -> Result<(), IntervalsError> {
+            Ok(())
+        }
+        async fn update_wellness_bulk(&self, _entries: &[Value]) -> Result<(), IntervalsError> {
+            Ok(())
+        }
+        async fn get_weather_config(&self) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn update_weather_config(&self, _config: &Value) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn list_routes(&self) -> Result<Value, IntervalsError> {
+            Ok(json!([]))
+        }
+        async fn get_route(
+            &self,
+            _route_id: i64,
+            _include_path: bool,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn update_route(
+            &self,
+            _route_id: i64,
+            _route: &Value,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn get_route_similarity(
+            &self,
+            _route_id: i64,
+            _other_id: i64,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn get_activity_streams(
+            &self,
+            _activity_id: &str,
+            _streams: Option<Vec<String>>,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn get_activity_intervals(
+            &self,
+            _activity_id: &str,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn get_best_efforts(
+            &self,
+            _activity_id: &str,
+            _options: Option<BestEffortsOptions>,
+        ) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn get_hr_histogram(&self, _activity_id: &str) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn get_power_histogram(&self, _activity_id: &str) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn get_pace_histogram(&self, _activity_id: &str) -> Result<Value, IntervalsError> {
+            Ok(json!({}))
+        }
+        async fn get_activity_messages(
+            &self,
+            _activity_id: &str,
+        ) -> Result<Vec<intervals_icu_client::ActivityMessage>, IntervalsError> {
+            Ok(vec![])
+        }
+    }
+
+    #[tokio::test]
+    async fn test_modify_training_update_action_dry_run() {
+        let handler = ModifyTrainingHandler::new();
+        let client = Arc::new(ModifyMockClient::with_events(vec![Event {
+            id: Some("event-123".to_string()),
+            start_date_local: "2026-03-01".to_string(),
+            name: "Tempo Run".to_string(),
+            category: EventCategory::Workout,
+            description: None,
+            r#type: None,
+        }]));
+
+        let input = json!({
+            "action": "modify",
+            "target_date": "2026-03-01",
+            "new_name": "Updated Tempo Run",
+            "dry_run": true,
+            "idempotency_token": "test-token"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("Preview (dry_run)"));
+        assert!(content_str.contains("Updated Tempo Run"));
+    }
+
+    #[tokio::test]
+    async fn test_modify_training_update_action_apply() {
+        let handler = ModifyTrainingHandler::new();
+        let client = Arc::new(ModifyMockClient::with_events(vec![Event {
+            id: Some("event-123".to_string()),
+            start_date_local: "2026-03-01".to_string(),
+            name: "Tempo Run".to_string(),
+            category: EventCategory::Workout,
+            description: None,
+            r#type: None,
+        }]));
+
+        let input = json!({
+            "action": "modify",
+            "target_date": "2026-03-01",
+            "new_name": "Updated Tempo Run",
+            "dry_run": false,
+            "idempotency_token": "test-token"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("Changes Applied"));
+        assert!(output.metadata.events_modified == Some(1));
+    }
+
+    #[tokio::test]
+    async fn test_modify_training_no_events_found() {
+        let handler = ModifyTrainingHandler::new();
+        let client = Arc::new(ModifyMockClient::with_events(vec![]));
+
+        let input = json!({
+            "action": "modify",
+            "target_date": "2026-03-01",
+            "new_name": "Updated Workout",
+            "idempotency_token": "test-token"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("No events found"));
+        assert!(!output.suggestions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_modify_training_with_description_filter() {
+        let handler = ModifyTrainingHandler::new();
+        let client = Arc::new(ModifyMockClient::with_events(vec![
+            Event {
+                id: Some("event-123".to_string()),
+                start_date_local: "2026-03-01".to_string(),
+                name: "Easy Run".to_string(),
+                category: EventCategory::Workout,
+                description: None,
+                r#type: None,
+            },
+            Event {
+                id: Some("event-124".to_string()),
+                start_date_local: "2026-03-01".to_string(),
+                name: "Tempo Run".to_string(),
+                category: EventCategory::Workout,
+                description: Some("Threshold workout".to_string()),
+                r#type: None,
+            },
+        ]));
+
+        let input = json!({
+            "action": "modify",
+            "target_date": "2026-03-01",
+            "target_description_contains": "tempo",
+            "new_name": "Updated Tempo",
+            "idempotency_token": "test-token"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("Updated Tempo"));
+    }
+
+    #[tokio::test]
+    async fn test_modify_training_description_filter_no_match() {
+        let handler = ModifyTrainingHandler::new();
+        let client = Arc::new(ModifyMockClient::with_events(vec![Event {
+            id: Some("event-123".to_string()),
+            start_date_local: "2026-03-01".to_string(),
+            name: "Easy Run".to_string(),
+            category: EventCategory::Workout,
+            description: None,
+            r#type: None,
+        }]));
+
+        let input = json!({
+            "action": "modify",
+            "target_date": "2026-03-01",
+            "target_description_contains": "tempo",
+            "new_name": "Updated",
+            "idempotency_token": "test-token"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("No events matched"));
+    }
+
+    #[tokio::test]
+    async fn test_modify_training_update_error() {
+        let handler = ModifyTrainingHandler::new();
+        let client = Arc::new(
+            ModifyMockClient::with_events(vec![Event {
+                id: Some("event-123".to_string()),
+                start_date_local: "2026-03-01".to_string(),
+                name: "Tempo Run".to_string(),
+                category: EventCategory::Workout,
+                description: None,
+                r#type: None,
+            }])
+            .with_update_error("API error"),
+        );
+
+        let input = json!({
+            "action": "modify",
+            "target_date": "2026-03-01",
+            "new_name": "Updated",
+            "dry_run": false,
+            "idempotency_token": "test-token"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_modify_training_range_scope() {
+        let handler = ModifyTrainingHandler::new();
+        let client = Arc::new(ModifyMockClient::with_events(vec![
+            Event {
+                id: Some("event-123".to_string()),
+                start_date_local: "2026-03-01".to_string(),
+                name: "Run 1".to_string(),
+                category: EventCategory::Workout,
+                description: None,
+                r#type: None,
+            },
+            Event {
+                id: Some("event-124".to_string()),
+                start_date_local: "2026-03-02".to_string(),
+                name: "Run 2".to_string(),
+                category: EventCategory::Workout,
+                description: None,
+                r#type: None,
+            },
+        ]));
+
+        let input = json!({
+            "action": "modify",
+            "target_date_from": "2026-03-01",
+            "target_date_to": "2026-03-07",
+            "new_name": "Updated Run",
+            "idempotency_token": "test-token"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("2026-03-01 to 2026-03-07"));
+    }
+
+    // ========================================================================
+    // Execute() Path Tests - create_training action
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_create_training_dry_run() {
+        let handler = ModifyTrainingHandler::new();
+        let client = Arc::new(ModifyMockClient::with_events(vec![]));
+
+        let input = json!({
+            "action": "create",
+            "new_date": "2026-03-15",
+            "new_name": "New Workout",
+            "new_duration": "1:00",
+            "new_category": "Workout",
+            "new_type": "Run",
+            "dry_run": true,
+            "idempotency_token": "test-token"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("Preview (dry_run)"));
+        assert!(content_str.contains("New Workout"));
+        assert!(output.metadata.events_created == Some(1));
+    }
+
+    #[tokio::test]
+    async fn test_create_training_apply() {
+        let handler = ModifyTrainingHandler::new();
+        let client = Arc::new(ModifyMockClient::with_events(vec![]));
+
+        let input = json!({
+            "action": "create",
+            "new_date": "2026-03-15",
+            "new_name": "New Workout",
+            "new_duration": "1:00",
+            "dry_run": false,
+            "idempotency_token": "test-token"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("Created"));
+    }
+
+    #[tokio::test]
+    async fn test_create_training_missing_date() {
+        let handler = ModifyTrainingHandler::new();
+        let client = Arc::new(ModifyMockClient::with_events(vec![]));
+
+        let input = json!({
+            "action": "create",
+            "new_name": "New Workout",
+            "idempotency_token": "test-token"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("new_date"));
+    }
+
+    #[tokio::test]
+    async fn test_create_training_with_target_date_alias() {
+        let handler = ModifyTrainingHandler::new();
+        let client = Arc::new(ModifyMockClient::with_events(vec![]));
+
+        let input = json!({
+            "action": "create",
+            "target_date": "2026-03-15",
+            "new_name": "New Workout",
+            "idempotency_token": "test-token"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_create_training_race_category() {
+        let handler = ModifyTrainingHandler::new();
+        let client = Arc::new(ModifyMockClient::with_events(vec![]));
+
+        let input = json!({
+            "action": "create",
+            "new_date": "2026-04-01",
+            "new_name": "Marathon",
+            "new_category": "RaceA",
+            "idempotency_token": "test-token"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("Marathon"));
+    }
+
+    #[tokio::test]
+    async fn test_create_training_note_category() {
+        let handler = ModifyTrainingHandler::new();
+        let client = Arc::new(ModifyMockClient::with_events(vec![]));
+
+        let input = json!({
+            "action": "create",
+            "new_date": "2026-03-20",
+            "new_name": "Rest Day Note",
+            "new_category": "Note",
+            "new_description": "Feeling tired",
+            "idempotency_token": "test-token"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+    }
+
+    // ========================================================================
+    // Execute() Path Tests - delete_training action
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_delete_training_dry_run_single() {
+        let handler = ModifyTrainingHandler::new();
+        let client = Arc::new(ModifyMockClient::with_events(vec![Event {
+            id: Some("event-123".to_string()),
+            start_date_local: "2026-03-01".to_string(),
+            name: "Tempo Run".to_string(),
+            category: EventCategory::Workout,
+            description: None,
+            r#type: None,
+        }]));
+
+        let input = json!({
+            "action": "delete",
+            "target_date": "2026-03-01",
+            "dry_run": true,
+            "idempotency_token": "test-token"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("Preview (dry_run)"));
+        assert!(content_str.contains("1"));
+    }
+
+    #[tokio::test]
+    async fn test_delete_training_apply_single() {
+        let handler = ModifyTrainingHandler::new();
+        let client = Arc::new(ModifyMockClient::with_events(vec![Event {
+            id: Some("event-123".to_string()),
+            start_date_local: "2026-03-01".to_string(),
+            name: "Tempo Run".to_string(),
+            category: EventCategory::Workout,
+            description: None,
+            r#type: None,
+        }]));
+
+        let input = json!({
+            "action": "delete",
+            "target_date": "2026-03-01",
+            "dry_run": false,
+            "idempotency_token": "test-token"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("Deleted"));
+        assert!(output.metadata.events_deleted == Some(1));
+    }
+
+    #[tokio::test]
+    async fn test_delete_training_dry_run_multiple() {
+        let handler = ModifyTrainingHandler::new();
+        let client = Arc::new(ModifyMockClient::with_events(vec![
+            Event {
+                id: Some("event-123".to_string()),
+                start_date_local: "2026-03-01".to_string(),
+                name: "Run 1".to_string(),
+                category: EventCategory::Workout,
+                description: None,
+                r#type: None,
+            },
+            Event {
+                id: Some("event-124".to_string()),
+                start_date_local: "2026-03-01".to_string(),
+                name: "Run 2".to_string(),
+                category: EventCategory::Workout,
+                description: None,
+                r#type: None,
+            },
+        ]));
+
+        let input = json!({
+            "action": "delete",
+            "target_date": "2026-03-01",
+            "dry_run": true,
+            "idempotency_token": "test-token"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("2"));
+    }
+
+    #[tokio::test]
+    async fn test_delete_training_with_description_filter() {
+        let handler = ModifyTrainingHandler::new();
+        let client = Arc::new(ModifyMockClient::with_events(vec![
+            Event {
+                id: Some("event-123".to_string()),
+                start_date_local: "2026-03-01".to_string(),
+                name: "Easy Run".to_string(),
+                category: EventCategory::Workout,
+                description: None,
+                r#type: None,
+            },
+            Event {
+                id: Some("event-124".to_string()),
+                start_date_local: "2026-03-01".to_string(),
+                name: "Tempo Run".to_string(),
+                category: EventCategory::Workout,
+                description: Some("Threshold workout".to_string()),
+                r#type: None,
+            },
+        ]));
+
+        let input = json!({
+            "action": "delete",
+            "target_date": "2026-03-01",
+            "target_description_contains": "tempo",
+            "dry_run": true,
+            "idempotency_token": "test-token"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        // Should only delete the tempo run
+        assert!(content_str.contains("1"));
+    }
+
+    #[tokio::test]
+    async fn test_delete_training_no_events() {
+        let handler = ModifyTrainingHandler::new();
+        let client = Arc::new(ModifyMockClient::with_events(vec![]));
+
+        let input = json!({
+            "action": "delete",
+            "target_date": "2026-03-01",
+            "dry_run": true,
+            "idempotency_token": "test-token"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("0"));
+    }
+
+    // ========================================================================
+    // Execute() Path Tests - invalid action
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_modify_training_invalid_action() {
+        let handler = ModifyTrainingHandler::new();
+        let client = Arc::new(ModifyMockClient::with_events(vec![]));
+
+        let input = json!({
+            "action": "invalid_action",
+            "target_date": "2026-03-01",
+            "idempotency_token": "test-token"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Invalid action"));
+    }
+
+    #[tokio::test]
+    async fn test_modify_training_missing_action() {
+        let handler = ModifyTrainingHandler::new();
+        let client = Arc::new(ModifyMockClient::with_events(vec![]));
+
+        let input = json!({
+            "target_date": "2026-03-01",
+            "idempotency_token": "test-token"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_modify_training_missing_idempotency_token() {
+        let handler = ModifyTrainingHandler::new();
+        let client = Arc::new(ModifyMockClient::with_events(vec![]));
+
+        let input = json!({
+            "action": "modify",
+            "target_date": "2026-03-01"
+        });
+
+        // Note: The handler itself doesn't check for idempotency token in execute()
+        // The router middleware handles this check
+        // This test verifies the execute path works without token (router adds it)
+        let result = handler.execute(input, client, None).await;
+        // This should fail because modify requires fields
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_modify_training_invalid_date_format() {
+        let handler = ModifyTrainingHandler::new();
+        let client = Arc::new(ModifyMockClient::with_events(vec![]));
+
+        let input = json!({
+            "action": "modify",
+            "target_date": "invalid-date",
+            "idempotency_token": "test-token"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_modify_training_range_invalid_dates() {
+        let handler = ModifyTrainingHandler::new();
+        let client = Arc::new(ModifyMockClient::with_events(vec![]));
+
+        let input = json!({
+            "action": "modify",
+            "target_date_from": "2026-03-07",
+            "target_date_to": "2026-03-01",
+            "idempotency_token": "test-token"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_err());
+    }
 }
