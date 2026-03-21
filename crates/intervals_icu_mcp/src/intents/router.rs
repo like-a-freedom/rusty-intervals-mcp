@@ -646,8 +646,8 @@ mod tests {
         let idempotency = Arc::new(IdempotencyMiddleware::new());
         let router = IntentRouter::new(handlers, client, idempotency);
 
-    let input = json!({"test": "data"});
-    let result = router.route("test_handler", input, None).await;
+        let input = json!({"test": "data"});
+        let result = router.route("test_handler", input, None).await;
 
         assert!(result.is_ok());
         let output = result.unwrap();
@@ -662,8 +662,8 @@ mod tests {
         let idempotency = Arc::new(IdempotencyMiddleware::new());
         let router = IntentRouter::new(handlers, client, idempotency);
 
-    let input = json!({});
-    let result = router.route("unknown_handler", input, None).await;
+        let input = json!({});
+        let result = router.route("unknown_handler", input, None).await;
 
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), IntentError::UnknownIntent(_)));
@@ -731,11 +731,11 @@ mod tests {
         let idempotency = Arc::new(IdempotencyMiddleware::new());
         let router = IntentRouter::new(handlers, client, idempotency);
 
-    let input = json!({
-        "idempotency_token": "token1",
-        "dry_run": true
-    });
-    let result = router.route("idempotent_handler", input, None).await;
+        let input = json!({
+            "idempotency_token": "token1",
+            "dry_run": true
+        });
+        let result = router.route("idempotent_handler", input, None).await;
 
         assert!(result.is_ok());
     }
@@ -749,10 +749,10 @@ mod tests {
         let idempotency = Arc::new(IdempotencyMiddleware::new());
         let router = IntentRouter::new(handlers, client, idempotency);
 
-    let input = json!({
-        "dry_run": false
-    });
-    let result = router.route("idempotent_handler", input, None).await;
+        let input = json!({
+            "dry_run": false
+        });
+        let result = router.route("idempotent_handler", input, None).await;
 
         assert!(result.is_err());
         assert!(matches!(
@@ -818,11 +818,11 @@ mod tests {
         let input = json!({
             "idempotency_token": "same-token"
         });
-    let result1 = router.route("counting_handler", input.clone(), None).await;
-    assert!(result1.is_ok());
+        let result1 = router.route("counting_handler", input.clone(), None).await;
+        assert!(result1.is_ok());
 
-    // Second call with same token should use cache
-    let result2 = router.route("counting_handler", input, None).await;
+        // Second call with same token should use cache
+        let result2 = router.route("counting_handler", input, None).await;
         assert!(result2.is_ok());
 
         // Reset for other tests
@@ -931,8 +931,8 @@ mod tests {
         let idempotency = Arc::new(IdempotencyMiddleware::new());
         let router = IntentRouter::new(handlers, client, idempotency);
 
-    let input = json!({"data": "test"});
-    let result = router.route("non_idempotent", input, None).await;
+        let input = json!({"data": "test"});
+        let result = router.route("non_idempotent", input, None).await;
 
         assert!(result.is_ok());
     }
@@ -946,8 +946,8 @@ mod tests {
         let idempotency = Arc::new(IdempotencyMiddleware::new());
         let router = IntentRouter::new(handlers, client, idempotency);
 
-    let input = json!({});
-    let result = router.route("requires_token", input, None).await;
+        let input = json!({});
+        let result = router.route("requires_token", input, None).await;
 
         assert!(result.is_err());
         assert!(matches!(
