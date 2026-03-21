@@ -12,6 +12,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use intervals_icu_client::{AthleteProfile, IntervalsClient};
+use intervals_icu_mcp::auth::{AppState, HttpBaseUrl, JwtManager, auth_endpoint, auth_middleware};
+use secrecy::ExposeSecret;
+use wiremock::matchers::{header, method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 // ============================================================================
 // Mock Client for HTTP Tests
@@ -771,4 +775,137 @@ fn test_local_session_manager_creation() {
 
     // Should create successfully
     assert!(Arc::new(session).as_ref() as *const _ as usize > 0);
+}
+
+// ============================================================================
+// Multi-tenant JWT HTTP Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_auth_endpoint_issues_jwt_for_valid_credentials() {
+    let mock_server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/v1/athlete/i123456/profile"))
+        .and(header(
+            "authorization",
+            "Basic QVBJX0tFWTp0ZXN0X2FwaV9rZXk=",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "athlete": {
+                "id": "i123456",
+                "name": "Test Athlete"
+            }
+        })))
+        .mount(&mock_server)
+        .await;
+
+    let jwt_manager = Arc::new(JwtManager::new(
+        b"test_jwt_secret_for_http_flow______________________________",
+        [7u8; 32],
+    ));
+    let app_state = Arc::new(AppState {
+        jwt_manager: jwt_manager.clone(),
+        jwt_ttl_seconds: 3600,
+        base_url: mock_server.uri(),
+    });
+
+    let app = axum::Router::new()
+        .route("/auth", axum::routing::post(auth_endpoint))
+        .with_state(app_state);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = axum::serve(listener, app.into_make_service());
+    let _server_handle = tokio::spawn(async move {
+        server.await.ok();
+    });
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let response = Client::new()
+        .post(format!("http://{}/auth", addr))
+        .json(&serde_json::json!({
+            "api_key": "test_api_key",
+            "athlete_id": "i123456"
+        }))
+        .send()
+        .await
+        .expect("request should succeed");
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+
+    let payload: serde_json::Value = response.json().await.expect("json response");
+    let token = payload
+        .get("token")
+        .and_then(|value| value.as_str())
+        .expect("token should be present");
+
+    let credentials = jwt_manager.verify_token(token).expect("jwt should verify");
+    assert_eq!(credentials.athlete_id, "i123456");
+    assert_eq!(credentials.api_key.expose_secret(), "test_api_key");
+}
+
+#[tokio::test]
+async fn test_mcp_route_requires_bearer_token_and_accepts_valid_jwt() {
+    let jwt_manager = Arc::new(JwtManager::new(
+        b"test_jwt_secret_for_http_flow______________________________",
+        [9u8; 32],
+    ));
+    let token = jwt_manager
+        .issue_token("i777777", "test_api_key", 3600)
+        .expect("token should issue");
+
+    let handler = intervals_icu_mcp::IntervalsMcpHandler::new_multi_tenant();
+    let session = Arc::new(
+        rmcp::transport::streamable_http_server::session::local::LocalSessionManager::default(),
+    );
+    let mcp_service = rmcp::transport::streamable_http_server::tower::StreamableHttpService::new(
+        move || -> Result<_, std::io::Error> { Ok(handler.clone()) },
+        session,
+        rmcp::transport::streamable_http_server::tower::StreamableHttpServerConfig::default(),
+    );
+
+    let app = axum::Router::new()
+        .nest_service("/mcp", mcp_service)
+        .layer(axum::Extension(HttpBaseUrl(
+            "https://intervals.icu".to_string(),
+        )))
+        .layer(axum::middleware::from_fn_with_state(
+            jwt_manager.clone(),
+            auth_middleware,
+        ));
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = axum::serve(listener, app.into_make_service());
+    let _server_handle = tokio::spawn(async move {
+        server.await.ok();
+    });
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let http_client = Client::new();
+    let missing_auth = http_client
+        .post(format!("http://{}/mcp", addr))
+        .header("Accept", "application/json, text/event-stream")
+        .header("Content-Type", "application/json")
+        .body(r#"{"jsonrpc":"2.0","method":"ping","id":1}"#)
+        .send()
+        .await
+        .expect("missing auth request should complete");
+
+    assert_eq!(missing_auth.status(), reqwest::StatusCode::UNAUTHORIZED);
+
+    let authorized = http_client
+        .post(format!("http://{}/mcp", addr))
+        .header("Authorization", format!("Bearer {}", token))
+        .header("Accept", "application/json, text/event-stream")
+        .header("Content-Type", "application/json")
+        .body(r#"{"jsonrpc":"2.0","method":"ping","id":1}"#)
+        .send()
+        .await
+        .expect("authorized request should complete");
+
+    assert_ne!(authorized.status(), reqwest::StatusCode::UNAUTHORIZED);
 }

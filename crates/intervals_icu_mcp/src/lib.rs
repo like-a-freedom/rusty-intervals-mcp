@@ -9,7 +9,10 @@ use rmcp::model::{
 };
 use rmcp::service::RequestContext;
 use rmcp::{RoleServer, ServerHandler};
+use secrecy::SecretString;
 use tokio::sync::Mutex;
+
+use crate::auth::{DecryptedCredentials, HttpBaseUrl};
 
 use crate::intents::handlers::{
     AnalyzeRaceHandler, AnalyzeTrainingHandler, AssessRecoveryHandler, ComparePeriodsHandler,
@@ -21,6 +24,7 @@ use crate::intents::{
 };
 use intervals_icu_client::IntervalsClient;
 
+pub mod auth;
 pub mod compact;
 pub mod domains;
 pub mod dynamic;
@@ -50,6 +54,23 @@ pub struct IntervalsMcpHandler {
 impl IntervalsMcpHandler {
     pub fn new(client: Arc<dyn IntervalsClient>) -> Self {
         Self::with_dynamic_runtime(client, dynamic::DynamicRuntime::from_env())
+    }
+
+    /// Create handler for multi-tenant HTTP mode.
+    /// In this mode, credentials are extracted from JWT tokens per-request,
+    /// and a new client is created for each request.
+    /// The client field is initialized with a placeholder that will be ignored.
+    pub fn new_multi_tenant() -> Self {
+        // Create a minimal placeholder client - it won't be used in multi-tenant mode
+        // because we create per-request clients from JWT credentials
+        let placeholder_client = Arc::new(
+            intervals_icu_client::http_client::ReqwestIntervalsClient::new(
+                "https://intervals.icu",
+                "placeholder".to_string(),
+                SecretString::new("placeholder".into()),
+            ),
+        );
+        Self::with_dynamic_runtime(placeholder_client, dynamic::DynamicRuntime::from_env())
     }
 
     pub fn with_dynamic_runtime(
@@ -121,6 +142,39 @@ impl IntervalsMcpHandler {
     pub async fn set_webhook_secret_value(&self, secret: impl Into<String>) {
         self.webhook_service().set_secret(secret.into()).await;
     }
+
+    fn request_parts(extensions: &rmcp::model::Extensions) -> Option<&axum::http::request::Parts> {
+        extensions.get::<axum::http::request::Parts>()
+    }
+
+    fn request_credentials(extensions: &rmcp::model::Extensions) -> Option<DecryptedCredentials> {
+        Self::request_parts(extensions)
+            .and_then(|parts| parts.extensions.get::<DecryptedCredentials>())
+            .cloned()
+    }
+
+    fn request_base_url(extensions: &rmcp::model::Extensions) -> Option<String> {
+        Self::request_parts(extensions)
+            .and_then(|parts| parts.extensions.get::<HttpBaseUrl>())
+            .map(|base_url| base_url.0.clone())
+    }
+
+    fn client_for_extensions(
+        &self,
+        extensions: &rmcp::model::Extensions,
+    ) -> Option<Arc<dyn IntervalsClient>> {
+        let credentials = Self::request_credentials(extensions)?;
+        let base_url = Self::request_base_url(extensions)
+            .unwrap_or_else(|| "https://intervals.icu".to_string());
+
+        Some(Arc::new(
+            intervals_icu_client::http_client::ReqwestIntervalsClient::new(
+                &base_url,
+                credentials.athlete_id,
+                credentials.api_key,
+            ),
+        ) as Arc<dyn IntervalsClient>)
+    }
 }
 
 impl ServerHandler for IntervalsMcpHandler {
@@ -185,20 +239,61 @@ impl ServerHandler for IntervalsMcpHandler {
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
+        // For multi-tenant mode: extract credentials from HTTP request parts and create per-request client.
+        let client_for_request = self.client_for_extensions(&context.extensions);
+
         // Route to intent handler by name
         let intent_name = request.name.as_ref();
         let args = request.arguments.unwrap_or_default();
 
-        match self
-            .intent_router
-            .route(intent_name, serde_json::Value::Object(args))
-            .await
-        {
-            Ok(output) => intent_output_to_call_tool_result(&output)
-                .map_err(|e| ErrorData::internal_error(e.to_string(), None)),
-            Err(e) => Err(intent_error_to_error_data(&e)),
+        // Use per-request client if available, otherwise use default
+        match client_for_request {
+            Some(client) => {
+                // Create temporary router with per-request client
+                let idempotency = Arc::new(intents::IdempotencyMiddleware::new());
+                let handlers = vec![
+                    Box::new(intents::handlers::PlanTrainingHandler::new())
+                        as Box<dyn intents::IntentHandler>,
+                    Box::new(intents::handlers::AnalyzeTrainingHandler::new())
+                        as Box<dyn intents::IntentHandler>,
+                    Box::new(intents::handlers::ModifyTrainingHandler::new())
+                        as Box<dyn intents::IntentHandler>,
+                    Box::new(intents::handlers::ComparePeriodsHandler::new())
+                        as Box<dyn intents::IntentHandler>,
+                    Box::new(intents::handlers::AssessRecoveryHandler::new())
+                        as Box<dyn intents::IntentHandler>,
+                    Box::new(intents::handlers::ManageProfileHandler::new())
+                        as Box<dyn intents::IntentHandler>,
+                    Box::new(intents::handlers::ManageGearHandler::new())
+                        as Box<dyn intents::IntentHandler>,
+                    Box::new(intents::handlers::AnalyzeRaceHandler::new())
+                        as Box<dyn intents::IntentHandler>,
+                ];
+                let router = Arc::new(intents::IntentRouter::new(handlers, client, idempotency));
+
+                match router
+                    .route(intent_name, serde_json::Value::Object(args))
+                    .await
+                {
+                    Ok(output) => intent_output_to_call_tool_result(&output)
+                        .map_err(|e| ErrorData::internal_error(e.to_string(), None)),
+                    Err(e) => Err(intent_error_to_error_data(&e)),
+                }
+            }
+            None => {
+                // Single-user mode: use pre-configured intent router
+                match self
+                    .intent_router
+                    .route(intent_name, serde_json::Value::Object(args))
+                    .await
+                {
+                    Ok(output) => intent_output_to_call_tool_result(&output)
+                        .map_err(|e| ErrorData::internal_error(e.to_string(), None)),
+                    Err(e) => Err(intent_error_to_error_data(&e)),
+                }
+            }
         }
     }
 
@@ -223,10 +318,14 @@ impl ServerHandler for IntervalsMcpHandler {
     async fn read_resource(
         &self,
         request: ReadResourceRequestParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResult, ErrorData> {
         if request.uri == "intervals-icu://athlete/profile" {
-            let text = domains::resources::build_athlete_profile_text(&*self.client)
+            let client = self
+                .client_for_extensions(&context.extensions)
+                .unwrap_or_else(|| self.client.clone());
+
+            let text = domains::resources::build_athlete_profile_text(&*client)
                 .await
                 .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
 
@@ -247,6 +346,7 @@ impl ServerHandler for IntervalsMcpHandler {
 mod tests {
     use super::*;
     use intervals_icu_client::{AthleteProfile, Event, EventCategory, IntervalsError};
+    use secrecy::ExposeSecret;
     use uuid::Uuid;
 
     fn test_handler() -> IntervalsMcpHandler {
@@ -716,5 +816,33 @@ mod tests {
 
         // Cleanup
         let _ = tokio::fs::remove_file(&tmp_file).await;
+    }
+
+    #[test]
+    fn request_extensions_extract_multi_tenant_credentials_and_base_url() {
+        let mut extensions = rmcp::model::Extensions::default();
+        let (mut parts, _body) = axum::http::Request::builder()
+            .uri("http://localhost/mcp")
+            .body(())
+            .expect("request")
+            .into_parts();
+
+        parts.extensions.insert(DecryptedCredentials {
+            athlete_id: "i123456".to_string(),
+            api_key: SecretString::new("per-request-key".to_string().into()),
+        });
+        parts
+            .extensions
+            .insert(HttpBaseUrl("http://mock.local".to_string()));
+        extensions.insert(parts);
+
+        let credentials = IntervalsMcpHandler::request_credentials(&extensions)
+            .expect("credentials should be extracted");
+        let base_url =
+            IntervalsMcpHandler::request_base_url(&extensions).expect("base url should exist");
+
+        assert_eq!(credentials.athlete_id, "i123456");
+        assert_eq!(credentials.api_key.expose_secret(), "per-request-key");
+        assert_eq!(base_url, "http://mock.local");
     }
 }

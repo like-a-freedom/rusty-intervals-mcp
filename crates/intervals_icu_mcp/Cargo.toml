@@ -1,6 +1,6 @@
 [package]
 name = "intervals_icu_mcp"
-version = "2.0.2"
+version = "2.0.3"
 edition = "2024"
 
 [dependencies]
@@ -31,6 +31,16 @@ hex = "0.4.3"
 chrono = "0.4.44"
 async-trait = "0.1.89"
 thiserror = "2.0.18"
+# JWT authentication for multi-tenant HTTP mode
+jwt-simple = "0.12.14"
+# AES-256-GCM for api_key encryption
+aes-gcm = "0.10.3"
+# Rate limiting for multi-tenant mode
+tower_governor = "0.8.0"
+# Base64 encoding
+base64 = "0.22.1"
+# GetRandom for OsRng
+getrandom = "0.4.2"
 
 [dev-dependencies]
 tokio = { version = "1.50.0", features = ["full"] }
