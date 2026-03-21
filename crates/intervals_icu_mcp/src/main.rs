@@ -15,8 +15,9 @@ use rmcp::transport::streamable_http_server::tower::{
 };
 use secrecy::SecretString;
 use tower_governor::{GovernorLayer, governor::GovernorConfigBuilder};
+use tower_http::timeout::TimeoutLayer;
 
-/// STDIO mode: инициализация с credentials из env
+/// STDIO mode: initialize with credentials from env
 async fn initialize_handler_single_user() -> Result<IntervalsMcpHandler, String> {
     let base = std::env::var("INTERVALS_ICU_BASE_URL")
         .unwrap_or_else(|_| "https://intervals.icu".to_string());
@@ -54,16 +55,16 @@ async fn initialize_handler_single_user() -> Result<IntervalsMcpHandler, String>
     Ok(handler)
 }
 
-/// HTTP mode: multi-tenant с JWT authentication
+/// HTTP mode: multi-tenant with JWT authentication
 async fn run_http_server(
     address: SocketAddr,
     max_body_size: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // JWT_SECRET обязателен для HTTP mode
+    // JWT_SECRET is required for HTTP mode
     let jwt_secret = std::env::var("JWT_SECRET")
         .map_err(|_| "JWT_SECRET environment variable is required for HTTP mode")?;
 
-    // JWT_ENCRYPTION_KEY для шифрования api_key (32 байта = 64 hex chars)
+    // JWT_ENCRYPTION_KEY for api_key encryption (32 bytes = 64 hex chars)
     let encryption_key_hex = std::env::var("JWT_ENCRYPTION_KEY")
         .map_err(|_| "JWT_ENCRYPTION_KEY environment variable is required for HTTP mode")?;
     let encryption_key = hex::decode(&encryption_key_hex)
@@ -78,12 +79,26 @@ async fn run_http_server(
 
     let jwt_manager = Arc::new(JwtManager::new(jwt_secret.as_bytes(), key_array));
 
-    // JWT TTL: настраиваемый, максимум 7 дней
+    // JWT TTL: configurable, maximum 7 days
     let jwt_ttl_seconds = std::env::var("JWT_TTL_SECONDS")
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
         .unwrap_or(86400)
         .min(7 * 24 * 3600);
+
+    // Request timeout: maximum time to process a single request
+    let request_timeout_secs = std::env::var("REQUEST_TIMEOUT_SECONDS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(30);
+    let request_timeout = Duration::from_secs(request_timeout_secs);
+
+    // Idle timeout: maximum idle connection time
+    let idle_timeout_secs = std::env::var("IDLE_TIMEOUT_SECONDS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(60);
+    let idle_timeout = Duration::from_secs(idle_timeout_secs);
 
     let base_url = std::env::var("INTERVALS_ICU_BASE_URL")
         .unwrap_or_else(|_| "https://intervals.icu".to_string());
@@ -94,10 +109,10 @@ async fn run_http_server(
         base_url: base_url.clone(),
     });
 
-    // Handler для multi-tenant mode (без credentials, они извлекаются из JWT)
+    // Handler for multi-tenant mode (no credentials, extracted from JWT)
     let handler = IntervalsMcpHandler::new_multi_tenant();
 
-    // Auth endpoint с rate limiting (защита от brute force)
+    // Auth endpoint with rate limiting (brute force protection)
     let auth_config = GovernorConfigBuilder::default()
         .per_second(1)
         .burst_size(3)
@@ -106,9 +121,13 @@ async fn run_http_server(
     let auth_route = Router::new()
         .route("/auth", post(auth_endpoint))
         .layer(GovernorLayer::new(auth_config))
+        .layer(TimeoutLayer::with_status_code(
+            hyper::StatusCode::REQUEST_TIMEOUT,
+            request_timeout,
+        ))
         .with_state(app_state.clone());
 
-    // MCP service с auth middleware и rate limiting
+    // MCP service with auth middleware and rate limiting
     let session = Arc::new(LocalSessionManager::default());
     let mcp_service = StreamableHttpService::new(
         move || Ok(handler.clone()),
@@ -129,9 +148,13 @@ async fn run_http_server(
             auth_middleware,
         ))
         .layer(GovernorLayer::new(mcp_config))
-        .layer(DefaultBodyLimit::max(max_body_size));
+        .layer(DefaultBodyLimit::max(max_body_size))
+        .layer(TimeoutLayer::with_status_code(
+            hyper::StatusCode::REQUEST_TIMEOUT,
+            request_timeout,
+        ));
 
-    // Health endpoint (без auth)
+    // Health endpoint (no auth)
     let health_route = Router::new().route("/health", get(|| async { "ok" }));
 
     let app = Router::new()
@@ -139,7 +162,12 @@ async fn run_http_server(
         .merge(mcp_route)
         .merge(health_route);
 
-    tracing::info!(%address, "starting HTTP server with JWT authentication");
+    tracing::info!(
+        %address,
+        request_timeout_secs = request_timeout.as_secs(),
+        idle_timeout_secs = idle_timeout.as_secs(),
+        "starting HTTP server with JWT authentication"
+    );
 
     let listener = tokio::net::TcpListener::bind(address).await?;
     axum::serve(
