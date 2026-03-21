@@ -730,6 +730,7 @@ async fn router_allows_apply_after_dry_run_with_same_token() {
                 "dry_run": true,
                 "idempotency_token": "shared-preview-apply-token"
             }),
+            None,
         )
         .await
         .expect("dry_run should succeed");
@@ -745,6 +746,7 @@ async fn router_allows_apply_after_dry_run_with_same_token() {
                 "new_duration": "1:00",
                 "idempotency_token": "shared-preview-apply-token"
             }),
+            None,
         )
         .await
         .expect("apply call should not be served from cached dry_run preview");
@@ -772,6 +774,7 @@ async fn router_rejects_same_token_for_different_mutation_payload() {
                 "new_duration": "1:00",
                 "idempotency_token": "reused-mutation-token"
             }),
+            None,
         )
         .await
         .expect("first mutation should succeed");
@@ -786,6 +789,7 @@ async fn router_rejects_same_token_for_different_mutation_payload() {
                 "new_duration": "0:25",
                 "idempotency_token": "reused-mutation-token"
             }),
+            None,
         )
         .await
         .expect_err("reusing the same idempotency token for a different request should fail");

@@ -32,13 +32,22 @@ impl IntentRouter {
             client,
         }
     }
-    pub async fn route(&self, name: &str, input: Value) -> Result<IntentOutput, IntentError> {
+    pub async fn route(
+        &self,
+        name: &str,
+        input: Value,
+        athlete_id: Option<&str>,
+    ) -> Result<IntentOutput, IntentError> {
+        let start = std::time::Instant::now();
+        info!(tool = name, athlete_id = ?athlete_id, "Tool call started");
+
         debug!("Routing intent: {}", name);
         let handler = self
             .handlers
             .get(name)
             .ok_or_else(|| IntentError::UnknownIntent(name.to_string()))?;
-        if handler.requires_idempotency_token() {
+
+        let result = if handler.requires_idempotency_token() {
             if let Some(token) = handler.extract_idempotency_token(&input) {
                 let dry_run = input
                     .get("dry_run")
@@ -46,23 +55,32 @@ impl IntentRouter {
                     .unwrap_or(false);
 
                 if dry_run {
-                    return handler.execute(input, self.client.clone(), None).await;
+                    handler.execute(input, self.client.clone(), None).await
+                } else {
+                    let request_fingerprint = fingerprint_request(name, &input);
+                    self.idempotency
+                        .execute_with_idempotency(&token, &request_fingerprint, || async {
+                            handler
+                                .execute(input.clone(), self.client.clone(), None)
+                                .await
+                        })
+                        .await
                 }
-
-                let request_fingerprint = fingerprint_request(name, &input);
-                return self
-                    .idempotency
-                    .execute_with_idempotency(&token, &request_fingerprint, || async {
-                        handler
-                            .execute(input.clone(), self.client.clone(), None)
-                            .await
-                    })
-                    .await;
             } else {
-                return Err(IntentError::validation("Idempotency token required"));
+                Err(IntentError::validation("Idempotency token required"))
             }
-        }
-        handler.execute(input, self.client.clone(), None).await
+        } else {
+            handler.execute(input, self.client.clone(), None).await
+        };
+
+        info!(
+            tool = name,
+            athlete_id = ?athlete_id,
+            duration_secs = start.elapsed().as_secs_f64(),
+            "Tool call completed"
+        );
+
+        result
     }
     pub fn tool_definitions(&self) -> Vec<ToolDefinition> {
         let output_schema = standard_output_schema();
@@ -628,8 +646,8 @@ mod tests {
         let idempotency = Arc::new(IdempotencyMiddleware::new());
         let router = IntentRouter::new(handlers, client, idempotency);
 
-        let input = json!({"test": "data"});
-        let result = router.route("test_handler", input).await;
+    let input = json!({"test": "data"});
+    let result = router.route("test_handler", input, None).await;
 
         assert!(result.is_ok());
         let output = result.unwrap();
@@ -644,8 +662,8 @@ mod tests {
         let idempotency = Arc::new(IdempotencyMiddleware::new());
         let router = IntentRouter::new(handlers, client, idempotency);
 
-        let input = json!({});
-        let result = router.route("unknown_handler", input).await;
+    let input = json!({});
+    let result = router.route("unknown_handler", input, None).await;
 
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), IntentError::UnknownIntent(_)));
@@ -713,11 +731,11 @@ mod tests {
         let idempotency = Arc::new(IdempotencyMiddleware::new());
         let router = IntentRouter::new(handlers, client, idempotency);
 
-        let input = json!({
-            "idempotency_token": "token1",
-            "dry_run": true
-        });
-        let result = router.route("idempotent_handler", input).await;
+    let input = json!({
+        "idempotency_token": "token1",
+        "dry_run": true
+    });
+    let result = router.route("idempotent_handler", input, None).await;
 
         assert!(result.is_ok());
     }
@@ -731,10 +749,10 @@ mod tests {
         let idempotency = Arc::new(IdempotencyMiddleware::new());
         let router = IntentRouter::new(handlers, client, idempotency);
 
-        let input = json!({
-            "dry_run": false
-        });
-        let result = router.route("idempotent_handler", input).await;
+    let input = json!({
+        "dry_run": false
+    });
+    let result = router.route("idempotent_handler", input, None).await;
 
         assert!(result.is_err());
         assert!(matches!(
@@ -800,11 +818,11 @@ mod tests {
         let input = json!({
             "idempotency_token": "same-token"
         });
-        let result1 = router.route("counting_handler", input.clone()).await;
-        assert!(result1.is_ok());
+    let result1 = router.route("counting_handler", input.clone(), None).await;
+    assert!(result1.is_ok());
 
-        // Second call with same token should use cache
-        let result2 = router.route("counting_handler", input).await;
+    // Second call with same token should use cache
+    let result2 = router.route("counting_handler", input, None).await;
         assert!(result2.is_ok());
 
         // Reset for other tests
@@ -913,8 +931,8 @@ mod tests {
         let idempotency = Arc::new(IdempotencyMiddleware::new());
         let router = IntentRouter::new(handlers, client, idempotency);
 
-        let input = json!({"data": "test"});
-        let result = router.route("non_idempotent", input).await;
+    let input = json!({"data": "test"});
+    let result = router.route("non_idempotent", input, None).await;
 
         assert!(result.is_ok());
     }
@@ -928,8 +946,8 @@ mod tests {
         let idempotency = Arc::new(IdempotencyMiddleware::new());
         let router = IntentRouter::new(handlers, client, idempotency);
 
-        let input = json!({});
-        let result = router.route("requires_token", input).await;
+    let input = json!({});
+    let result = router.route("requires_token", input, None).await;
 
         assert!(result.is_err());
         assert!(matches!(

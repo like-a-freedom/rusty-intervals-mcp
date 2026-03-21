@@ -236,66 +236,67 @@ impl ServerHandler for IntervalsMcpHandler {
         })
     }
 
-    async fn call_tool(
-        &self,
-        request: CallToolRequestParams,
-        context: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, ErrorData> {
-        // For multi-tenant mode: extract credentials from HTTP request parts and create per-request client.
-        let client_for_request = self.client_for_extensions(&context.extensions);
+async fn call_tool(
+    &self,
+    request: CallToolRequestParams,
+    context: RequestContext<RoleServer>,
+) -> Result<CallToolResult, ErrorData> {
+    // For multi-tenant mode: extract credentials from HTTP request parts and create per-request client.
+    let client_for_request = self.client_for_extensions(&context.extensions);
+    let athlete_id = Self::request_credentials(&context.extensions).map(|c| c.athlete_id);
 
-        // Route to intent handler by name
-        let intent_name = request.name.as_ref();
-        let args = request.arguments.unwrap_or_default();
+    // Route to intent handler by name
+    let intent_name = request.name.as_ref();
+    let args = request.arguments.unwrap_or_default();
 
-        // Use per-request client if available, otherwise use default
-        match client_for_request {
-            Some(client) => {
-                // Create temporary router with per-request client
-                let idempotency = Arc::new(intents::IdempotencyMiddleware::new());
-                let handlers = vec![
-                    Box::new(intents::handlers::PlanTrainingHandler::new())
-                        as Box<dyn intents::IntentHandler>,
-                    Box::new(intents::handlers::AnalyzeTrainingHandler::new())
-                        as Box<dyn intents::IntentHandler>,
-                    Box::new(intents::handlers::ModifyTrainingHandler::new())
-                        as Box<dyn intents::IntentHandler>,
-                    Box::new(intents::handlers::ComparePeriodsHandler::new())
-                        as Box<dyn intents::IntentHandler>,
-                    Box::new(intents::handlers::AssessRecoveryHandler::new())
-                        as Box<dyn intents::IntentHandler>,
-                    Box::new(intents::handlers::ManageProfileHandler::new())
-                        as Box<dyn intents::IntentHandler>,
-                    Box::new(intents::handlers::ManageGearHandler::new())
-                        as Box<dyn intents::IntentHandler>,
-                    Box::new(intents::handlers::AnalyzeRaceHandler::new())
-                        as Box<dyn intents::IntentHandler>,
-                ];
-                let router = Arc::new(intents::IntentRouter::new(handlers, client, idempotency));
+    // Use per-request client if available, otherwise use default
+    match client_for_request {
+        Some(client) => {
+            // Create temporary router with per-request client
+            let idempotency = Arc::new(intents::IdempotencyMiddleware::new());
+            let handlers = vec![
+                Box::new(intents::handlers::PlanTrainingHandler::new())
+                    as Box<dyn intents::IntentHandler>,
+                Box::new(intents::handlers::AnalyzeTrainingHandler::new())
+                    as Box<dyn intents::IntentHandler>,
+                Box::new(intents::handlers::ModifyTrainingHandler::new())
+                    as Box<dyn intents::IntentHandler>,
+                Box::new(intents::handlers::ComparePeriodsHandler::new())
+                    as Box<dyn intents::IntentHandler>,
+                Box::new(intents::handlers::AssessRecoveryHandler::new())
+                    as Box<dyn intents::IntentHandler>,
+                Box::new(intents::handlers::ManageProfileHandler::new())
+                    as Box<dyn intents::IntentHandler>,
+                Box::new(intents::handlers::ManageGearHandler::new())
+                    as Box<dyn intents::IntentHandler>,
+                Box::new(intents::handlers::AnalyzeRaceHandler::new())
+                    as Box<dyn intents::IntentHandler>,
+            ];
+            let router = Arc::new(intents::IntentRouter::new(handlers, client, idempotency));
 
-                match router
-                    .route(intent_name, serde_json::Value::Object(args))
-                    .await
-                {
-                    Ok(output) => intent_output_to_call_tool_result(&output)
-                        .map_err(|e| ErrorData::internal_error(e.to_string(), None)),
-                    Err(e) => Err(intent_error_to_error_data(&e)),
-                }
+            match router
+                .route(intent_name, serde_json::Value::Object(args), athlete_id.as_deref())
+                .await
+            {
+                Ok(output) => intent_output_to_call_tool_result(&output)
+                    .map_err(|e| ErrorData::internal_error(e.to_string(), None)),
+                Err(e) => Err(intent_error_to_error_data(&e)),
             }
-            None => {
-                // Single-user mode: use pre-configured intent router
-                match self
-                    .intent_router
-                    .route(intent_name, serde_json::Value::Object(args))
-                    .await
-                {
-                    Ok(output) => intent_output_to_call_tool_result(&output)
-                        .map_err(|e| ErrorData::internal_error(e.to_string(), None)),
-                    Err(e) => Err(intent_error_to_error_data(&e)),
-                }
+        }
+        None => {
+            // Single-user mode: use pre-configured intent router
+            match self
+                .intent_router
+                .route(intent_name, serde_json::Value::Object(args), athlete_id.as_deref())
+                .await
+            {
+                Ok(output) => intent_output_to_call_tool_result(&output)
+                    .map_err(|e| ErrorData::internal_error(e.to_string(), None)),
+                Err(e) => Err(intent_error_to_error_data(&e)),
             }
         }
     }
+}
 
     fn get_tool(&self, _name: &str) -> Option<rmcp::model::Tool> {
         None
