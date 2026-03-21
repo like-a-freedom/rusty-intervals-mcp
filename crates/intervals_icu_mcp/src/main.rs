@@ -8,7 +8,9 @@ use axum::{
     routing::{get, post},
 };
 use intervals_icu_mcp::IntervalsMcpHandler;
-use intervals_icu_mcp::auth::{AppState, HttpBaseUrl, JwtManager, auth_endpoint, auth_middleware};
+use intervals_icu_mcp::auth::{
+    AppState, HttpBaseUrl, JwtManager, MasterKeyConfig, auth_endpoint, auth_middleware,
+};
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use rmcp::transport::streamable_http_server::tower::{
     StreamableHttpServerConfig, StreamableHttpService,
@@ -60,31 +62,21 @@ async fn run_http_server(
     address: SocketAddr,
     max_body_size: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // JWT_SECRET is required for HTTP mode
-    let jwt_secret = std::env::var("JWT_SECRET")
-        .map_err(|_| "JWT_SECRET environment variable is required for HTTP mode")?;
+    // JWT_MASTER_KEY is required for HTTP mode (64 bytes = 128 hex chars)
+    let jwt_master_key_hex = std::env::var("JWT_MASTER_KEY")
+        .map_err(|_| "JWT_MASTER_KEY environment variable is required for HTTP mode")?;
 
-    // JWT_ENCRYPTION_KEY for api_key encryption (32 bytes = 64 hex chars)
-    let encryption_key_hex = std::env::var("JWT_ENCRYPTION_KEY")
-        .map_err(|_| "JWT_ENCRYPTION_KEY environment variable is required for HTTP mode")?;
-    let encryption_key = hex::decode(&encryption_key_hex)
-        .map_err(|_| "JWT_ENCRYPTION_KEY must be a valid hex string")?;
+    // Parse master key and derive signing/encryption keys via HKDF
+    let master_key_config = MasterKeyConfig::from_hex(&jwt_master_key_hex)
+        .map_err(|e| format!("Invalid JWT_MASTER_KEY: {}", e))?;
 
-    if encryption_key.len() != 32 {
-        return Err("JWT_ENCRYPTION_KEY must be exactly 32 bytes (64 hex chars)".into());
-    }
+    let jwt_manager = Arc::new(JwtManager::from_master_key(&master_key_config));
 
-    let mut key_array = [0u8; 32];
-    key_array.copy_from_slice(&encryption_key);
-
-    let jwt_manager = Arc::new(JwtManager::new(jwt_secret.as_bytes(), key_array));
-
-    // JWT TTL: configurable, maximum 7 days
+    // JWT TTL: configurable, 3 months (90 days) by default
     let jwt_ttl_seconds = std::env::var("JWT_TTL_SECONDS")
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
-        .unwrap_or(86400)
-        .min(7 * 24 * 3600);
+        .unwrap_or(7776000); // 90 days = 3 months
 
     // Request timeout: maximum time to process a single request
     let request_timeout_secs = std::env::var("REQUEST_TIMEOUT_SECONDS")

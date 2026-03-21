@@ -21,8 +21,7 @@ export INTERVALS_ICU_API_KEY=...
 export INTERVALS_ICU_ATHLETE_ID=...
 export MCP_TRANSPORT=http
 export MCP_HTTP_ADDRESS=127.0.0.1:3000
-export JWT_SECRET=$(openssl rand -hex 32)
-export JWT_ENCRYPTION_KEY=$(openssl rand -hex 32)
+export JWT_MASTER_KEY=$(openssl rand -hex 64)
 cargo run -p intervals_icu_mcp --bin intervals_icu_mcp
 ```
 
@@ -40,15 +39,14 @@ export INTERVALS_ICU_API_KEY=...
 export INTERVALS_ICU_ATHLETE_ID=...
 export MCP_TRANSPORT=http   # omit or set to stdio for local child-process use
 export MCP_HTTP_ADDRESS=127.0.0.1:3000
-export JWT_SECRET=$(openssl rand -hex 32)
-export JWT_ENCRYPTION_KEY=$(openssl rand -hex 32)
+export JWT_MASTER_KEY=$(openssl rand -hex 64)
 intervals_icu_mcp
 ```
 
 (Use `--bin <name>` if you need to select a specific binary.)
 - Run MCP server for stdio or other transports:
 
-The crate supports RMCP transports (stdio, streamable HTTP). In stdio mode, the binary reads `INTERVALS_ICU_API_KEY` and `INTERVALS_ICU_ATHLETE_ID` directly from the environment. In HTTP mode, the server mounts `/auth`, `/health`, and the streamable MCP service at `/mcp` and requires `JWT_SECRET` plus `JWT_ENCRYPTION_KEY`.
+The crate supports RMCP transports (stdio, streamable HTTP). In stdio mode, the binary reads `INTERVALS_ICU_API_KEY` and `INTERVALS_ICU_ATHLETE_ID` directly from the environment. In HTTP mode, the server mounts `/auth`, `/health`, and the streamable MCP service at `/mcp` and requires `JWT_MASTER_KEY`.
 
 If you need a concrete stdio example, run an example from the RMCP SDK or see the `tests/e2e_stdio.rs` test for an example of launching the server as a child process.
 
@@ -58,7 +56,8 @@ Useful HTTP-mode environment variables:
 - `MAX_HTTP_BODY_SIZE` (default `4194304` bytes)
 - `REQUEST_TIMEOUT_SECONDS` (default `30`)
 - `IDLE_TIMEOUT_SECONDS` (default `60`)
-- `JWT_TTL_SECONDS` (default `86400`, maximum 7 days)
+- `JWT_MASTER_KEY` (required, 64-byte hex key)
+- `JWT_TTL_SECONDS` (default `7776000` = 90 days)
 
 For containerized deployment, prefer the repository-level `Dockerfile` and `docker-compose.yml`; those artifacts are intended for HTTP streamable MCP, not stdio child-process usage.
 - Running tests:

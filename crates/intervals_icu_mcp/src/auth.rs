@@ -2,10 +2,12 @@
 
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
+use hkdf::Hkdf;
 use intervals_icu_client::IntervalsClient;
 use jwt_simple::prelude::*;
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
+use sha2::Sha256;
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -53,6 +55,37 @@ pub struct AppState {
     pub base_url: String,
 }
 
+/// Master key configuration with HKDF-derived keys
+#[derive(Debug)]
+pub struct MasterKeyConfig {
+    pub signing_key: [u8; 32],
+    pub encryption_key: [u8; 32],
+}
+
+impl MasterKeyConfig {
+    pub fn from_hex(hex_str: &str) -> Result<Self, AuthError> {
+        let master_key = hex::decode(hex_str).map_err(|_| AuthError::InvalidKeyFormat)?;
+
+        if master_key.len() != 64 {
+            return Err(AuthError::InvalidKeyLength);
+        }
+
+        let hk = Hkdf::<Sha256>::new(None, &master_key);
+        let mut signing_key = [0u8; 32];
+        let mut encryption_key = [0u8; 32];
+
+        hk.expand(b"intervals-mcp-signing", &mut signing_key)
+            .map_err(|_| AuthError::KeyDerivationError)?;
+        hk.expand(b"intervals-mcp-encryption", &mut encryption_key)
+            .map_err(|_| AuthError::KeyDerivationError)?;
+
+        Ok(Self {
+            signing_key,
+            encryption_key,
+        })
+    }
+}
+
 /// Authentication errors
 #[derive(Debug, Error)]
 pub enum AuthError {
@@ -68,6 +101,12 @@ pub enum AuthError {
     ServerConfig,
     #[error("Invalid credentials")]
     InvalidCredentials,
+    #[error("Invalid key format")]
+    InvalidKeyFormat,
+    #[error("Invalid key length")]
+    InvalidKeyLength,
+    #[error("Key derivation error")]
+    KeyDerivationError,
     #[error("JWT error: {0}")]
     JwtError(#[from] jwt_simple::Error),
 }
@@ -77,6 +116,15 @@ impl JwtManager {
         Self {
             signing_key: HS256Key::from_bytes(jwt_secret),
             encryption_key,
+            issuer: "intervals-icu-mcp".to_string(),
+            audience: "intervals-icu-mcp".to_string(),
+        }
+    }
+
+    pub fn from_master_key(config: &MasterKeyConfig) -> Self {
+        Self {
+            signing_key: HS256Key::from_bytes(&config.signing_key),
+            encryption_key: config.encryption_key,
             issuer: "intervals-icu-mcp".to_string(),
             audience: "intervals-icu-mcp".to_string(),
         }
@@ -201,6 +249,9 @@ impl IntoResponse for AuthError {
             AuthError::InvalidCredentials => StatusCode::UNAUTHORIZED,
             AuthError::EncryptionError => StatusCode::INTERNAL_SERVER_ERROR,
             AuthError::ServerConfig => StatusCode::INTERNAL_SERVER_ERROR,
+            AuthError::InvalidKeyFormat => StatusCode::INTERNAL_SERVER_ERROR,
+            AuthError::InvalidKeyLength => StatusCode::INTERNAL_SERVER_ERROR,
+            AuthError::KeyDerivationError => StatusCode::INTERNAL_SERVER_ERROR,
             AuthError::JwtError(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
 
@@ -576,5 +627,119 @@ mod tests {
 
         // Should fail with InvalidCredentials (API call will fail)
         assert!(result.is_err());
+    }
+
+    // ========================================
+    // TDD Tests for HKDF-based JWT Manager
+    // ========================================
+
+    // RED: Test that MasterKeyConfig can be created from hex string
+    #[test]
+    fn test_master_key_config_from_hex() {
+        // Valid 64-byte (128 hex chars) master key
+        let master_key_hex = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+
+        let result = MasterKeyConfig::from_hex(master_key_hex);
+
+        assert!(result.is_ok());
+        let config = result.unwrap();
+        assert_eq!(config.signing_key.len(), 32);
+        assert_eq!(config.encryption_key.len(), 32);
+    }
+
+    // RED: Test that invalid hex string fails
+    #[test]
+    fn test_master_key_config_invalid_hex() {
+        let invalid_hex = "not_valid_hex_chars!";
+
+        let result = MasterKeyConfig::from_hex(invalid_hex);
+
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), AuthError::InvalidKeyFormat));
+    }
+
+    // RED: Test that wrong length key fails
+    #[test]
+    fn test_master_key_config_wrong_length() {
+        // Only 32 bytes (64 hex chars) instead of 64 bytes
+        let short_key_hex = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+
+        let result = MasterKeyConfig::from_hex(short_key_hex);
+
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), AuthError::InvalidKeyLength));
+    }
+
+    // RED: Test that HKDF produces different signing and encryption keys
+    #[test]
+    fn test_hkdf_produces_different_keys() {
+        let master_key_hex = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+
+        let config = MasterKeyConfig::from_hex(master_key_hex).unwrap();
+
+        // Signing and encryption keys should be different
+        assert_ne!(config.signing_key, config.encryption_key);
+
+        // Keys should not be all zeros
+        assert_ne!(config.signing_key, [0u8; 32]);
+        assert_ne!(config.encryption_key, [0u8; 32]);
+    }
+
+    // RED: Test JwtManager can be created from MasterKeyConfig
+    #[test]
+    fn test_jwt_manager_from_master_key() {
+        let master_key_hex = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+
+        let config = MasterKeyConfig::from_hex(master_key_hex).unwrap();
+        let manager = JwtManager::from_master_key(&config);
+
+        assert_eq!(manager.issuer, "intervals-icu-mcp");
+        assert_eq!(manager.audience, "intervals-icu-mcp");
+    }
+
+    // RED: Test JWT token issuance and verification with HKDF
+    #[test]
+    fn test_jwt_issue_and_verify_with_hkdf() {
+        let master_key_hex = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+
+        let config = MasterKeyConfig::from_hex(master_key_hex).unwrap();
+        let manager = JwtManager::from_master_key(&config);
+
+        let athlete_id = "i123456";
+        let api_key = "test_api_key_123";
+
+        // Issue token
+        let token = manager.issue_token(athlete_id, api_key, 3600).unwrap();
+
+        // Verify token
+        let credentials = manager.verify_token(&token).unwrap();
+
+        assert_eq!(credentials.athlete_id, athlete_id);
+        assert_eq!(credentials.api_key.expose_secret(), api_key);
+    }
+
+    // RED: Test that different master keys produce different tokens
+    #[test]
+    fn test_different_master_keys_produce_different_tokens() {
+        let master_key_hex_1 = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+        let master_key_hex_2 = "ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100";
+
+        let config1 = MasterKeyConfig::from_hex(master_key_hex_1).unwrap();
+        let config2 = MasterKeyConfig::from_hex(master_key_hex_2).unwrap();
+
+        let manager1 = JwtManager::from_master_key(&config1);
+        let manager2 = JwtManager::from_master_key(&config2);
+
+        let athlete_id = "i123456";
+        let api_key = "test_api_key_123";
+
+        let token1 = manager1.issue_token(athlete_id, api_key, 3600).unwrap();
+        let token2 = manager2.issue_token(athlete_id, api_key, 3600).unwrap();
+
+        // Tokens should be different
+        assert_ne!(token1, token2);
+
+        // Token from manager1 should NOT be verifiable by manager2
+        assert!(manager2.verify_token(&token1).is_err());
     }
 }
