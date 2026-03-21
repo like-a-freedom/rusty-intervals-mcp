@@ -76,12 +76,12 @@ fn test_http_address_invalid_fallback() {
 
 #[test]
 fn test_max_body_size_default() {
-    // Default max body size (50MB)
+    // Default max body size (4MB)
     let max_body_size = std::env::var("MAX_HTTP_BODY_SIZE_NOT_SET")
         .ok()
         .and_then(|s| s.parse::<usize>().ok())
-        .unwrap_or(50 * 1024 * 1024);
-    assert_eq!(max_body_size, 50 * 1024 * 1024);
+        .unwrap_or(4 * 1024 * 1024);
+    assert_eq!(max_body_size, 4 * 1024 * 1024);
 }
 
 #[test]
@@ -94,8 +94,8 @@ fn test_max_body_size_custom() {
 #[test]
 fn test_max_body_size_invalid_fallback() {
     // Invalid max body size should fallback to default
-    let max_body_size = "not_a_number".parse::<usize>().unwrap_or(50 * 1024 * 1024);
-    assert_eq!(max_body_size, 50 * 1024 * 1024);
+    let max_body_size = "not_a_number".parse::<usize>().unwrap_or(4 * 1024 * 1024);
+    assert_eq!(max_body_size, 4 * 1024 * 1024);
 }
 
 // ============================================================================
