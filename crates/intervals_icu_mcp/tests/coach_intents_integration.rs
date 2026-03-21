@@ -1676,6 +1676,53 @@ async fn analyze_training_period_includes_trend_context() {
 }
 
 #[tokio::test]
+async fn analyze_training_single_accepts_today_date_alias() {
+    let today = Utc::now().date_naive();
+    let client = Arc::new(MockCoachClient {
+        activities: vec![ActivitySummary {
+            id: "today-training-1".to_string(),
+            name: Some("Today's Endurance Run".to_string()),
+            start_date_local: format!("{}T07:30:00", today.format("%Y-%m-%d")),
+        }],
+        events: vec![],
+        fitness: json!([{ "fitness": 55.0, "fatigue": 47.0, "form": 8.0 }]),
+        wellness: json!([]),
+        wellness_for_date: json!({}),
+        upcoming_workouts: json!([]),
+        activity_details: json!({
+            "distance": 18050.0,
+            "moving_time": 7742,
+            "average_heartrate": 141.0,
+            "total_elevation_gain": 233.0
+        }),
+        intervals: json!([]),
+        streams: json!({}),
+        best_efforts: json!([]),
+        sport_settings: json!([]),
+        hr_histogram: json!({}),
+        power_histogram: json!({}),
+        pace_histogram: json!({}),
+    });
+    let handler = AnalyzeTrainingHandler::new();
+
+    let output = handler
+        .execute(
+            json!({
+                "target_type": "single",
+                "date": "today"
+            }),
+            client,
+            None,
+        )
+        .await
+        .unwrap();
+
+    let markdown = markdown_text(&output);
+    assert!(markdown.contains("Today's Endurance Run"));
+    assert!(markdown.contains("**Date:** today"));
+}
+
+#[tokio::test]
 async fn analyze_training_period_surfaces_future_planned_workouts() {
     let client = Arc::new(MockCoachClient::with_future_workouts_only());
     let handler = AnalyzeTrainingHandler::new();

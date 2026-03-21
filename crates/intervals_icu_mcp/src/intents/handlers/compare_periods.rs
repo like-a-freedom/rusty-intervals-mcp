@@ -1,6 +1,5 @@
 use crate::intents::{ContentBlock, IdempotencyCache, IntentError, IntentHandler, IntentOutput};
 use async_trait::async_trait;
-use chrono::NaiveDate;
 use intervals_icu_client::{ActivitySummary, IntervalsClient};
 use serde_json::{Value, json};
 /// Compare Periods Intent Handler
@@ -13,7 +12,7 @@ use crate::engines::analysis_fetch::{PeriodFetchRequest, fetch_period_data};
 use crate::engines::coach_metrics::{
     TrendSnapshot, build_trend_snapshot, derive_trend_metrics, derive_volume_metrics,
 };
-use crate::intents::utils::filter_activities_by_range;
+use crate::intents::utils::{filter_activities_by_range, parse_date};
 
 pub struct ComparePeriodsHandler;
 impl ComparePeriodsHandler {
@@ -37,11 +36,11 @@ impl IntentHandler for ComparePeriodsHandler {
         json!({
             "type": "object",
             "properties": {
-                "period_a_start": {"type": "string", "description": "Period A start (YYYY-MM-DD)"},
-                "period_a_end": {"type": "string", "description": "Period A end (YYYY-MM-DD)"},
+                "period_a_start": {"type": "string", "description": "Period A start (YYYY-MM-DD, 'today', 'tomorrow', or 'yesterday')"},
+                "period_a_end": {"type": "string", "description": "Period A end (YYYY-MM-DD, 'today', 'tomorrow', or 'yesterday')"},
                 "period_a_label": {"type": "string", "description": "Period A label"},
-                "period_b_start": {"type": "string", "description": "Period B start (YYYY-MM-DD)"},
-                "period_b_end": {"type": "string", "description": "Period B end (YYYY-MM-DD)"},
+                "period_b_start": {"type": "string", "description": "Period B start (YYYY-MM-DD, 'today', 'tomorrow', or 'yesterday')"},
+                "period_b_end": {"type": "string", "description": "Period B end (YYYY-MM-DD, 'today', 'tomorrow', or 'yesterday')"},
                 "period_b_label": {"type": "string", "description": "Period B label"},
                 "workout_type": {"type": "string", "description": "Filter by type: tempo, intervals, long_run"},
                 "metrics": {"type": "array", "items": {"type": "string"}, "description": "Metrics: volume, intensity, zones, pace, hr, tss"}
@@ -342,10 +341,8 @@ impl ComparePeriodsHandler {
         end: &str,
         workout_type: Option<&str>,
     ) -> Result<PeriodStats, IntentError> {
-        let start_date = NaiveDate::parse_from_str(start, "%Y-%m-%d")
-            .map_err(|_| IntentError::validation(format!("Invalid start date: {}", start)))?;
-        let end_date = NaiveDate::parse_from_str(end, "%Y-%m-%d")
-            .map_err(|_| IntentError::validation(format!("Invalid end date: {}", end)))?;
+        let start_date = parse_date(start, "start")?;
+        let end_date = parse_date(end, "end")?;
 
         let window = AnalysisWindow::new(start_date, end_date);
 
@@ -438,6 +435,7 @@ impl Default for ComparePeriodsHandler {
 mod tests {
     use super::*;
     use async_trait::async_trait;
+    use chrono::NaiveDate;
     use intervals_icu_client::{AthleteProfile, IntervalsError};
     use std::collections::HashMap;
     use std::sync::Arc;

@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 
 use crate::engines::analysis_fetch::fetch_calendar_events_between;
-use crate::intents::utils::{filter_events_by_date, filter_events_by_range};
+use crate::intents::utils::{filter_events_by_date, filter_events_by_range, parse_date};
 
 pub struct ModifyTrainingHandler;
 
@@ -276,27 +276,12 @@ impl ModifyTrainingHandler {
 
         match (target_date, target_date_from, target_date_to) {
             (Some(date), _, _) => {
-                let parsed = NaiveDate::parse_from_str(date, "%Y-%m-%d").map_err(|_| {
-                    IntentError::validation(format!(
-                        "Invalid date format: {}. Use YYYY-MM-DD.",
-                        date
-                    ))
-                })?;
+                let parsed = parse_date(date, "target_date")?;
                 Ok(TargetScope::Single(parsed))
             }
             (None, Some(start), Some(end)) => {
-                let start_date = NaiveDate::parse_from_str(start, "%Y-%m-%d").map_err(|_| {
-                    IntentError::validation(format!(
-                        "Invalid date format: {}. Use YYYY-MM-DD.",
-                        start
-                    ))
-                })?;
-                let end_date = NaiveDate::parse_from_str(end, "%Y-%m-%d").map_err(|_| {
-                    IntentError::validation(format!(
-                        "Invalid date format: {}. Use YYYY-MM-DD.",
-                        end
-                    ))
-                })?;
+                let start_date = parse_date(start, "target_date_from")?;
+                let end_date = parse_date(end, "target_date_to")?;
                 if start_date > end_date {
                     return Err(IntentError::validation(
                         "Start date must be before end date.".to_string(),
@@ -1170,6 +1155,21 @@ mod tests {
         match result.unwrap() {
             TargetScope::Single(date) => {
                 assert_eq!(date, NaiveDate::from_ymd_opt(2026, 3, 15).unwrap())
+            }
+            TargetScope::Range(_, _) => panic!("Expected Single variant"),
+        }
+    }
+
+    #[test]
+    fn test_resolve_target_scope_single_relative_today() {
+        let input = json!({
+            "target_date": "today"
+        });
+        let result = ModifyTrainingHandler::resolve_target_scope(&input);
+        assert!(result.is_ok());
+        match result.unwrap() {
+            TargetScope::Single(date) => {
+                assert_eq!(date, chrono::Local::now().date_naive())
             }
             TargetScope::Range(_, _) => panic!("Expected Single variant"),
         }

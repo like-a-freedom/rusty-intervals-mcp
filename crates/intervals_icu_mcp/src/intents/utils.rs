@@ -4,17 +4,38 @@
 /// - Date parsing and validation
 /// - Activity filtering
 /// - Period calculations
-use chrono::{NaiveDate, NaiveDateTime};
+use chrono::{Duration, Local, NaiveDate, NaiveDateTime};
 use intervals_icu_client::{ActivitySummary, Event, IntervalsClient};
 use serde_json::Value;
 
 use crate::intents::{ContentBlock, IntentError};
 
-/// Parse and validate a date string in YYYY-MM-DD format
+fn resolve_relative_day_alias(date_str: &str) -> Option<NaiveDate> {
+    let today = Local::now().date_naive();
+
+    match date_str.to_ascii_lowercase().as_str() {
+        "today" => Some(today),
+        "tomorrow" => Some(today + Duration::days(1)),
+        "yesterday" => Some(today - Duration::days(1)),
+        _ => None,
+    }
+}
+
+/// Parse and validate an ordinary date string.
+///
+/// Accepts:
+/// - YYYY-MM-DD
+/// - today
+/// - tomorrow
+/// - yesterday
 pub fn parse_date(date_str: &str, field_name: &str) -> Result<NaiveDate, IntentError> {
+    if let Some(relative_date) = resolve_relative_day_alias(date_str) {
+        return Ok(relative_date);
+    }
+
     NaiveDate::parse_from_str(date_str, "%Y-%m-%d").map_err(|_| {
         IntentError::validation(format!(
-            "Invalid date format for {}: '{}'. Use YYYY-MM-DD.",
+            "Invalid date format for {}: '{}'. Use YYYY-MM-DD, 'today', 'tomorrow', or 'yesterday'.",
             field_name, date_str
         ))
     })
@@ -313,6 +334,21 @@ mod tests {
         assert_eq!(date.day(), 1);
         assert_eq!(date.month(), 3);
         assert_eq!(date.year(), 2026);
+    }
+
+    #[test]
+    fn test_parse_date_supports_relative_day_aliases() {
+        let today = chrono::Local::now().date_naive();
+
+        assert_eq!(parse_date("today", "test").unwrap(), today);
+        assert_eq!(
+            parse_date("tomorrow", "test").unwrap(),
+            today + chrono::Duration::days(1)
+        );
+        assert_eq!(
+            parse_date("yesterday", "test").unwrap(),
+            today - chrono::Duration::days(1)
+        );
     }
 
     #[test]
