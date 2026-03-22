@@ -11,6 +11,7 @@ use intervals_icu_mcp::IntervalsMcpHandler;
 use intervals_icu_mcp::auth::{
     AppState, HttpBaseUrl, JwtManager, MasterKeyConfig, auth_endpoint, auth_middleware,
 };
+use intervals_icu_mcp::metrics;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use rmcp::transport::streamable_http_server::tower::{
     StreamableHttpServerConfig, StreamableHttpService,
@@ -62,6 +63,10 @@ async fn run_http_server(
     address: SocketAddr,
     max_body_size: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize Prometheus metrics (HTTP mode only)
+    // Ignore error if already initialized (e.g., in tests)
+    let _ = metrics::init_prometheus_recorder();
+
     // JWT_MASTER_KEY is required for HTTP mode (64 bytes = 128 hex chars)
     let jwt_master_key_hex = std::env::var("JWT_MASTER_KEY")
         .map_err(|_| "JWT_MASTER_KEY environment variable is required for HTTP mode")?;
@@ -149,10 +154,14 @@ async fn run_http_server(
     // Health endpoint (no auth)
     let health_route = Router::new().route("/health", get(|| async { "ok" }));
 
+    // Metrics endpoint (with optional auth)
+    let metrics_route = metrics::create_metrics_router();
+
     let app = Router::new()
         .merge(auth_route)
         .merge(mcp_route)
-        .merge(health_route);
+        .merge(health_route)
+        .merge(metrics_route);
 
     tracing::info!(
         %address,

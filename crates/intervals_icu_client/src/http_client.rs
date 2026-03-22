@@ -9,6 +9,7 @@ use crate::traits::{
 use crate::{
     ActivityMessage, AthleteProfile, BestEffortsOptions, IntervalsError, Result, ValidationError,
 };
+use ::metrics::{counter, histogram};
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use chrono::{Duration, Utc};
@@ -161,26 +162,84 @@ impl ReqwestIntervalsClient {
         &self,
         request: reqwest::RequestBuilder,
     ) -> Result<T> {
+        let start = std::time::Instant::now();
         let resp = request.send().await?;
-        self.handle_response(resp).await
+        let duration = start.elapsed().as_secs_f64();
+        let status = resp.status().as_u16();
+
+        histogram!("intervals_icu_mcp_upstream_request_duration_seconds").record(duration);
+        counter!(
+            "intervals_icu_mcp_upstream_requests_total",
+            "status" => status.to_string()
+        )
+        .increment(1);
+
+        self.handle_response(resp).await.inspect_err(|e| {
+            Self::record_upstream_error(e);
+        })
     }
 
     /// Execute a request and expect a text response.
     async fn execute_text(&self, request: reqwest::RequestBuilder) -> Result<String> {
+        let start = std::time::Instant::now();
         let resp = request.send().await?;
+        let duration = start.elapsed().as_secs_f64();
+        let status = resp.status().as_u16();
+
+        histogram!("intervals_icu_mcp_upstream_request_duration_seconds").record(duration);
+        counter!(
+            "intervals_icu_mcp_upstream_requests_total",
+            "status" => status.to_string()
+        )
+        .increment(1);
+
         if !resp.status().is_success() {
-            return Err(self.error_from_response(resp).await);
+            let err = self.error_from_response(resp).await;
+            Self::record_upstream_error(&err);
+            return Err(err);
         }
         Ok(resp.text().await?)
     }
 
     /// Execute a request with no expected response body.
     async fn execute_empty(&self, request: reqwest::RequestBuilder) -> Result<()> {
+        let start = std::time::Instant::now();
         let resp = request.send().await?;
+        let duration = start.elapsed().as_secs_f64();
+        let status = resp.status().as_u16();
+
+        histogram!("intervals_icu_mcp_upstream_request_duration_seconds").record(duration);
+        counter!(
+            "intervals_icu_mcp_upstream_requests_total",
+            "status" => status.to_string()
+        )
+        .increment(1);
+
         if !resp.status().is_success() {
-            return Err(self.error_from_response(resp).await);
+            let err = self.error_from_response(resp).await;
+            Self::record_upstream_error(&err);
+            return Err(err);
         }
         Ok(())
+    }
+
+    /// Record an upstream error metric based on error type.
+    fn record_upstream_error(err: &IntervalsError) {
+        let error_type = match err {
+            IntervalsError::Http(e) if e.is_timeout() => "timeout",
+            IntervalsError::Http(e) if e.is_connect() => "network",
+            IntervalsError::Http(_) => "network",
+            IntervalsError::Auth(_) => "auth",
+            IntervalsError::NotFound(_) => "not_found",
+            IntervalsError::Api(api) if api.status >= 500 => "5xx",
+            IntervalsError::Api(api) if api.status >= 400 => "4xx",
+            _ => "other",
+        };
+        counter!(
+            "intervals_icu_mcp_upstream_errors_total",
+            "error_type" => error_type
+        )
+        .increment(1);
     }
 
     /// Handle a response, converting status codes to appropriate errors.

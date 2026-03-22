@@ -24,9 +24,22 @@ All notable changes to this project will be documented in this file.
 - Bump crate versions to 2.0.0 for both `intervals_icu_client` and `intervals_icu_mcp`.
 - Major version bump reflects completed dynamic OpenAPI runtime alignment, athleteId auto-injection fix, and extensive test hardening.
 
-## [Unreleased]
+## [2.1.0] - 2026-03-22
 
 ### Added
+- **Prometheus metrics for MCP observability** (HTTP mode only). New `/metrics` endpoint exposes:
+  - Upstream (intervals.icu) request duration, count, and error metrics
+  - MCP protocol layer: tool calls, method calls, duration histograms
+  - HTTP transport: request count, duration, active request gauge
+  - Auth layer: token issuance, verification (valid/invalid/expired), auth failures
+  - Active athletes gauge (no high-cardinality labels)
+- Optional `PROMETHEUS_METRICS_TOKEN` for `/metrics` endpoint authentication
+- `docs/METRICS.md`: full metrics SRS document with all metric definitions, alert examples, and design decisions
+- `intervals_icu_client`: add `metrics` crate dependency and instrument upstream HTTP calls (`execute_json`, `execute_text`, `execute_empty`) with duration histograms and error counters
+- `intervals_icu_mcp`: add `record_auth_failure`, `record_mcp_session`, `record_mcp_method_call` metric functions
+- `intervals_icu_mcp`: add `endpoint` label to `rate_limited_total` metric
+- `intervals_icu_mcp`: expand `token_verifications_total` labels to include `expired` status
+- `intervals_icu_mcp`: add metrics integration tests (`tests/metrics_tests.rs`)
 - `intervals_icu_client`: add spec-aligned weather config and athlete route client methods, plus `update_wellness_bulk` for the current wellness bulk endpoint.
 - `intervals_icu_client`: add an ignored live OpenAPI smoke test in `src/http_client.rs` that validates critical client contracts against `https://intervals.icu/api/v1/docs`.
 - `intervals_icu_mcp`: add dynamic registry regression coverage for current-spec athlete path placeholders, including `/api/v1/athlete/{athleteId}/sport-settings/{id}/apply`.
@@ -39,75 +52,6 @@ All notable changes to this project will be documented in this file.
 - `intervals_icu_mcp`: replace several production-adjacent test mocks that previously panicked via `unimplemented!()` with deterministic event stubs so MCP/client alignment regressions fail informatively.
 - `intervals_icu_mcp`: intent tools now return schema-only MCP results (`structuredContent` + empty `content`) instead of duplicating the same payload as markdown text, improving token efficiency and matching the declared output contract.
 
-## [1.1.2] - 2026-03-02
-
-### Added
-- Prepare for next release.
-- Bump crate versions to 1.1.2 for both `intervals_icu_client` and `intervals_icu_mcp`.
-- Dynamic OpenAPI MCP runtime in `intervals_icu_mcp`: tools are generated from OpenAPI, dispatched through a generic HTTP path, and merged with compatibility aliases and internal webhook/download tools.
-- Preserved MCP prompts/resources and compact-aware response filtering in the new dynamic dispatch flow.
-- Dynamic runtime tests for tag filtering and cache fallback on failed OpenAPI refresh.
-
-### Changed
-- Replaced legacy hardcoded runtime tool routing with `ServerHandler`-based dynamic `list_tools`/`call_tool` implementation.
-- Runtime registry lifecycle is now cache-first with periodic refresh attempts (`INTERVALS_ICU_SPEC_REFRESH_SECS`) and graceful fallback to the last valid cache when refresh fails.
-- Removed dead legacy helpers from `transforms.rs` and deleted unused `src/test_utils.rs`.
-
-### Quality
-- Validation gates pass locally: `cargo fmt --all -- --check`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo test --all-targets --all-features`.
-
-## [1.1.1] - 2026-03-01
-- Chore: bump crate versions to 1.1.1 for patch release.
-
-## [1.0.2] - 2026-03-01
-- Chore: bump crate versions to 1.0.2 for patch release.
-
-## [1.0.1] - 2026-02-28
-- Chore: bump crate versions to 1.0.1 for patch release.
-
-
-
-## [0.3.0] - 2025-12-16
-- Fix: `get_event` now returns a descriptive decoding error (includes a short snippet of the response body) when the API returns a payload that doesn't match the `Event` schema (e.g., when an `activity_id` is passed by mistake). See `docs/SPEC.md` and `docs/OPENAPI_EVENT_FIX.md` for details.
-- Fix: include required `type` (sport) query parameter in `get_power_curves`, `get_hr_curves`, and `get_pace_curves` client methods and MCP tools to avoid 422 responses from the upstream API. Added tests asserting the `type` and `curves` query parameters are sent.
-- Fix: event tools now accept numeric event IDs (as required by the Intervals.icu API) and normalize them to strings, preventing MCP parameter deserialization errors for `update_event`, `duplicate_event`, and `bulk_delete_events`.
-- Fix: align activity search endpoints to `/activities/search` and `/activities/search-full` with required `query` validation across client, MCP tools, and tests.
-- Fix: interval search now requires `minSecs`, `maxSecs`, `minIntensity`, and `maxIntensity`, and supports optional `type`, `minReps`, `maxReps`, and `limit` parameters; tests updated to cover new query payload.
-- Fix: calendar bulk delete uses `PUT /events/bulk-delete` with `{id|external_id}` items; event duplication uses `POST /duplicate-events` with `numCopies` and `weeksBetween` and returns the created events list.
-- Fix: gear reminder updates use singular endpoint `/gear/{gearId}/reminder/{reminderId}` and propagate `reset`/`snoozeDays` query flags; sport settings update requires `recalcHrZones`, and applying sport settings uses `PUT /sport-settings/{id}/apply` without `start_date`.
-- Fix: workout library now reads folders via `/athlete/{id}/folders` and workouts via `/athlete/{id}/workouts`, filtering by `folder_id` client-side to match the published API.
-
-## [0.3.1] - 2025-12-16
-- Fix: `search_activities` and `search_activities_full` now validate that the `q` parameter is non-empty and forward it as `q` (the upstream API expects `q`, not `query`), preventing 422 Unprocessable Entity responses; tests added to assert `q` is sent.
-
-## [0.3.2] - 2025-12-16
-- Fix: Make integration `download_activity_file_returns_base64_and_writes_file` test robust against transient empty responses on CI by adding short retries and better diagnostics; prevents spurious CI failures. Updated CI to run the specific integration target with verbose output for clearer diagnostics.
-
-## [0.3.3] - 2025-12-16
-- Fix: Address clippy lint `expect_fun_call` in integration test by avoiding function calls inside `expect`. This cleans up the test and satisfies `cargo clippy` in CI.
-
-## [0.3.4] - 2025-12-16
-- Fix: Update CI to use `houseabsolute/actions-rust-cross@v1` (instead of `main`) for cross builds to avoid action resolution errors on the Windows runner; add a note and ensure workflows reference an explicit stable action tag.
-
-## [0.3.5] - 2025-12-16
-- Chore: Bump GitHub Actions to pinned, modern releases (actions/checkout@v6, docker actions v3/v5/v6 series, houseabsolute/actions-rust-cross@v1.0.5, softprops/action-gh-release@v2.5.0) to avoid 'unable to find version' errors and improve runner compatibility.
-
-## [0.3.6] - 2025-12-16
-- Fix: Temporarily remove `aarch64-unknown-linux-gnu` cross build from the release matrix to avoid OpenSSL system-dependency failures in the `cross` Docker images on GitHub Actions. Add follow-up TODO to either (a) vendor OpenSSL, (b) use custom cross image with `libssl-dev`, or (c) add an ARM runner job in future.
-
-**Note:** This is a temporary mitigation to restore green release builds; we should follow up to add a proper fix that allows aarch64 cross builds to succeed deterministically (e.g., vendor OpenSSL or use a custom Docker image that includes `libssl-dev`).
-
-## [0.3.7] - 2025-12-16
-- Chore: Replace archived `actions-rs/toolchain@v1` with explicit `rustup` install steps in CI to avoid deprecated/archived action usage and the `set-output` deprecation warnings; improves reliability and control over installed components.
-
-## [0.3.8] - 2025-12-16
-- Chore: Run `release-build` on every `push` to `master` (remove `release`-only guard) so release artifacts are built on push for faster feedback; keep asset upload step gated to `github.event_name == 'release'` to avoid release API permission errors on non-release pushes.
-
-## [0.3.9] - 2025-12-16
-- Chore: Avoid running heavy checks (fmt/clippy/tests) when code hasn't changed by adding a code-change detection step; make release asset upload tolerant (continue-on-error) and set workflow permissions to allow release updates when available. This reduces flakiness and CI time on trivial pushes.
-
-## [Unreleased]
-
 ### Added
 - Token-efficiency features: `get_activity_streams` now supports `max_points` (downsample arrays), `summary` (return statistics instead of arrays), and `streams` filtering to reduce tokens when returning long time-series.
 - `get_activity_details` gained `expand` (boolean) and `fields` (array) parameters. By default the MCP now returns a compact activity summary; set `expand=true` to fetch full payload when needed.
@@ -119,7 +63,7 @@ All notable changes to this project will be documented in this file.
 ### Breaking changes
 - `get_activity_details` defaults to a compact summary (previously returned the full details by default). If your integrations rely on the full payload, update calls to `get_activity_details` to pass `{"expand": true}`.
 
-
+## [Unreleased]
 
 ## [0.1.0] - 2025-12-15
 - Initial MCP-compatible Intervals.icu client in Rust.

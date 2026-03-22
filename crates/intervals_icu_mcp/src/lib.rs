@@ -31,6 +31,7 @@ pub mod dynamic;
 pub mod engines;
 mod event_id;
 pub mod intents;
+pub mod metrics;
 pub mod prompts;
 mod services;
 mod state;
@@ -197,6 +198,7 @@ impl ServerHandler for IntervalsMcpHandler {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
+        metrics::record_mcp_method_call("tools/list");
         // Return only intent tools (8 high-level business intents)
         // Dynamic OpenAPI tools are internal-only and NOT exposed to LLM host
         let intent_tools = self.intent_router.tool_definitions();
@@ -241,6 +243,7 @@ impl ServerHandler for IntervalsMcpHandler {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
+        metrics::record_mcp_method_call("tools/call");
         // For multi-tenant mode: extract credentials from HTTP request parts and create per-request client.
         let client_for_request = self.client_for_extensions(&context.extensions);
         let athlete_id = Self::request_credentials(&context.extensions).map(|c| c.athlete_id);
@@ -315,6 +318,7 @@ impl ServerHandler for IntervalsMcpHandler {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, ErrorData> {
+        metrics::record_mcp_method_call("resources/list");
         let res = domains::resources::athlete_profile_resource().no_annotation();
 
         Ok(ListResourcesResult {
@@ -329,6 +333,7 @@ impl ServerHandler for IntervalsMcpHandler {
         request: ReadResourceRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResult, ErrorData> {
+        metrics::record_mcp_method_call("resources/read");
         if request.uri == "intervals-icu://athlete/profile" {
             let client = self
                 .client_for_extensions(&context.extensions)
