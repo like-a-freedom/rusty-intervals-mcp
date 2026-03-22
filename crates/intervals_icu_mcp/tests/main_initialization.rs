@@ -328,8 +328,8 @@ fn test_jwt_ttl_seconds_invalid_fallback() {
 fn test_master_key_from_hex_valid() {
     use intervals_icu_mcp::auth::MasterKeyConfig;
 
-    let master_key_hex = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
-    let result = MasterKeyConfig::from_hex(master_key_hex);
+    let master_key_hex = "11".repeat(64);
+    let result = MasterKeyConfig::from_hex(&master_key_hex);
     assert!(result.is_ok());
 }
 
@@ -347,8 +347,8 @@ fn test_master_key_from_hex_wrong_length() {
     use intervals_icu_mcp::auth::MasterKeyConfig;
 
     // Only 32 bytes instead of 64
-    let short_key = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
-    let result = MasterKeyConfig::from_hex(short_key);
+    let short_key = "11".repeat(32);
+    let result = MasterKeyConfig::from_hex(&short_key);
     assert!(result.is_err());
 }
 

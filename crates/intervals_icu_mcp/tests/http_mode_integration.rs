@@ -7,6 +7,7 @@
 /// - Resource access via HTTP
 /// - Session management
 /// - Error handling
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use reqwest::Client;
 use std::sync::Arc;
 use std::time::Duration;
@@ -30,6 +31,15 @@ fn mock_event(event_id: Option<&str>) -> intervals_icu_client::Event {
         description: None,
         r#type: None,
     }
+}
+
+fn test_basic_auth_header(api_key: &str) -> String {
+    let credentials = format!("API_KEY:{api_key}");
+    format!("Basic {}", STANDARD.encode(credentials))
+}
+
+fn test_master_key_hex() -> String {
+    "11".repeat(64)
 }
 
 struct HttpTestMockClient;
@@ -787,10 +797,7 @@ async fn test_auth_endpoint_issues_jwt_for_valid_credentials() {
 
     Mock::given(method("GET"))
         .and(path("/api/v1/athlete/i123456/profile"))
-        .and(header(
-            "authorization",
-            "Basic QVBJX0tFWTp0ZXN0X2FwaV9rZXk=",
-        ))
+        .and(header("authorization", test_basic_auth_header("test_api_key")))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "athlete": {
                 "id": "i123456",
@@ -800,9 +807,9 @@ async fn test_auth_endpoint_issues_jwt_for_valid_credentials() {
         .mount(&mock_server)
         .await;
 
-    let master_key_hex = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+    let master_key_hex = test_master_key_hex();
     let master_key_config =
-        intervals_icu_mcp::auth::MasterKeyConfig::from_hex(master_key_hex).unwrap();
+        intervals_icu_mcp::auth::MasterKeyConfig::from_hex(&master_key_hex).unwrap();
     let jwt_manager = Arc::new(JwtManager::from_master_key(&master_key_config));
     let app_state = Arc::new(AppState {
         jwt_manager: jwt_manager.clone(),
@@ -851,9 +858,9 @@ async fn test_auth_endpoint_issues_jwt_for_valid_credentials() {
 
 #[tokio::test]
 async fn test_mcp_route_requires_bearer_token_and_accepts_valid_jwt() {
-    let master_key_hex = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+    let master_key_hex = test_master_key_hex();
     let master_key_config =
-        intervals_icu_mcp::auth::MasterKeyConfig::from_hex(master_key_hex).unwrap();
+        intervals_icu_mcp::auth::MasterKeyConfig::from_hex(&master_key_hex).unwrap();
     let jwt_manager = Arc::new(JwtManager::from_master_key(&master_key_config));
     let token = jwt_manager
         .issue_token("i777777", "test_api_key", 3600)
