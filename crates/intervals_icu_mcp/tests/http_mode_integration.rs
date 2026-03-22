@@ -797,7 +797,10 @@ async fn test_auth_endpoint_issues_jwt_for_valid_credentials() {
 
     Mock::given(method("GET"))
         .and(path("/api/v1/athlete/i123456/profile"))
-        .and(header("authorization", test_basic_auth_header("test_api_key")))
+        .and(header(
+            "authorization",
+            test_basic_auth_header("test_api_key"),
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "athlete": {
                 "id": "i123456",
