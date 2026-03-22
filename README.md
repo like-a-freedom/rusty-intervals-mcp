@@ -24,6 +24,7 @@ A high-performance **Rust MCP server for Intervals.icu** designed around one ide
 - [Claude Desktop setup](#claude-desktop-setup)
 - [Example asks](#example-asks)
 - [Deterministic coaching analytics](#deterministic-coaching-analytics)
+- [Observability & Metrics](#observability--metrics)
 - [Runtime configuration](#runtime-configuration)
 - [Development](#development)
 - [Docker and remote deployment](#docker-and-remote-deployment)
@@ -410,6 +411,72 @@ Fetch → Audit → Compute → Interpret → Render
 - **explainable** — alerts have evidence
 - **token-efficient** — the model receives interpretations, not just raw numbers
 
+## Observability & Metrics
+
+In HTTP mode, the server exposes Prometheus-format metrics at `/metrics`. These provide visibility into upstream API health, MCP protocol usage, auth lifecycle, and active athlete tracking.
+
+### Endpoint
+
+`GET /metrics` — returns metrics in Prometheus text format.
+
+Optional authentication via `PROMETHEUS_METRICS_TOKEN` env var:
+- If set: requests must include `Authorization: Bearer <token>` header
+- If unset: endpoint is public (no auth required)
+
+### Key metrics groups
+
+| Group | Example metrics |
+|-------|-----------------|
+| **Upstream API** | `upstream_request_duration_seconds`, `upstream_requests_total`, `upstream_errors_total` |
+| **MCP Protocol** | `tool_calls_total{tool}`, `tool_duration_seconds{tool}`, `mcp_method_calls_total{method}` |
+| **HTTP Transport** | `http_requests_total{path}`, `http_request_duration_seconds`, `active_requests` |
+| **Auth & Security** | `tokens_issued_total`, `token_verifications_total{status}`, `auth_failures_total{reason}` |
+| **Active Usage** | `active_athletes` (gauge, no high-cardinality labels) |
+
+### Example Prometheus queries
+
+```promql
+# Upstream error rate
+rate(intervals_icu_mcp_upstream_errors_total[5m]) / rate(intervals_icu_mcp_upstream_requests_total[5m])
+
+# p95 tool latency
+histogram_quantile(0.95, rate(intervals_icu_mcp_tool_duration_seconds_bucket[5m]))
+
+# Active athletes
+intervals_icu_mcp_active_athletes
+```
+
+### Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PROMETHEUS_METRICS_TOKEN` | unset | Optional Bearer token for `/metrics` endpoint |
+
+### Grafana dashboard
+
+A prebuilt Grafana dashboard for these metrics is available at:
+
+- `examples/grafana/intervals_icu_mcp_observability_dashboard.json`
+
+Import it into Grafana, bind the `DS_PROMETHEUS` datasource input, and use the built-in variables (`Job`, `Instance`, `Path`, `Tool`) to drill from service-wide health down to specific routes or MCP tools.
+
+For protected `/metrics` endpoints, configure your Prometheus scrape job with the same bearer token value as `PROMETHEUS_METRICS_TOKEN`.
+
+### vmagent scrape example
+
+An example VictoriaMetrics `vmagent` scrape configuration is available at:
+
+- `examples/vmagent/intervals_icu_mcp_metrics.yml`
+
+The example includes both:
+
+- a public `/metrics` target
+- a protected `/metrics` target using `authorization.credentials_file`
+
+For production, prefer `credentials_file` over inline bearer tokens so secrets stay outside versioned config.
+
+For full metrics specification, see [`docs/OBSERVABILITY_SRS.md`](docs/OBSERVABILITY_SRS.md).
+
 ## Runtime configuration
 
 See `.env.example` for the standard environment layout.
@@ -524,6 +591,7 @@ The container exposes:
 - `GET /health` for liveness checks
 - `POST /auth` to exchange Intervals.icu credentials for a JWT
 - streamable MCP at `/mcp`
+- `GET /metrics` for Prometheus metrics (HTTP mode only)
 
 ### Docker Compose
 

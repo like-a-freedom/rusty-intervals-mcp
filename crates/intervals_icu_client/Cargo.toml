@@ -26,6 +26,7 @@ base64 = "0.22.1"
 futures-util = "0.3.32"
 chrono = { version = "0.4.44", default-features = false, features = ["clock"] }
 tracing = "0.1.44"
+metrics = "0.24.3"
 
 [dev-dependencies]
 wiremock = "0.6.5"

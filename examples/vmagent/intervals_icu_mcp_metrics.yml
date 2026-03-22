@@ -1,0 +1,54 @@
+# Example vmagent scrape config for rusty_intervals_mcp HTTP metrics.
+#
+# Usage notes:
+# - The MCP server must run with MCP_TRANSPORT=http.
+# - Metrics are exposed at GET /metrics.
+# - If PROMETHEUS_METRICS_TOKEN is enabled on the server, prefer
+#   authorization.credentials_file over inline credentials.
+# - vmagent uses Prometheus-compatible scrape_configs syntax.
+#
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  external_labels:
+    app: rusty_intervals_mcp
+
+scrape_configs:
+  # Public /metrics endpoint (no PROMETHEUS_METRICS_TOKEN configured)
+  - job_name: intervals_icu_mcp
+    metrics_path: /metrics
+    scheme: http
+    static_configs:
+      - targets:
+          - 127.0.0.1:3000
+        labels:
+          env: dev
+          service: rusty_intervals_mcp
+          transport: http
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+
+  # Protected /metrics endpoint (PROMETHEUS_METRICS_TOKEN configured)
+  # Recommended for production: keep the bearer token in a file managed by
+  # your secret distribution system, then point vmagent at that file.
+  - job_name: intervals_icu_mcp_secure
+    metrics_path: /metrics
+    scheme: http
+    authorization:
+      type: Bearer
+      credentials_file: /etc/vmagent/secrets/intervals_icu_mcp_metrics.token
+    static_configs:
+      - targets:
+          - mcp.example.internal:3000
+        labels:
+          env: prod
+          service: rusty_intervals_mcp
+          transport: http
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+
+# Optional VictoriaMetrics remote write example:
+# remoteWrite:
+#   - url: http://victoriametrics:8428/api/v1/write

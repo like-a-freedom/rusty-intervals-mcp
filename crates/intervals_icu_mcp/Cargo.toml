@@ -19,6 +19,7 @@ rmcp = { version = "1.2.0", features = [
 intervals_icu_client = { path = "../intervals_icu_client" }
 axum = { version = "0.8.8", features = ["macros"] }
 hyper = "1.8.1"
+metrics = "0.24"
 metrics-exporter-prometheus = "0.18.1"
 tracing = "0.1.44"
 anyhow = "1.0.100"
@@ -56,3 +57,4 @@ rmcp = { version = "1.2.0", features = [
 async-trait = "0.1.89"
 reqwest = { version = "0.13.2", features = ["json", "query"] }
 once_cell = "1.21.3"
+serial_test = "3.2"

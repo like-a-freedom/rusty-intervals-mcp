@@ -2,6 +2,7 @@ use super::idempotency::IdempotencyMiddleware;
 use super::types::{
     IntentError, IntentHandler, IntentOutput, ToolDefinition, standard_output_schema,
 };
+use crate::metrics;
 use intervals_icu_client::IntervalsClient;
 use serde_json::{Map, Value};
 use std::collections::HashMap;
@@ -77,10 +78,21 @@ impl IntentRouter {
             handler.execute(input, self.client.clone(), None).await
         };
 
+        let duration = start.elapsed().as_secs_f64();
+        let success = result.is_ok();
+
+        // Record metrics
+        metrics::record_tool_call(name, success, duration);
+
+        // Track athlete activity for observability (no high-cardinality labels)
+        if let Some(aid) = athlete_id {
+            metrics::record_athlete_activity(aid);
+        }
+
         info!(
             tool = name,
             athlete_id = athlete_id.unwrap_or("unknown"),
-            duration_secs = start.elapsed().as_secs_f64(),
+            duration_secs = duration,
             "Tool call completed"
         );
 

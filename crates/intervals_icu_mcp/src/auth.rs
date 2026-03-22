@@ -13,6 +13,8 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use thiserror::Error;
 
+use crate::metrics;
+
 #[cfg(test)]
 use secrecy::ExposeSecret;
 
@@ -291,6 +293,9 @@ pub async fn auth_endpoint(
             .jwt_manager
             .issue_token(&req.athlete_id, &req.api_key, state.jwt_ttl_seconds)?;
 
+    // Record token issuance metric
+    metrics::record_token_issued();
+
     tracing::info!(
         client_ip = %client_ip,
         athlete_id = %req.athlete_id,
@@ -330,13 +335,24 @@ pub async fn auth_middleware(
 
     let credentials = match auth_header {
         Some(token) => match jwt_manager.verify_token(token) {
-            Ok(creds) => creds,
+            Ok(creds) => {
+                // Record successful verification
+                metrics::record_token_verification("valid");
+                creds
+            }
             Err(e) => {
                 tracing::warn!(
                     client_ip = %client_ip,
                     error = %e,
                     "Failed JWT verification"
                 );
+                // Record failed verification with status
+                let status = match &e {
+                    AuthError::TokenExpired => "expired",
+                    _ => "invalid",
+                };
+                metrics::record_token_verification(status);
+                metrics::record_auth_failure("invalid_token");
                 return Err(StatusCode::UNAUTHORIZED);
             }
         },
@@ -345,6 +361,9 @@ pub async fn auth_middleware(
                 client_ip = %client_ip,
                 "Missing Authorization header"
             );
+            // Record failed verification (missing token)
+            metrics::record_token_verification("invalid");
+            metrics::record_auth_failure("missing_token");
             return Err(StatusCode::UNAUTHORIZED);
         }
     };
