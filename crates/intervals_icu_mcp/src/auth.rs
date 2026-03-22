@@ -379,6 +379,10 @@ pub async fn auth_middleware(
 mod tests {
     use super::*;
 
+    fn repeated_hex(byte: &str, repeat_count: usize) -> String {
+        byte.repeat(repeat_count)
+    }
+
     fn create_test_manager() -> JwtManager {
         let secret = b"test_secret_key_for_jwt_signing_12345678901234567890123456789012";
         let encryption_key = [0u8; 32];
@@ -656,9 +660,9 @@ mod tests {
     #[test]
     fn test_master_key_config_from_hex() {
         // Valid 64-byte (128 hex chars) master key
-        let master_key_hex = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+        let master_key_hex = repeated_hex("11", 64);
 
-        let result = MasterKeyConfig::from_hex(master_key_hex);
+        let result = MasterKeyConfig::from_hex(&master_key_hex);
 
         assert!(result.is_ok());
         let config = result.unwrap();
@@ -681,9 +685,9 @@ mod tests {
     #[test]
     fn test_master_key_config_wrong_length() {
         // Only 32 bytes (64 hex chars) instead of 64 bytes
-        let short_key_hex = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+        let short_key_hex = repeated_hex("11", 32);
 
-        let result = MasterKeyConfig::from_hex(short_key_hex);
+        let result = MasterKeyConfig::from_hex(&short_key_hex);
 
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), AuthError::InvalidKeyLength));
@@ -692,9 +696,9 @@ mod tests {
     // RED: Test that HKDF produces different signing and encryption keys
     #[test]
     fn test_hkdf_produces_different_keys() {
-        let master_key_hex = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+        let master_key_hex = repeated_hex("11", 64);
 
-        let config = MasterKeyConfig::from_hex(master_key_hex).unwrap();
+        let config = MasterKeyConfig::from_hex(&master_key_hex).unwrap();
 
         // Signing and encryption keys should be different
         assert_ne!(config.signing_key, config.encryption_key);
@@ -707,9 +711,9 @@ mod tests {
     // RED: Test JwtManager can be created from MasterKeyConfig
     #[test]
     fn test_jwt_manager_from_master_key() {
-        let master_key_hex = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+        let master_key_hex = repeated_hex("11", 64);
 
-        let config = MasterKeyConfig::from_hex(master_key_hex).unwrap();
+        let config = MasterKeyConfig::from_hex(&master_key_hex).unwrap();
         let manager = JwtManager::from_master_key(&config);
 
         assert_eq!(manager.issuer, "intervals-icu-mcp");
@@ -719,9 +723,9 @@ mod tests {
     // RED: Test JWT token issuance and verification with HKDF
     #[test]
     fn test_jwt_issue_and_verify_with_hkdf() {
-        let master_key_hex = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+        let master_key_hex = repeated_hex("11", 64);
 
-        let config = MasterKeyConfig::from_hex(master_key_hex).unwrap();
+        let config = MasterKeyConfig::from_hex(&master_key_hex).unwrap();
         let manager = JwtManager::from_master_key(&config);
 
         let athlete_id = "i123456";
@@ -740,11 +744,11 @@ mod tests {
     // RED: Test that different master keys produce different tokens
     #[test]
     fn test_different_master_keys_produce_different_tokens() {
-        let master_key_hex_1 = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
-        let master_key_hex_2 = "ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100";
+        let master_key_hex_1 = repeated_hex("11", 64);
+        let master_key_hex_2 = repeated_hex("22", 64);
 
-        let config1 = MasterKeyConfig::from_hex(master_key_hex_1).unwrap();
-        let config2 = MasterKeyConfig::from_hex(master_key_hex_2).unwrap();
+        let config1 = MasterKeyConfig::from_hex(&master_key_hex_1).unwrap();
+        let config2 = MasterKeyConfig::from_hex(&master_key_hex_2).unwrap();
 
         let manager1 = JwtManager::from_master_key(&config1);
         let manager2 = JwtManager::from_master_key(&config2);
