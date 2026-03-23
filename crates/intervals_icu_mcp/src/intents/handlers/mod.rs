@@ -6,6 +6,7 @@ mod manage_gear;
 mod manage_profile;
 mod modify_training;
 mod plan_training;
+pub mod render;
 
 pub use analyze_race::AnalyzeRaceHandler;
 pub use analyze_training::AnalyzeTrainingHandler;
