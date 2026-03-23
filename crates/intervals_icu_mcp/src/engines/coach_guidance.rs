@@ -58,6 +58,8 @@ const ACWR_OVERREACH_RATIO: f64 = 1.5;
 const MONOTONY_ALERT: f64 = 2.5;
 /// Fatigue Index: high fatigue alert threshold (> this value)
 const FATIGUE_INDEX_ALERT: f64 = 2.5;
+/// Durability Index: low durability alert threshold (< this value)
+const DURABILITY_INDEX_ALERT: f64 = 0.85;
 
 // =============================================================================
 // Alert Generation
@@ -236,6 +238,23 @@ pub fn build_alerts(metrics: &CoachMetrics) -> Vec<CoachAlert> {
         });
     }
 
+    // Durability Index alert
+    if let Some(load_management) = &metrics.load_management
+        && let Some(durability_index) = load_management.durability_index
+        && durability_index < DURABILITY_INDEX_ALERT
+    {
+        alerts.push(CoachAlert {
+            severity: CoachAlertSeverity::Caution,
+            code: "low_durability_index".to_string(),
+            title: "Low durability index".to_string(),
+            evidence: vec![format!(
+                "Durability Index {:.3} is below {:.2} — power curve degraded after accumulated work",
+                durability_index, DURABILITY_INDEX_ALERT
+            )],
+            section: "load_management".to_string(),
+        });
+    }
+
     // High training load alert
     if let Some(volume) = &metrics.volume
         && volume.weekly_avg_hours > WEEKLY_AVG_HIGH_HOURS
@@ -406,6 +425,16 @@ pub fn build_guidance(metrics: &CoachMetrics, alerts: &[CoachAlert]) -> CoachGui
         );
         guidance.suggestions.push(
             "Prioritize recovery and consider reducing load until fatigue index improves."
+                .to_string(),
+        );
+    }
+
+    if has_alert_code(alerts, "low_durability_index") {
+        guidance
+            .findings
+            .push("Power curve degraded after accumulated work — reduced durability.".to_string());
+        guidance.suggestions.push(
+            "Consider reducing training volume or adding recovery to restore power curve."
                 .to_string(),
         );
     }
@@ -975,5 +1004,42 @@ mod tests {
 
         let alerts = build_alerts(&metrics);
         assert!(!alerts.iter().any(|a| a.code == "high_fatigue_index"));
+    }
+
+    #[test]
+    fn low_durability_index_creates_alert_and_guidance() {
+        let metrics = CoachMetrics {
+            load_management: Some(LoadManagementMetrics {
+                durability_index: Some(0.82),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let alerts = build_alerts(&metrics);
+        let guidance = build_guidance(&metrics, &alerts);
+
+        assert!(alerts.iter().any(|a| a.code == "low_durability_index"));
+        assert!(guidance.findings.iter().any(|f| f.contains("durability")));
+        assert!(
+            guidance
+                .suggestions
+                .iter()
+                .any(|s| s.contains("recovery") || s.contains("volume"))
+        );
+    }
+
+    #[test]
+    fn durability_index_above_threshold_does_not_alert() {
+        let metrics = CoachMetrics {
+            load_management: Some(LoadManagementMetrics {
+                durability_index: Some(0.92),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let alerts = build_alerts(&metrics);
+        assert!(!alerts.iter().any(|a| a.code == "low_durability_index"));
     }
 }

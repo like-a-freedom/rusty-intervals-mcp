@@ -230,6 +230,17 @@ pub fn compute_stress_tolerance(strain: f64, monotony: f64) -> Option<f64> {
     }
 }
 
+pub fn compute_durability_index(
+    current_power_at_duration: f64,
+    baseline_power_at_duration: f64,
+) -> Option<f64> {
+    if baseline_power_at_duration <= 0.0 {
+        None
+    } else {
+        Some(current_power_at_duration / baseline_power_at_duration)
+    }
+}
+
 pub fn compute_readiness_score(
     mood: Option<f64>,
     sleep_hours: Option<f64>,
@@ -263,6 +274,7 @@ pub fn compute_load_management_metrics(
             strain: None,
             fatigue_index: None,
             stress_tolerance: None,
+            durability_index: None,
         });
     };
 
@@ -280,6 +292,7 @@ pub fn compute_load_management_metrics(
         strain,
         fatigue_index,
         stress_tolerance,
+        durability_index: None,
     })
 }
 
@@ -942,6 +955,7 @@ mod tests {
                 strain: Some(175.0 * 25_000_000.0),
                 fatigue_index: None,
                 stress_tolerance: Some(1.75),
+                durability_index: None,
             }
         );
     }
@@ -1244,5 +1258,27 @@ mod tests {
         assert!(metrics.avg_stress.is_none());
         assert!(metrics.avg_fatigue.is_none());
         assert!(metrics.readiness_score.is_none());
+    }
+
+    #[test]
+    fn durability_index_is_current_divided_by_baseline() {
+        let di = compute_durability_index(295.0, 310.0).unwrap();
+        assert!((di - 0.952).abs() < 0.001);
+    }
+
+    #[test]
+    fn durability_index_returns_none_when_baseline_is_zero() {
+        assert!(compute_durability_index(295.0, 0.0).is_none());
+    }
+
+    #[test]
+    fn durability_index_returns_none_when_baseline_is_negative() {
+        assert!(compute_durability_index(295.0, -310.0).is_none());
+    }
+
+    #[test]
+    fn durability_index_handles_zero_current() {
+        let di = compute_durability_index(0.0, 310.0).unwrap();
+        assert!((di - 0.0).abs() < f64::EPSILON);
     }
 }

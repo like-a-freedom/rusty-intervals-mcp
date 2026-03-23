@@ -54,6 +54,18 @@ pub(crate) fn build_load_management_markdown(
         lines.push(format!("- Fatigue Index: {:.2} {}", fatigue_index, status));
     }
 
+    if let Some(durability_index) = metrics.durability_index {
+        let status = if durability_index >= 0.9 {
+            "✅"
+        } else {
+            "⚠️"
+        };
+        lines.push(format!(
+            "- Durability Index: {:.3} {}",
+            durability_index, status
+        ));
+    }
+
     if lines.len() == 2 {
         lines.push(
             "- Load-management context unavailable because no deterministic load signal was found."
