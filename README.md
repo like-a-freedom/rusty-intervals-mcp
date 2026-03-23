@@ -259,6 +259,33 @@ intervals_icu_mcp
 
 The MCP endpoint is available at `http://<address>/mcp`.
 
+#### Authenticating with `/auth`
+
+Exchange your Intervals.icu API key for a JWT:
+
+```sh
+curl -s -X POST http://127.0.0.1:3000/auth \
+  -H "Content-Type: application/json" \
+  -d '{"api_key": "your_api_key_here", "athlete_id": "i123456"}'
+```
+
+Response:
+
+```json
+{
+  "token": "<jwt>",
+  "expires_in": 7776000,
+  "athlete_id": "i123456"
+}
+```
+
+Use the returned `token` in subsequent requests to `/mcp`:
+
+```sh
+curl -s http://127.0.0.1:3000/mcp \
+  -H "Authorization: Bearer <jwt>"
+```
+
 Current HTTP security/runtime notes:
 - `/auth` is rate-limited separately for brute-force protection (1 req/sec, burst size 3).
 - `/mcp` rate limiting is applied at the endpoint/peer-IP layer.
