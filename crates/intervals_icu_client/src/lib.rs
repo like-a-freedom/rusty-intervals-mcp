@@ -23,6 +23,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
+pub mod circuit_breaker;
 pub mod config;
 pub mod error;
 pub mod http_client;

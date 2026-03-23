@@ -2,6 +2,7 @@
 //!
 //! This module provides a reqwest-based implementation of the [`IntervalsClient`](crate::IntervalsClient) trait.
 
+use crate::circuit_breaker::CircuitBreaker;
 use crate::traits::{
     ActivityService, AthleteService, EventService, FitnessService, GearService, RouteService,
     SportSettingsService, WeatherService, WellnessService, WorkoutService,
@@ -16,15 +17,38 @@ use chrono::{Duration, Utc};
 use futures_util::StreamExt;
 use secrecy::{ExposeSecret, SecretString};
 use std::path::PathBuf;
+use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
 
 /// Client for the Intervals.icu API using reqwest.
-#[derive(Clone, Debug)]
 pub struct ReqwestIntervalsClient {
     base_url: String,
     athlete_id: String,
     api_key: SecretString,
     client: reqwest::Client,
+    circuit_breaker: Arc<CircuitBreaker>,
+}
+
+impl Clone for ReqwestIntervalsClient {
+    fn clone(&self) -> Self {
+        Self {
+            base_url: self.base_url.clone(),
+            athlete_id: self.athlete_id.clone(),
+            api_key: self.api_key.clone(),
+            client: self.client.clone(),
+            circuit_breaker: self.circuit_breaker.clone(),
+        }
+    }
+}
+
+impl std::fmt::Debug for ReqwestIntervalsClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReqwestIntervalsClient")
+            .field("base_url", &self.base_url)
+            .field("athlete_id", &self.athlete_id)
+            .field("circuit_breaker", &self.circuit_breaker)
+            .finish()
+    }
 }
 
 impl ReqwestIntervalsClient {
@@ -43,6 +67,7 @@ impl ReqwestIntervalsClient {
             athlete_id: athlete_id.into(),
             api_key,
             client,
+            circuit_breaker: Arc::new(CircuitBreaker::default()),
         }
     }
 
@@ -162,9 +187,30 @@ impl ReqwestIntervalsClient {
         &self,
         request: reqwest::RequestBuilder,
     ) -> Result<T> {
+        if !self.circuit_breaker.allow_request() {
+            return Err(IntervalsError::Api(crate::error::ApiError::new(
+                503,
+                "circuit breaker open — upstream is unavailable",
+                "",
+            )));
+        }
+
         let start = std::time::Instant::now();
-        let resp = request.send().await?;
+        let resp = request.send().await;
         let duration = start.elapsed().as_secs_f64();
+
+        let resp = match resp {
+            Ok(r) => {
+                self.circuit_breaker.record_success();
+                r
+            }
+            Err(e) => {
+                self.circuit_breaker.record_failure();
+                histogram!("intervals_icu_mcp_upstream_request_duration_seconds").record(duration);
+                return Err(IntervalsError::Http(e));
+            }
+        };
+
         let status = resp.status().as_u16();
 
         histogram!("intervals_icu_mcp_upstream_request_duration_seconds").record(duration);
@@ -181,9 +227,30 @@ impl ReqwestIntervalsClient {
 
     /// Execute a request and expect a text response.
     async fn execute_text(&self, request: reqwest::RequestBuilder) -> Result<String> {
+        if !self.circuit_breaker.allow_request() {
+            return Err(IntervalsError::Api(crate::error::ApiError::new(
+                503,
+                "circuit breaker open — upstream is unavailable",
+                "",
+            )));
+        }
+
         let start = std::time::Instant::now();
-        let resp = request.send().await?;
+        let resp = request.send().await;
         let duration = start.elapsed().as_secs_f64();
+
+        let resp = match resp {
+            Ok(r) => {
+                self.circuit_breaker.record_success();
+                r
+            }
+            Err(e) => {
+                self.circuit_breaker.record_failure();
+                histogram!("intervals_icu_mcp_upstream_request_duration_seconds").record(duration);
+                return Err(IntervalsError::Http(e));
+            }
+        };
+
         let status = resp.status().as_u16();
 
         histogram!("intervals_icu_mcp_upstream_request_duration_seconds").record(duration);
@@ -203,9 +270,30 @@ impl ReqwestIntervalsClient {
 
     /// Execute a request with no expected response body.
     async fn execute_empty(&self, request: reqwest::RequestBuilder) -> Result<()> {
+        if !self.circuit_breaker.allow_request() {
+            return Err(IntervalsError::Api(crate::error::ApiError::new(
+                503,
+                "circuit breaker open — upstream is unavailable",
+                "",
+            )));
+        }
+
         let start = std::time::Instant::now();
-        let resp = request.send().await?;
+        let resp = request.send().await;
         let duration = start.elapsed().as_secs_f64();
+
+        let resp = match resp {
+            Ok(r) => {
+                self.circuit_breaker.record_success();
+                r
+            }
+            Err(e) => {
+                self.circuit_breaker.record_failure();
+                histogram!("intervals_icu_mcp_upstream_request_duration_seconds").record(duration);
+                return Err(IntervalsError::Http(e));
+            }
+        };
+
         let status = resp.status().as_u16();
 
         histogram!("intervals_icu_mcp_upstream_request_duration_seconds").record(duration);
