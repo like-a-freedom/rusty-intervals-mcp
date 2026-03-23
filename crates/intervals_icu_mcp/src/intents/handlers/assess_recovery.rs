@@ -802,4 +802,141 @@ mod tests {
         assert!(hrv_row[2].contains("baseline") || hrv_row[2].contains("range"));
         assert!(!hrv_row[2].contains("Very Low"));
     }
+
+    #[test]
+    fn recovery_rows_include_readiness_score_when_api_available() {
+        let rows = AssessRecoveryHandler::build_recovery_metric_rows(
+            &WellnessMetrics {
+                avg_sleep_hours: Some(7.5),
+                avg_resting_hr: Some(50.0),
+                avg_hrv: Some(65.0),
+                recovery_index: None,
+                wellness_days_count: 5,
+                readiness_score: Some(8.0),
+                ..Default::default()
+            },
+            &FitnessMetrics {
+                tsb: Some(5.0),
+                ..Default::default()
+            },
+        );
+
+        let rs_row = rows
+            .iter()
+            .find(|row| row[0] == "Readiness Score")
+            .expect("Readiness Score row should be present");
+        assert_eq!(rs_row[1], "8.0");
+        assert!(rs_row[2].contains("Supportive"));
+    }
+
+    #[test]
+    fn recovery_rows_readiness_watch_threshold() {
+        let rows = AssessRecoveryHandler::build_recovery_metric_rows(
+            &WellnessMetrics {
+                avg_sleep_hours: Some(7.5),
+                avg_resting_hr: Some(50.0),
+                avg_hrv: Some(65.0),
+                readiness_score: Some(6.0),
+                wellness_days_count: 5,
+                ..Default::default()
+            },
+            &FitnessMetrics {
+                tsb: Some(5.0),
+                ..Default::default()
+            },
+        );
+
+        let rs_row = rows
+            .iter()
+            .find(|row| row[0] == "Readiness Score")
+            .expect("Readiness Score row should be present");
+        assert!(rs_row[2].contains("Watch"));
+    }
+
+    #[test]
+    fn recovery_rows_readiness_low_threshold() {
+        let rows = AssessRecoveryHandler::build_recovery_metric_rows(
+            &WellnessMetrics {
+                avg_sleep_hours: Some(7.5),
+                avg_resting_hr: Some(50.0),
+                avg_hrv: Some(65.0),
+                readiness_score: Some(4.5),
+                wellness_days_count: 5,
+                ..Default::default()
+            },
+            &FitnessMetrics {
+                tsb: Some(5.0),
+                ..Default::default()
+            },
+        );
+
+        let rs_row = rows
+            .iter()
+            .find(|row| row[0] == "Readiness Score")
+            .expect("Readiness Score row should be present");
+        assert!(rs_row[2].contains("Low"));
+    }
+
+    #[test]
+    fn recovery_rows_include_mood_stress_fatigue_when_complete() {
+        let rows = AssessRecoveryHandler::build_recovery_metric_rows(
+            &WellnessMetrics {
+                avg_sleep_hours: Some(7.5),
+                avg_resting_hr: Some(50.0),
+                avg_hrv: Some(65.0),
+                avg_mood: Some(8.0),
+                avg_stress: Some(4.0),
+                avg_fatigue: Some(3.0),
+                readiness_score: Some(8.0),
+                wellness_days_count: 5,
+                ..Default::default()
+            },
+            &FitnessMetrics {
+                tsb: Some(5.0),
+                ..Default::default()
+            },
+        );
+
+        let mood_row = rows
+            .iter()
+            .find(|row| row[0] == "Mood")
+            .expect("Mood row should be present");
+        assert!(mood_row[1].contains("8"));
+
+        let stress_row = rows
+            .iter()
+            .find(|row| row[0] == "Stress")
+            .expect("Stress row should be present");
+        assert!(stress_row[1].contains("4"));
+
+        let fatigue_row = rows
+            .iter()
+            .find(|row| row[0] == "Fatigue")
+            .expect("Fatigue row should be present");
+        assert!(fatigue_row[1].contains("3"));
+    }
+
+    #[test]
+    fn recovery_rows_omit_mood_stress_fatigue_when_partial() {
+        let rows = AssessRecoveryHandler::build_recovery_metric_rows(
+            &WellnessMetrics {
+                avg_sleep_hours: Some(7.5),
+                avg_resting_hr: Some(50.0),
+                avg_hrv: Some(65.0),
+                avg_mood: Some(8.0),
+                avg_stress: None,
+                avg_fatigue: Some(3.0),
+                wellness_days_count: 5,
+                ..Default::default()
+            },
+            &FitnessMetrics {
+                tsb: Some(5.0),
+                ..Default::default()
+            },
+        );
+
+        assert!(!rows.iter().any(|row| row[0] == "Mood"));
+        assert!(!rows.iter().any(|row| row[0] == "Stress"));
+        assert!(!rows.iter().any(|row| row[0] == "Fatigue"));
+    }
 }
