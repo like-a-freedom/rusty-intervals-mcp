@@ -12,8 +12,12 @@ const FITNESS_CTL_KEYS: &[&str] = &["fitness", "ctl"];
 const FITNESS_ATL_KEYS: &[&str] = &["fatigue", "atl"];
 const FITNESS_TSB_KEYS: &[&str] = &["form", "tsb"];
 const SLEEP_KEYS: &[&str] = &["sleep_hours", "sleepSecs", "sleep_secs"];
-const RESTING_HR_KEYS: &[&str] = &["resting_hr", "restingHR", "resting_hr_bpm"];
+const RESTING_HR_KEYS: &[&str] = &["resting_hr", "restingHR", "resting_hr_bpm", "avgSleepingHR"];
 const HRV_KEYS: &[&str] = &["hrv"];
+const MOOD_KEYS: &[&str] = &["mood"];
+const STRESS_KEYS: &[&str] = &["stress"];
+const FATIGUE_KEYS: &[&str] = &["fatigue"];
+const READINESS_KEYS: &[&str] = &["readiness"];
 const RECENT_WELLNESS_WINDOW: usize = 7;
 const HRV_BASELINE_WINDOW: usize = 28;
 const HRV_WATCH_DROP_PCT: f64 = -6.0;
@@ -210,7 +214,45 @@ pub fn compute_recovery_index(
     }
 }
 
-pub fn compute_load_management_metrics(loads: &[f64]) -> Option<LoadManagementMetrics> {
+pub fn compute_fatigue_index(load_7d: f64, recovery_index: f64) -> Option<f64> {
+    if recovery_index.abs() < f64::EPSILON {
+        None
+    } else {
+        Some(load_7d / recovery_index)
+    }
+}
+
+pub fn compute_stress_tolerance(strain: f64, monotony: f64) -> Option<f64> {
+    if monotony.abs() < f64::EPSILON {
+        None
+    } else {
+        Some((strain / monotony) / 100.0)
+    }
+}
+
+pub fn compute_readiness_score(
+    mood: Option<f64>,
+    sleep_hours: Option<f64>,
+    stress: Option<f64>,
+    fatigue: Option<f64>,
+) -> Option<f64> {
+    let mood = mood?;
+    let sleep_hours = sleep_hours?;
+    let stress = stress?;
+    let fatigue = fatigue?;
+    let normalized_sleep = if sleep_hours > 10.0 {
+        sleep_hours / 10.0
+    } else {
+        sleep_hours
+    };
+    let weighted_sum = mood * 0.3 + normalized_sleep * 0.3 + stress * 0.2 + fatigue * 0.2;
+    Some(weighted_sum)
+}
+
+pub fn compute_load_management_metrics(
+    loads: &[f64],
+    recovery_index: Option<f64>,
+) -> Option<LoadManagementMetrics> {
     if loads.is_empty() {
         return None;
     }
@@ -223,16 +265,25 @@ pub fn compute_load_management_metrics(loads: &[f64]) -> Option<LoadManagementMe
             acwr,
             monotony: None,
             strain: None,
+            fatigue_index: None,
+            stress_tolerance: None,
         });
     };
 
     let monotony = compute_monotony(last_seven);
     let strain = monotony.map(|value| compute_strain(last_seven, value));
+    let stress_tolerance = monotony
+        .zip(strain)
+        .and_then(|(m, s)| compute_stress_tolerance(s, m));
+    let load_7d = last_seven.iter().sum::<f64>();
+    let fatigue_index = recovery_index.and_then(|ri| compute_fatigue_index(load_7d, ri));
 
     Some(LoadManagementMetrics {
         acwr,
         monotony,
         strain,
+        fatigue_index,
+        stress_tolerance,
     })
 }
 
@@ -410,6 +461,17 @@ pub fn parse_wellness_metrics(payload: Option<&Value>) -> Option<WellnessMetrics
         compute_recovery_index(hrv, resting_hr, hrv_baseline, resting_hr_baseline)
     });
 
+    let readiness_values = collect_numbers(recent_entries, READINESS_KEYS);
+    let api_readiness = average(&readiness_values);
+    let mood_values = collect_numbers(recent_entries, MOOD_KEYS);
+    let stress_values = collect_numbers(recent_entries, STRESS_KEYS);
+    let fatigue_values = collect_numbers(recent_entries, FATIGUE_KEYS);
+    let avg_mood = average(&mood_values);
+    let avg_stress = average(&stress_values);
+    let avg_fatigue = average(&fatigue_values);
+    let readiness_score = api_readiness
+        .or_else(|| compute_readiness_score(avg_mood, avg_sleep_hours, avg_stress, avg_fatigue));
+
     Some(WellnessMetrics {
         avg_sleep_hours,
         avg_resting_hr,
@@ -420,6 +482,10 @@ pub fn parse_wellness_metrics(payload: Option<&Value>) -> Option<WellnessMetrics
         hrv_trend_state,
         recovery_index,
         wellness_days_count: recent_entries.len(),
+        avg_mood,
+        avg_stress,
+        avg_fatigue,
+        readiness_score,
     })
 }
 
@@ -870,7 +936,7 @@ mod tests {
     fn load_management_metrics_require_sufficient_lookback_for_acwr() {
         let loads = vec![25.0; 14];
 
-        let metrics = compute_load_management_metrics(&loads).unwrap();
+        let metrics = compute_load_management_metrics(&loads, None).unwrap();
 
         assert_eq!(
             metrics,
@@ -878,6 +944,8 @@ mod tests {
                 acwr: None,
                 monotony: Some(25_000_000.0),
                 strain: Some(175.0 * 25_000_000.0),
+                fatigue_index: None,
+                stress_tolerance: Some(1.75),
             }
         );
     }
@@ -1059,5 +1127,120 @@ mod tests {
         let m = compute_consistency_index(0, 0);
         assert_eq!(m.ratio, None);
         assert_eq!(m.state, None);
+    }
+
+    #[test]
+    fn fatigue_index_is_load_7d_divided_by_recovery_index() {
+        let fi = compute_fatigue_index(175.0, 1.4).unwrap();
+        assert!((fi - 125.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn fatigue_index_returns_none_when_recovery_index_is_zero() {
+        assert!(compute_fatigue_index(175.0, 0.0).is_none());
+    }
+
+    #[test]
+    fn stress_tolerance_is_strain_over_monotony_divided_by_100() {
+        let st = compute_stress_tolerance(450.0, 2.0).unwrap();
+        assert!((st - 2.25).abs() < 0.01);
+    }
+
+    #[test]
+    fn stress_tolerance_returns_none_when_monotony_is_zero() {
+        assert!(compute_stress_tolerance(450.0, 0.0).is_none());
+    }
+
+    #[test]
+    fn readiness_score_computes_weighted_average() {
+        let rs = compute_readiness_score(Some(8.0), Some(7.5), Some(5.0), Some(4.0)).unwrap();
+        assert!((rs - 6.45).abs() < 0.01);
+    }
+
+    #[test]
+    fn readiness_score_returns_none_when_all_inputs_are_none() {
+        assert!(compute_readiness_score(None, None, None, None).is_none());
+    }
+
+    #[test]
+    fn readiness_score_returns_none_for_partial_inputs() {
+        assert!(compute_readiness_score(Some(8.0), None, Some(5.0), None).is_none());
+        assert!(compute_readiness_score(Some(8.0), Some(7.5), None, None).is_none());
+        assert!(compute_readiness_score(None, Some(7.5), Some(5.0), Some(4.0)).is_none());
+    }
+
+    #[test]
+    fn readiness_score_normalizes_sleep_hours_over_10() {
+        let rs = compute_readiness_score(Some(8.0), Some(8.0), Some(5.0), Some(4.0)).unwrap();
+        assert!((rs - 6.6).abs() < 0.01);
+    }
+
+    #[test]
+    fn readiness_score_handles_partial_inputs() {
+        assert!(compute_readiness_score(Some(8.0), None, Some(5.0), None).is_none());
+        assert!(compute_readiness_score(Some(8.0), Some(7.5), None, None).is_none());
+        assert!(compute_readiness_score(None, Some(7.5), Some(5.0), Some(4.0)).is_none());
+    }
+
+    #[test]
+    fn load_management_metrics_computes_fatigue_index_and_stress_tolerance() {
+        let loads = vec![25.0; 28];
+        let metrics = compute_load_management_metrics(&loads, Some(1.5)).unwrap();
+        assert!(metrics.fatigue_index.is_some());
+        assert!(metrics.stress_tolerance.is_some());
+    }
+
+    #[test]
+    fn load_management_metrics_without_recovery_index_has_no_fatigue_index() {
+        let loads = vec![25.0; 28];
+        let metrics = compute_load_management_metrics(&loads, None).unwrap();
+        assert!(metrics.fatigue_index.is_none());
+        assert!(metrics.stress_tolerance.is_some());
+    }
+
+    #[test]
+    fn parse_wellness_metrics_extracts_mood_stress_fatigue() {
+        let payload = json!([
+            {"sleep_hours": 8.0, "resting_hr": 50.0, "hrv": 65.0, "mood": 8.0, "stress": 5.0, "fatigue": 4.0},
+            {"sleep_hours": 7.5, "resting_hr": 51.0, "hrv": 63.0, "mood": 7.0, "stress": 6.0, "fatigue": 5.0}
+        ]);
+        let metrics = parse_wellness_metrics(Some(&payload)).unwrap();
+        assert_eq!(metrics.avg_mood, Some(7.5));
+        assert_eq!(metrics.avg_stress, Some(5.5));
+        assert_eq!(metrics.avg_fatigue, Some(4.5));
+        assert!(metrics.readiness_score.is_some());
+    }
+
+    #[test]
+    fn parse_wellness_metrics_uses_api_readiness_as_primary() {
+        let payload = json!([
+            {"sleep_hours": 8.0, "resting_hr": 50.0, "hrv": 65.0, "readiness": 7.5}
+        ]);
+        let metrics = parse_wellness_metrics(Some(&payload)).unwrap();
+        assert_eq!(metrics.readiness_score, Some(7.5));
+    }
+
+    #[test]
+    fn parse_wellness_metrics_readiness_falls_back_to_formula_when_api_missing() {
+        let payload = json!([
+            {"sleep_hours": 8.0, "resting_hr": 50.0, "hrv": 65.0, "mood": 8.0, "stress": 3.0, "fatigue": 2.0}
+        ]);
+        let metrics = parse_wellness_metrics(Some(&payload)).unwrap();
+        assert!(metrics.readiness_score.is_some());
+        let rs = metrics.readiness_score.unwrap();
+        let expected = 8.0 * 0.3 + 8.0 * 0.3 + 3.0 * 0.2 + 2.0 * 0.2;
+        assert!((rs - expected).abs() < 0.01);
+    }
+
+    #[test]
+    fn parse_wellness_metrics_readiness_requires_api_or_all_components() {
+        let payload = json!([
+            {"sleep_hours": 8.0, "resting_hr": 50.0, "hrv": 65.0}
+        ]);
+        let metrics = parse_wellness_metrics(Some(&payload)).unwrap();
+        assert!(metrics.avg_mood.is_none());
+        assert!(metrics.avg_stress.is_none());
+        assert!(metrics.avg_fatigue.is_none());
+        assert!(metrics.readiness_score.is_none());
     }
 }

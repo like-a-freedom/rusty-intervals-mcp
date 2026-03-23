@@ -144,6 +144,10 @@ pub struct WellnessMetrics {
     pub hrv_trend_state: Option<String>,
     pub recovery_index: Option<f64>,
     pub wellness_days_count: usize,
+    pub avg_mood: Option<f64>,
+    pub avg_stress: Option<f64>,
+    pub avg_fatigue: Option<f64>,
+    pub readiness_score: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -167,6 +171,8 @@ pub struct LoadManagementMetrics {
     pub acwr: Option<AcwrMetrics>,
     pub monotony: Option<f64>,
     pub strain: Option<f64>,
+    pub fatigue_index: Option<f64>,
+    pub stress_tolerance: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -319,6 +325,8 @@ mod tests {
                 }),
                 monotony: Some(1.8),
                 strain: Some(540.0),
+                fatigue_index: None,
+                stress_tolerance: None,
             }),
             ..Default::default()
         };
@@ -338,6 +346,10 @@ mod tests {
             hrv_trend_state: Some("within_range".into()),
             recovery_index: Some(1.36),
             wellness_days_count: 4,
+            avg_mood: None,
+            avg_stress: None,
+            avg_fatigue: None,
+            readiness_score: None,
         };
 
         assert_eq!(metrics.recovery_index, Some(1.36));
@@ -379,6 +391,8 @@ mod tests {
                 }),
                 monotony: Some(1.5),
                 strain: Some(270.0),
+                fatigue_index: None,
+                stress_tolerance: None,
             }),
             workout: Some(WorkoutMetricsContext {
                 efficiency_factor: Some(1.48),
