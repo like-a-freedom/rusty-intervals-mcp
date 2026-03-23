@@ -77,7 +77,7 @@ Responses are designed for LLMs:
 
 ### 4. Deterministic coaching analytics
 
-Read-only coaching intents use a deterministic pipeline to compute metrics such as readiness, ACWR context, monotony, strain, recovery interpretation, and stream-derived execution signals.
+Read-only coaching intents use a deterministic pipeline to compute metrics such as readiness, ACWR context, monotony, strain, fatigue index, stress tolerance, durability index, recovery interpretation, and stream-derived execution signals.
 
 ### 5. Safer mutation flows
 
@@ -187,7 +187,7 @@ Responses are shaped for actionability:
 The server computes important metrics and interpretations itself, including portions of:
 
 - readiness context
-- fatigue and load guidance
+- fatigue and load guidance (Fatigue Index, Stress Tolerance, Durability Index)
 - stream-aware execution signals
 - training period summaries
 
