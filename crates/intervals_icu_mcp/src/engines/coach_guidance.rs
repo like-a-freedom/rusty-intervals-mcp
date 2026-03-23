@@ -54,8 +54,8 @@ pub const WEEKLY_AVG_HIGH_HOURS: f64 = 15.0;
 const ACWR_WATCH_RATIO: f64 = 1.3;
 /// ACWR: overload threshold (> this value)
 const ACWR_OVERREACH_RATIO: f64 = 1.5;
-/// Monotony: repetitive-stress threshold (> this value)
-const MONOTONY_ALERT: f64 = 2.0;
+/// Monotony: repetitive-stress threshold (Foster standard > 2.5)
+const MONOTONY_ALERT: f64 = 2.5;
 
 // =============================================================================
 // Alert Generation
@@ -233,6 +233,43 @@ pub fn build_alerts(metrics: &CoachMetrics) -> Vec<CoachAlert> {
         });
     }
 
+    // Threshold-biased polarisation alert
+    if let Some(polarisation) = &metrics.polarisation
+        && let Some(state) = polarisation.state.as_deref()
+        && state == "threshold_biased"
+    {
+        alerts.push(CoachAlert {
+            severity: CoachAlertSeverity::Caution,
+            code: "threshold_biased_polarisation".to_string(),
+            title: "Threshold-biased training distribution".to_string(),
+            evidence: vec![format!(
+                "Polarisation ratio {:.2} indicates too much threshold-zone work ({:.0}% Z2)",
+                polarisation.ratio.unwrap_or(0.0),
+                polarisation.z2_pct * 100.0
+            )],
+            section: "distribution".to_string(),
+        });
+    }
+
+    // Low consistency alert
+    if let Some(consistency) = &metrics.consistency
+        && let Some(state) = consistency.state.as_deref()
+        && state == "low"
+    {
+        alerts.push(CoachAlert {
+            severity: CoachAlertSeverity::Caution,
+            code: "low_consistency".to_string(),
+            title: "Low training plan adherence".to_string(),
+            evidence: vec![format!(
+                "Only {} of {} planned sessions completed ({:.0}%)",
+                consistency.sessions_completed,
+                consistency.sessions_planned,
+                consistency.ratio.unwrap_or(0.0) * 100.0
+            )],
+            section: "adherence".to_string(),
+        });
+    }
+
     alerts
 }
 
@@ -344,6 +381,27 @@ pub fn build_guidance(metrics: &CoachMetrics, alerts: &[CoachAlert]) -> CoachGui
         );
     }
 
+    // Distribution guidance (polarisation)
+    if has_alert_code(alerts, "threshold_biased_polarisation") {
+        guidance
+            .findings
+            .push("Training distribution is skewed toward threshold-zone work.".to_string());
+        guidance.suggestions.push(
+            "Shift more volume to easy (Z1) or high-intensity (Z3) to reach 80/20 polarisation."
+                .to_string(),
+        );
+    }
+
+    // Adherence guidance (consistency)
+    if has_alert_code(alerts, "low_consistency") {
+        guidance
+            .findings
+            .push("Plan adherence is significantly below target.".to_string());
+        guidance
+            .suggestions
+            .push("Review schedule constraints or adjust the training plan.".to_string());
+    }
+
     // Workout-specific guidance
     if let Some(workout) = &metrics.workout
         && let Some(count) = workout.interval_count
@@ -376,8 +434,8 @@ pub fn build_guidance(metrics: &CoachMetrics, alerts: &[CoachAlert]) -> CoachGui
 mod tests {
     use super::*;
     use crate::domains::coach::{
-        AcwrMetrics, CoachMetrics, FitnessMetrics, LoadManagementMetrics, VolumeMetrics,
-        WellnessMetrics,
+        AcwrMetrics, CoachMetrics, ConsistencyMetrics, FitnessMetrics, LoadManagementMetrics,
+        PolarisationMetrics, VolumeMetrics, WellnessMetrics,
     };
 
     #[test]
@@ -670,7 +728,7 @@ mod tests {
     fn high_monotony_creates_repetitive_stress_guidance() {
         let metrics = CoachMetrics {
             load_management: Some(LoadManagementMetrics {
-                monotony: Some(2.3),
+                monotony: Some(2.8),
                 strain: Some(810.0),
                 ..Default::default()
             }),
@@ -753,5 +811,90 @@ mod tests {
         assert!(has_alert_code(&alerts, "low_sleep"));
         assert!(has_any_alert_code(&alerts, &["acwr_watch", "deep_fatigue"]));
         assert!(!has_alert_code(&alerts, "high_monotony"));
+    }
+
+    #[test]
+    fn threshold_biased_polarisation_creates_alert_and_guidance() {
+        let metrics = CoachMetrics {
+            polarisation: Some(PolarisationMetrics {
+                z1_pct: 0.50,
+                z2_pct: 0.45,
+                z3_pct: 0.05,
+                ratio: Some(0.61),
+                state: Some("threshold_biased".into()),
+            }),
+            ..Default::default()
+        };
+
+        let alerts = build_alerts(&metrics);
+        let guidance = build_guidance(&metrics, &alerts);
+
+        assert!(
+            alerts
+                .iter()
+                .any(|a| a.code == "threshold_biased_polarisation")
+        );
+        assert!(guidance.suggestions.iter().any(|s| s.contains("80/20")));
+    }
+
+    #[test]
+    fn polarised_training_does_not_create_alert() {
+        let metrics = CoachMetrics {
+            polarisation: Some(PolarisationMetrics {
+                z1_pct: 0.50,
+                z2_pct: 0.35,
+                z3_pct: 0.15,
+                ratio: Some(0.93),
+                state: Some("polarised".into()),
+            }),
+            ..Default::default()
+        };
+
+        let alerts = build_alerts(&metrics);
+        assert!(
+            !alerts
+                .iter()
+                .any(|a| a.code == "threshold_biased_polarisation")
+        );
+    }
+
+    #[test]
+    fn low_consistency_creates_alert_and_guidance() {
+        let metrics = CoachMetrics {
+            consistency: Some(ConsistencyMetrics {
+                sessions_planned: 10,
+                sessions_completed: 3,
+                ratio: Some(0.3),
+                state: Some("low".into()),
+            }),
+            ..Default::default()
+        };
+
+        let alerts = build_alerts(&metrics);
+        let guidance = build_guidance(&metrics, &alerts);
+
+        assert!(alerts.iter().any(|a| a.code == "low_consistency"));
+        assert!(
+            guidance
+                .suggestions
+                .iter()
+                .any(|s| s.contains("schedule") || s.contains("plan"))
+        );
+    }
+
+    #[test]
+    fn good_consistency_does_not_create_alert() {
+        let metrics = CoachMetrics {
+            consistency: Some(ConsistencyMetrics {
+                sessions_planned: 10,
+                sessions_completed: 9,
+                ratio: Some(0.9),
+                state: Some("excellent".into()),
+            }),
+            ..Default::default()
+        };
+
+        let alerts = build_alerts(&metrics);
+        assert!(!alerts.iter().any(|a| a.code == "low_consistency"));
     }
 }

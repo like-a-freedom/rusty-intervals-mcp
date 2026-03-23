@@ -1,6 +1,7 @@
 use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
@@ -45,6 +46,7 @@ pub struct IdempotencyStats {
 pub struct IdempotencyMiddleware {
     cache: Arc<RwLock<CacheInner>>,
     default_ttl: Duration,
+    persistence_path: Option<PathBuf>,
 }
 
 struct CacheInner {
@@ -63,7 +65,63 @@ impl IdempotencyMiddleware {
                 stats: IdempotencyStats::default(),
             })),
             default_ttl: ttl,
+            persistence_path: None,
         }
+    }
+
+    pub fn with_file(path: PathBuf) -> Self {
+        let entries = Self::load_from_file(&path);
+        Self {
+            cache: Arc::new(RwLock::new(CacheInner {
+                entries,
+                stats: IdempotencyStats::default(),
+            })),
+            default_ttl: Duration::from_secs(86400),
+            persistence_path: Some(path),
+        }
+    }
+
+    pub fn with_ttl_and_file(ttl: Duration, path: PathBuf) -> Self {
+        let entries = Self::load_from_file(&path);
+        Self {
+            cache: Arc::new(RwLock::new(CacheInner {
+                entries,
+                stats: IdempotencyStats::default(),
+            })),
+            default_ttl: ttl,
+            persistence_path: Some(path),
+        }
+    }
+
+    pub async fn flush(&self) -> std::io::Result<()> {
+        let Some(ref path) = self.persistence_path else {
+            return Ok(());
+        };
+        let cache = self.cache.read().await;
+        let serializable: Vec<_> = cache
+            .entries
+            .iter()
+            .filter(|(_, e)| !e.is_expired())
+            .map(|(k, e)| (k.clone(), e.clone()))
+            .collect();
+        let json = serde_json::to_vec(&serializable)?;
+
+        let tmp_path = path.with_extension("tmp");
+        tokio::fs::write(&tmp_path, &json).await?;
+        tokio::fs::rename(&tmp_path, path).await?;
+        Ok(())
+    }
+
+    fn load_from_file(path: &std::path::Path) -> HashMap<String, IdempotencyEntry> {
+        let Ok(data) = std::fs::read_to_string(path) else {
+            return HashMap::new();
+        };
+        let entries: Vec<(String, IdempotencyEntry)> =
+            serde_json::from_str(&data).unwrap_or_default();
+        entries
+            .into_iter()
+            .filter(|(_, e)| !e.is_expired())
+            .collect()
     }
     pub async fn execute_with_idempotency<F, Fut>(
         &self,
@@ -78,6 +136,7 @@ impl IdempotencyMiddleware {
         if let Some(entry) = self.get(token, request_fingerprint).await? {
             let mut cache = self.cache.write().await;
             cache.stats.hits += 1;
+            crate::metrics::record_idempotency("hit");
             return Ok(entry);
         }
         let result = action().await?;
@@ -86,6 +145,7 @@ impl IdempotencyMiddleware {
             let mut cache = self.cache.write().await;
             cache.stats.misses += 1;
             cache.stats.sets += 1;
+            crate::metrics::record_idempotency("miss");
         }
         Ok(result)
     }
@@ -102,6 +162,7 @@ impl IdempotencyMiddleware {
                 return Ok(None);
             }
             if entry.request_fingerprint != request_fingerprint {
+                crate::metrics::record_idempotency("conflict");
                 return Err(IntentError::IdempotencyConflict(format!(
                     "token '{}' was already used for a different request; generate a new idempotency token",
                     token
@@ -169,5 +230,64 @@ mod tests {
         let t1 = generate_idempotency_token("test", &["a"]);
         let t2 = generate_idempotency_token("test", &["a"]);
         assert_eq!(t1, t2);
+    }
+
+    #[tokio::test]
+    async fn idempotency_survives_reload_from_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("idempotency.json");
+
+        let m1 = IdempotencyMiddleware::with_file(path.clone());
+        let out = IntentOutput::markdown("test result");
+
+        // Verify in-memory works first
+        m1.set("tok1", "fp-a", &out).await;
+        let in_mem = m1.get("tok1", "fp-a").await.unwrap();
+        assert!(in_mem.is_some(), "should be in memory after set");
+
+        // Flush and check file
+        m1.flush().await.unwrap();
+        let file_content = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !file_content.is_empty(),
+            "file should not be empty after flush"
+        );
+
+        // Reload
+        let m2 = IdempotencyMiddleware::with_file(path);
+        let loaded = m2.get("tok1", "fp-a").await.unwrap();
+        assert!(loaded.is_some(), "expected cached output after reload");
+    }
+
+    #[tokio::test]
+    async fn expired_entries_not_restored_from_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("idempotency.json");
+
+        let m = IdempotencyMiddleware::with_ttl_and_file(Duration::from_millis(1), path.clone());
+        m.set("tok1", "fp-a", &IntentOutput::markdown("x")).await;
+        m.flush().await.unwrap();
+
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        let m2 = IdempotencyMiddleware::with_file(path);
+        let loaded = m2.get("tok1", "fp-a").await.unwrap();
+        assert!(loaded.is_none());
+    }
+
+    #[tokio::test]
+    async fn flush_without_file_is_noop() {
+        let m = IdempotencyMiddleware::new();
+        m.set("tok1", "fp-a", &IntentOutput::markdown("x")).await;
+        assert!(m.flush().await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn missing_file_returns_empty_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nonexistent.json");
+
+        let m = IdempotencyMiddleware::with_file(path);
+        assert!(m.get("tok1", "fp-a").await.unwrap().is_none());
     }
 }

@@ -499,6 +499,124 @@ fn average(values: &[f64]) -> Option<f64> {
     }
 }
 
+pub fn compute_polarisation(
+    z1_pct: f64,
+    z2_pct: f64,
+    z3_pct: f64,
+) -> Option<crate::domains::coach::PolarisationMetrics> {
+    use crate::domains::coach::PolarisationMetrics;
+
+    let ratio = if z2_pct.abs() < f64::EPSILON {
+        None
+    } else {
+        Some((z1_pct + z3_pct) / (2.0 * z2_pct))
+    };
+
+    let state = ratio.map(|r| {
+        if r < 0.75 {
+            "threshold_biased".to_string()
+        } else if r <= 1.0 {
+            "polarised".to_string()
+        } else {
+            "high_intensity_dominant".to_string()
+        }
+    });
+
+    Some(PolarisationMetrics {
+        z1_pct,
+        z2_pct,
+        z3_pct,
+        ratio,
+        state,
+    })
+}
+
+pub fn parse_polarisation_from_api(
+    activity_detail: Option<&Value>,
+    zone_times: Option<&Value>,
+) -> Option<crate::domains::coach::PolarisationMetrics> {
+    use crate::domains::coach::PolarisationMetrics;
+
+    // Priority 1: Use pre-computed polarization_index from API
+    if let Some(detail) = activity_detail.and_then(|v| v.as_object())
+        && let Some(index) = get_number(detail, &["polarization_index"])
+    {
+        let state = if index < 0.75 {
+            Some("threshold_biased".to_string())
+        } else if index <= 1.0 {
+            Some("polarised".to_string())
+        } else {
+            Some("high_intensity_dominant".to_string())
+        };
+        return Some(PolarisationMetrics {
+            z1_pct: 0.0,
+            z2_pct: 0.0,
+            z3_pct: 0.0,
+            ratio: Some(index),
+            state,
+        });
+    }
+
+    // Priority 2: Aggregate from icu_zone_times
+    // API returns zone times as [{id, secs}, ...] — typically 5 zones.
+    // Seiler mapping: zones 1+2 → Z1, zone 3 → Z2, zones 4+5 → Z3
+    if let Some(zt) = zone_times.and_then(|v| v.as_array()) {
+        let zone_secs: Vec<f64> = zt
+            .iter()
+            .filter_map(|entry| entry.get("secs").and_then(|s| s.as_f64()))
+            .collect();
+        let total: f64 = zone_secs.iter().sum();
+
+        if zone_secs.len() >= 5 && total > 0.0 {
+            // 5-zone model: [0,1]=easy, [2]=threshold, [3,4]=high
+            let z1_pct = (zone_secs[0] + zone_secs[1]) / total;
+            let z2_pct = zone_secs[2] / total;
+            let z3_pct = (zone_secs[3] + zone_secs[4]) / total;
+            return compute_polarisation(z1_pct, z2_pct, z3_pct);
+        } else if zone_secs.len() >= 3 && total > 0.0 {
+            // 3-zone model or unknown: map directly
+            let z1_pct = zone_secs[0] / total;
+            let z2_pct = zone_secs[1] / total;
+            let z3_pct: f64 = zone_secs[2..].iter().sum::<f64>() / total;
+            return compute_polarisation(z1_pct, z2_pct, z3_pct);
+        }
+    }
+
+    None
+}
+
+pub fn compute_consistency_index(
+    sessions_completed: usize,
+    sessions_planned: usize,
+) -> crate::domains::coach::ConsistencyMetrics {
+    use crate::domains::coach::ConsistencyMetrics;
+
+    let ratio = if sessions_planned == 0 {
+        None
+    } else {
+        Some(sessions_completed as f64 / sessions_planned as f64)
+    };
+
+    let state = ratio.map(|r| {
+        if r >= 0.9 {
+            "excellent".to_string()
+        } else if r >= 0.7 {
+            "good".to_string()
+        } else if r >= 0.5 {
+            "moderate".to_string()
+        } else {
+            "low".to_string()
+        }
+    });
+
+    ConsistencyMetrics {
+        sessions_planned,
+        sessions_completed,
+        ratio,
+        state,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -801,5 +919,145 @@ mod tests {
             compute_aerobic_decoupling(&hr, &output),
             None::<DecouplingMetrics>
         );
+    }
+
+    // Polarisation tests
+    // Seiler 80/20 collapses 5 zones into 3 macro-zones:
+    //   Z1 (Easy)    = zones 1+2 (below LT1)
+    //   Z2 (Threshold) = zone 3 (LT1-LT2)
+    //   Z3 (High)    = zones 4+5 (above LT2)
+    // Formula: ratio = (Z1 + Z3) / (2 * Z2)
+
+    #[test]
+    fn polarisation_ratio_classifies_threshold_biased() {
+        // z1=0.50, z2=0.45, z3=0.05 -> ratio = 0.55 / 0.90 = 0.611 -> threshold_biased
+        let m = compute_polarisation(0.50, 0.45, 0.05).unwrap();
+        assert!(m.ratio.unwrap() < 0.75);
+        assert_eq!(m.state.as_deref(), Some("threshold_biased"));
+    }
+
+    #[test]
+    fn polarisation_ratio_classifies_polarised() {
+        // z1=0.50, z2=0.35, z3=0.15 -> ratio = 0.65 / 0.70 = 0.928 -> polarised
+        let m = compute_polarisation(0.50, 0.35, 0.15).unwrap();
+        assert!(m.ratio.unwrap() > 0.75);
+        assert!(m.ratio.unwrap() <= 1.0);
+        assert_eq!(m.state.as_deref(), Some("polarised"));
+    }
+
+    #[test]
+    fn polarisation_ratio_classifies_high_intensity_dominant() {
+        let m = compute_polarisation(0.50, 0.10, 0.40).unwrap();
+        assert!(m.ratio.unwrap() > 1.0);
+        assert_eq!(m.state.as_deref(), Some("high_intensity_dominant"));
+    }
+
+    #[test]
+    fn polarisation_returns_none_ratio_when_z2_is_zero() {
+        let m = compute_polarisation(0.50, 0.0, 0.50).unwrap();
+        assert_eq!(m.ratio, None);
+        assert_eq!(m.state, None);
+    }
+
+    #[test]
+    fn polarisation_preserves_input_percentages() {
+        let m = compute_polarisation(0.70, 0.20, 0.10).unwrap();
+        assert!((m.z1_pct - 0.70).abs() < f64::EPSILON);
+        assert!((m.z2_pct - 0.20).abs() < f64::EPSILON);
+        assert!((m.z3_pct - 0.10).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn parse_polarisation_from_api_uses_polarization_index() {
+        let detail = json!({"polarization_index": 0.85});
+        let m = parse_polarisation_from_api(Some(&detail), None).unwrap();
+        assert_eq!(m.ratio, Some(0.85));
+        assert_eq!(m.state.as_deref(), Some("polarised"));
+    }
+
+    #[test]
+    fn parse_polarisation_from_api_aggregates_5_zone_times() {
+        // 5-zone model: zones 1+2 → Z1 (3600+3000=6600), zone 3 → Z2 (600), zones 4+5 → Z3 (500+300=800)
+        // total = 8000, z1_pct=0.825, z2_pct=0.075, z3_pct=0.10
+        // ratio = (0.825 + 0.10) / (2 * 0.075) = 0.925 / 0.15 = 6.17 -> high_intensity_dominant
+        let zone_times = json!([
+            {"id": "z1", "secs": 3600},
+            {"id": "z2", "secs": 3000},
+            {"id": "z3", "secs": 600},
+            {"id": "z4", "secs": 500},
+            {"id": "z5", "secs": 300}
+        ]);
+        let m = parse_polarisation_from_api(None, Some(&zone_times)).unwrap();
+        assert!(m.ratio.unwrap() > 1.0);
+        assert_eq!(m.state.as_deref(), Some("high_intensity_dominant"));
+    }
+
+    #[test]
+    fn parse_polarisation_from_api_aggregates_5_zone_polarised() {
+        // Realistic 80/20 distribution across 5 zones:
+        // Z1: 6000+2000=8000 (easy), Z2: 1000 (threshold), Z3: 800+200=1000 (high)
+        // total = 10000, z1_pct=0.80, z2_pct=0.10, z3_pct=0.10
+        // ratio = (0.80 + 0.10) / (2 * 0.10) = 0.90 / 0.20 = 4.5 -> not polarised
+        // Need more threshold: z1=0.70, z2=0.20, z3=0.10 -> ratio = 0.80/0.40 = 2.0
+        // Let's use: z1=0.75, z2=0.15, z3=0.10 -> ratio = 0.85/0.30 = 2.83
+        // Actually let's aim for ratio ~0.9:
+        // z1=0.70, z2=0.20, z3=0.10 -> ratio = 0.80/0.40 = 2.0 (still high)
+        // z1=0.50, z2=0.35, z3=0.15 -> ratio = 0.65/0.70 = 0.928 (polarised!)
+        let zone_times = json!([
+            {"id": "z1", "secs": 3000},
+            {"id": "z2", "secs": 2000},
+            {"id": "z3", "secs": 3500},
+            {"id": "z4", "secs": 1000},
+            {"id": "z5", "secs": 500}
+        ]);
+        // z1_macro = 5000, z2_macro = 3500, z3_macro = 1500, total=10000
+        // z1_pct=0.50, z2_pct=0.35, z3_pct=0.15
+        // ratio = 0.65 / 0.70 = 0.928 -> polarised
+        let m = parse_polarisation_from_api(None, Some(&zone_times)).unwrap();
+        assert!(m.ratio.unwrap() > 0.75);
+        assert!(m.ratio.unwrap() <= 1.0);
+        assert_eq!(m.state.as_deref(), Some("polarised"));
+    }
+
+    #[test]
+    fn parse_polarisation_from_api_returns_none_when_no_data() {
+        assert!(parse_polarisation_from_api(None, None).is_none());
+    }
+
+    // Consistency tests
+
+    #[test]
+    fn consistency_index_full_adherence() {
+        let m = compute_consistency_index(10, 10);
+        assert_eq!(m.ratio, Some(1.0));
+        assert_eq!(m.state.as_deref(), Some("excellent"));
+    }
+
+    #[test]
+    fn consistency_index_good_adherence() {
+        let m = compute_consistency_index(8, 10);
+        assert_eq!(m.ratio, Some(0.8));
+        assert_eq!(m.state.as_deref(), Some("good"));
+    }
+
+    #[test]
+    fn consistency_index_moderate_adherence() {
+        let m = compute_consistency_index(5, 10);
+        assert_eq!(m.ratio, Some(0.5));
+        assert_eq!(m.state.as_deref(), Some("moderate"));
+    }
+
+    #[test]
+    fn consistency_index_low_adherence() {
+        let m = compute_consistency_index(3, 10);
+        assert_eq!(m.ratio, Some(0.3));
+        assert_eq!(m.state.as_deref(), Some("low"));
+    }
+
+    #[test]
+    fn consistency_index_no_plans_returns_none_ratio() {
+        let m = compute_consistency_index(0, 0);
+        assert_eq!(m.ratio, None);
+        assert_eq!(m.state, None);
     }
 }

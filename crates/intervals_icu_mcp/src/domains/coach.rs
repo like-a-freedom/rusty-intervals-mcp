@@ -177,6 +177,28 @@ pub struct DecouplingMetrics {
     pub state: String,
 }
 
+/// Seiler 80/20 polarisation metrics — collapses standard 5-zone model into 3 macro-zones:
+///   Z1 (Easy)      = zones 1+2 (below LT1)
+///   Z2 (Threshold) = zone 3 (LT1–LT2)
+///   Z3 (High)      = zones 4+5 (above LT2)
+/// Formula: `ratio = (z1_pct + z3_pct) / (2 * z2_pct)`
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct PolarisationMetrics {
+    pub z1_pct: f64,
+    pub z2_pct: f64,
+    pub z3_pct: f64,
+    pub ratio: Option<f64>,
+    pub state: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct ConsistencyMetrics {
+    pub sessions_planned: usize,
+    pub sessions_completed: usize,
+    pub ratio: Option<f64>,
+    pub state: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct WorkoutMetricsContext {
     pub interval_count: Option<usize>,
@@ -208,6 +230,8 @@ pub struct CoachMetrics {
     pub trend: Option<TrendMetrics>,
     pub workout: Option<WorkoutMetricsContext>,
     pub race: Option<RaceMetrics>,
+    pub polarisation: Option<PolarisationMetrics>,
+    pub consistency: Option<ConsistencyMetrics>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

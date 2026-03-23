@@ -32,7 +32,6 @@ pub mod engines;
 mod event_id;
 pub mod intents;
 pub mod metrics;
-pub mod prompts;
 mod services;
 mod state;
 #[cfg(test)]

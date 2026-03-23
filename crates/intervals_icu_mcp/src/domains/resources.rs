@@ -5,7 +5,9 @@ use rmcp::model::RawResource;
 pub fn athlete_profile_resource() -> RawResource {
     let mut resource = RawResource::new("intervals-icu://athlete/profile", "Athlete Profile");
     resource.description = Some(
-        "Complete athlete profile with current fitness metrics (fitness/fatigue/form/rampRate) and sport settings"
+        "Athlete profile data including: profile (id, name), fitness metrics (ctl, atl, tsb, rampRate), \
+         sport settings (ftp, lthr, max_hr, power_zones, hr_zones, pace_zones). \
+         Returns JSON with fields: profile.id, profile.name, fitness.*, sport_settings[]."
             .to_string(),
     );
     resource.mime_type = Some("application/json".to_string());
