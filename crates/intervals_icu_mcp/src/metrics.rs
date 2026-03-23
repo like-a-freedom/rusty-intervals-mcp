@@ -164,6 +164,15 @@ pub fn record_mcp_method_call(method: &str) {
     .increment(1);
 }
 
+/// Record idempotency cache operation.
+pub fn record_idempotency(result: &str) {
+    counter!(
+        "intervals_icu_mcp_idempotency_total",
+        "result" => result.to_string()
+    )
+    .increment(1);
+}
+
 /// Record HTTP request with duration.
 pub fn record_http_request(method: &str, path: &str, status: u16, duration_secs: f64) {
     let status_str = status.to_string();

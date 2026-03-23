@@ -89,11 +89,11 @@ pub struct OutputMetadata {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IntentOutput {
     pub content: Vec<ContentBlock>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub suggestions: Vec<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub next_actions: Vec<String>,
-    #[serde(skip_serializing_if = "OutputMetadata::is_empty")]
+    #[serde(skip_serializing_if = "OutputMetadata::is_empty", default)]
     pub metadata: OutputMetadata,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
