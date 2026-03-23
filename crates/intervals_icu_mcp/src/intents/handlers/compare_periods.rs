@@ -10,7 +10,7 @@ use std::sync::Arc;
 use crate::domains::coach::AnalysisWindow;
 use crate::engines::analysis_fetch::{PeriodFetchRequest, fetch_period_data};
 use crate::engines::coach_metrics::{
-    compute_consistency_index, TrendSnapshot, build_trend_snapshot, derive_trend_metrics,
+    TrendSnapshot, build_trend_snapshot, compute_consistency_index, derive_trend_metrics,
     derive_volume_metrics,
 };
 use crate::intents::utils::{filter_activities_by_range, parse_date};
@@ -103,14 +103,10 @@ impl IntentHandler for ComparePeriodsHandler {
             a_stats.snapshot.activity_count,
         );
 
-        let a_consistency = compute_consistency_index(
-            a_stats.snapshot.activity_count,
-            a_stats.planned_count,
-        );
-        let b_consistency = compute_consistency_index(
-            b_stats.snapshot.activity_count,
-            b_stats.planned_count,
-        );
+        let a_consistency =
+            compute_consistency_index(a_stats.snapshot.activity_count, a_stats.planned_count);
+        let b_consistency =
+            compute_consistency_index(b_stats.snapshot.activity_count, b_stats.planned_count);
 
         let mut content = Vec::new();
         content.push(ContentBlock::markdown(format!(
