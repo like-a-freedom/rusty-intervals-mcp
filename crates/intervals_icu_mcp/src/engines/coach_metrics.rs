@@ -240,11 +240,7 @@ pub fn compute_readiness_score(
     let sleep_hours = sleep_hours?;
     let stress = stress?;
     let fatigue = fatigue?;
-    let normalized_sleep = if sleep_hours > 10.0 {
-        sleep_hours / 10.0
-    } else {
-        sleep_hours
-    };
+    let normalized_sleep = sleep_hours.clamp(0.0, 10.0);
     let weighted_sum = mood * 0.3 + normalized_sleep * 0.3 + stress * 0.2 + fatigue * 0.2;
     Some(weighted_sum)
 }
@@ -1173,6 +1169,12 @@ mod tests {
     fn readiness_score_normalizes_sleep_hours_over_10() {
         let rs = compute_readiness_score(Some(8.0), Some(8.0), Some(5.0), Some(4.0)).unwrap();
         assert!((rs - 6.6).abs() < 0.01);
+    }
+
+    #[test]
+    fn readiness_score_clamps_sleep_above_10_hours() {
+        let rs = compute_readiness_score(Some(8.0), Some(12.0), Some(5.0), Some(4.0)).unwrap();
+        assert!((rs - 7.2).abs() < 0.01);
     }
 
     #[test]
