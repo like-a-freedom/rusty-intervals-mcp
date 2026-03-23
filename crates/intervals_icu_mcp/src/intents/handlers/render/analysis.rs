@@ -31,6 +31,29 @@ pub(crate) fn build_load_management_markdown(
         lines.push(format!("- Strain: {:.0}", strain));
     }
 
+    if let Some(stress_tolerance) = metrics.stress_tolerance {
+        let status = if (3.0..=6.0).contains(&stress_tolerance) {
+            "✅"
+        } else if stress_tolerance > 6.0 {
+            "⚠️"
+        } else {
+            "⚪"
+        };
+        lines.push(format!(
+            "- Stress Tolerance: {:.2} {}",
+            stress_tolerance, status
+        ));
+    }
+
+    if let Some(fatigue_index) = metrics.fatigue_index {
+        let status = if fatigue_index <= 2.5 {
+            "✅"
+        } else {
+            "⚠️"
+        };
+        lines.push(format!("- Fatigue Index: {:.2} {}", fatigue_index, status));
+    }
+
     if lines.len() == 2 {
         lines.push(
             "- Load-management context unavailable because no deterministic load signal was found."

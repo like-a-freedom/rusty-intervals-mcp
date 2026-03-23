@@ -21,6 +21,8 @@ pub const DEFAULT_FIELDS: &[&str] = &[
     "weight",
     "fatigue",
     "motivation",
+    "mood",
+    "readiness",
 ];
 
 /// Normalize a date string to YYYY-MM-DD format.

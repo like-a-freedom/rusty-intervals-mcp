@@ -212,6 +212,37 @@ impl AssessRecoveryHandler {
             ]);
         }
 
+        if let Some(readiness_score) = wellness.readiness_score {
+            let readiness_status = if readiness_score >= 7.0 {
+                "✅ Supportive"
+            } else if readiness_score >= 5.0 {
+                "⚠️ Watch"
+            } else {
+                "❌ Low"
+            };
+            rows.push(vec![
+                "Readiness Score".into(),
+                format!("{:.1}", readiness_score),
+                readiness_status.into(),
+            ]);
+        }
+
+        if let (Some(mood), Some(stress), Some(fatigue)) =
+            (wellness.avg_mood, wellness.avg_stress, wellness.avg_fatigue)
+        {
+            rows.push(vec!["Mood".into(), format!("{:.0}/10", mood), "".into()]);
+            rows.push(vec![
+                "Stress".into(),
+                format!("{:.0}/10", stress),
+                "".into(),
+            ]);
+            rows.push(vec![
+                "Fatigue".into(),
+                format!("{:.0}/10", fatigue),
+                "".into(),
+            ]);
+        }
+
         rows
     }
 
