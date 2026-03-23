@@ -1409,6 +1409,7 @@ mod tests {
             strain: Some(882.0),
             fatigue_index: None,
             stress_tolerance: None,
+            durability_index: None,
         }));
 
         assert!(markdown.contains("ACWR"));

@@ -173,6 +173,7 @@ pub struct LoadManagementMetrics {
     pub strain: Option<f64>,
     pub fatigue_index: Option<f64>,
     pub stress_tolerance: Option<f64>,
+    pub durability_index: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -327,6 +328,7 @@ mod tests {
                 strain: Some(540.0),
                 fatigue_index: None,
                 stress_tolerance: None,
+                durability_index: None,
             }),
             ..Default::default()
         };
@@ -393,6 +395,7 @@ mod tests {
                 strain: Some(270.0),
                 fatigue_index: None,
                 stress_tolerance: None,
+                durability_index: None,
             }),
             workout: Some(WorkoutMetricsContext {
                 efficiency_factor: Some(1.48),
