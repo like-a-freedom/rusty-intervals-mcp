@@ -56,6 +56,8 @@ const ACWR_WATCH_RATIO: f64 = 1.3;
 const ACWR_OVERREACH_RATIO: f64 = 1.5;
 /// Monotony: repetitive-stress threshold (Foster standard > 2.5)
 const MONOTONY_ALERT: f64 = 2.5;
+/// Fatigue Index: high fatigue alert threshold (> this value)
+const FATIGUE_INDEX_ALERT: f64 = 2.5;
 
 // =============================================================================
 // Alert Generation
@@ -212,6 +214,23 @@ pub fn build_alerts(metrics: &CoachMetrics) -> Vec<CoachAlert> {
             evidence: vec![format!(
                 "Monotony {:.2} exceeds {:.1}",
                 monotony, MONOTONY_ALERT
+            )],
+            section: "load_management".to_string(),
+        });
+    }
+
+    // Fatigue Index alert
+    if let Some(load_management) = &metrics.load_management
+        && let Some(fatigue_index) = load_management.fatigue_index
+        && fatigue_index > FATIGUE_INDEX_ALERT
+    {
+        alerts.push(CoachAlert {
+            severity: CoachAlertSeverity::Caution,
+            code: "high_fatigue_index".to_string(),
+            title: "High fatigue index".to_string(),
+            evidence: vec![format!(
+                "Fatigue Index {:.2} exceeds {:.1}",
+                fatigue_index, FATIGUE_INDEX_ALERT
             )],
             section: "load_management".to_string(),
         });
@@ -381,6 +400,16 @@ pub fn build_guidance(metrics: &CoachMetrics, alerts: &[CoachAlert]) -> CoachGui
         );
     }
 
+    if has_alert_code(alerts, "high_fatigue_index") {
+        guidance.findings.push(
+            "Fatigue index is elevated — accumulated load is outpacing recovery.".to_string(),
+        );
+        guidance.suggestions.push(
+            "Prioritize recovery and consider reducing load until fatigue index improves."
+                .to_string(),
+        );
+    }
+
     // Distribution guidance (polarisation)
     if has_alert_code(alerts, "threshold_biased_polarisation") {
         guidance
@@ -521,6 +550,10 @@ mod tests {
                 hrv_trend_state: Some("suppressed".into()),
                 recovery_index: Some(0.73),
                 wellness_days_count: 7,
+                avg_mood: None,
+                avg_stress: None,
+                avg_fatigue: None,
+                readiness_score: None,
             }),
             ..Default::default()
         };
@@ -542,6 +575,10 @@ mod tests {
                 hrv_trend_state: Some("within_range".into()),
                 recovery_index: Some(1.02),
                 wellness_days_count: 7,
+                avg_mood: None,
+                avg_stress: None,
+                avg_fatigue: None,
+                readiness_score: None,
             }),
             ..Default::default()
         };
@@ -896,5 +933,47 @@ mod tests {
 
         let alerts = build_alerts(&metrics);
         assert!(!alerts.iter().any(|a| a.code == "low_consistency"));
+    }
+
+    #[test]
+    fn high_fatigue_index_creates_alert_and_guidance() {
+        let metrics = CoachMetrics {
+            load_management: Some(LoadManagementMetrics {
+                fatigue_index: Some(3.2),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let alerts = build_alerts(&metrics);
+        let guidance = build_guidance(&metrics, &alerts);
+
+        assert!(alerts.iter().any(|a| a.code == "high_fatigue_index"));
+        assert!(
+            guidance
+                .findings
+                .iter()
+                .any(|f| f.contains("Fatigue index"))
+        );
+        assert!(
+            guidance
+                .suggestions
+                .iter()
+                .any(|s| s.contains("recovery") || s.contains("fatigue"))
+        );
+    }
+
+    #[test]
+    fn fatigue_index_below_threshold_does_not_alert() {
+        let metrics = CoachMetrics {
+            load_management: Some(LoadManagementMetrics {
+                fatigue_index: Some(1.5),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let alerts = build_alerts(&metrics);
+        assert!(!alerts.iter().any(|a| a.code == "high_fatigue_index"));
     }
 }

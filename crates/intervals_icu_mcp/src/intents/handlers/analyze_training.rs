@@ -878,7 +878,13 @@ impl AnalyzeTrainingHandler {
                 .iter()
                 .map(|(_, load)| *load)
                 .collect::<Vec<_>>();
-            context.metrics.load_management = compute_load_management_metrics(&load_values);
+            let recovery_index = context
+                .metrics
+                .wellness
+                .as_ref()
+                .and_then(|w| w.recovery_index);
+            context.metrics.load_management =
+                compute_load_management_metrics(&load_values, recovery_index);
         }
 
         if let Some(api_acwr) = api_load_snapshot {
@@ -1401,6 +1407,8 @@ mod tests {
             }),
             monotony: Some(2.1),
             strain: Some(882.0),
+            fatigue_index: None,
+            stress_tolerance: None,
         }));
 
         assert!(markdown.contains("ACWR"));
