@@ -6,6 +6,7 @@
 //! - `Open`: upstream failing, requests rejected immediately
 //! - `HalfOpen`: probe state, one request allowed to test recovery
 
+use metrics::gauge;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
@@ -49,21 +50,30 @@ impl CircuitBreaker {
 
     pub fn state(&self) -> CircuitState {
         let state = self.state.lock().unwrap();
-        if *state == CircuitState::Open {
-            if let Some(last) = *self.last_failure_at.lock().unwrap() {
-                if last.elapsed() >= self.reset_timeout {
-                    drop(state);
-                    *self.state.lock().unwrap() = CircuitState::HalfOpen;
-                    return CircuitState::HalfOpen;
-                }
-            }
+        if *state == CircuitState::Open
+            && let Some(last) = *self.last_failure_at.lock().unwrap()
+            && last.elapsed() >= self.reset_timeout
+        {
+            drop(state);
+            *self.state.lock().unwrap() = CircuitState::HalfOpen;
+            return CircuitState::HalfOpen;
         }
         *state
+    }
+
+    fn record_state(&self, state: CircuitState) {
+        let value = match state {
+            CircuitState::Closed => 0.0,
+            CircuitState::Open => 1.0,
+            CircuitState::HalfOpen => 2.0,
+        };
+        gauge!("intervals_icu_client_circuit_state").set(value);
     }
 
     pub fn record_success(&self) {
         self.failure_count.store(0, Ordering::Relaxed);
         *self.state.lock().unwrap() = CircuitState::Closed;
+        self.record_state(CircuitState::Closed);
     }
 
     pub fn record_failure(&self) {
@@ -72,6 +82,7 @@ impl CircuitBreaker {
 
         if count >= self.failure_threshold {
             *self.state.lock().unwrap() = CircuitState::Open;
+            self.record_state(CircuitState::Open);
         }
     }
 

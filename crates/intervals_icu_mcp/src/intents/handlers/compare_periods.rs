@@ -10,7 +10,8 @@ use std::sync::Arc;
 use crate::domains::coach::AnalysisWindow;
 use crate::engines::analysis_fetch::{PeriodFetchRequest, fetch_period_data};
 use crate::engines::coach_metrics::{
-    TrendSnapshot, build_trend_snapshot, derive_trend_metrics, derive_volume_metrics,
+    compute_consistency_index, TrendSnapshot, build_trend_snapshot, derive_trend_metrics,
+    derive_volume_metrics,
 };
 use crate::intents::utils::{filter_activities_by_range, parse_date};
 
@@ -102,6 +103,15 @@ impl IntentHandler for ComparePeriodsHandler {
             a_stats.snapshot.activity_count,
         );
 
+        let a_consistency = compute_consistency_index(
+            a_stats.snapshot.activity_count,
+            a_stats.planned_count,
+        );
+        let b_consistency = compute_consistency_index(
+            b_stats.snapshot.activity_count,
+            b_stats.planned_count,
+        );
+
         let mut content = Vec::new();
         content.push(ContentBlock::markdown(format!(
             "## Comparison: {} vs {}",
@@ -187,7 +197,7 @@ impl IntentHandler for ComparePeriodsHandler {
             ));
         }
         content.push(ContentBlock::markdown(format!(
-            "### Trend Context\n\n- Activity delta: {}\n- Time delta: {}\n- Distance delta: {}\n- Elevation delta: {}\n- Current period weekly average: {:.1} hrs",
+            "### Trend Context\n\n- Activity delta: {}\n- Time delta: {}\n- Distance delta: {}\n- Elevation delta: {}\n- Current period weekly average: {:.1} hrs\n- {} consistency: {} ({:.0}% of {} planned sessions)\n- {} consistency: {} ({:.0}% of {} planned sessions)",
             trend
                 .activity_count_delta
                 .map(|delta| format!("{:+}", delta))
@@ -196,6 +206,14 @@ impl IntentHandler for ComparePeriodsHandler {
             format_pct(trend.distance_delta_pct),
             format_pct(trend.elevation_delta_pct),
             a_volume.weekly_avg_hours,
+            a_label,
+            a_consistency.state.as_deref().unwrap_or("unknown"),
+            a_consistency.ratio.unwrap_or(0.0) * 100.0,
+            a_stats.planned_count,
+            b_label,
+            b_consistency.state.as_deref().unwrap_or("unknown"),
+            b_consistency.ratio.unwrap_or(0.0) * 100.0,
+            b_stats.planned_count,
         )));
 
         // Analysis
@@ -247,6 +265,7 @@ struct PeriodStats {
     window_days: i64,
     activities: Vec<ActivitySummary>,
     activity_details: std::collections::HashMap<String, Value>,
+    planned_count: usize,
 }
 
 fn matches_workout_type(activity: &ActivitySummary, filter: &str) -> bool {
@@ -358,6 +377,20 @@ impl ComparePeriodsHandler {
 
         let period = filter_activities_by_range(&fetched.activities, &start_date, &end_date);
 
+        let planned_count = fetched
+            .calendar_events
+            .iter()
+            .filter(|event| {
+                if let Ok(date) =
+                    chrono::NaiveDate::parse_from_str(&event.start_date_local, "%Y-%m-%d")
+                {
+                    date >= start_date && date <= end_date
+                } else {
+                    false
+                }
+            })
+            .count();
+
         if period.is_empty() {
             return Ok(PeriodStats {
                 snapshot: TrendSnapshot {
@@ -369,6 +402,7 @@ impl ComparePeriodsHandler {
                 window_days: window.window_days(),
                 activities: Vec::new(),
                 activity_details: fetched.activity_details,
+                planned_count,
             });
         }
 
@@ -407,6 +441,7 @@ impl ComparePeriodsHandler {
             window_days: window.window_days(),
             activities: period.into_iter().cloned().collect(),
             activity_details,
+            planned_count,
         })
     }
 }
@@ -581,6 +616,7 @@ mod tests {
             window_days: 7,
             activities: vec![],
             activity_details: HashMap::new(),
+            planned_count: 0,
         };
 
         let (value, note) = requested_metric_value("volume", &stats);
@@ -600,6 +636,7 @@ mod tests {
             window_days: 7,
             activities: vec![],
             activity_details: HashMap::new(),
+            planned_count: 0,
         };
 
         let (value, note) = requested_metric_value("pace", &stats);
@@ -619,6 +656,7 @@ mod tests {
             window_days: 7,
             activities: vec![],
             activity_details: HashMap::new(),
+            planned_count: 0,
         };
 
         let (value, note) = requested_metric_value("pace", &stats);
@@ -645,6 +683,7 @@ mod tests {
                 "a1".to_string(),
                 json!({"average_heartrate": 150.0}),
             )]),
+            planned_count: 0,
         };
 
         let (value, note) = requested_metric_value("hr", &stats);
@@ -668,6 +707,7 @@ mod tests {
                 start_date_local: "2026-03-01".to_string(),
             }],
             activity_details: HashMap::new(),
+            planned_count: 0,
         };
 
         let (value, note) = requested_metric_value("hr", &stats);
@@ -694,6 +734,7 @@ mod tests {
                 "a1".to_string(),
                 json!({"icu_training_load": 75.0}),
             )]),
+            planned_count: 0,
         };
 
         let (value, note) = requested_metric_value("tss", &stats);
@@ -713,6 +754,7 @@ mod tests {
             window_days: 7,
             activities: vec![],
             activity_details: HashMap::new(),
+            planned_count: 0,
         };
 
         let (value, note) = requested_metric_value("unknown_metric", &stats);
@@ -818,6 +860,7 @@ mod tests {
             window_days: 28,
             activities: Vec::new(),
             activity_details: std::collections::HashMap::new(),
+            planned_count: 0,
         };
 
         assert_eq!(stats.snapshot.activity_count, 10);
@@ -838,6 +881,7 @@ mod tests {
             window_days: 7,
             activities: Vec::new(),
             activity_details: std::collections::HashMap::new(),
+            planned_count: 0,
         };
 
         assert_eq!(stats.snapshot.activity_count, 0);
