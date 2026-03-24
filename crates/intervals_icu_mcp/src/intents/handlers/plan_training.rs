@@ -150,7 +150,7 @@ impl IntentHandler for PlanTrainingHandler {
             .ok();
 
         // --- Historical volume (actual weeks, not hardcoded) ---
-        let historical_avg_hours = if adaptive {
+        let (historical_avg_hours, historical_weeks) = if adaptive {
             client
                 .get_recent_activities(Some(60), Some(56))
                 .await
@@ -173,10 +173,11 @@ impl IntentHandler for PlanTrainingHandler {
                     let newest = dated.iter().map(|(d, _)| *d).max()?;
                     let weeks = ((newest - oldest).num_days() as f64 / 7.0).max(1.0);
                     let total_seconds: f64 = dated.iter().map(|(_, s)| s).sum();
-                    Some(total_seconds / 3600.0 / weeks)
+                    Some((total_seconds / 3600.0 / weeks, weeks))
                 })
+                .unzip()
         } else {
-            None
+            (None, None)
         };
 
         // --- Parse extracted data ---
@@ -274,8 +275,8 @@ impl IntentHandler for PlanTrainingHandler {
                 }));
         }
 
-        // --- Race anchors (from past_events, excluded from conflicts) ---
-        let race_anchors: Vec<&intervals_icu_client::Event> = past_events
+        // --- Race anchors (from past_events and upcoming) ---
+        let mut race_anchors: Vec<(String, String, String)> = past_events
             .iter()
             .filter(|e| {
                 matches!(
@@ -289,7 +290,47 @@ impl IntentHandler for PlanTrainingHandler {
                     .map(|d| d >= start_date && d <= end_date)
                     .unwrap_or(false)
             })
+            .map(|e| {
+                (
+                    e.start_date_local.clone(),
+                    e.name.clone(),
+                    format!("{:?}", e.category),
+                )
+            })
             .collect();
+
+        // Also check upcoming workouts for race events
+        if let Some(ref up) = upcoming
+            && let Some(arr) = up.as_array()
+        {
+            for w in arr {
+                let is_race = w
+                    .get("category")
+                    .and_then(|c| c.as_str())
+                    .map(|c| c == "RaceA" || c == "RaceB")
+                    .unwrap_or(false);
+                if !is_race {
+                    continue;
+                }
+                if let Some(date_str) = w.get("start_date_local").and_then(|v| v.as_str())
+                    && let Ok(d) = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d")
+                    && d >= start_date
+                    && d <= end_date
+                {
+                    let name = w
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Race")
+                        .to_string();
+                    let category = w
+                        .get("category")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("RaceA")
+                        .to_string();
+                    race_anchors.push((date_str.to_string(), name, category));
+                }
+            }
+        }
 
         // --- Build output ---
         let athlete_name = profile.name.as_deref().unwrap_or("Athlete");
@@ -315,7 +356,12 @@ impl IntentHandler for PlanTrainingHandler {
             .map(|v| format!(" | **LTHR:** {:.0} bpm", v))
             .unwrap_or_default();
         let historical_line = historical_avg_hours
-            .map(|avg| format!("\n**Historical Avg (8wk):** {:.1} hrs/wk", avg))
+            .map(|avg| {
+                let wk_label = historical_weeks
+                    .map(|w| format!("{:.0}wk", w))
+                    .unwrap_or_else(|| "8wk".into());
+                format!("\n**Historical Avg ({}):** {:.1} hrs/wk", wk_label, avg)
+            })
             .unwrap_or_default();
         let tsb_line = fitness
             .as_ref()
@@ -370,12 +416,8 @@ impl IntentHandler for PlanTrainingHandler {
         // --- Race anchors section ---
         if !race_anchors.is_empty() {
             let mut anchor_rows = vec![vec!["Date".into(), "Event".into(), "Category".into()]];
-            for r in &race_anchors {
-                anchor_rows.push(vec![
-                    r.start_date_local.clone(),
-                    r.name.clone(),
-                    format!("{:?}", r.category),
-                ]);
+            for (date, name, category) in &race_anchors {
+                anchor_rows.push(vec![date.clone(), name.clone(), category.clone()]);
             }
             content.push(ContentBlock::markdown("### Race Anchors".to_string()));
             content.push(ContentBlock::table(
@@ -417,32 +459,6 @@ impl IntentHandler for PlanTrainingHandler {
             max_hours,
             sport_info.lthr,
         )));
-
-        // --- Task 7: Upcoming workouts ---
-        if let Some(ref workouts) = upcoming
-            && let Some(arr) = workouts.as_array()
-            && !arr.is_empty()
-        {
-            content.push(ContentBlock::markdown(
-                "### Already Planned Workouts\n\n\
-                         The following workouts are already scheduled in the planning period. \
-                         New events will be added alongside them."
-                    .to_string(),
-            ));
-            let mut upcoming_rows = vec![vec!["Date".into(), "Name".into()]];
-            for w in arr.iter().take(10) {
-                let date = w
-                    .get("start_date_local")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("-");
-                let name = w.get("name").and_then(|v| v.as_str()).unwrap_or("-");
-                upcoming_rows.push(vec![date.into(), name.into()]);
-            }
-            content.push(ContentBlock::table(
-                upcoming_rows[0].clone(),
-                upcoming_rows[1..].to_vec(),
-            ));
-        }
 
         // --- Task 5: Generate and create events ---
         let events_to_create = generate_events(&phases, start_date, focus, weeks);
