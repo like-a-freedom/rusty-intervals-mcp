@@ -1043,6 +1043,7 @@ mod tests {
         async fn get_activity_details(&self, _activity_id: &str) -> Result<Value, IntervalsError> {
             Ok(json!({
                 "moving_time": 3600,
+                "elapsed_time": 4200,
                 "distance": 10000.0,
                 "average_heartrate": 150.0,
                 "icu_training_load": 75.0

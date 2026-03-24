@@ -156,24 +156,32 @@ impl IntentHandler for PlanTrainingHandler {
                 .await
                 .ok()
                 .and_then(|activities| {
-                    let dated: Vec<(chrono::NaiveDate, f64)> = activities
+                    let dated: Vec<(chrono::NaiveDate, f64, f64)> = activities
                         .iter()
                         .filter_map(|a| {
                             let date =
                                 chrono::NaiveDate::parse_from_str(&a.start_date_local, "%Y-%m-%d")
                                     .ok()?;
-                            let secs = a.moving_time? as f64;
-                            Some((date, secs))
+                            let moving_secs = a.moving_time? as f64;
+                            let elapsed_secs = a.elapsed_time? as f64;
+                            Some((date, moving_secs, elapsed_secs))
                         })
                         .collect();
                     if dated.is_empty() {
                         return None;
                     }
-                    let oldest = dated.iter().map(|(d, _)| *d).min()?;
-                    let newest = dated.iter().map(|(d, _)| *d).max()?;
+                    let oldest = dated.iter().map(|(d, _, _)| *d).min()?;
+                    let newest = dated.iter().map(|(d, _, _)| *d).max()?;
                     let weeks = ((newest - oldest).num_days() as f64 / 7.0).max(1.0);
-                    let total_seconds: f64 = dated.iter().map(|(_, s)| s).sum();
-                    Some((total_seconds / 3600.0 / weeks, weeks))
+                    let total_moving_seconds: f64 = dated.iter().map(|(_, s, _)| s).sum();
+                    let total_elapsed_seconds: f64 = dated.iter().map(|(_, _, e)| e).sum();
+                    Some((
+                        (
+                            total_moving_seconds / 3600.0 / weeks,
+                            total_elapsed_seconds / 3600.0 / weeks,
+                        ),
+                        weeks,
+                    ))
                 })
                 .unzip()
         } else {
@@ -356,11 +364,14 @@ impl IntentHandler for PlanTrainingHandler {
             .map(|v| format!(" | **LTHR:** {:.0} bpm", v))
             .unwrap_or_default();
         let historical_line = historical_avg_hours
-            .map(|avg| {
+            .map(|(moving_avg, elapsed_avg)| {
                 let wk_label = historical_weeks
                     .map(|w| format!("{:.0}wk", w))
                     .unwrap_or_else(|| "8wk".into());
-                format!("\n**Historical Avg ({}):** {:.1} hrs/wk", wk_label, avg)
+                format!(
+                    "\n**Historical Avg ({}):** {:.1} hrs/wk (moving), {:.1} hrs/wk (elapsed)",
+                    wk_label, moving_avg, elapsed_avg
+                )
             })
             .unwrap_or_default();
         let tsb_line = fitness
@@ -526,14 +537,14 @@ impl IntentHandler for PlanTrainingHandler {
         }
 
         // Task 4: Volume overshoot warning
-        if let Some(avg) = historical_avg_hours
-            && max_hours > avg * 1.3
+        if let Some((moving_avg, _elapsed_avg)) = historical_avg_hours
+            && max_hours > moving_avg * 1.3
         {
             suggestions.push(format!(
                     "Requested {:.1} hrs/wk exceeds your 8-week average ({:.1} hrs/wk) by {:.0}% - consider a more gradual increase.",
                     max_hours,
-                    avg,
-                    ((max_hours - avg) / avg * 100.0)
+                    moving_avg,
+                    ((max_hours - moving_avg) / moving_avg * 100.0)
                 ));
         }
 
