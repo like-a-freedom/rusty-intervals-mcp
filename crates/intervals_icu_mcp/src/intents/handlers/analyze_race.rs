@@ -53,6 +53,10 @@ impl AnalyzeRaceHandler {
             "10k",
             "5k",
             "triathlon",
+            "trail",
+            "skyrace",
+            "vertical",
+            "km vert",
         ]
         .iter()
         .any(|token| name.contains(token))
@@ -362,8 +366,16 @@ impl IntentHandler for AnalyzeRaceHandler {
 
             if compare {
                 let planned_events = client
-                    .get_events(Some(180), Some(300))
+                    .get_upcoming_workouts(Some(365), Some(300), None)
                     .await
+                    .unwrap_or_default();
+                let planned_events: Vec<intervals_icu_client::Event> = planned_events
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| serde_json::from_value(v.clone()).ok())
+                            .collect()
+                    })
                     .unwrap_or_default();
                 let race_day = Self::parse_activity_date(&race.start_date_local);
                 let matching_plan = planned_events.iter().find(|event| {
