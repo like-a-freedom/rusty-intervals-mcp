@@ -258,6 +258,7 @@ mod tests {
                 id: "123".to_string(),
                 name: Some("Test".to_string()),
                 start_date_local: "2026-03-01".to_string(),
+                ..Default::default()
             }],
             ..Default::default()
         };
@@ -305,6 +306,7 @@ mod tests {
                 id: "123".to_string(),
                 name: Some("Test".to_string()),
                 start_date_local: "2026-03-01".to_string(),
+                ..Default::default()
             }],
             fitness: Some(serde_json::json!({"ctl": 50})),
             ..Default::default()
@@ -329,6 +331,7 @@ mod tests {
                 id: "123".to_string(),
                 name: Some("Test".to_string()),
                 start_date_local: "2026-03-01".to_string(),
+                ..Default::default()
             }],
             fitness: Some(serde_json::json!({"ctl": 50})),
             ..Default::default()
@@ -353,6 +356,7 @@ mod tests {
                 id: "123".to_string(),
                 name: Some("Test".to_string()),
                 start_date_local: "2026-03-01".to_string(),
+                ..Default::default()
             }],
             fitness: Some(serde_json::json!({"ctl": 50})),
             ..Default::default()
@@ -376,6 +380,7 @@ mod tests {
                 id: "123".to_string(),
                 name: Some("Test".to_string()),
                 start_date_local: "2026-03-01".to_string(),
+                ..Default::default()
             }],
             wellness: Some(serde_json::json!([{"date": "2026-03-01"}])),
             fitness: Some(serde_json::json!({"ctl": 50, "atl": 30})),

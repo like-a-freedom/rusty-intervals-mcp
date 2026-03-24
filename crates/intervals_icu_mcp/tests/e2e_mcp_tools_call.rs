@@ -38,11 +38,13 @@ impl IntervalsClient for E2eMockClient {
                 id: "act-1".to_string(),
                 name: Some("Morning Run".to_string()),
                 start_date_local: "2026-03-15".to_string(),
+                ..Default::default()
             },
             intervals_icu_client::ActivitySummary {
                 id: "act-2".to_string(),
                 name: Some("Interval Session".to_string()),
                 start_date_local: "2026-03-17".to_string(),
+                ..Default::default()
             },
         ])
     }

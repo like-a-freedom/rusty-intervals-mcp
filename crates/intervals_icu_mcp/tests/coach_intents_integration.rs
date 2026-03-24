@@ -84,6 +84,7 @@ impl MockCoachClient {
                 id: "activity-1".to_string(),
                 name: Some("Hard Session".to_string()),
                 start_date_local: "2026-03-04".to_string(),
+                ..Default::default()
             }],
             events: vec![],
             fitness: json!([{ "fitness": 50.0, "fatigue": 75.0, "form": tsb }]),
@@ -113,6 +114,7 @@ impl MockCoachClient {
                 id: "race-1".to_string(),
                 name: Some("Mountain 50K".to_string()),
                 start_date_local: "2026-03-01".to_string(),
+                ..Default::default()
             }],
             events: vec![Event {
                 id: Some("event-race-1".to_string()),
@@ -159,16 +161,19 @@ impl MockCoachClient {
                     id: "a1".to_string(),
                     name: Some("Run 1".to_string()),
                     start_date_local: "2026-03-01".to_string(),
+                    ..Default::default()
                 },
                 ActivitySummary {
                     id: "a2".to_string(),
                     name: Some("Run 2".to_string()),
                     start_date_local: "2026-03-03".to_string(),
+                    ..Default::default()
                 },
                 ActivitySummary {
                     id: "a3".to_string(),
                     name: Some("Run 3".to_string()),
                     start_date_local: "2026-02-25".to_string(),
+                    ..Default::default()
                 },
             ],
             events: vec![],
@@ -199,6 +204,7 @@ impl MockCoachClient {
                 id: "single-1".to_string(),
                 name: Some("Track Intervals".to_string()),
                 start_date_local: "2026-03-04".to_string(),
+                ..Default::default()
             }],
             events: vec![],
             fitness: json!({}),
@@ -231,6 +237,7 @@ impl MockCoachClient {
                 id: "race-degraded-1".to_string(),
                 name: Some("Spring Marathon".to_string()),
                 start_date_local: "2026-03-02".to_string(),
+                ..Default::default()
             }],
             events: vec![],
             fitness: json!({}),
@@ -259,6 +266,7 @@ impl MockCoachClient {
                 id: "activity-1".to_string(),
                 name: Some("Sharpening Session".to_string()),
                 start_date_local: "2026-03-04".to_string(),
+                ..Default::default()
             }],
             events: vec![],
             fitness: json!([{ "fitness": 62.0, "fatigue": 48.0, "form": 14.0 }]),
@@ -291,6 +299,7 @@ impl MockCoachClient {
                 id: "supportive-1".to_string(),
                 name: Some("Pre-race tune-up".to_string()),
                 start_date_local: "2026-03-04".to_string(),
+                ..Default::default()
             }],
             events: vec![],
             fitness: json!([{ "fitness": 64.0, "fatigue": 46.0, "form": 15.0 }]),
@@ -323,6 +332,7 @@ impl MockCoachClient {
                 id: "adaptive-drop-1".to_string(),
                 name: Some("Quality Session".to_string()),
                 start_date_local: "2026-03-04".to_string(),
+                ..Default::default()
             }],
             events: vec![],
             fitness: json!([{ "fitness": 62.0, "fatigue": 48.0, "form": 14.0 }]),
@@ -352,6 +362,7 @@ impl MockCoachClient {
                 id: "adaptive-norm-1".to_string(),
                 name: Some("Quality Session".to_string()),
                 start_date_local: "2026-03-04".to_string(),
+                ..Default::default()
             }],
             events: vec![],
             fitness: json!([{ "fitness": 62.0, "fatigue": 48.0, "form": 14.0 }]),
@@ -381,6 +392,7 @@ impl MockCoachClient {
                 id: format!("load-{day}"),
                 name: Some(format!("Run {day}")),
                 start_date_local: format!("2026-03-{day:02}"),
+                ..Default::default()
             })
             .collect();
 
@@ -415,6 +427,7 @@ impl MockCoachClient {
                 id: "stream-1".to_string(),
                 name: Some("Tempo Session".to_string()),
                 start_date_local: "2026-03-04".to_string(),
+                ..Default::default()
             }],
             events: vec![],
             fitness: json!([{ "fitness": 55.0, "fatigue": 47.0, "form": 8.0 }]),
@@ -582,6 +595,7 @@ impl MockCoachClient {
                 id: "i130349092".to_string(),
                 name: Some("Completed Endurance Run".to_string()),
                 start_date_local: format!("{planned_date}T07:00:00"),
+                ..Default::default()
             }],
             events: vec![],
             fitness: json!([{ "fitness": 57.0, "fatigue": 43.0, "form": 14.0 }]),
@@ -632,11 +646,13 @@ impl MockCoachClient {
                     id: "activity-regular-1".to_string(),
                     name: Some("Easy Run".to_string()),
                     start_date_local: "2026-03-06".to_string(),
+                    ..Default::default()
                 },
                 ActivitySummary {
                     id: "race-2".to_string(),
                     name: Some("City Marathon Race".to_string()),
                     start_date_local: "2026-03-01".to_string(),
+                    ..Default::default()
                 },
             ],
             events: vec![Event {
@@ -681,16 +697,19 @@ impl MockCoachClient {
                     id: "tempo-1".to_string(),
                     name: Some("Tempo Builder".to_string()),
                     start_date_local: "2026-03-01".to_string(),
+                    ..Default::default()
                 },
                 ActivitySummary {
                     id: "long-1".to_string(),
                     name: Some("Long Run".to_string()),
                     start_date_local: "2026-03-03".to_string(),
+                    ..Default::default()
                 },
                 ActivitySummary {
                     id: "tempo-2".to_string(),
                     name: Some("Tempo Cruise Intervals".to_string()),
                     start_date_local: "2026-02-25".to_string(),
+                    ..Default::default()
                 },
             ],
             events: vec![],
@@ -722,6 +741,7 @@ impl MockCoachClient {
                 id: "mode-1".to_string(),
                 name: Some("Progression Run".to_string()),
                 start_date_local: "2026-03-08".to_string(),
+                ..Default::default()
             }],
             events: vec![],
             fitness: json!([{ "fitness": 58.0, "fatigue": 46.0, "form": 12.0 }]),
@@ -760,6 +780,7 @@ impl MockCoachClient {
                 id: "mode-collapse-1".to_string(),
                 name: Some("Uphill intervals".to_string()),
                 start_date_local: "2026-02-18".to_string(),
+                ..Default::default()
             }],
             events: vec![],
             fitness: json!([{ "fitness": 54.0, "fatigue": 47.0, "form": 7.0 }]),
@@ -788,6 +809,7 @@ impl MockCoachClient {
                 id: "i126027814".to_string(),
                 name: Some("Uphill intervals".to_string()),
                 start_date_local: "2026-02-18".to_string(),
+                ..Default::default()
             }],
             events: vec![],
             fitness: json!([{ "fitness": 54.0, "fatigue": 47.0, "form": 7.0 }]),
@@ -845,6 +867,7 @@ impl MockCoachClient {
                 id: "power-fallback-1".to_string(),
                 name: Some("Hill reps".to_string()),
                 start_date_local: "2026-02-18".to_string(),
+                ..Default::default()
             }],
             events: vec![],
             fitness: json!([{ "fitness": 54.0, "fatigue": 47.0, "form": 7.0 }]),
@@ -898,6 +921,7 @@ impl MockCoachClient {
                 id: "streams-weird-1".to_string(),
                 name: Some("Tempo with sensors".to_string()),
                 start_date_local: "2026-02-18".to_string(),
+                ..Default::default()
             }],
             events: vec![],
             fitness: json!([{ "fitness": 54.0, "fatigue": 47.0, "form": 7.0 }]),
@@ -937,6 +961,7 @@ impl MockCoachClient {
                 id: "detail-rich-1".to_string(),
                 name: Some("Steady aerobic run".to_string()),
                 start_date_local: "2026-03-08".to_string(),
+                ..Default::default()
             }],
             events: vec![],
             fitness: json!([{ "fitness": 58.0, "fatigue": 46.0, "form": 12.0 }]),
@@ -971,6 +996,7 @@ impl MockCoachClient {
                 id: "power-alias-1".to_string(),
                 name: Some("Threshold reps".to_string()),
                 start_date_local: "2026-02-18".to_string(),
+                ..Default::default()
             }],
             events: vec![],
             fitness: json!([{ "fitness": 54.0, "fatigue": 47.0, "form": 7.0 }]),
@@ -1024,6 +1050,7 @@ impl MockCoachClient {
                 id: "speed-fallback-1".to_string(),
                 name: Some("Run intervals from pace stream".to_string()),
                 start_date_local: "2026-02-18".to_string(),
+                ..Default::default()
             }],
             events: vec![],
             fitness: json!([{ "fitness": 54.0, "fatigue": 47.0, "form": 7.0 }]),
@@ -1091,6 +1118,7 @@ impl MockCoachClient {
                 id: "many-intervals-1".to_string(),
                 name: Some("Big interval session".to_string()),
                 start_date_local: "2026-02-18".to_string(),
+                ..Default::default()
             }],
             events: vec![],
             fitness: json!([{ "fitness": 54.0, "fatigue": 47.0, "form": 7.0 }]),
@@ -1125,6 +1153,7 @@ impl MockCoachClient {
                 id: "priority-streams-1".to_string(),
                 name: Some("Uphill intervals".to_string()),
                 start_date_local: "2026-02-18".to_string(),
+                ..Default::default()
             }],
             events: vec![],
             fitness: json!([{ "fitness": 54.0, "fatigue": 47.0, "form": 7.0 }]),
@@ -1165,6 +1194,7 @@ impl MockCoachClient {
                 id: "payload-1".to_string(),
                 name: Some("Structured Long Run".to_string()),
                 start_date_local: "2026-03-08".to_string(),
+                ..Default::default()
             }],
             events: vec![],
             fitness: json!([{ "fitness": 60.0, "fatigue": 44.0, "form": 16.0 }]),
@@ -1208,6 +1238,7 @@ impl MockCoachClient {
                 id: "hist-full-1".to_string(),
                 name: Some("Recovery Run Z1".to_string()),
                 start_date_local: "2026-03-08".to_string(),
+                ..Default::default()
             }],
             events: vec![],
             fitness: json!([{ "fitness": 58.0, "fatigue": 46.0, "form": 12.0 }]),
@@ -1299,6 +1330,7 @@ impl MockCoachClient {
                 id: "live-efforts-1".to_string(),
                 name: Some("Recovery Run Z1".to_string()),
                 start_date_local: "2026-03-08".to_string(),
+                ..Default::default()
             }],
             events: vec![],
             fitness: json!([{ "fitness": 58.0, "fatigue": 46.0, "form": 12.0 }]),
@@ -1683,6 +1715,7 @@ async fn analyze_training_single_accepts_today_date_alias() {
             id: "today-training-1".to_string(),
             name: Some("Today's Endurance Run".to_string()),
             start_date_local: format!("{}T07:30:00", today.format("%Y-%m-%d")),
+            ..Default::default()
         }],
         events: vec![],
         fitness: json!([{ "fitness": 55.0, "fatigue": 47.0, "form": 8.0 }]),
@@ -1828,11 +1861,13 @@ async fn analyze_race_accepts_target_date_alias() {
                 id: "older-race-1".to_string(),
                 name: Some("Mountain 50K".to_string()),
                 start_date_local: "2026-02-21T08:23:41".to_string(),
+                ..Default::default()
             },
             ActivitySummary {
                 id: "today-run-1".to_string(),
                 name: Some("Today's Long Run".to_string()),
                 start_date_local: format!("{}T08:00:00", today.format("%Y-%m-%d")),
+                ..Default::default()
             },
         ],
         events: vec![],
@@ -1943,6 +1978,7 @@ async fn assess_recovery_with_fatigue_alert_tsb_minus_15() {
             id: "activity-1".to_string(),
             name: Some("Easy Run".to_string()),
             start_date_local: "2026-03-04".to_string(),
+            ..Default::default()
         }],
         events: vec![],
         fitness: json!([{ "fitness": 50.0, "fatigue": 65.0, "form": -15.0 }]),
@@ -1977,6 +2013,7 @@ async fn assess_recovery_with_high_training_load() {
             id: "activity-1".to_string(),
             name: Some("Hard Session".to_string()),
             start_date_local: "2026-03-04".to_string(),
+            ..Default::default()
         }],
         events: vec![],
         fitness: json!([{ "fitness": 80.0, "fatigue": 60.0, "form": 20.0 }]),

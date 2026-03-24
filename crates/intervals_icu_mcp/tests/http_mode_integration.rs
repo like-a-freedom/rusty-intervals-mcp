@@ -65,6 +65,7 @@ impl IntervalsClient for HttpTestMockClient {
             id: "act1".into(),
             name: Some("Morning Run".into()),
             start_date_local: "2026-03-04".into(),
+            ..Default::default()
         }])
     }
 

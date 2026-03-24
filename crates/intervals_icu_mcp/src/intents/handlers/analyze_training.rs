@@ -2366,6 +2366,7 @@ mod tests {
                     id: activity_id.to_string(),
                     name: Some(name.to_string()),
                     start_date_local: date.to_string(),
+                    ..Default::default()
                 }],
                 fitness_summary: None,
                 workout_detail: None,
@@ -2998,11 +2999,13 @@ mod tests {
                     id: "12345".to_string(),
                     name: Some("Morning Run".to_string()),
                     start_date_local: "2026-03-01".to_string(),
+                    ..Default::default()
                 },
                 ActivitySummary {
                     id: "12346".to_string(),
                     name: Some("Evening Ride".to_string()),
                     start_date_local: "2026-03-01".to_string(),
+                    ..Default::default()
                 },
             ],
             fitness_summary: None,
@@ -3039,11 +3042,13 @@ mod tests {
                     id: "12345".to_string(),
                     name: Some("Easy Run".to_string()),
                     start_date_local: "2026-03-01".to_string(),
+                    ..Default::default()
                 },
                 ActivitySummary {
                     id: "12346".to_string(),
                     name: Some("Tempo Run".to_string()),
                     start_date_local: "2026-03-01".to_string(),
+                    ..Default::default()
                 },
             ],
             fitness_summary: None,
@@ -3585,11 +3590,13 @@ mod tests {
                         id: "12345".to_string(),
                         name: Some("Run 1".to_string()),
                         start_date_local: "2026-03-01".to_string(),
+                        ..Default::default()
                     },
                     ActivitySummary {
                         id: "12346".to_string(),
                         name: Some("Run 2".to_string()),
                         start_date_local: "2026-03-03".to_string(),
+                        ..Default::default()
                     },
                 ])
                 .with_fitness_summary(json!({
@@ -3645,6 +3652,7 @@ mod tests {
                     id: "12345".to_string(),
                     name: Some("Run".to_string()),
                     start_date_local: "2026-03-01".to_string(),
+                    ..Default::default()
                 }])
                 .with_events(vec![Event {
                     id: Some("e1".to_string()),
@@ -3773,11 +3781,13 @@ mod tests {
                 id: "12345".to_string(),
                 name: Some("Easy Run".to_string()),
                 start_date_local: "2026-03-01".to_string(),
+                ..Default::default()
             },
             ActivitySummary {
                 id: "12346".to_string(),
                 name: Some("Interval Run".to_string()),
                 start_date_local: "2026-03-03".to_string(),
+                ..Default::default()
             },
         ]));
 
@@ -3805,6 +3815,7 @@ mod tests {
                     id: "12345".to_string(),
                     name: Some("Run".to_string()),
                     start_date_local: "2026-03-01".to_string(),
+                    ..Default::default()
                 }])
                 .with_activity_detail(
                     "12345",
@@ -3841,6 +3852,7 @@ mod tests {
                     id: "12345".to_string(),
                     name: Some("Run".to_string()),
                     start_date_local: "2026-03-01".to_string(),
+                    ..Default::default()
                 }])
                 .with_activity_detail(
                     "12345",
@@ -3874,6 +3886,7 @@ mod tests {
                     id: "12345".to_string(),
                     name: Some("Interval Session".to_string()),
                     start_date_local: "2026-03-01".to_string(),
+                    ..Default::default()
                 }]),
             );
 

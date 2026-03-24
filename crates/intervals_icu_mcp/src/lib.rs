@@ -400,6 +400,7 @@ mod tests {
                 id: "a1".to_string(),
                 name: Some("Run".to_string()),
                 start_date_local: "2026-03-04".to_string(),
+                ..Default::default()
             }])
         }
 

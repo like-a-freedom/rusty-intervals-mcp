@@ -2,6 +2,7 @@ use crate::intents::{
     ContentBlock, IdempotencyCache, IntentError, IntentHandler, IntentOutput, OutputMetadata,
 };
 use async_trait::async_trait;
+use chrono::Datelike;
 use intervals_icu_client::IntervalsClient;
 use serde_json::{Value, json};
 /// Plan Training Intent Handler
@@ -101,7 +102,6 @@ impl IntentHandler for PlanTrainingHandler {
             .and_then(Value::as_bool)
             .unwrap_or(true);
 
-        // Parse dates using utils
         let start_date = parse_date(period_start, "period_start")?;
         let end_date = parse_date(period_end, "period_end")?;
 
@@ -113,22 +113,142 @@ impl IntentHandler for PlanTrainingHandler {
 
         let weeks: u32 = ((end_date - start_date).num_days() / 7 + 1) as u32;
 
-        // Get athlete profile for adaptive planning
+        // --- Required fetches ---
         let profile = client
             .get_athlete_profile()
             .await
             .map_err(|e| IntentError::api(format!("Failed to fetch profile: {}", e)))?;
 
-        // Get sport settings for athlete preferences
         let sport_settings = client.get_sport_settings().await.ok();
 
-        // Get fitness summary for adaptive planning
         let fitness = if adaptive {
             client.get_fitness_summary().await.ok()
         } else {
             None
         };
 
+        // --- Task 2: Wellness ---
+        let wellness = if adaptive {
+            client.get_wellness(Some(14)).await.ok()
+        } else {
+            None
+        };
+
+        // --- Task 3: Existing events (conflict detection + race anchors) ---
+        let horizon_days = (end_date - start_date).num_days() as i32 + 7;
+        let existing_events = client
+            .get_events(Some(horizon_days), None)
+            .await
+            .ok()
+            .unwrap_or_default();
+
+        // --- Task 7: Upcoming workouts (adaptive) ---
+        let upcoming = if adaptive {
+            client
+                .get_upcoming_workouts(Some(weeks * 7), Some(100), None)
+                .await
+                .ok()
+        } else {
+            None
+        };
+
+        // --- Task 4: Historical volume ---
+        let historical_avg_hours = if adaptive {
+            client
+                .get_recent_activities(Some(60), Some(56))
+                .await
+                .ok()
+                .and_then(|activities| {
+                    let total_seconds: f64 = activities
+                        .iter()
+                        .filter_map(|a| a.moving_time)
+                        .map(|t| t as f64)
+                        .sum();
+                    if total_seconds > 0.0 {
+                        Some(total_seconds / 3600.0 / 8.0)
+                    } else {
+                        None
+                    }
+                })
+        } else {
+            None
+        };
+
+        // --- Parse extracted data ---
+        let sport_info = sport_settings
+            .as_ref()
+            .map(ExtractedSportSettings::from_value)
+            .unwrap_or_default();
+
+        let wellness_snapshot = wellness
+            .as_ref()
+            .map(WellnessSnapshot::from_value)
+            .unwrap_or_default();
+
+        // --- Task 3: Conflict detection ---
+        let conflicts: Vec<&intervals_icu_client::Event> = existing_events
+            .iter()
+            .filter(|e| {
+                chrono::NaiveDate::parse_from_str(&e.start_date_local, "%Y-%m-%d")
+                    .map(|d| d >= start_date && d <= end_date)
+                    .unwrap_or(false)
+            })
+            .collect();
+
+        if !conflicts.is_empty() {
+            let mut conflict_content = Vec::new();
+            conflict_content.push(ContentBlock::markdown(
+                "## Conflict Detected\n\nExisting events overlap with the planned period. \
+                 Remove or reschedule them before creating a new plan."
+                    .to_string(),
+            ));
+
+            let mut conflict_rows = vec![vec!["Date".into(), "Name".into(), "Category".into()]];
+            for c in &conflicts {
+                conflict_rows.push(vec![
+                    c.start_date_local.clone(),
+                    c.name.clone(),
+                    format!("{:?}", c.category),
+                ]);
+            }
+            conflict_content.push(ContentBlock::table(
+                conflict_rows[0].clone(),
+                conflict_rows[1..].to_vec(),
+            ));
+
+            return Ok(IntentOutput::new(conflict_content)
+                .with_suggestions(vec![
+                    "Existing events found in planning period.".into(),
+                    "Remove conflicting events or adjust period_start/period_end.".into(),
+                ])
+                .with_next_actions(vec![
+                    "To delete conflicts: modify_training with action: delete".into(),
+                    "To reschedule: modify_training with action: modify".into(),
+                ])
+                .with_metadata(OutputMetadata {
+                    events_created: Some(0),
+                    ..Default::default()
+                }));
+        }
+
+        // --- Task 3: Race anchors ---
+        let race_anchors: Vec<&intervals_icu_client::Event> = existing_events
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e.category,
+                    intervals_icu_client::EventCategory::RaceA
+                        | intervals_icu_client::EventCategory::RaceB
+                )
+            })
+            .filter(|e| {
+                chrono::NaiveDate::parse_from_str(&e.start_date_local, "%Y-%m-%d")
+                    .map(|d| d >= start_date && d <= end_date)
+                    .unwrap_or(false)
+            })
+            .collect();
+
+        // --- Build output ---
         let athlete_name = profile.name.as_deref().unwrap_or("Athlete");
         let mut content = Vec::new();
         let race_info = input
@@ -137,25 +257,66 @@ impl IntentHandler for PlanTrainingHandler {
             .map(|r| format!(" - {}", r))
             .unwrap_or_default();
 
-        // Build profile info string if available
-        let profile_info = if let Some(settings) = sport_settings.as_ref() {
-            settings
-                .get("sports")
-                .and_then(|s| s.as_array())
-                .and_then(|sports| sports.first())
-                .and_then(|first_sport| first_sport.get("name"))
-                .and_then(|n| n.as_str())
-                .map(|sport_name| format!("Sport: {}", sport_name))
-        } else {
-            None
-        };
+        // --- Task 6: Enhanced header ---
+        let sport_line = sport_info
+            .sport_name
+            .as_ref()
+            .map(|n| format!("\n**Sport:** {}", n))
+            .unwrap_or_default();
+        let ftp_line = sport_info
+            .ftp
+            .map(|v| format!("\n**FTP:** {:.0}W", v))
+            .unwrap_or_default();
+        let lthr_line = sport_info
+            .lthr
+            .map(|v| format!(" | **LTHR:** {:.0} bpm", v))
+            .unwrap_or_default();
+        let historical_line = historical_avg_hours
+            .map(|avg| format!("\n**Historical Avg (8wk):** {:.1} hrs/wk", avg))
+            .unwrap_or_default();
+        let tsb_line = fitness
+            .as_ref()
+            .and_then(|f| f.get("tsb").and_then(|v| v.as_f64()))
+            .map(|tsb| {
+                let state = if tsb > 10.0 {
+                    "Fresh"
+                } else if tsb < -10.0 {
+                    "Fatigued"
+                } else {
+                    "Neutral"
+                };
+                format!("\n**Current TSB:** {:.0} ({})", tsb, state)
+            })
+            .unwrap_or_default();
+        let readiness_line = wellness_snapshot
+            .readiness
+            .map(|r| {
+                let state = if r >= 7.0 {
+                    "Good"
+                } else if r >= 5.0 {
+                    "Fair"
+                } else {
+                    "Low"
+                };
+                format!("\n**Readiness:** {:.1} ({})", r, state)
+            })
+            .unwrap_or_default();
 
         content.push(ContentBlock::markdown(format!(
-            "## Training Plan: {}{}\n\n**Athlete:** {}{}\n**Period:** {} to {} ({} weeks)\n**Focus:** {}\n**Max Hours/Week:** {:.1}",
-            focus.as_str().replace("_", " ").to_uppercase(),
+            "## Training Plan: {}{}\n\n\
+             **Athlete:** {}{}{}{}{}{}{}\n\
+             **Period:** {} to {} ({} weeks)\n\
+             **Focus:** {}\n\
+             **Max Hours/Week:** {:.1}",
+            focus.as_str().replace('_', " ").to_uppercase(),
             race_info,
             athlete_name,
-            profile_info.map(|p| format!("\n**{}**", p)).unwrap_or_default(),
+            sport_line,
+            ftp_line,
+            lthr_line,
+            historical_line,
+            tsb_line,
+            readiness_line,
             period_start,
             period_end,
             weeks,
@@ -163,7 +324,24 @@ impl IntentHandler for PlanTrainingHandler {
             max_hours
         )));
 
-        // Build period structure based on weeks
+        // --- Race anchors section ---
+        if !race_anchors.is_empty() {
+            let mut anchor_rows = vec![vec!["Date".into(), "Event".into(), "Category".into()]];
+            for r in &race_anchors {
+                anchor_rows.push(vec![
+                    r.start_date_local.clone(),
+                    r.name.clone(),
+                    format!("{:?}", r.category),
+                ]);
+            }
+            content.push(ContentBlock::markdown("### Race Anchors".to_string()));
+            content.push(ContentBlock::table(
+                anchor_rows[0].clone(),
+                anchor_rows[1..].to_vec(),
+            ));
+        }
+
+        // --- Periodization ---
         let (phases, structure) = self.build_periodization(weeks, focus, max_hours);
 
         let mut phase_rows = vec![vec![
@@ -190,17 +368,57 @@ impl IntentHandler for PlanTrainingHandler {
             structure
         )));
 
-        // Sample week
-        content.push(ContentBlock::markdown(
-            self.build_sample_week(focus, max_hours),
-        ));
+        // --- Sample week with HR zones ---
+        content.push(ContentBlock::markdown(self.build_sample_week(
+            focus,
+            max_hours,
+            sport_info.lthr,
+        )));
 
-        // Calculate events that would be created
-        let events_count = weeks * 4; // Average 4 workouts per week
+        // --- Task 7: Upcoming workouts ---
+        if let Some(ref workouts) = upcoming
+            && let Some(arr) = workouts.as_array()
+            && !arr.is_empty()
+        {
+            content.push(ContentBlock::markdown(
+                "### Already Planned Workouts\n\n\
+                         The following workouts are already scheduled in the planning period. \
+                         New events will be added alongside them."
+                    .to_string(),
+            ));
+            let mut upcoming_rows = vec![vec!["Date".into(), "Name".into()]];
+            for w in arr.iter().take(10) {
+                let date = w
+                    .get("start_date_local")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("-");
+                let name = w.get("name").and_then(|v| v.as_str()).unwrap_or("-");
+                upcoming_rows.push(vec![date.into(), name.into()]);
+            }
+            content.push(ContentBlock::table(
+                upcoming_rows[0].clone(),
+                upcoming_rows[1..].to_vec(),
+            ));
+        }
 
+        // --- Task 5: Generate and create events ---
+        let events_to_create = generate_events(&phases, start_date, focus, weeks);
+        let events_count = events_to_create.len() as u32;
+
+        let created_events = client
+            .bulk_create_events(events_to_create)
+            .await
+            .map_err(|e| IntentError::api(format!("Failed to create events: {}", e)))?;
+
+        content.push(ContentBlock::markdown(format!(
+            "### Created Events: {} workouts\n\nEvents successfully created in Intervals.icu.",
+            created_events.len()
+        )));
+
+        // --- Suggestions ---
         let mut suggestions = vec![
             format!(
-                "Weeks 1-{}: {} → focus on aerobic base, 85-95% Z1-Z2",
+                "Weeks 1-{}: {} - focus on aerobic base, 85-95% Z1-Z2",
                 weeks.min(4),
                 phases[0].name
             ),
@@ -215,6 +433,49 @@ impl IntentHandler for PlanTrainingHandler {
             } else if tsb < -10.0 {
                 suggestions.push("TSB negative - consider starting with recovery week.".into());
             }
+        }
+
+        // Task 2: Wellness suggestions
+        if let Some(readiness) = wellness_snapshot.readiness {
+            if readiness < 5.0 {
+                suggestions.push(format!(
+                    "Low readiness ({:.1}) - consider starting with a recovery week.",
+                    readiness
+                ));
+            } else if readiness >= 7.0 {
+                suggestions.push(format!(
+                    "Readiness {:.1} (Good) - safe to progress load.",
+                    readiness
+                ));
+            }
+        }
+        if let Some(hrv) = wellness_snapshot.hrv
+            && hrv < 40.0
+        {
+            suggestions.push(format!(
+                "HRV very low ({:.0} ms) - monitor recovery before increasing intensity.",
+                hrv
+            ));
+        }
+        if let Some(sleep) = wellness_snapshot.sleep_avg
+            && sleep < 6.5
+        {
+            suggestions.push(format!(
+                "Sleep average {:.1}h below threshold - prioritize rest.",
+                sleep
+            ));
+        }
+
+        // Task 4: Volume overshoot warning
+        if let Some(avg) = historical_avg_hours
+            && max_hours > avg * 1.3
+        {
+            suggestions.push(format!(
+                    "Requested {:.1} hrs/wk exceeds your 8-week average ({:.1} hrs/wk) by {:.0}% - consider a more gradual increase.",
+                    max_hours,
+                    avg,
+                    ((max_hours - avg) / avg * 100.0)
+                ));
         }
 
         let next_actions = vec![
@@ -242,6 +503,180 @@ struct Phase {
     weeks: String,
     volume: String,
     focus: String,
+}
+
+// --- Task 1: Sport settings extraction ---
+
+#[derive(Default)]
+struct ExtractedSportSettings {
+    sport_name: Option<String>,
+    ftp: Option<f64>,
+    lthr: Option<f64>,
+}
+
+impl ExtractedSportSettings {
+    fn from_value(value: &Value) -> Self {
+        let sport_name = value
+            .get("sports")
+            .and_then(|s| s.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|s| s.get("name"))
+            .and_then(|n| n.as_str())
+            .map(String::from);
+
+        let ftp = value
+            .get("sports")
+            .and_then(|s| s.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|s| s.get("ftp"))
+            .and_then(|v| v.as_f64());
+
+        let lthr = value
+            .get("sports")
+            .and_then(|s| s.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|s| s.get("lthr"))
+            .and_then(|v| v.as_f64());
+
+        Self {
+            sport_name,
+            ftp,
+            lthr,
+        }
+    }
+}
+
+// --- Task 2: Wellness snapshot ---
+
+#[derive(Default)]
+struct WellnessSnapshot {
+    readiness: Option<f64>,
+    hrv: Option<f64>,
+    sleep_avg: Option<f64>,
+}
+
+impl WellnessSnapshot {
+    fn from_value(value: &Value) -> Self {
+        let entries = value.as_array().cloned().unwrap_or_default();
+        if entries.is_empty() {
+            return Self::default();
+        }
+
+        let readiness_vals: Vec<f64> = entries
+            .iter()
+            .filter_map(|e| e.get("readiness").and_then(|v| v.as_f64()))
+            .collect();
+        let readiness = if readiness_vals.is_empty() {
+            None
+        } else {
+            Some(readiness_vals.iter().sum::<f64>() / readiness_vals.len() as f64)
+        };
+
+        let hrv_vals: Vec<f64> = entries
+            .iter()
+            .filter_map(|e| e.get("hrv").and_then(|v| v.as_f64()))
+            .collect();
+        let hrv = if hrv_vals.is_empty() {
+            None
+        } else {
+            Some(hrv_vals.iter().sum::<f64>() / hrv_vals.len() as f64)
+        };
+
+        let sleep_vals: Vec<f64> = entries
+            .iter()
+            .filter_map(|e| e.get("sleep").and_then(|v| v.as_f64()))
+            .collect();
+        let sleep_avg = if sleep_vals.is_empty() {
+            None
+        } else {
+            Some(sleep_vals.iter().sum::<f64>() / sleep_vals.len() as f64)
+        };
+
+        Self {
+            readiness,
+            hrv,
+            sleep_avg,
+        }
+    }
+}
+
+// --- Task 5: Event generation ---
+
+fn generate_events(
+    _phases: &[Phase],
+    start_date: chrono::NaiveDate,
+    focus: TrainingFocus,
+    weeks: u32,
+) -> Vec<intervals_icu_client::Event> {
+    let mut events = Vec::new();
+    let workout_names: Vec<(&str, &str)> = match focus {
+        TrainingFocus::AerobicBase => vec![
+            ("Easy Run Z1-Z2", "Easy aerobic run, conversational pace"),
+            ("Endurance Run Z2", "Steady aerobic effort"),
+            ("Recovery Run Z1", "Very easy, active recovery"),
+            ("Long Run Z2", "Progressive long aerobic run"),
+        ],
+        TrainingFocus::Intensity => vec![
+            ("Threshold Session", "Zone 3-4 intervals"),
+            ("VO2max Intervals", "Short, hard intervals Z4-Z5"),
+            ("Easy Aerobic", "Recovery between sessions"),
+            (
+                "Long Aerobic + Strides",
+                "Aerobic with neuromuscular finish",
+            ),
+        ],
+        TrainingFocus::Specific => vec![
+            ("Race-Pace Intervals", "Sustained race-specific effort"),
+            ("Specific Workout", "Terrain and fueling rehearsal"),
+            ("Easy Maintenance", "Aerobic maintenance, low load"),
+            ("Long Race-Specific", "Full dress rehearsal"),
+        ],
+        TrainingFocus::Taper => vec![
+            ("Sharpening", "Short pickups, maintain sharpness"),
+            ("Race-Pace Activation", "Brief race-pace effort"),
+            ("Easy Aerobic", "Very easy, preserve freshness"),
+            ("Pre-Race Opener", "Short leg opener"),
+        ],
+        TrainingFocus::Recovery => vec![
+            ("Easy Aerobic", "Gentle aerobic, no intensity"),
+            ("Mobility + Strength", "Maintenance strength work"),
+            ("Easy Run + Strides", "Light jog with optional strides"),
+            ("Cross-Training", "Low-impact activity"),
+        ],
+    };
+
+    let days_of_week = [
+        chrono::Weekday::Tue,
+        chrono::Weekday::Thu,
+        chrono::Weekday::Sat,
+        chrono::Weekday::Sun,
+    ];
+
+    for week in 0..weeks {
+        // Skip recovery weeks (every 4th week)
+        if week > 0 && (week + 1) % 4 == 0 {
+            continue;
+        }
+
+        let week_start = start_date + chrono::Duration::weeks(week as i64);
+        for (i, day_offset) in days_of_week.iter().enumerate() {
+            let mut current = week_start;
+            while current.weekday() != *day_offset {
+                current += chrono::Duration::days(1);
+            }
+            let (name, description) = &workout_names[i % workout_names.len()];
+            events.push(intervals_icu_client::Event {
+                id: None,
+                start_date_local: current.format("%Y-%m-%d").to_string(),
+                name: name.to_string(),
+                category: intervals_icu_client::EventCategory::Workout,
+                description: Some(description.to_string()),
+                r#type: None,
+            });
+        }
+    }
+
+    events
 }
 
 impl PlanTrainingHandler {
@@ -343,17 +778,23 @@ impl PlanTrainingHandler {
         (phases, structure)
     }
 
-    fn build_sample_week(&self, focus: TrainingFocus, max_hours: f64) -> String {
+    fn build_sample_week(&self, focus: TrainingFocus, max_hours: f64, lthr: Option<f64>) -> String {
+        let hr_hint = lthr
+            .map(|l| format!(" (HR < {:.0} bpm)", l * 0.85))
+            .unwrap_or_default();
         match focus {
             TrainingFocus::AerobicBase => {
                 format!(
-                    "### Sample Week\n\n- Monday: REST\n- Tuesday: Easy Run {:.0}:{:02.0} (Z1-Z2)\n- Wednesday: Recovery + Strength\n- Thursday: Easy Run {:.0}:{:02.0} (Z1-Z2)\n- Friday: REST or cross-training\n- Saturday: Long Run {:.0}:{:02.0} (Z1-Z2)\n- Sunday: Active Recovery",
+                    "### Sample Week\n\n- Monday: REST\n- Tuesday: Easy Run {:.0}:{:02.0} (Z1-Z2){}\n- Wednesday: Recovery + Strength\n- Thursday: Easy Run {:.0}:{:02.0} (Z1-Z2){}\n- Friday: REST or cross-training\n- Saturday: Long Run {:.0}:{:02.0} (Z1-Z2){}\n- Sunday: Active Recovery",
                     max_hours / 5.0 * 60.0,
                     (max_hours / 5.0 * 60.0 % 60.0),
+                    hr_hint,
                     max_hours / 5.0 * 60.0,
                     (max_hours / 5.0 * 60.0 % 60.0),
+                    hr_hint,
                     max_hours / 3.0 * 60.0,
-                    (max_hours / 3.0 * 60.0 % 60.0)
+                    (max_hours / 3.0 * 60.0 % 60.0),
+                    hr_hint
                 )
             }
             TrainingFocus::Intensity => {
@@ -550,7 +991,7 @@ mod tests {
     #[test]
     fn test_build_sample_week_aerobic_base() {
         let handler = PlanTrainingHandler::new();
-        let week = handler.build_sample_week(TrainingFocus::AerobicBase, 10.0);
+        let week = handler.build_sample_week(TrainingFocus::AerobicBase, 10.0, None);
 
         assert!(week.contains("Sample Week"));
         assert!(week.contains("Monday: REST"));
@@ -564,10 +1005,10 @@ mod tests {
     fn test_build_sample_week_non_aerobic() {
         let handler = PlanTrainingHandler::new();
 
-        let intensity = handler.build_sample_week(TrainingFocus::Intensity, 10.0);
-        let specific = handler.build_sample_week(TrainingFocus::Specific, 10.0);
-        let taper = handler.build_sample_week(TrainingFocus::Taper, 10.0);
-        let recovery = handler.build_sample_week(TrainingFocus::Recovery, 10.0);
+        let intensity = handler.build_sample_week(TrainingFocus::Intensity, 10.0, None);
+        let specific = handler.build_sample_week(TrainingFocus::Specific, 10.0, None);
+        let taper = handler.build_sample_week(TrainingFocus::Taper, 10.0, None);
+        let recovery = handler.build_sample_week(TrainingFocus::Recovery, 10.0, None);
 
         assert!(intensity.contains("Threshold / VO2 session"));
         assert!(specific.contains("Race-pace intervals"));
@@ -578,7 +1019,7 @@ mod tests {
     #[test]
     fn test_build_sample_week_time_formatting() {
         let handler = PlanTrainingHandler::new();
-        let week = handler.build_sample_week(TrainingFocus::AerobicBase, 10.0);
+        let week = handler.build_sample_week(TrainingFocus::AerobicBase, 10.0, None);
 
         // Should contain formatted times (HH:MM format)
         // For 10 hrs: Easy runs = 2hrs each (120 min = 2:00), Long run = 3:20 (200 min)
@@ -721,5 +1162,152 @@ mod tests {
         let end = NaiveDate::from_ymd_opt(2026, 3, 10).unwrap();
         let weeks: u32 = ((end - start).num_days() / 7 + 1) as u32;
         assert_eq!(weeks, 2);
+    }
+
+    // ========================================================================
+    // ExtractedSportSettings Tests
+    // ========================================================================
+
+    #[test]
+    fn test_extract_sport_settings_full() {
+        let value = json!({
+            "sports": [{"name": "Running", "ftp": 280.0, "lthr": 172.0}]
+        });
+        let settings = ExtractedSportSettings::from_value(&value);
+        assert_eq!(settings.sport_name.as_deref(), Some("Running"));
+        assert_eq!(settings.ftp, Some(280.0));
+        assert_eq!(settings.lthr, Some(172.0));
+    }
+
+    #[test]
+    fn test_extract_sport_settings_empty() {
+        let value = json!({});
+        let settings = ExtractedSportSettings::from_value(&value);
+        assert!(settings.sport_name.is_none());
+        assert!(settings.ftp.is_none());
+        assert!(settings.lthr.is_none());
+    }
+
+    #[test]
+    fn test_extract_sport_settings_no_ftp() {
+        let value = json!({
+            "sports": [{"name": "Cycling"}]
+        });
+        let settings = ExtractedSportSettings::from_value(&value);
+        assert_eq!(settings.sport_name.as_deref(), Some("Cycling"));
+        assert!(settings.ftp.is_none());
+        assert!(settings.lthr.is_none());
+    }
+
+    // ========================================================================
+    // WellnessSnapshot Tests
+    // ========================================================================
+
+    #[test]
+    fn test_wellness_snapshot_from_value() {
+        let value = json!([
+            {"readiness": 7.0, "hrv": 65.0, "sleep": 7.5},
+            {"readiness": 6.5, "hrv": 55.0, "sleep": 7.0}
+        ]);
+        let snap = WellnessSnapshot::from_value(&value);
+        assert!((snap.readiness.unwrap() - 6.75).abs() < 0.01);
+        assert!((snap.hrv.unwrap() - 60.0).abs() < 0.01);
+        assert!((snap.sleep_avg.unwrap() - 7.25).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_wellness_snapshot_empty() {
+        let value = json!([]);
+        let snap = WellnessSnapshot::from_value(&value);
+        assert!(snap.readiness.is_none());
+        assert!(snap.hrv.is_none());
+        assert!(snap.sleep_avg.is_none());
+    }
+
+    #[test]
+    fn test_wellness_snapshot_partial() {
+        let value = json!([
+            {"readiness": 5.0},
+            {"readiness": 7.0}
+        ]);
+        let snap = WellnessSnapshot::from_value(&value);
+        assert!((snap.readiness.unwrap() - 6.0).abs() < 0.01);
+        assert!(snap.hrv.is_none());
+    }
+
+    // ========================================================================
+    // Conflict Detection Tests
+    // ========================================================================
+
+    #[test]
+    fn test_conflict_detection_logic() {
+        let start = chrono::NaiveDate::parse_from_str("2026-03-01", "%Y-%m-%d").unwrap();
+        let end = chrono::NaiveDate::parse_from_str("2026-03-31", "%Y-%m-%d").unwrap();
+        let event_date = chrono::NaiveDate::parse_from_str("2026-03-15", "%Y-%m-%d").unwrap();
+        assert!(event_date >= start && event_date <= end);
+
+        let outside = chrono::NaiveDate::parse_from_str("2026-04-15", "%Y-%m-%d").unwrap();
+        assert!(outside > end);
+    }
+
+    // ========================================================================
+    // Event Generation Tests
+    // ========================================================================
+
+    #[test]
+    fn test_generate_events_aerobic_base() {
+        let handler = PlanTrainingHandler::new();
+        let (phases, _) = handler.build_periodization(4, TrainingFocus::AerobicBase, 10.0);
+        let start = chrono::NaiveDate::from_ymd_opt(2026, 3, 2).unwrap(); // Monday
+        let events = generate_events(&phases, start, TrainingFocus::AerobicBase, 4);
+        // 4 weeks, week 4 is recovery (skip) -> 3 weeks * 4 events = 12
+        assert_eq!(events.len(), 12);
+        assert!(
+            events
+                .iter()
+                .all(|e| e.category == intervals_icu_client::EventCategory::Workout)
+        );
+        assert!(events.iter().all(|e| e.id.is_none()));
+    }
+
+    #[test]
+    fn test_generate_events_recovery_week_skip() {
+        let handler = PlanTrainingHandler::new();
+        let (phases, _) = handler.build_periodization(8, TrainingFocus::AerobicBase, 10.0);
+        let start = chrono::NaiveDate::from_ymd_opt(2026, 3, 2).unwrap();
+        let events = generate_events(&phases, start, TrainingFocus::AerobicBase, 8);
+        // Weeks 1-8, recovery at week 4 and 8 -> 6 active weeks * 4 = 24
+        assert_eq!(events.len(), 24);
+    }
+
+    #[test]
+    fn test_generate_events_dates_are_valid() {
+        let handler = PlanTrainingHandler::new();
+        let (phases, _) = handler.build_periodization(4, TrainingFocus::AerobicBase, 10.0);
+        let start = chrono::NaiveDate::from_ymd_opt(2026, 3, 2).unwrap();
+        let events = generate_events(&phases, start, TrainingFocus::AerobicBase, 4);
+        for event in &events {
+            assert!(
+                chrono::NaiveDate::parse_from_str(&event.start_date_local, "%Y-%m-%d").is_ok(),
+                "Invalid date: {}",
+                event.start_date_local
+            );
+            assert!(!event.name.is_empty());
+            assert!(event.description.is_some());
+        }
+    }
+
+    #[test]
+    fn test_generate_events_intensity() {
+        let handler = PlanTrainingHandler::new();
+        let (phases, _) = handler.build_periodization(6, TrainingFocus::Intensity, 10.0);
+        let start = chrono::NaiveDate::from_ymd_opt(2026, 3, 2).unwrap();
+        let events = generate_events(&phases, start, TrainingFocus::Intensity, 6);
+        // 6 weeks, week 4 is recovery -> 5 * 4 = 20
+        assert_eq!(events.len(), 20);
+        assert!(events.iter().all(|e| e.name.contains("Session")
+            || e.name.contains("Intervals")
+            || e.name.contains("Aerobic")
+            || e.name.contains("Strides")));
     }
 }
