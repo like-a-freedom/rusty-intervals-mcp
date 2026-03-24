@@ -587,6 +587,35 @@ mod tests {
     }
 
     #[test]
+    fn test_looks_like_race_keywords() {
+        use super::AnalyzeRaceHandler;
+        // Standard keywords
+        assert!(AnalyzeRaceHandler::looks_like_race(Some("City Marathon")));
+        assert!(AnalyzeRaceHandler::looks_like_race(Some("Half Marathon")));
+        assert!(AnalyzeRaceHandler::looks_like_race(Some("5K Race")));
+        assert!(AnalyzeRaceHandler::looks_like_race(Some("10K")));
+        assert!(AnalyzeRaceHandler::looks_like_race(Some("Ultra 100K")));
+        assert!(AnalyzeRaceHandler::looks_like_race(Some(
+            "Sprint Triathlon"
+        )));
+        // Trail keywords
+        assert!(AnalyzeRaceHandler::looks_like_race(Some("CCC Trail")));
+        assert!(AnalyzeRaceHandler::looks_like_race(Some("Trail Running")));
+        assert!(AnalyzeRaceHandler::looks_like_race(Some(
+            "Skyrace Chamonix"
+        )));
+        assert!(AnalyzeRaceHandler::looks_like_race(Some("Vertical KM")));
+        assert!(AnalyzeRaceHandler::looks_like_race(Some("km vert")));
+        // Non-race
+        assert!(!AnalyzeRaceHandler::looks_like_race(Some("Easy Run")));
+        assert!(!AnalyzeRaceHandler::looks_like_race(Some("Recovery")));
+        assert!(!AnalyzeRaceHandler::looks_like_race(None));
+        // Race names without keyword tokens (need category fallback — not yet implemented)
+        assert!(!AnalyzeRaceHandler::looks_like_race(Some("UTMB")));
+        assert!(!AnalyzeRaceHandler::looks_like_race(Some("CCC")));
+    }
+
+    #[test]
     fn test_empty_results_handling() {
         // When no race is found, the handler should return gracefully
         let race_found = false;

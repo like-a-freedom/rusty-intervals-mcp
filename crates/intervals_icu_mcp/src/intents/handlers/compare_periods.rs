@@ -861,6 +861,107 @@ mod tests {
         assert_eq!(requested_metric_label("custom_metric"), "CUSTOM METRIC");
     }
 
+    #[test]
+    fn test_requested_metric_label_zones() {
+        assert_eq!(requested_metric_label("zones"), "Zones");
+    }
+
+    #[test]
+    fn test_requested_metric_label_intensity() {
+        assert_eq!(requested_metric_label("intensity"), "Intensity");
+    }
+
+    #[test]
+    fn test_requested_metric_value_intensity() {
+        use std::collections::HashMap;
+        let mut details = HashMap::new();
+        details.insert("a1".into(), json!({"icu_training_load": 100}));
+        details.insert("a2".into(), json!({"icu_training_load": 150}));
+        let activities = vec![
+            ActivitySummary {
+                id: "a1".into(),
+                name: Some("Run 1".into()),
+                start_date_local: "2026-03-01".into(),
+                ..Default::default()
+            },
+            ActivitySummary {
+                id: "a2".into(),
+                name: Some("Run 2".into()),
+                start_date_local: "2026-03-03".into(),
+                ..Default::default()
+            },
+        ];
+        let stats = PeriodStats {
+            snapshot: TrendSnapshot {
+                activity_count: 2,
+                total_time_secs: 7200,
+                total_distance_m: 20000.0,
+                total_elevation_m: 200.0,
+            },
+            window_days: 14,
+            activities,
+            activity_details: details,
+            planned_count: 0,
+        };
+        let (value, note) = requested_metric_value("intensity", &stats);
+        // 250 total TSS / 2 weeks = 125 TSS/wk
+        assert!(value.contains("TSS/wk"), "value: {value}");
+        assert!(value.contains("125"), "value: {value}");
+        assert!(note.contains("training load"));
+    }
+
+    #[test]
+    fn test_requested_metric_value_zones_empty() {
+        use std::collections::HashMap;
+        let stats = PeriodStats {
+            snapshot: TrendSnapshot {
+                activity_count: 0,
+                total_time_secs: 0,
+                total_distance_m: 0.0,
+                total_elevation_m: 0.0,
+            },
+            window_days: 7,
+            activities: vec![],
+            activity_details: HashMap::new(),
+            planned_count: 0,
+        };
+        let (value, note) = requested_metric_value("zones", &stats);
+        assert_eq!(value, "n/a");
+        assert!(note.contains("unavailable"));
+    }
+
+    #[test]
+    fn test_requested_metric_value_zones_with_data() {
+        use std::collections::HashMap;
+        let mut details = HashMap::new();
+        details.insert(
+            "a1".into(),
+            json!({"icu_zone_times": [{"id": "Z1", "secs": 3600}, {"id": "Z2", "secs": 1800}]}),
+        );
+        let activities = vec![ActivitySummary {
+            id: "a1".into(),
+            name: Some("Run".into()),
+            start_date_local: "2026-03-01".into(),
+            ..Default::default()
+        }];
+        let stats = PeriodStats {
+            snapshot: TrendSnapshot {
+                activity_count: 1,
+                total_time_secs: 5400,
+                total_distance_m: 10000.0,
+                total_elevation_m: 100.0,
+            },
+            window_days: 7,
+            activities,
+            activity_details: details,
+            planned_count: 0,
+        };
+        let (value, note) = requested_metric_value("zones", &stats);
+        assert!(value.contains("Z1: 60m"), "value: {value}");
+        assert!(value.contains("Z2: 30m"), "value: {value}");
+        assert!(note.contains("icu_zone_times"));
+    }
+
     // ========================================================================
     // format_duration() Tests
     // ========================================================================
