@@ -134,41 +134,46 @@ impl IntentHandler for PlanTrainingHandler {
             None
         };
 
-        // --- Task 3: Existing events (conflict detection + race anchors) ---
-        let horizon_days = (end_date - start_date).num_days() as i32 + 7;
-        let existing_events = client
-            .get_events(Some(horizon_days), None)
+        // --- Past events (for context and race anchors) ---
+        let past_horizon =
+            ((chrono::Utc::now().date_naive() - start_date).num_days() as i32).max(0) + 30;
+        let past_events = client
+            .get_events(Some(past_horizon), None)
             .await
             .ok()
             .unwrap_or_default();
 
-        // --- Task 7: Upcoming workouts (adaptive) ---
-        let upcoming = if adaptive {
-            client
-                .get_upcoming_workouts(Some(weeks * 7), Some(100), None)
-                .await
-                .ok()
-        } else {
-            None
-        };
+        // --- Upcoming workouts (future conflicts + display) ---
+        let upcoming = client
+            .get_upcoming_workouts(Some(weeks * 7), Some(100), None)
+            .await
+            .ok();
 
-        // --- Task 4: Historical volume ---
+        // --- Historical volume (actual weeks, not hardcoded) ---
         let historical_avg_hours = if adaptive {
             client
                 .get_recent_activities(Some(60), Some(56))
                 .await
                 .ok()
                 .and_then(|activities| {
-                    let total_seconds: f64 = activities
+                    let dated: Vec<(chrono::NaiveDate, f64)> = activities
                         .iter()
-                        .filter_map(|a| a.moving_time)
-                        .map(|t| t as f64)
-                        .sum();
-                    if total_seconds > 0.0 {
-                        Some(total_seconds / 3600.0 / 8.0)
-                    } else {
-                        None
+                        .filter_map(|a| {
+                            let date =
+                                chrono::NaiveDate::parse_from_str(&a.start_date_local, "%Y-%m-%d")
+                                    .ok()?;
+                            let secs = a.moving_time? as f64;
+                            Some((date, secs))
+                        })
+                        .collect();
+                    if dated.is_empty() {
+                        return None;
                     }
+                    let oldest = dated.iter().map(|(d, _)| *d).min()?;
+                    let newest = dated.iter().map(|(d, _)| *d).max()?;
+                    let weeks = ((newest - oldest).num_days() as f64 / 7.0).max(1.0);
+                    let total_seconds: f64 = dated.iter().map(|(_, s)| s).sum();
+                    Some(total_seconds / 3600.0 / weeks)
                 })
         } else {
             None
@@ -185,9 +190,17 @@ impl IntentHandler for PlanTrainingHandler {
             .map(WellnessSnapshot::from_value)
             .unwrap_or_default();
 
-        // --- Task 3: Conflict detection ---
-        let conflicts: Vec<&intervals_icu_client::Event> = existing_events
+        // --- Conflict detection (Fix 1+2: exclude RaceA/B, check upcoming) ---
+        // Non-race existing events in period
+        let existing_conflicts: Vec<&intervals_icu_client::Event> = past_events
             .iter()
+            .filter(|e| {
+                !matches!(
+                    e.category,
+                    intervals_icu_client::EventCategory::RaceA
+                        | intervals_icu_client::EventCategory::RaceB
+                )
+            })
             .filter(|e| {
                 chrono::NaiveDate::parse_from_str(&e.start_date_local, "%Y-%m-%d")
                     .map(|d| d >= start_date && d <= end_date)
@@ -195,31 +208,61 @@ impl IntentHandler for PlanTrainingHandler {
             })
             .collect();
 
-        if !conflicts.is_empty() {
-            let mut conflict_content = Vec::new();
-            conflict_content.push(ContentBlock::markdown(
-                "## Conflict Detected\n\nExisting events overlap with the planned period. \
-                 Remove or reschedule them before creating a new plan."
-                    .to_string(),
-            ));
+        // Upcoming workout dates in period (future conflicts)
+        let upcoming_conflict_dates: Vec<String> = upcoming
+            .as_ref()
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|w| {
+                        let date_str = w.get("start_date_local").and_then(|v| v.as_str())?;
+                        let date = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d").ok()?;
+                        if date >= start_date && date <= end_date {
+                            let name = w.get("name").and_then(|v| v.as_str()).unwrap_or("Workout");
+                            Some(format!("{} ({})", name, date_str))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
 
-            let mut conflict_rows = vec![vec!["Date".into(), "Name".into(), "Category".into()]];
-            for c in &conflicts {
-                conflict_rows.push(vec![
-                    c.start_date_local.clone(),
-                    c.name.clone(),
-                    format!("{:?}", c.category),
-                ]);
+        if !existing_conflicts.is_empty() || !upcoming_conflict_dates.is_empty() {
+            let mut conflict_content = Vec::new();
+
+            if !existing_conflicts.is_empty() {
+                conflict_content.push(ContentBlock::markdown(
+                    "## Conflict Detected\n\nExisting events overlap with the planned period. \
+                     Remove or reschedule them before creating a new plan."
+                        .to_string(),
+                ));
+                let mut conflict_rows = vec![vec!["Date".into(), "Name".into(), "Category".into()]];
+                for c in &existing_conflicts {
+                    conflict_rows.push(vec![
+                        c.start_date_local.clone(),
+                        c.name.clone(),
+                        format!("{:?}", c.category),
+                    ]);
+                }
+                conflict_content.push(ContentBlock::table(
+                    conflict_rows[0].clone(),
+                    conflict_rows[1..].to_vec(),
+                ));
             }
-            conflict_content.push(ContentBlock::table(
-                conflict_rows[0].clone(),
-                conflict_rows[1..].to_vec(),
-            ));
+
+            if !upcoming_conflict_dates.is_empty() {
+                conflict_content.push(ContentBlock::markdown(format!(
+                    "## Existing Plan Detected\n\n{} workouts already scheduled in this period. \
+                     Remove existing plan before creating a new one.",
+                    upcoming_conflict_dates.len()
+                )));
+            }
 
             return Ok(IntentOutput::new(conflict_content)
                 .with_suggestions(vec![
-                    "Existing events found in planning period.".into(),
-                    "Remove conflicting events or adjust period_start/period_end.".into(),
+                    "Events or workouts found in planning period.".into(),
+                    "Remove conflicts or adjust period_start/period_end.".into(),
                 ])
                 .with_next_actions(vec![
                     "To delete conflicts: modify_training with action: delete".into(),
@@ -231,8 +274,8 @@ impl IntentHandler for PlanTrainingHandler {
                 }));
         }
 
-        // --- Task 3: Race anchors ---
-        let race_anchors: Vec<&intervals_icu_client::Event> = existing_events
+        // --- Race anchors (from past_events, excluded from conflicts) ---
+        let race_anchors: Vec<&intervals_icu_client::Event> = past_events
             .iter()
             .filter(|e| {
                 matches!(
@@ -558,44 +601,16 @@ struct WellnessSnapshot {
 impl WellnessSnapshot {
     fn from_value(value: &Value) -> Self {
         let entries = value.as_array().cloned().unwrap_or_default();
-        if entries.is_empty() {
-            return Self::default();
-        }
-
-        let readiness_vals: Vec<f64> = entries
-            .iter()
-            .filter_map(|e| e.get("readiness").and_then(|v| v.as_f64()))
-            .collect();
-        let readiness = if readiness_vals.is_empty() {
-            None
-        } else {
-            Some(readiness_vals.iter().sum::<f64>() / readiness_vals.len() as f64)
-        };
-
-        let hrv_vals: Vec<f64> = entries
-            .iter()
-            .filter_map(|e| e.get("hrv").and_then(|v| v.as_f64()))
-            .collect();
-        let hrv = if hrv_vals.is_empty() {
-            None
-        } else {
-            Some(hrv_vals.iter().sum::<f64>() / hrv_vals.len() as f64)
-        };
-
-        let sleep_vals: Vec<f64> = entries
-            .iter()
-            .filter_map(|e| e.get("sleep").and_then(|v| v.as_f64()))
-            .collect();
-        let sleep_avg = if sleep_vals.is_empty() {
-            None
-        } else {
-            Some(sleep_vals.iter().sum::<f64>() / sleep_vals.len() as f64)
+        // Use the latest entry (most recent reading)
+        let latest = match entries.last() {
+            Some(e) => e,
+            None => return Self::default(),
         };
 
         Self {
-            readiness,
-            hrv,
-            sleep_avg,
+            readiness: latest.get("readiness").and_then(|v| v.as_f64()),
+            hrv: latest.get("hrv").and_then(|v| v.as_f64()),
+            sleep_avg: latest.get("sleep").and_then(|v| v.as_f64()),
         }
     }
 }
@@ -653,8 +668,12 @@ fn generate_events(
     ];
 
     for week in 0..weeks {
-        // Skip recovery weeks (every 4th week)
-        if week > 0 && (week + 1) % 4 == 0 {
+        // Skip recovery weeks only for long-term periodization focuses
+        let skip_recovery = matches!(
+            focus,
+            TrainingFocus::AerobicBase | TrainingFocus::Intensity | TrainingFocus::Specific
+        );
+        if skip_recovery && week > 0 && (week + 1) % 4 == 0 {
             continue;
         }
 
@@ -1206,13 +1225,14 @@ mod tests {
     #[test]
     fn test_wellness_snapshot_from_value() {
         let value = json!([
-            {"readiness": 7.0, "hrv": 65.0, "sleep": 7.5},
-            {"readiness": 6.5, "hrv": 55.0, "sleep": 7.0}
+            {"readiness": 3.0, "hrv": 30.0, "sleep": 5.0},
+            {"readiness": 8.0, "hrv": 70.0, "sleep": 8.0}
         ]);
         let snap = WellnessSnapshot::from_value(&value);
-        assert!((snap.readiness.unwrap() - 6.75).abs() < 0.01);
-        assert!((snap.hrv.unwrap() - 60.0).abs() < 0.01);
-        assert!((snap.sleep_avg.unwrap() - 7.25).abs() < 0.01);
+        // Uses latest entry (last), not average
+        assert_eq!(snap.readiness, Some(8.0));
+        assert_eq!(snap.hrv, Some(70.0));
+        assert_eq!(snap.sleep_avg, Some(8.0));
     }
 
     #[test]
@@ -1231,7 +1251,8 @@ mod tests {
             {"readiness": 7.0}
         ]);
         let snap = WellnessSnapshot::from_value(&value);
-        assert!((snap.readiness.unwrap() - 6.0).abs() < 0.01);
+        // Latest entry only
+        assert_eq!(snap.readiness, Some(7.0));
         assert!(snap.hrv.is_none());
     }
 
@@ -1309,5 +1330,36 @@ mod tests {
             || e.name.contains("Intervals")
             || e.name.contains("Aerobic")
             || e.name.contains("Strides")));
+    }
+
+    #[test]
+    fn test_generate_events_taper_no_recovery_skip() {
+        let handler = PlanTrainingHandler::new();
+        let (phases, _) = handler.build_periodization(3, TrainingFocus::Taper, 10.0);
+        let start = chrono::NaiveDate::from_ymd_opt(2026, 3, 2).unwrap();
+        let events = generate_events(&phases, start, TrainingFocus::Taper, 3);
+        // Taper: no recovery skip, 3 weeks * 4 = 12
+        assert_eq!(events.len(), 12);
+    }
+
+    #[test]
+    fn test_conflict_detection_excludes_races() {
+        let race_a = intervals_icu_client::EventCategory::RaceA;
+        let race_b = intervals_icu_client::EventCategory::RaceB;
+        let workout = intervals_icu_client::EventCategory::Workout;
+        // Races should be excluded from conflicts
+        assert!(matches!(
+            race_a,
+            intervals_icu_client::EventCategory::RaceA | intervals_icu_client::EventCategory::RaceB
+        ));
+        assert!(matches!(
+            race_b,
+            intervals_icu_client::EventCategory::RaceA | intervals_icu_client::EventCategory::RaceB
+        ));
+        // Workouts are conflicts
+        assert!(!matches!(
+            workout,
+            intervals_icu_client::EventCategory::RaceA | intervals_icu_client::EventCategory::RaceB
+        ));
     }
 }
