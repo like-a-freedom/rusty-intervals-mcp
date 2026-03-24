@@ -213,7 +213,9 @@ impl IntentHandler for ComparePeriodsHandler {
         )));
 
         // Analysis
-        let volume_change = if let Some(distance_delta_pct) = trend.distance_delta_pct {
+        let volume_change = if let Some(time_delta_pct) = trend.time_delta_pct {
+            time_delta_pct as f32
+        } else if let Some(distance_delta_pct) = trend.distance_delta_pct {
             distance_delta_pct as f32
         } else {
             0.0
@@ -234,6 +236,15 @@ impl IntentHandler for ComparePeriodsHandler {
             suggestions.push(format!(
                 "Volume decreased by {:.0}% - may indicate recovery or illness",
                 volume_change.abs()
+            ));
+        }
+
+        if let Some(elev_delta) = trend.elevation_delta_pct
+            && elev_delta.abs() > 30.0
+        {
+            suggestions.push(format!(
+                "Elevation change: {:+.0}% - consider extra recovery and hill-specific work",
+                elev_delta
             ));
         }
 
@@ -334,6 +345,58 @@ fn requested_metric_value(metric: &str, stats: &PeriodStats) -> (String, String)
                 .sum::<f64>();
             (format!("{sum:.1}"), "sum of training load".into())
         }
+        "intensity" => {
+            let total_tss: f64 = stats
+                .activities
+                .iter()
+                .filter_map(|activity| {
+                    stats
+                        .activity_details
+                        .get(&activity.id)
+                        .and_then(|detail| detail.get("icu_training_load"))
+                        .and_then(|v| v.as_f64().or_else(|| v.as_i64().map(|n| n as f64)))
+                })
+                .sum();
+            let weeks = (stats.window_days as f64 / 7.0).max(1.0);
+            let weekly_avg = total_tss / weeks;
+            (
+                format!("{weekly_avg:.0} TSS/wk"),
+                "weekly average training load".into(),
+            )
+        }
+        "zones" => {
+            let mut zone_totals: std::collections::HashMap<String, i64> =
+                std::collections::HashMap::new();
+            for activity in &stats.activities {
+                if let Some(detail) = stats.activity_details.get(&activity.id)
+                    && let Some(zone_times) =
+                        detail.get("icu_zone_times").and_then(|v| v.as_array())
+                {
+                    for zt in zone_times {
+                        if let (Some(id), Some(secs)) = (
+                            zt.get("id").and_then(|v| v.as_str()),
+                            zt.get("secs").and_then(|v| v.as_i64()),
+                        ) {
+                            *zone_totals.entry(id.to_string()).or_default() += secs;
+                        }
+                    }
+                }
+            }
+            if zone_totals.is_empty() {
+                ("n/a".into(), "zone times unavailable".into())
+            } else {
+                let mut sorted: Vec<_> = zone_totals.into_iter().collect();
+                sorted.sort_by(|a, b| a.0.cmp(&b.0));
+                let parts: Vec<String> = sorted
+                    .iter()
+                    .map(|(id, secs)| {
+                        let mins = *secs as f64 / 60.0;
+                        format!("{}: {:.0}m", id, mins)
+                    })
+                    .collect();
+                (parts.join(", "), "aggregated from icu_zone_times".into())
+            }
+        }
         other => ("n/a".into(), format!("metric '{}' not yet modeled", other)),
     }
 }
@@ -344,6 +407,8 @@ fn requested_metric_label(metric: &str) -> String {
         "tss" => "TSS".to_string(),
         "pace" => "Pace".to_string(),
         "volume" => "Volume".to_string(),
+        "zones" => "Zones".to_string(),
+        "intensity" => "Intensity".to_string(),
         other => other.replace('_', " ").to_uppercase(),
     }
 }

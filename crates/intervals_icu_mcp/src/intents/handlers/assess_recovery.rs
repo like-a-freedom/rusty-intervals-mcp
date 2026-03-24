@@ -8,6 +8,17 @@ use serde_json::{Value, json};
 /// Assesses recovery status, readiness to train, and detects red flags.
 use std::sync::Arc;
 
+const READINESS_SLEEP_EASY: f64 = 6.0;
+const READINESS_SLEEP_INTENSITY: f64 = 7.0;
+const READINESS_SLEEP_LONG: f64 = 6.5;
+const READINESS_SLEEP_RACE: f64 = 7.5;
+const READINESS_TSB_INTENSITY: f64 = -5.0;
+const READINESS_TSB_LONG: f64 = -8.0;
+const READINESS_TSB_RACE: f64 = 5.0;
+const READINESS_RECOVERY_INDEX_INTENSITY: f64 = 0.95;
+const READINESS_RECOVERY_INDEX_LONG: f64 = 0.9;
+const READINESS_RECOVERY_INDEX_RACE: f64 = 1.1;
+
 #[cfg(test)]
 use crate::domains::coach::CoachMetrics;
 use crate::domains::coach::{AnalysisKind, AnalysisWindow, CoachContext, WellnessMetrics};
@@ -57,7 +68,7 @@ impl PlannedActivity {
 
         match self {
             Self::Easy => {
-                let verdict = if has_flags && sleep < 6.0 {
+                let verdict = if has_flags && sleep < READINESS_SLEEP_EASY {
                     "Caution"
                 } else {
                     "Green light"
@@ -72,7 +83,10 @@ impl PlannedActivity {
                 )
             }
             Self::Intensity => {
-                let ready = !has_flags && sleep >= 7.0 && tsb > -5.0 && recovery_index >= 0.95;
+                let ready = !has_flags
+                    && sleep >= READINESS_SLEEP_INTENSITY
+                    && tsb > READINESS_TSB_INTENSITY
+                    && recovery_index >= READINESS_RECOVERY_INDEX_INTENSITY;
                 (
                     if ready {
                         "Ready for quality"
@@ -88,7 +102,10 @@ impl PlannedActivity {
                 )
             }
             Self::Long => {
-                let ready = !has_flags && sleep >= 6.5 && tsb > -8.0 && recovery_index >= 0.9;
+                let ready = !has_flags
+                    && sleep >= READINESS_SLEEP_LONG
+                    && tsb > READINESS_TSB_LONG
+                    && recovery_index >= READINESS_RECOVERY_INDEX_LONG;
                 (
                     if ready {
                         "Long run acceptable"
@@ -104,7 +121,10 @@ impl PlannedActivity {
                 )
             }
             Self::Race => {
-                let ready = !has_flags && sleep >= 7.5 && tsb > 5.0 && recovery_index >= 1.1;
+                let ready = !has_flags
+                    && sleep >= READINESS_SLEEP_RACE
+                    && tsb > READINESS_TSB_RACE
+                    && recovery_index >= READINESS_RECOVERY_INDEX_RACE;
                 (
                     if ready {
                         "Race-ready"
@@ -326,6 +346,12 @@ impl IntentHandler for AssessRecoveryHandler {
         )
         .await?;
 
+        // Look-ahead: check upcoming workouts for key sessions
+        let upcoming = client
+            .get_upcoming_workouts(Some(7), Some(5), None)
+            .await
+            .ok();
+
         let mut context = CoachContext::new(
             AnalysisKind::RecoveryAssessment,
             AnalysisWindow::new(start_date, end_date),
@@ -405,7 +431,30 @@ impl IntentHandler for AssessRecoveryHandler {
         }
 
         // Use shared guidance from coach engine
-        let suggestions = context.guidance.suggestions.clone();
+        let mut suggestions = context.guidance.suggestions.clone();
+
+        // Look-ahead: warn if key workout scheduled in next 7 days
+        if let Some(ref workouts) = upcoming
+            && let Some(arr) = workouts.as_array()
+        {
+            let has_key_workout = arr.iter().any(|w| {
+                let name = w
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                name.contains("race")
+                    || name.contains("interval")
+                    || name.contains("tempo")
+                    || name.contains("long")
+            });
+            if has_key_workout {
+                suggestions.push(
+                    "Key workout or race scheduled in the next 7 days - prioritize recovery today."
+                        .into(),
+                );
+            }
+        }
 
         let mut next_actions = vec![
             format!(
