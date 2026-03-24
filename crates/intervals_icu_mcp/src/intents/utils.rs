@@ -528,16 +528,19 @@ mod tests {
                 id: "1".to_string(),
                 name: Some("Run".to_string()),
                 start_date_local: "2026-03-01T10:00:00".to_string(),
+                ..Default::default()
             },
             ActivitySummary {
                 id: "2".to_string(),
                 name: Some("Ride".to_string()),
                 start_date_local: "2026-03-02T10:00:00".to_string(),
+                ..Default::default()
             },
             ActivitySummary {
                 id: "3".to_string(),
                 name: Some("Swim".to_string()),
                 start_date_local: "2026-03-01T14:00:00".to_string(),
+                ..Default::default()
             },
         ];
 
@@ -555,6 +558,7 @@ mod tests {
             id: "1".to_string(),
             name: Some("Run".to_string()),
             start_date_local: "2026-03-01T10:00:00".to_string(),
+            ..Default::default()
         }];
 
         let target = NaiveDate::from_ymd_opt(2026, 3, 15).unwrap();
@@ -579,16 +583,19 @@ mod tests {
                 id: "1".to_string(),
                 name: Some("Run".to_string()),
                 start_date_local: "2026-03-01T10:00:00".to_string(),
+                ..Default::default()
             },
             ActivitySummary {
                 id: "2".to_string(),
                 name: Some("Ride".to_string()),
                 start_date_local: "2026-03-15T10:00:00".to_string(),
+                ..Default::default()
             },
             ActivitySummary {
                 id: "3".to_string(),
                 name: Some("Swim".to_string()),
                 start_date_local: "2026-03-31T10:00:00".to_string(),
+                ..Default::default()
             },
         ];
 
@@ -606,16 +613,19 @@ mod tests {
                 id: "1".to_string(),
                 name: Some("Morning Run".to_string()),
                 start_date_local: "2026-03-01T10:00:00".to_string(),
+                ..Default::default()
             },
             ActivitySummary {
                 id: "2".to_string(),
                 name: Some("Easy Ride".to_string()),
                 start_date_local: "2026-03-02T10:00:00".to_string(),
+                ..Default::default()
             },
             ActivitySummary {
                 id: "3".to_string(),
                 name: Some("Long Run".to_string()),
                 start_date_local: "2026-03-03T10:00:00".to_string(),
+                ..Default::default()
             },
         ];
 
@@ -636,11 +646,13 @@ mod tests {
                 id: "1".to_string(),
                 name: None,
                 start_date_local: "2026-03-01T10:00:00".to_string(),
+                ..Default::default()
             },
             ActivitySummary {
                 id: "2".to_string(),
                 name: Some("Run".to_string()),
                 start_date_local: "2026-03-02T10:00:00".to_string(),
+                ..Default::default()
             },
         ];
 

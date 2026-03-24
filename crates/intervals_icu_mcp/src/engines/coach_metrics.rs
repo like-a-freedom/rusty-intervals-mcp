@@ -758,11 +758,13 @@ mod tests {
                 id: "a1".into(),
                 name: Some("Run 1".into()),
                 start_date_local: "2026-03-01".into(),
+                ..Default::default()
             },
             ActivitySummary {
                 id: "a2".into(),
                 name: Some("Run 2".into()),
                 start_date_local: "2026-03-02".into(),
+                ..Default::default()
             },
         ];
         let refs = activities.iter().collect::<Vec<_>>();

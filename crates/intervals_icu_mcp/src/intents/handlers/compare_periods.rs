@@ -542,6 +542,7 @@ mod tests {
             id: "a1".to_string(),
             name: Some("Interval Training".to_string()),
             start_date_local: "2026-03-01".to_string(),
+            ..Default::default()
         };
         assert!(matches_workout_type(&activity, "intervals"));
     }
@@ -552,6 +553,7 @@ mod tests {
             id: "a1".to_string(),
             name: Some("Tempo Run".to_string()),
             start_date_local: "2026-03-01".to_string(),
+            ..Default::default()
         };
         assert!(matches_workout_type(&activity, "tempo"));
     }
@@ -562,6 +564,7 @@ mod tests {
             id: "a1".to_string(),
             name: Some("Long Run".to_string()),
             start_date_local: "2026-03-01".to_string(),
+            ..Default::default()
         };
         assert!(matches_workout_type(&activity, "long_run"));
     }
@@ -572,6 +575,7 @@ mod tests {
             id: "a1".to_string(),
             name: None,
             start_date_local: "2026-03-01".to_string(),
+            ..Default::default()
         };
         assert!(!matches_workout_type(&activity, "intervals"));
     }
@@ -582,6 +586,7 @@ mod tests {
             id: "a1".to_string(),
             name: Some("Easy Run".to_string()),
             start_date_local: "2026-03-01".to_string(),
+            ..Default::default()
         };
         assert!(!matches_workout_type(&activity, "intervals"));
     }
@@ -592,6 +597,7 @@ mod tests {
             id: "a1".to_string(),
             name: Some("INTERVAL SESSION".to_string()),
             start_date_local: "2026-03-01".to_string(),
+            ..Default::default()
         };
         assert!(matches_workout_type(&activity, "intervals"));
     }
@@ -674,6 +680,7 @@ mod tests {
                 id: "a1".to_string(),
                 name: Some("Run".to_string()),
                 start_date_local: "2026-03-01".to_string(),
+                ..Default::default()
             }],
             activity_details: HashMap::from([(
                 "a1".to_string(),
@@ -701,6 +708,7 @@ mod tests {
                 id: "a1".to_string(),
                 name: Some("Run".to_string()),
                 start_date_local: "2026-03-01".to_string(),
+                ..Default::default()
             }],
             activity_details: HashMap::new(),
             planned_count: 0,
@@ -725,6 +733,7 @@ mod tests {
                 id: "a1".to_string(),
                 name: Some("Run".to_string()),
                 start_date_local: "2026-03-01".to_string(),
+                ..Default::default()
             }],
             activity_details: HashMap::from([(
                 "a1".to_string(),
@@ -1020,11 +1029,13 @@ mod tests {
                     id: "a1".to_string(),
                     name: Some("Run".to_string()),
                     start_date_local: "2026-03-01".to_string(),
+                    ..Default::default()
                 },
                 ActivitySummary {
                     id: "a2".to_string(),
                     name: Some("Interval Run".to_string()),
                     start_date_local: "2026-03-05".to_string(),
+                    ..Default::default()
                 },
             ])
         }

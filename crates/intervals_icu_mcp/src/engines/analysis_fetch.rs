@@ -258,6 +258,7 @@ fn parse_planned_workout(
             id: format!("event:{event_id}"),
             name,
             start_date_local: start_date_local.to_string(),
+            ..Default::default()
         },
         event.clone(),
     ))
@@ -609,6 +610,7 @@ mod tests {
             id: id.to_string(),
             name: Some(format!("Activity {}", id)),
             start_date_local: date.to_string(),
+            ..Default::default()
         }
     }
 
@@ -963,6 +965,7 @@ mod tests {
                 id: "a1".to_string(),
                 name: Some("Test".to_string()),
                 start_date_local: "2026-03-01".to_string(),
+                ..Default::default()
             }],
             ..Default::default()
         };

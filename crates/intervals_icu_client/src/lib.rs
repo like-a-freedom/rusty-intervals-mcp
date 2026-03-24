@@ -61,11 +61,19 @@ pub struct AthleteProfile {
     pub name: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 pub struct ActivitySummary {
     pub id: String,
     pub name: Option<String>,
     pub start_date_local: String,
+    #[serde(default)]
+    pub moving_time: Option<i32>,
+    #[serde(default)]
+    pub elapsed_time: Option<i32>,
+    #[serde(default)]
+    pub distance: Option<f64>,
+    #[serde(default, rename = "icu_training_load")]
+    pub training_load: Option<i32>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
