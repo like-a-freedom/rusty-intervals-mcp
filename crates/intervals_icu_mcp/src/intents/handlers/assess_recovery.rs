@@ -306,8 +306,7 @@ impl IntentHandler for AssessRecoveryHandler {
                 "period_days": {"type": "number", "default": 7, "description": "Analysis period (days)"},
                 "for_activity": {"type": "string", "enum": ["easy", "intensity", "long", "race"], "description": "Planned activity type"},
                 "include_wellness": {"type": "boolean", "default": true, "description": "Include wellness data"},
-                "include_red_flags": {"type": "boolean", "default": true, "description": "Check for red flags"},
-                "idempotency_token": {"type": "string", "description": "Idempotency token (optional)"}
+                "include_red_flags": {"type": "boolean", "default": true, "description": "Check for red flags"}
             }
         })
     }
