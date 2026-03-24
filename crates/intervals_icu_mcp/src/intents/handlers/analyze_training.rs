@@ -927,11 +927,20 @@ impl AnalyzeTrainingHandler {
                 .iter()
                 .map(|activity| {
                     let detail = fetched.activity_details.get(&activity.id);
-                    let duration = detail
+                    let moving_duration = detail
                         .and_then(|value| value.get("moving_time"))
                         .and_then(|value| value.as_i64())
-                        .map(format_duration_hhmm)
-                        .unwrap_or_else(|| "n/a".to_string());
+                        .map(format_duration_hhmm);
+                    let elapsed_duration = detail
+                        .and_then(|value| value.get("elapsed_time"))
+                        .and_then(|value| value.as_i64())
+                        .map(format_duration_hhmm);
+                    let duration = match (moving_duration, elapsed_duration) {
+                        (Some(mov), Some(elp)) => format!("{} (elapsed: {})", mov, elp),
+                        (Some(mov), None) => mov,
+                        (None, Some(elp)) => format!("elapsed: {}", elp),
+                        (None, None) => "n/a".to_string(),
+                    };
                     let load = detail
                         .and_then(|value| value.get("icu_training_load"))
                         .and_then(|value| {
