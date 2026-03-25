@@ -175,6 +175,10 @@ pub fn compute_monotony(loads_7d: &[f64]) -> Option<f64> {
     }
 
     let mean = loads_7d.iter().sum::<f64>() / loads_7d.len() as f64;
+    if mean <= 0.0 {
+        return None;
+    }
+
     let variance = loads_7d
         .iter()
         .map(|load| {
@@ -183,9 +187,11 @@ pub fn compute_monotony(loads_7d: &[f64]) -> Option<f64> {
         })
         .sum::<f64>()
         / loads_7d.len() as f64;
-    let stddev = variance.sqrt().max(1e-6);
 
-    Some(mean / stddev)
+    // Use population stddev; cap floor to avoid infinity when all loads are identical.
+    // Real-world identical loads → monotony is high but finite (cap at 10.0).
+    let stddev = variance.sqrt().max(mean * 0.1);
+    Some((mean / stddev).min(10.0))
 }
 
 pub fn compute_strain(loads_7d: &[f64], monotony: f64) -> f64 {
@@ -329,8 +335,8 @@ pub fn compute_aerobic_decoupling(hr: &[f64], output: &[f64]) -> Option<Decoupli
     let state = classify_decoupling_state(decoupling_pct);
 
     Some(DecouplingMetrics {
-        efficiency_factor_first_half: first_half,
-        efficiency_factor_second_half: second_half,
+        efficiency_factor_first_half: Some(first_half),
+        efficiency_factor_second_half: Some(second_half),
         decoupling_pct,
         state,
     })
@@ -356,8 +362,8 @@ fn parse_aerobic_decoupling(detail: Option<&Value>) -> Option<DecouplingMetrics>
     let decoupling_pct = get_number(object, AEROBIC_DECOUPLING_KEYS)?;
 
     Some(DecouplingMetrics {
-        efficiency_factor_first_half: 1.0,
-        efficiency_factor_second_half: 1.0 - (decoupling_pct / 100.0),
+        efficiency_factor_first_half: None,
+        efficiency_factor_second_half: None,
         decoupling_pct,
         state: classify_decoupling_state(decoupling_pct),
     })
@@ -695,7 +701,7 @@ pub fn compute_consistency_index(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domains::coach::{DecouplingMetrics, FitnessMetrics, LoadManagementMetrics};
+    use crate::domains::coach::{DecouplingMetrics, FitnessMetrics};
     use serde_json::json;
 
     fn wellness_entry(sleep_secs: f64, resting_hr: f64, hrv: f64) -> Value {
@@ -920,6 +926,13 @@ mod tests {
     }
 
     #[test]
+    fn monotony_capped_at_10_for_identical_loads() {
+        let loads = [25.0; 7];
+        let monotony = compute_monotony(&loads).unwrap();
+        assert_eq!(monotony, 10.0);
+    }
+
+    #[test]
     fn strain_is_weekly_total_multiplied_by_monotony() {
         let loads = [10.0, 10.0, 20.0, 20.0, 30.0, 30.0, 40.0];
         let monotony = compute_monotony(&loads).unwrap();
@@ -949,17 +962,12 @@ mod tests {
 
         let metrics = compute_load_management_metrics(&loads, None).unwrap();
 
-        assert_eq!(
-            metrics,
-            LoadManagementMetrics {
-                acwr: None,
-                monotony: Some(25_000_000.0),
-                strain: Some(175.0 * 25_000_000.0),
-                fatigue_index: None,
-                stress_tolerance: Some(1.75),
-                durability_index: None,
-            }
-        );
+        // Identical loads → monotony capped at 10.0 (not infinity)
+        assert_eq!(metrics.acwr, None);
+        assert_eq!(metrics.monotony, Some(10.0));
+        assert_eq!(metrics.strain, Some(175.0 * 10.0));
+        assert_eq!(metrics.fatigue_index, None);
+        assert!((metrics.stress_tolerance.unwrap() - 1.75).abs() < 0.01);
     }
 
     #[test]

@@ -54,7 +54,8 @@ pub const WEEKLY_AVG_HIGH_HOURS: f64 = 15.0;
 const ACWR_WATCH_RATIO: f64 = 1.3;
 /// ACWR: overload threshold (> this value)
 const ACWR_OVERREACH_RATIO: f64 = 1.5;
-/// Monotony: repetitive-stress threshold (Foster standard > 2.5)
+/// Monotony: repetitive-stress threshold (Foster 1998 recommends ≤ 2.0; Seiler uses 2.5).
+/// Values above this indicate insufficient training variety → elevated injury/overtraining risk.
 const MONOTONY_ALERT: f64 = 2.5;
 /// Fatigue Index: high fatigue alert threshold (> this value)
 const FATIGUE_INDEX_ALERT: f64 = 2.5;

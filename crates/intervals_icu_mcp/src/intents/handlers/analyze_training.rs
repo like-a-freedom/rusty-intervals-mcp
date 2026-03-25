@@ -1029,11 +1029,7 @@ impl AnalyzeTrainingHandler {
             }
 
             content.push(ContentBlock::markdown(build_load_management_text(
-                if context.metrics.load_management.is_some() || load_history_sufficient {
-                    context.metrics.load_management.as_ref()
-                } else {
-                    None
-                },
+                context.metrics.load_management.as_ref(),
             )));
 
             if let Some(block) = data_availability_block(
@@ -1061,13 +1057,16 @@ impl AnalyzeTrainingHandler {
                 rows,
             ));
         } else if analysis_type == "intervals" {
+            let interval_keyword = desc_filter
+                .map(|s| s.to_lowercase())
+                .unwrap_or_else(|| "interval".to_string());
             let rows = period
                 .iter()
                 .filter(|activity| {
                     activity
                         .name
                         .as_ref()
-                        .map(|name| name.to_lowercase().contains("interval"))
+                        .map(|name| name.to_lowercase().contains(&interval_keyword))
                         .unwrap_or(false)
                 })
                 .map(|activity| {
@@ -3104,10 +3103,18 @@ mod tests {
         let result = handler.execute(input, client, None).await;
         assert!(result.is_ok());
         let output = result.unwrap();
-        let content_str = format!("{:?}", output.content);
-        assert!(content_str.contains("Requested Metrics"));
-        assert!(content_str.contains("TIME"));
-        assert!(content_str.contains("DISTANCE"));
+        // Verify requested metrics table exists with expected headers
+        let has_metrics_table = output.content.iter().any(|block| {
+            if let ContentBlock::Table { headers, rows } = block {
+                headers.contains(&"Metric".to_string())
+                    && headers.contains(&"Value".to_string())
+                    && rows.iter().any(|row| row.first().map(|s| s.as_str()) == Some("TIME"))
+                    && rows.iter().any(|row| row.first().map(|s| s.as_str()) == Some("DISTANCE"))
+            } else {
+                false
+            }
+        });
+        assert!(has_metrics_table, "Expected requested metrics table with TIME/DISTANCE rows");
     }
 
     #[tokio::test]
