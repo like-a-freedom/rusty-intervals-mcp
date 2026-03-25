@@ -284,7 +284,7 @@ pub fn build_alerts(metrics: &CoachMetrics) -> Vec<CoachAlert> {
             evidence: vec![format!(
                 "Polarisation ratio {:.2} indicates too much threshold-zone work ({:.0}% Z2)",
                 polarisation.ratio.unwrap_or(0.0),
-                polarisation.z2_pct * 100.0
+                polarisation.z2_pct.unwrap_or(0.0) * 100.0
             )],
             section: "distribution".to_string(),
         });
@@ -884,9 +884,9 @@ mod tests {
     fn threshold_biased_polarisation_creates_alert_and_guidance() {
         let metrics = CoachMetrics {
             polarisation: Some(PolarisationMetrics {
-                z1_pct: 0.50,
-                z2_pct: 0.45,
-                z3_pct: 0.05,
+                z1_pct: Some(0.50),
+                z2_pct: Some(0.45),
+                z3_pct: Some(0.05),
                 ratio: Some(0.61),
                 state: Some("threshold_biased".into()),
             }),
@@ -908,9 +908,9 @@ mod tests {
     fn polarised_training_does_not_create_alert() {
         let metrics = CoachMetrics {
             polarisation: Some(PolarisationMetrics {
-                z1_pct: 0.50,
-                z2_pct: 0.35,
-                z3_pct: 0.15,
+                z1_pct: Some(0.50),
+                z2_pct: Some(0.35),
+                z3_pct: Some(0.15),
                 ratio: Some(0.93),
                 state: Some("polarised".into()),
             }),
