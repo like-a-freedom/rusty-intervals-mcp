@@ -329,7 +329,7 @@ impl ModifyTrainingHandler {
         if matching.is_empty() {
             let mut content = Vec::new();
             content.push(ContentBlock::markdown(
-                "## Modify Training\n\n**Status:** No events found".to_string(),
+                "# Modify Training\n\nStatus: No events found".to_string(),
             ));
 
             let mut summary = Vec::new();
@@ -339,12 +339,12 @@ impl ModifyTrainingHandler {
             if let Some(d) = desc_filter
                 && events_before_filter > 0
             {
-                summary.push("- No events matched the provided description filter".into());
+                summary.push("  No events matched the provided description filter".into());
                 summary.push(format!(
-                    "- The date has scheduled training, but none matched '{}'",
+                    "  The date has scheduled training, but none matched '{}'",
                     d
                 ));
-                summary.push(format!("- Search filter: '{}'", d));
+                summary.push(format!("  Search filter: '{}'", d));
 
                 suggestions.push(
                     "Try a broader description filter or omit it to see all events on that date"
@@ -361,12 +361,12 @@ impl ModifyTrainingHandler {
                 );
             } else {
                 summary.push(format!(
-                    "- No training events scheduled for {}",
+                    "  No training events scheduled for {}",
                     target_label
                 ));
-                summary.push("- This date appears to be free".into());
+                summary.push("  This date appears to be free".into());
                 if let Some(d) = desc_filter {
-                    summary.push(format!("- Search filter: '{}'", d));
+                    summary.push(format!("  Search filter: '{}'", d));
                 }
 
                 suggestions.push("Check a different date for existing workouts".into());
@@ -397,8 +397,8 @@ impl ModifyTrainingHandler {
             "Changes Applied"
         };
         content.push(ContentBlock::markdown(format!(
-            "## Modify Training - {}\n\n**Action:** modify\n**Target:** {}\n**Affected:** {} event(s)\nAffected: {} event(s)",
-            mode, target_label, matching.len(), matching.len()
+            "# Modify Training - {}\n\nAction: modify\nTarget: {}\nAffected: {} event(s)",
+            mode, target_label, matching.len()
         )));
 
         let mut rows = Vec::new();
@@ -546,7 +546,7 @@ impl ModifyTrainingHandler {
             "Created"
         };
         content.push(ContentBlock::markdown(format!(
-            "## Create Training - {}\n\n**Name:** {}\n**Date:** {}\n**Duration:** {}",
+            "# Create Training - {}\n\nName: {}\nDate: {}\nDuration: {}",
             mode, new_name, new_date, new_duration
         )));
 
@@ -626,7 +626,7 @@ impl ModifyTrainingHandler {
             "Deleted"
         };
         content.push(ContentBlock::markdown(format!(
-            "## Delete Training - {}\n\n**Target:** {}\n**Events to delete:** {}",
+            "# Delete Training - {}\n\nTarget: {}\nEvents to delete: {}",
             mode, target_label, count
         )));
 

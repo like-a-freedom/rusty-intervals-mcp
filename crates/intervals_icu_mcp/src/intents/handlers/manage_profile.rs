@@ -219,7 +219,7 @@ impl ManageProfileHandler {
 
         let mut content = Vec::new();
         content.push(ContentBlock::markdown(format!(
-            "## Athlete Profile\n\n**Name:** {}\n**ID:** {}",
+            "# Athlete Profile\nName: {}\nID: {}",
             profile.name.as_deref().unwrap_or("Unknown"),
             profile.id
         )));
@@ -244,7 +244,7 @@ impl ManageProfileHandler {
                 .unwrap_or_else(|| "Not set".to_string());
 
             content.push(ContentBlock::markdown(format!(
-                "### Overview\n\n| Parameter | Value |\n|-----------|-------|\n| Age | {} |\n| Weight | {} |",
+                "Overview\n| Parameter | Value |\n|-----------|-------|\n| Age | {} |\n| Weight | {} |",
                 age, weight
             )));
         }
@@ -255,10 +255,7 @@ impl ManageProfileHandler {
                     let sport_name = sport_display_name(sport);
                     let rendered_ranges = format_hr_zone_ranges(zones);
 
-                    content.push(ContentBlock::markdown(format!(
-                        "### Zones ({})",
-                        sport_name
-                    )));
+                    content.push(ContentBlock::markdown(format!("Zones ({})", sport_name)));
 
                     let mut hr_rows = vec![vec!["Zone".to_string(), "HR Range".to_string()]];
                     for (index, range) in rendered_ranges.iter().enumerate() {
@@ -279,7 +276,7 @@ impl ManageProfileHandler {
                 let sport_name = sport_display_name(primary);
 
                 content.push(ContentBlock::markdown(format!(
-                    "### Thresholds ({})",
+                    "Thresholds ({})",
                     sport_name
                 )));
 
@@ -319,7 +316,7 @@ impl ManageProfileHandler {
         }
 
         if sections.contains(&"metrics".to_string()) {
-            content.push(ContentBlock::markdown("### Metrics".to_string()));
+            content.push(ContentBlock::markdown("Metrics".to_string()));
 
             if let Some(fitness) = parse_fitness_metrics(fitness_summary.as_ref())
                 .or_else(|| parse_fitness_metrics(wellness_for_today.as_ref()))
@@ -435,9 +432,8 @@ impl ManageProfileHandler {
 
         let mut content = Vec::new();
         content.push(ContentBlock::markdown(format!(
-            "## Threshold Update\n\n**Source:** {}\n**Apply to history:** {}\nApply to history: {}",
+            "# Threshold Update\nSource: {}\nApply to history: {}",
             source,
-            if apply { "Yes" } else { "No" },
             if apply { "Yes" } else { "No" }
         )));
 
@@ -470,7 +466,7 @@ impl ManageProfileHandler {
         ]);
         content.push(ContentBlock::table(rows[0].clone(), rows[1..].to_vec()));
         content.push(ContentBlock::markdown(format!(
-            "\nUpdated sport settings for **{}** via Intervals.icu API.{}",
+            "Updated sport settings for {} via Intervals.icu API.{}",
             sport_type,
             if apply {
                 " Historical activities were queued for recalculation."

@@ -160,22 +160,22 @@ impl IntentHandler for AnalyzeRaceHandler {
 
         let mut content = Vec::new();
         content.push(ContentBlock::markdown(
-            "## Race Analysis\n\n*Post-race performance review*",
+            "# Race Analysis\nPost-race performance review",
         ));
 
         // Handle no race found gracefully
         if race.is_none() {
             let summary = if let Some(d) = desc_filter {
                 vec![
-                    format!("- No race found matching '{}'", d),
-                    "- Try a different search term or date range".into(),
-                    "- Check if the activity is tagged as a race".into(),
+                    format!("  No race found matching '{}'", d),
+                    "  Try a different search term or date range".into(),
+                    "  Check if the activity is tagged as a race".into(),
                 ]
             } else {
                 vec![
-                    "- No recent race activities found".into(),
-                    "- Races are typically tagged or have 'race' in the name".into(),
-                    "- Try using description_contains with race name".into(),
+                    "  No recent race activities found".into(),
+                    "  Races are typically tagged or have 'race' in the name".into(),
+                    "  Try using description_contains with race name".into(),
                 ]
             };
 
@@ -264,7 +264,7 @@ impl IntentHandler for AnalyzeRaceHandler {
 
             let name = race.name.as_deref().unwrap_or("Race");
             content.push(ContentBlock::markdown(format!(
-                "### {}\n\n**Date:** {}\n**ID:** {}",
+                "{}\nDate: {}\nID: {}",
                 name, race.start_date_local, race.id
             )));
 
@@ -308,8 +308,8 @@ impl IntentHandler for AnalyzeRaceHandler {
                 }
                 if !execution_lines.is_empty() {
                     content.push(ContentBlock::markdown(format!(
-                        "### Execution Pattern\n\n- {}",
-                        execution_lines.join("\n- ")
+                        "Execution Pattern\n  {}",
+                        execution_lines.join("\n  ")
                     )));
                 }
 
@@ -337,8 +337,8 @@ impl IntentHandler for AnalyzeRaceHandler {
                     }
                     if !performance_lines.is_empty() {
                         content.push(ContentBlock::markdown(format!(
-                            "### Performance Review\n\n- {}",
-                            performance_lines.join("\n- ")
+                            "Performance Review\n  {}",
+                            performance_lines.join("\n  ")
                         )));
                     }
                 }
@@ -346,13 +346,13 @@ impl IntentHandler for AnalyzeRaceHandler {
                 if analysis_mode == RaceAnalysisMode::Recovery {
                     if let Some(recovery_note) = &race_metrics.post_race_recovery_note {
                         content.push(ContentBlock::markdown(format!(
-                            "### Recovery Outlook\n\n- {}",
+                            "Recovery Outlook\n  {}",
                             recovery_note
                         )));
                     }
                 } else if let Some(recovery_note) = &race_metrics.post_race_recovery_note {
                     content.push(ContentBlock::markdown(format!(
-                        "### Post-Race Load Context\n\n- {}",
+                        "Post-Race Load Context\n  {}",
                         recovery_note
                     )));
                 }
@@ -360,7 +360,7 @@ impl IntentHandler for AnalyzeRaceHandler {
 
             if analysis_mode == RaceAnalysisMode::Strategy {
                 content.push(ContentBlock::markdown(
-                    "### Strategy Review\n\n- Focus on pacing discipline, fueling timing, and how effort changed across segments.\n- Compare the first and final third of the race for execution drift.\n- Revisit terrain-specific decisions, aid-station timing, and surges that may have raised cost late in the race.".to_string(),
+                    "Strategy Review\n  Focus on pacing discipline, fueling timing, and how effort changed across segments.\n  Compare the first and final third of the race for execution drift.\n  Revisit terrain-specific decisions, aid-station timing, and surges that may have raised cost late in the race.".to_string(),
                 ));
             }
 
@@ -386,11 +386,11 @@ impl IntentHandler for AnalyzeRaceHandler {
                 });
                 let comparison = if let Some(plan) = matching_plan {
                     format!(
-                        "### Comparison to Plan\n\n- Planned event: {}\n- Planned date: {}\n- Actual race: {}",
+                        "Comparison to Plan\n  Planned event: {}\n  Planned date: {}\n  Actual race: {}",
                         plan.name, plan.start_date_local, name
                     )
                 } else {
-                    "### Comparison to Plan\n\n- No matching planned event found for this race."
+                    "Comparison to Plan\n  No matching planned event found for this race."
                         .to_string()
                 };
                 content.push(ContentBlock::markdown(comparison));
@@ -423,7 +423,7 @@ impl IntentHandler for AnalyzeRaceHandler {
                 .with_suggestions(suggestions)
                 .with_next_actions(next_actions));
         } else {
-            content.push(ContentBlock::markdown("### Results\n\n| Metric | Value |\n|--------|-------|\n| Time | -:-:-:-- |\n| Place | -/- |\n| Pace | -'--\"/km |"));
+            content.push(ContentBlock::markdown("Results\n| Metric | Value |\n|--------|-------|\n| Time | -:-:-:-- |\n| Place | -/- |\n| Pace | -'--\"/km |"));
         }
 
         let suggestions = vec!["Review nutrition and hydration strategy for next race.".into()];

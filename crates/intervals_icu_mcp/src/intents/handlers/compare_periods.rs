@@ -110,7 +110,7 @@ impl IntentHandler for ComparePeriodsHandler {
 
         let mut content = Vec::new();
         content.push(ContentBlock::markdown(format!(
-            "## Comparison: {} vs {}",
+            "# Comparison: {} vs {}",
             a_label, b_label
         )));
 
@@ -181,7 +181,7 @@ impl IntentHandler for ComparePeriodsHandler {
                     vec![requested_metric_label(metric), a_value, b_value, note]
                 })
                 .collect::<Vec<_>>();
-            content.push(ContentBlock::markdown("### Requested Metrics".to_string()));
+            content.push(ContentBlock::markdown("Requested Metrics".to_string()));
             content.push(ContentBlock::table(
                 vec![
                     "Metric".into(),
@@ -193,7 +193,7 @@ impl IntentHandler for ComparePeriodsHandler {
             ));
         }
         content.push(ContentBlock::markdown(format!(
-            "### Trend Context\n\n- Activity delta: {}\n- Time delta: {}\n- Distance delta: {}\n- Elevation delta: {}\n- Current period weekly average: {:.1} hrs\n- {} consistency: {} ({:.0}% of {} planned sessions)\n- {} consistency: {} ({:.0}% of {} planned sessions)",
+            "Trend Context\n  Activity delta: {}\n  Time delta: {}\n  Distance delta: {}\n  Elevation delta: {}\n  Current period weekly average: {:.1} hrs\n  {} consistency: {} ({:.0}% of {} planned sessions)\n  {} consistency: {} ({:.0}% of {} planned sessions)",
             trend
                 .activity_count_delta
                 .map(|delta| format!("{:+}", delta))

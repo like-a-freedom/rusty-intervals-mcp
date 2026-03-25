@@ -364,7 +364,7 @@ impl IntentHandler for AssessRecoveryHandler {
         context.guidance = build_guidance(&context.metrics, &context.alerts);
 
         content.push(ContentBlock::markdown(format!(
-            "## Recovery Assessment ({} - {})\n\n**Readiness for:** {}",
+            "# Recovery Assessment ({} - {})\nReadiness for: {}",
             start_date.format("%d %b"),
             end_date.format("%d %b"),
             planned_activity.as_str()
@@ -382,7 +382,7 @@ impl IntentHandler for AssessRecoveryHandler {
             && (wellness.avg_resting_hr.is_some() || wellness.avg_hrv.is_some())
         {
             content.push(ContentBlock::markdown(
-                    "### Recovery Index\n\n- Recovery Index unavailable because either HRV or resting HR is missing."
+                    "Recovery Index\nRecovery Index unavailable because either HRV or resting HR is missing."
                         .to_string(),
                 ));
         }
@@ -400,14 +400,13 @@ impl IntentHandler for AssessRecoveryHandler {
 
         if include_red_flags {
             let flags_md = if red_flags.is_empty() {
-                "**Red Flags:** None detected ✅\n\n**Recommendation:** Ready for key workout"
-                    .to_string()
+                "Red Flags: None detected\nRecommendation: Ready for key workout".to_string()
             } else {
-                let mut md = String::from("**Red Flags Detected:** ⚠️\n\n");
+                let mut md = String::from("Red Flags Detected:\n");
                 for flag in &red_flags {
-                    md.push_str(&format!("- {}\n", flag));
+                    md.push_str(&format!("  {}\n", flag));
                 }
-                md.push_str("\n**Recommendation:** Consider recovery before intensity");
+                md.push_str("\nRecommendation: Consider recovery before intensity");
                 md
             };
             content.push(ContentBlock::markdown(flags_md));
@@ -416,7 +415,7 @@ impl IntentHandler for AssessRecoveryHandler {
         let (readiness_status, readiness_note) =
             planned_activity.readiness_copy(&wellness, &fitness, &red_flags);
         content.push(ContentBlock::markdown(format!(
-            "### Activity-Specific Readiness\n\n- **{}** for {} work.\n- {}",
+            "Activity-Specific Readiness\n  {} for {} work.\n  {}",
             readiness_status,
             planned_activity.as_str(),
             readiness_note
