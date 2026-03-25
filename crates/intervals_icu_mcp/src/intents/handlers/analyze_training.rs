@@ -1032,7 +1032,7 @@ impl AnalyzeTrainingHandler {
                 )));
             }
 
-            content.push(ContentBlock::markdown(build_load_management_markdown(
+            content.push(ContentBlock::markdown(build_load_management_text(
                 if context.metrics.load_management.is_some() || load_history_sufficient {
                     context.metrics.load_management.as_ref()
                 } else {
@@ -1407,7 +1407,7 @@ mod tests {
 
     #[test]
     fn load_management_markdown_renders_acwr_and_monotony_values() {
-        let markdown = build_load_management_markdown(Some(&LoadManagementMetrics {
+        let markdown = build_load_management_text(Some(&LoadManagementMetrics {
             acwr: Some(AcwrMetrics {
                 acute_load: 420.0,
                 chronic_load: 350.0,
@@ -1428,7 +1428,7 @@ mod tests {
 
     #[test]
     fn load_management_markdown_reports_when_history_is_unavailable() {
-        let markdown = build_load_management_markdown(None);
+        let markdown = build_load_management_text(None);
 
         assert!(markdown.contains("Load Context"));
         assert!(markdown.contains("unavailable"));
