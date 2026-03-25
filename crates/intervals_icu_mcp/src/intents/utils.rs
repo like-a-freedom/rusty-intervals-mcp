@@ -264,19 +264,40 @@ pub fn data_availability_block(
     all_available: bool,
 ) -> Option<ContentBlock> {
     if !degraded_mode_reasons.is_empty() {
-        return Some(ContentBlock::markdown(format!(
-            "### Data Availability\n\n- {}",
-            degraded_mode_reasons.join("\n- ")
-        )));
+        let mut text = "Data availability".to_string();
+        for reason in degraded_mode_reasons {
+            text.push('\n');
+            text.push_str(&format!("  {reason}"));
+        }
+        return Some(ContentBlock::markdown(text));
     }
 
     if all_available {
         return Some(ContentBlock::markdown(
-            "### Data Availability\n\n✅ All data sources available".to_string(),
+            "Data availability: all sources available".to_string(),
         ));
     }
 
     None
+}
+
+// ============================================================================
+// Compact Markdown Helpers
+// ============================================================================
+
+/// Compact section header: "# Title" (was "## Title")
+pub fn compact_section(title: &str) -> String {
+    format!("# {title}")
+}
+
+/// Compact key-value: "Key: value" (was "**Key:** value")
+pub fn compact_kv(key: &str, value: impl std::fmt::Display) -> String {
+    format!("{key}: {value}")
+}
+
+/// Compact list item: "  text" (was "- text")
+pub fn compact_item(text: &str) -> String {
+    format!("  {text}")
 }
 
 // ============================================================================
@@ -495,8 +516,10 @@ mod tests {
 
         match block {
             crate::intents::ContentBlock::Markdown { markdown } => {
-                assert!(markdown.contains("Data Availability"));
+                assert!(markdown.contains("Data availability"));
                 assert!(markdown.contains("stream data unavailable"));
+                assert!(!markdown.contains("###"));
+                assert!(!markdown.contains("✅"));
             }
             other => panic!("unexpected block: {:?}", other),
         }
@@ -509,7 +532,8 @@ mod tests {
 
         match block {
             crate::intents::ContentBlock::Markdown { markdown } => {
-                assert!(markdown.contains("All data sources available"));
+                assert!(markdown.contains("all sources available"));
+                assert!(!markdown.contains("✅"));
             }
             other => panic!("unexpected block: {:?}", other),
         }
@@ -783,5 +807,22 @@ mod tests {
     fn test_calculate_percent_change_negative_old_value() {
         let result = calculate_percent_change(-100.0, -90.0);
         assert!((result - (-10.0)).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_compact_section() {
+        assert_eq!(compact_section("Title"), "# Title");
+        assert_eq!(compact_section("Recovery"), "# Recovery");
+    }
+
+    #[test]
+    fn test_compact_kv() {
+        assert_eq!(compact_kv("Status", "good"), "Status: good");
+        assert_eq!(compact_kv("Count", 42), "Count: 42");
+    }
+
+    #[test]
+    fn test_compact_item() {
+        assert_eq!(compact_item("first"), "  first");
     }
 }
