@@ -249,16 +249,16 @@ impl AnalyzeTrainingHandler {
         if matching.is_empty() {
             let mut content = Vec::new();
             content.push(ContentBlock::markdown(format!(
-                "## Analysis: {}\n\n**Status:** No activities found",
+                "# Analysis: {}\nStatus: No activities found",
                 date
             )));
 
             let mut summary = vec![
-                format!("- No training activities recorded for {}", date),
-                "- This could be a rest day or activities haven't been synced yet".into(),
+                format!("  No training activities recorded for {}", date),
+                "  This could be a rest day or activities haven't been synced yet".into(),
             ];
             if let Some(d) = desc_filter {
-                summary.push(format!("- Search filter: '{}'", d));
+                summary.push(format!("  Search filter: '{}'", d));
             }
 
             content.push(ContentBlock::markdown(summary.join("\n")));
@@ -283,26 +283,26 @@ impl AnalyzeTrainingHandler {
         if matching.len() > 1 {
             let mut content = Vec::new();
             content.push(ContentBlock::markdown(format!(
-                "## Analysis: {}\n\n**Status:** Multiple activities found",
+                "# Analysis: {}\nStatus: Multiple activities found",
                 date
             )));
 
             let mut summary = vec![format!(
-                "- Found {} activities for {}",
+                "  Found {} activities for {}",
                 matching.len(),
                 date
             )];
             if let Some(d) = desc_filter {
                 summary.push(format!(
-                    "- Search filter: '{}' matched {} activities",
+                    "  Search filter: '{}' matched {} activities",
                     d,
                     matching.len()
                 ));
             }
-            summary.push("Please be more specific with your search.".into());
+            summary.push("  Please be more specific with your search.".into());
 
             // List found activities
-            let mut activities_list = vec!["**Found activities:**".into()];
+            let mut activities_list = vec!["Found activities:".into()];
             for (i, a) in matching.iter().enumerate() {
                 activities_list.push(format!(
                     "{}. {} (ID: {})",
@@ -314,7 +314,7 @@ impl AnalyzeTrainingHandler {
             content.push(ContentBlock::markdown(activities_list.join("\n")));
 
             // Build explicit retry examples for each activity
-            let mut retry_examples = vec!["**To analyze a specific activity, retry with:**".into()];
+            let mut retry_examples = vec!["To analyze a specific activity, retry with:".into()];
             for (i, a) in matching.iter().enumerate() {
                 let name = a.name.as_deref().unwrap_or("Unknown");
                 let id = &a.id;
@@ -322,7 +322,7 @@ impl AnalyzeTrainingHandler {
                 let key_phrase = name.split(['-', '—', ':']).next().unwrap_or(name).trim();
 
                 retry_examples.push(format!(
-                    "{}. **{}** → `description_contains: \"{}\"` or ID: `{}`",
+                    "{}. {} → `description_contains: \"{}\"` or ID: `{}`",
                     i + 1,
                     name,
                     key_phrase,
@@ -461,7 +461,7 @@ impl AnalyzeTrainingHandler {
 
         let mut content = Vec::new();
         content.push(ContentBlock::markdown(format!(
-            "## Analysis: {}\n\n**Date:** {}\n**ID:** {}\n**Type:** {}",
+            "# Analysis: {}\nDate: {}\nID: {}\nType: {}",
             activity_name,
             date,
             activity_id,
@@ -482,7 +482,7 @@ impl AnalyzeTrainingHandler {
                 workout_detail.and_then(Value::as_object),
                 &requested_metrics,
             );
-            content.push(ContentBlock::markdown("### Requested Metrics".to_string()));
+            content.push(ContentBlock::markdown("Requested Metrics".to_string()));
             content.push(ContentBlock::table(
                 vec!["Metric".into(), "Value".into(), "Status".into()],
                 rows,
@@ -492,7 +492,7 @@ impl AnalyzeTrainingHandler {
         if analysis_mode.show_detailed_breakdown() {
             let rows = build_detailed_workout_rows(workout_detail);
             if !rows.is_empty() {
-                content.push(ContentBlock::markdown("### Detailed Breakdown".to_string()));
+                content.push(ContentBlock::markdown("Detailed Breakdown".to_string()));
                 content.push(ContentBlock::table(
                     vec!["Metric".into(), "Value".into()],
                     rows,
@@ -502,7 +502,7 @@ impl AnalyzeTrainingHandler {
 
         let activity_message_rows = build_activity_message_rows(&fetched.activity_messages);
         if !activity_message_rows.is_empty() {
-            content.push(ContentBlock::markdown("### Workout Comments".to_string()));
+            content.push(ContentBlock::markdown("Workout Comments".to_string()));
             content.push(ContentBlock::table(
                 vec![
                     "When".into(),
@@ -531,8 +531,8 @@ impl AnalyzeTrainingHandler {
                 ));
             }
             content.push(ContentBlock::markdown(format!(
-                "### Execution Context\n\n- {}",
-                lines.join("\n- ")
+                "Execution Context\n  {}",
+                lines.join("\n  ")
             )));
         }
 
@@ -550,7 +550,7 @@ impl AnalyzeTrainingHandler {
                 };
 
                 content.push(ContentBlock::markdown(
-                    "\n### Interval Analysis\n\n**Detected Intervals:**".to_string(),
+                    "\nInterval Analysis\nDetected Intervals:".to_string(),
                 ));
 
                 let interval_rows = build_interval_analysis_rows(
@@ -569,7 +569,7 @@ impl AnalyzeTrainingHandler {
                 ));
             } else {
                 content.push(ContentBlock::markdown(
-                    "### Interval Analysis\n\n- No structured interval data available for this workout."
+                    "Interval Analysis\n  No structured interval data available for this workout."
                         .to_string(),
                 ));
             }
@@ -587,7 +587,7 @@ impl AnalyzeTrainingHandler {
         // Power histogram - add note if requested but unavailable
         if include_hist && fetched.power_histogram.is_none() {
             content.push(ContentBlock::markdown(
-                "\n### Power Histogram\n\n- Power histogram unavailable - this workout may not have power meter data.".to_string(),
+                "\nPower Histogram\n  Power histogram unavailable - this workout may not have power meter data.".to_string(),
             ));
         } else {
             append_histogram_section(
@@ -635,8 +635,8 @@ impl AnalyzeTrainingHandler {
             }
             if !findings.is_empty() {
                 content.push(ContentBlock::markdown(format!(
-                    "### Quality Findings\n\n- {}",
-                    findings.join("\n- ")
+                    "Quality Findings\n  {}",
+                    findings.join("\n  ")
                 )));
             }
         }
@@ -759,28 +759,28 @@ impl AnalyzeTrainingHandler {
         if period.is_empty() {
             let mut content = Vec::new();
             content.push(ContentBlock::markdown(format!(
-                "## Period Analysis: {} to {}\n\n**Status:** No activities found",
+                "# Period: {} to {}\nStatus: No activities found",
                 start, end
             )));
 
             let summary = [
                 format!(
-                    "- No completed or planned workouts were found between {} and {}",
+                    "  No completed or planned workouts were found between {} and {}",
                     start, end
                 ),
                 if calendar_events.is_empty() {
-                    "- No calendar events were found in this period either".into()
+                    "  No calendar events were found in this period either".into()
                 } else {
                     format!(
-                        "- {} calendar event(s) found in this window; review them below",
+                        "  {} calendar event(s) found in this window; review them below",
                         calendar_events.len()
                     )
                 },
-                "- This is unusual - consider checking:".into(),
-                "  - Device sync status".into(),
-                "  - Date range correctness".into(),
-                "  - Training calendar / planned workout availability".into(),
-                "  - Account connection".into(),
+                "  This is unusual - consider checking:".into(),
+                "    Device sync status".into(),
+                "    Date range correctness".into(),
+                "    Training calendar / planned workout availability".into(),
+                "    Account connection".into(),
             ]
             .join("\n");
 
@@ -788,9 +788,7 @@ impl AnalyzeTrainingHandler {
 
             if !calendar_events.is_empty() {
                 let calendar_rows = build_calendar_event_rows(&calendar_events);
-                content.push(ContentBlock::markdown(
-                    "### Calendar Events in Window".to_string(),
-                ));
+                content.push(ContentBlock::markdown("Calendar Events".to_string()));
                 content.push(ContentBlock::table(
                     vec![
                         "Date".into(),
@@ -907,7 +905,7 @@ impl AnalyzeTrainingHandler {
 
         let mut content = Vec::new();
         content.push(ContentBlock::markdown(format!(
-            "## Period Analysis: {} - {}",
+            "# Period: {} to {}",
             start, end
         )));
 
@@ -967,9 +965,7 @@ impl AnalyzeTrainingHandler {
                 })
                 .collect::<Vec<_>>();
 
-            content.push(ContentBlock::markdown(
-                "### Planned Workouts in Window".to_string(),
-            ));
+            content.push(ContentBlock::markdown("Planned Workouts".to_string()));
             content.push(ContentBlock::table(
                 vec![
                     "Date".into(),
@@ -1010,7 +1006,7 @@ impl AnalyzeTrainingHandler {
                 &period_snapshot,
                 &fetched.activity_details,
             );
-            content.push(ContentBlock::markdown("### Requested Metrics".to_string()));
+            content.push(ContentBlock::markdown("Requested Metrics".to_string()));
             content.push(ContentBlock::table(
                 vec!["Metric".into(), "Value".into(), "Status".into()],
                 rows,
@@ -1021,7 +1017,7 @@ impl AnalyzeTrainingHandler {
         if show_context_sections {
             if let Some(trend) = &context.metrics.trend {
                 content.push(ContentBlock::markdown(format!(
-                    "### Trend Context\n\n- Activity delta: {}\n- Time delta: {}\n- Distance delta: {}\n- Elevation delta: {}",
+                    "Trend Context\n  Activity delta: {}\n  Time delta: {}\n  Distance delta: {}\n  Elevation delta: {}",
                     trend
                         .activity_count_delta
                         .map(|delta| format!("{:+}", delta))
@@ -1059,7 +1055,7 @@ impl AnalyzeTrainingHandler {
                 .rev()
                 .map(|(date, load)| vec![date.to_string(), format!("{load:.1}")])
                 .collect::<Vec<_>>();
-            content.push(ContentBlock::markdown("### Daily Load Series".to_string()));
+            content.push(ContentBlock::markdown("Daily Load Series".to_string()));
             content.push(ContentBlock::table(
                 vec!["Date".into(), "Load".into()],
                 rows,
@@ -1090,7 +1086,7 @@ impl AnalyzeTrainingHandler {
                 })
                 .collect::<Vec<_>>();
             if !rows.is_empty() {
-                content.push(ContentBlock::markdown("### Interval Sessions".to_string()));
+                content.push(ContentBlock::markdown("Interval Sessions".to_string()));
                 content.push(ContentBlock::table(
                     vec!["Date".into(), "Workout".into()],
                     rows,
@@ -3629,7 +3625,7 @@ mod tests {
         assert!(result.is_ok());
         let output = result.unwrap();
         let content_str = format!("{:?}", output.content);
-        assert!(content_str.contains("Period Analysis"));
+        assert!(content_str.contains("Period:"));
         assert!(content_str.contains("2026-03-01"));
         assert!(content_str.contains("2026-03-07"));
     }
@@ -3812,7 +3808,7 @@ mod tests {
         let output = result.unwrap();
         let content_str = format!("{:?}", output.content);
         // Should only include the interval run
-        assert!(content_str.contains("Period Analysis"));
+        assert!(content_str.contains("Period:"));
     }
 
     #[tokio::test]
@@ -3911,7 +3907,7 @@ mod tests {
         let output = result.unwrap();
         let content_str = format!("{:?}", output.content);
         // Interval sessions section appears when interval workouts found
-        assert!(content_str.contains("Period Analysis"));
+        assert!(content_str.contains("Period:"));
     }
 
     #[tokio::test]

@@ -5,9 +5,7 @@ use intervals_icu_mcp::intents::{ContentBlock, IntentOutput};
 
 fn sample_single_activity_output() -> IntentOutput {
     IntentOutput::new(vec![
-        ContentBlock::markdown(
-            "## Analysis: 2026-03-20\n\n**Date:** 2026-03-20\n**ID:** 12345\n**Type:** Run",
-        ),
+        ContentBlock::markdown("# Analysis: 2026-03-20\nDate: 2026-03-20\nID: 12345\nType: Run"),
         ContentBlock::table(
             vec!["Metric".into(), "Value".into()],
             vec![
@@ -16,7 +14,7 @@ fn sample_single_activity_output() -> IntentOutput {
                 vec!["Avg HR".into(), "155 bpm".into()],
             ],
         ),
-        ContentBlock::markdown("### Requested Metrics"),
+        ContentBlock::markdown("Requested Metrics"),
         ContentBlock::table(
             vec!["Metric".into(), "Value".into(), "Status".into()],
             vec![
@@ -24,9 +22,9 @@ fn sample_single_activity_output() -> IntentOutput {
                 vec!["DISTANCE".into(), "10.50 km".into(), "available".into()],
             ],
         ),
-        ContentBlock::markdown("### Quality Findings"),
-        ContentBlock::markdown("- Average power tracked at 220 W."),
-        ContentBlock::markdown("### Interval Analysis\n\n**Detected Intervals:** 6"),
+        ContentBlock::markdown("Quality Findings"),
+        ContentBlock::markdown("  Average power tracked at 220 W."),
+        ContentBlock::markdown("Interval Analysis\nDetected Intervals: 6"),
         ContentBlock::table(
             vec!["#".into(), "Duration".into(), "HR".into(), "Power".into()],
             vec![
@@ -36,7 +34,9 @@ fn sample_single_activity_output() -> IntentOutput {
         ),
     ])
     .with_suggestions(vec!["Strong intervals — power held above target.".into()])
-    .with_next_actions(vec!["To compare with previous week: compare_periods".into()])
+    .with_next_actions(vec![
+        "To compare with previous week: compare_periods".into(),
+    ])
 }
 
 #[test]

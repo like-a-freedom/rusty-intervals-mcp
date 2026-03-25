@@ -49,9 +49,7 @@ fn baseline_assess_recovery() {
 #[test]
 fn baseline_analyze_training_single_activity() {
     let output = IntentOutput::new(vec![
-        ContentBlock::markdown(
-            "## Analysis: 2026-03-20\n\n**Date:** 2026-03-20\n**ID:** 12345\n**Type:** Run",
-        ),
+        ContentBlock::markdown("# Analysis: 2026-03-20\nDate: 2026-03-20\nID: 12345\nType: Run"),
         ContentBlock::table(
             vec!["Metric".into(), "Value".into()],
             vec![
@@ -60,7 +58,7 @@ fn baseline_analyze_training_single_activity() {
                 vec!["Avg HR".into(), "155 bpm".into()],
             ],
         ),
-        ContentBlock::markdown("### Requested Metrics"),
+        ContentBlock::markdown("Requested Metrics"),
         ContentBlock::table(
             vec!["Metric".into(), "Value".into(), "Status".into()],
             vec![
@@ -69,8 +67,8 @@ fn baseline_analyze_training_single_activity() {
                 vec!["PACE".into(), "5:00 /km".into(), "available".into()],
             ],
         ),
-        ContentBlock::markdown("### Quality Findings"),
-        ContentBlock::markdown("- Average power tracked at 220 W."),
+        ContentBlock::markdown("Quality Findings"),
+        ContentBlock::markdown("  Average power tracked at 220 W."),
     ])
     .with_suggestions(vec!["Consistent pacing throughout.".into()]);
 
