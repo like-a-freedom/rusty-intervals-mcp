@@ -178,8 +178,8 @@ pub struct LoadManagementMetrics {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct DecouplingMetrics {
-    pub efficiency_factor_first_half: f64,
-    pub efficiency_factor_second_half: f64,
+    pub efficiency_factor_first_half: Option<f64>,
+    pub efficiency_factor_second_half: Option<f64>,
     pub decoupling_pct: f64,
     pub state: String,
 }
@@ -365,8 +365,8 @@ mod tests {
             avg_power: Some(235.0),
             efficiency_factor: Some(1.59),
             aerobic_decoupling: Some(DecouplingMetrics {
-                efficiency_factor_first_half: 1.62,
-                efficiency_factor_second_half: 1.54,
+                efficiency_factor_first_half: Some(1.62),
+                efficiency_factor_second_half: Some(1.54),
                 decoupling_pct: 4.94,
                 state: "acceptable".into(),
             }),
@@ -400,8 +400,8 @@ mod tests {
             workout: Some(WorkoutMetricsContext {
                 efficiency_factor: Some(1.48),
                 aerobic_decoupling: Some(DecouplingMetrics {
-                    efficiency_factor_first_half: 1.5,
-                    efficiency_factor_second_half: 1.44,
+                    efficiency_factor_first_half: Some(1.5),
+                    efficiency_factor_second_half: Some(1.44),
                     decoupling_pct: 4.0,
                     state: "acceptable".into(),
                 }),
