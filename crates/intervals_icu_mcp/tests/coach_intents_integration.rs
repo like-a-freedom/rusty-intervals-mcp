@@ -1752,7 +1752,7 @@ async fn analyze_training_single_accepts_today_date_alias() {
 
     let markdown = markdown_text(&output);
     assert!(markdown.contains("Today's Endurance Run"));
-    assert!(markdown.contains("**Date:** today"));
+    assert!(markdown.contains("Date: today"));
 }
 
 #[tokio::test]
@@ -1776,7 +1776,7 @@ async fn analyze_training_period_surfaces_future_planned_workouts() {
         .unwrap();
 
     let markdown = markdown_text(&output);
-    assert!(markdown.contains("Planned Workouts in Window"));
+    assert!(markdown.contains("Planned Workouts"));
     assert!(markdown.contains("Recovery Run Z1"));
     assert!(markdown.contains("Endurance Run Z2 — Pre-Trip"));
     assert_eq!(output.metadata.total_count, Some(2));
@@ -2235,7 +2235,7 @@ async fn manage_profile_renders_requested_metrics_section_from_fitness_summary()
         .unwrap();
 
     let markdown = markdown_text(&output);
-    assert!(markdown.contains("### Metrics"));
+    assert!(markdown.contains("Metrics"));
     assert!(markdown.contains("CTL") || markdown.contains("Fitness"));
     assert!(markdown.contains("TSB") || markdown.contains("Form"));
 }

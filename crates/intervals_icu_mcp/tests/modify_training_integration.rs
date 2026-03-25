@@ -27,7 +27,7 @@ impl TrackingMockClient {
             upcoming_workouts: json!([
                 {
                     "id": 94131981,
-                    "start_date_local": "2026-03-23",
+                    "start_date_local": "2026-03-26",
                     "name": "Gym — Legs (Recovery Week -30%)",
                     "category": "WORKOUT",
                     "description": "Strength session focused on neural stimulus and low soreness. (Recovery week -30% volume)",
@@ -48,7 +48,7 @@ impl TrackingMockClient {
             upcoming_workouts: json!([
                 {
                     "id": 94131991,
-                    "start_date_local": "2026-03-23",
+                    "start_date_local": "2026-03-26",
                     "name": "Tempo Session",
                     "category": "WORKOUT",
                     "description": "Tempo build workout",
@@ -58,7 +58,7 @@ impl TrackingMockClient {
                 },
                 {
                     "id": 94131992,
-                    "start_date_local": "2026-03-24",
+                    "start_date_local": "2026-03-27",
                     "name": "Tempo Session",
                     "category": "WORKOUT",
                     "description": "Tempo build workout",
@@ -68,7 +68,7 @@ impl TrackingMockClient {
                 },
                 {
                     "id": 94131993,
-                    "start_date_local": "2026-03-25",
+                    "start_date_local": "2026-03-28",
                     "name": "Easy Run",
                     "category": "WORKOUT",
                     "description": "Recovery run",
@@ -89,7 +89,7 @@ impl TrackingMockClient {
             upcoming_workouts: json!([
                 {
                     "id": 94131994,
-                    "start_date_local": "2026-03-23",
+                    "start_date_local": "2026-03-26",
                     "name": "City Marathon",
                     "category": "RACE_A",
                     "description": "Race day",
@@ -99,7 +99,7 @@ impl TrackingMockClient {
                 },
                 {
                     "id": 94131995,
-                    "start_date_local": "2026-03-24",
+                    "start_date_local": "2026-03-27",
                     "name": "Sick day",
                     "category": "SICK",
                     "description": "Out sick, rest only",
@@ -481,7 +481,7 @@ async fn modify_training_dry_run_finds_future_workout_by_description() {
         .execute(
             json!({
                 "action": "modify",
-                "target_date": "2026-03-23",
+                "target_date": "2026-03-26",
                 "target_description_contains": "neural stimulus",
                 "new_duration": "1:00",
                 "dry_run": true,
@@ -510,7 +510,7 @@ async fn modify_training_applies_duration_and_description_updates() {
         .execute(
             json!({
                 "action": "modify",
-                "target_date": "2026-03-23",
+                "target_date": "2026-03-26",
                 "target_description_contains": "neural stimulus",
                 "new_duration": "1:00",
                 "new_description": "Strength session focused on neural stimulus. Duration 1h.",
@@ -611,9 +611,9 @@ async fn modify_training_normalizes_new_date_before_update() {
         .execute(
             json!({
                 "action": "modify",
-                "target_date": "2026-03-23",
+                "target_date": "2026-03-26",
                 "target_description_contains": "neural stimulus",
-                "new_date": "2026-03-24",
+                "new_date": "2026-03-27",
                 "idempotency_token": "modify-normalized-date"
             }),
             client,
@@ -626,7 +626,7 @@ async fn modify_training_normalizes_new_date_before_update() {
     assert_eq!(updates.len(), 1);
     assert_eq!(
         updates[0].1.get("start_date_local").and_then(Value::as_str),
-        Some("2026-03-24T00:00:00")
+        Some("2026-03-27T00:00:00")
     );
 }
 
@@ -639,7 +639,7 @@ async fn modify_training_reports_filter_miss_when_date_has_events() {
         .execute(
             json!({
                 "action": "modify",
-                "target_date": "2026-03-23",
+                "target_date": "2026-03-26",
                 "target_description_contains": "tempo",
                 "new_duration": "1:00",
                 "dry_run": true,
@@ -666,7 +666,7 @@ async fn modify_training_finds_future_race_events() {
         .execute(
             json!({
                 "action": "modify",
-                "target_date": "2026-03-23",
+                "target_date": "2026-03-26",
                 "target_description_contains": "marathon",
                 "new_name": "City Marathon — Confirmed",
                 "idempotency_token": "future-race-event"
@@ -695,7 +695,7 @@ async fn modify_training_finds_future_sick_events() {
         .execute(
             json!({
                 "action": "delete",
-                "target_date": "2026-03-24",
+                "target_date": "2026-03-27",
                 "target_description_contains": "sick",
                 "idempotency_token": "future-sick-event"
             }),
@@ -724,7 +724,7 @@ async fn router_allows_apply_after_dry_run_with_same_token() {
             "modify_training",
             json!({
                 "action": "modify",
-                "target_date": "2026-03-23",
+                "target_date": "2026-03-26",
                 "target_description_contains": "neural stimulus",
                 "new_duration": "1:00",
                 "dry_run": true,
@@ -741,7 +741,7 @@ async fn router_allows_apply_after_dry_run_with_same_token() {
             "modify_training",
             json!({
                 "action": "modify",
-                "target_date": "2026-03-23",
+                "target_date": "2026-03-26",
                 "target_description_contains": "neural stimulus",
                 "new_duration": "1:00",
                 "idempotency_token": "shared-preview-apply-token"
@@ -807,8 +807,8 @@ async fn modify_training_range_updates_all_matching_events() {
         .execute(
             json!({
                 "action": "modify",
-                "target_date_from": "2026-03-23",
-                "target_date_to": "2026-03-24",
+                "target_date_from": "2026-03-26",
+                "target_date_to": "2026-03-27",
                 "target_description_contains": "tempo",
                 "new_duration": "1:00",
                 "new_description": "Adjusted tempo block",
@@ -836,8 +836,8 @@ async fn delete_training_range_bulk_deletes_all_matching_events() {
         .execute(
             json!({
                 "action": "delete",
-                "target_date_from": "2026-03-23",
-                "target_date_to": "2026-03-24",
+                "target_date_from": "2026-03-26",
+                "target_date_to": "2026-03-27",
                 "target_description_contains": "tempo",
                 "idempotency_token": "delete-range-block"
             }),
