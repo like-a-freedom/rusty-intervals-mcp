@@ -3,14 +3,14 @@ use serde_json::Value;
 
 use crate::intents::ContentBlock;
 
-pub(crate) fn build_load_management_markdown(
+pub(crate) fn build_load_management_text(
     metrics: Option<&crate::domains::coach::LoadManagementMetrics>,
 ) -> String {
-    let mut lines = vec!["### Load Context".to_string(), String::new()];
+    let mut lines = vec!["Load Context".to_string()];
 
     let Some(metrics) = metrics else {
         lines.push(
-            "- Load-management context unavailable because the lookback history is too short."
+            "  Load-management context unavailable because the lookback history is too short."
                 .to_string(),
         );
         return lines.join("\n");
@@ -18,57 +18,34 @@ pub(crate) fn build_load_management_markdown(
 
     if let Some(acwr) = &metrics.acwr {
         lines.push(format!(
-            "- ACWR: {:.2} ({}) — acute {:.1}, chronic {:.1}",
+            "  ACWR: {:.2} ({}) — acute {:.1}, chronic {:.1}",
             acwr.ratio, acwr.state, acwr.acute_load, acwr.chronic_load
         ));
     }
 
     if let Some(monotony) = metrics.monotony {
-        lines.push(format!("- Monotony: {:.2}", monotony));
+        lines.push(format!("  Monotony: {:.2}", monotony));
     }
 
     if let Some(strain) = metrics.strain {
-        lines.push(format!("- Strain: {:.0}", strain));
+        lines.push(format!("  Strain: {:.0}", strain));
     }
 
     if let Some(stress_tolerance) = metrics.stress_tolerance {
-        let status = if (3.0..=6.0).contains(&stress_tolerance) {
-            "✅"
-        } else if stress_tolerance > 6.0 {
-            "⚠️"
-        } else {
-            "⚪"
-        };
-        lines.push(format!(
-            "- Stress Tolerance: {:.2} {}",
-            stress_tolerance, status
-        ));
+        lines.push(format!("  Stress Tolerance: {:.2}", stress_tolerance));
     }
 
     if let Some(fatigue_index) = metrics.fatigue_index {
-        let status = if fatigue_index <= 2.5 {
-            "✅"
-        } else {
-            "⚠️"
-        };
-        lines.push(format!("- Fatigue Index: {:.2} {}", fatigue_index, status));
+        lines.push(format!("  Fatigue Index: {:.2}", fatigue_index));
     }
 
     if let Some(durability_index) = metrics.durability_index {
-        let status = if durability_index >= 0.9 {
-            "✅"
-        } else {
-            "⚠️"
-        };
-        lines.push(format!(
-            "- Durability Index: {:.3} {}",
-            durability_index, status
-        ));
+        lines.push(format!("  Durability Index: {:.3}", durability_index));
     }
 
-    if lines.len() == 2 {
+    if lines.len() == 1 {
         lines.push(
-            "- Load-management context unavailable because no deterministic load signal was found."
+            "  Load-management context unavailable because no deterministic load signal was found."
                 .to_string(),
         );
     }
@@ -829,7 +806,7 @@ pub(crate) fn append_histogram_section(
     {
         let zone_rows = build_zone_distribution_rows(zones);
         if !zone_rows.is_empty() {
-            content.push(ContentBlock::markdown(format!("\n### {title}\n")));
+            content.push(ContentBlock::markdown(title.to_string()));
             content.push(ContentBlock::table(
                 vec!["Zone".into(), "Time".into(), "%".into()],
                 zone_rows,
@@ -841,7 +818,7 @@ pub(crate) fn append_histogram_section(
     if let Some(buckets) = payload.as_array() {
         let range_rows = build_range_histogram_rows(buckets, range_unit);
         if !range_rows.is_empty() {
-            content.push(ContentBlock::markdown(format!("\n### {title}\n")));
+            content.push(ContentBlock::markdown(title.to_string()));
             content.push(ContentBlock::table(
                 vec!["Range".into(), "Time".into()],
                 range_rows,
@@ -851,7 +828,7 @@ pub(crate) fn append_histogram_section(
 
         let rows = build_bucket_histogram_rows(buckets, average_key, start_suffix);
         if !rows.is_empty() {
-            content.push(ContentBlock::markdown(format!("\n### {title}\n")));
+            content.push(ContentBlock::markdown(title.to_string()));
             content.push(ContentBlock::table(
                 vec![
                     "Bucket Start".into(),
@@ -944,7 +921,7 @@ pub(crate) fn append_best_efforts_section(content: &mut Vec<ContentBlock>, best_
         return;
     }
 
-    content.push(ContentBlock::markdown("\n### Best Efforts\n".to_string()));
+    content.push(ContentBlock::markdown("Best Efforts".to_string()));
 
     let has_legacy_hr = arr
         .iter()
@@ -1003,7 +980,7 @@ pub(crate) fn append_best_efforts_section(content: &mut Vec<ContentBlock>, best_
 pub(crate) fn append_stream_insights(content: &mut Vec<ContentBlock>, streams: Option<&Value>) {
     let Some(streams) = streams.and_then(Value::as_object) else {
         content.push(ContentBlock::markdown(
-            "### Stream Insights\n\n- Stream data requested but unavailable.".to_string(),
+            "Stream Insights\n  Stream data requested but unavailable.".to_string(),
         ));
         return;
     };
@@ -1055,12 +1032,12 @@ pub(crate) fn append_stream_insights(content: &mut Vec<ContentBlock>, streams: O
 
     if rows.is_empty() {
         content.push(ContentBlock::markdown(
-            "### Stream Insights\n\n- Stream data requested but unavailable.".to_string(),
+            "Stream Insights\n  Stream data requested but unavailable.".to_string(),
         ));
         return;
     }
 
-    content.push(ContentBlock::markdown("### Stream Insights".to_string()));
+    content.push(ContentBlock::markdown("Stream Insights".to_string()));
     content.push(ContentBlock::table(
         vec!["Stream".into(), "Points".into(), "Min".into(), "Max".into()],
         rows,
@@ -1073,25 +1050,26 @@ mod tests {
     use crate::domains::coach::LoadManagementMetrics;
 
     #[test]
-    fn load_management_markdown_renders_durability_index_robust() {
+    fn load_management_text_renders_durability_index_robust() {
         let metrics = LoadManagementMetrics {
             durability_index: Some(0.92),
             ..Default::default()
         };
-        let markdown = build_load_management_markdown(Some(&metrics));
-        assert!(markdown.contains("Durability Index"));
-        assert!(markdown.contains("0.920"));
+        let text = build_load_management_text(Some(&metrics));
+        assert!(text.contains("Durability Index"));
+        assert!(text.contains("0.920"));
+        assert!(!text.contains("###"));
     }
 
     #[test]
-    fn load_management_markdown_renders_durability_index_low() {
+    fn load_management_text_renders_durability_index_low() {
         let metrics = LoadManagementMetrics {
             durability_index: Some(0.80),
             ..Default::default()
         };
-        let markdown = build_load_management_markdown(Some(&metrics));
-        assert!(markdown.contains("Durability Index"));
-        assert!(markdown.contains("0.800"));
+        let text = build_load_management_text(Some(&metrics));
+        assert!(text.contains("Durability Index"));
+        assert!(text.contains("0.800"));
     }
 
     #[test]
