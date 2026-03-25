@@ -86,7 +86,7 @@ pub fn build_alerts(metrics: &CoachMetrics) -> Vec<CoachAlert> {
     // Fatigue alert (TSB < -10 but >= -20)
     if let Some(fitness) = &metrics.fitness
         && let Some(tsb) = fitness.tsb
-        && (TSB_DEEP_FATIGUE..TSB_FATIGUED).contains(&tsb)
+        && (TSB_DEEP_FATIGUE..=TSB_FATIGUED).contains(&tsb)
     {
         alerts.push(CoachAlert {
             severity: CoachAlertSeverity::Caution,
@@ -276,7 +276,7 @@ pub fn build_alerts(metrics: &CoachMetrics) -> Vec<CoachAlert> {
     if let Some(polarisation) = &metrics.polarisation
         && let Some(state) = polarisation.state.as_deref()
         && state == "threshold_biased"
-        && polarisation.z2_pct.is_some()
+        && let Some(z2_pct) = polarisation.z2_pct
     {
         alerts.push(CoachAlert {
             severity: CoachAlertSeverity::Caution,
@@ -285,7 +285,7 @@ pub fn build_alerts(metrics: &CoachMetrics) -> Vec<CoachAlert> {
             evidence: vec![format!(
                 "Polarisation ratio {:.2} indicates too much threshold-zone work ({:.0}% Z2)",
                 polarisation.ratio.unwrap_or(0.0),
-                polarisation.z2_pct.unwrap() * 100.0
+                z2_pct * 100.0
             )],
             section: "distribution".to_string(),
         });
