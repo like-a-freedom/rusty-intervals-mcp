@@ -191,9 +191,9 @@ pub struct DecouplingMetrics {
 /// Formula: `ratio = (z1_pct + z3_pct) / (2 * z2_pct)`
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct PolarisationMetrics {
-    pub z1_pct: f64,
-    pub z2_pct: f64,
-    pub z3_pct: f64,
+    pub z1_pct: Option<f64>,
+    pub z2_pct: Option<f64>,
+    pub z3_pct: Option<f64>,
     pub ratio: Option<f64>,
     pub state: Option<String>,
 }

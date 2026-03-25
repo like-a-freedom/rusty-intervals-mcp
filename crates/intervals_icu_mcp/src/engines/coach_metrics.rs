@@ -26,6 +26,8 @@ const EFFICIENCY_FACTOR_KEYS: &[&str] = &["icu_efficiency_factor", "efficiency_f
 const AEROBIC_DECOUPLING_KEYS: &[&str] = &["decoupling", "aerobic_decoupling"];
 const HR_STREAM_KEYS: &[&str] = &["heartrate", "heart_rate", "hr"];
 const OUTPUT_STREAM_KEYS: &[&str] = &["watts", "velocity_smooth", "pace"];
+const MONOTONY_STDDEV_FLOOR_RATIO: f64 = 0.1;
+const MONOTONY_CAP: f64 = 10.0;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TrendSnapshot {
@@ -188,10 +190,10 @@ pub fn compute_monotony(loads_7d: &[f64]) -> Option<f64> {
         .sum::<f64>()
         / loads_7d.len() as f64;
 
-    // Use population stddev; cap floor to avoid infinity when all loads are identical.
-    // Real-world identical loads → monotony is high but finite (cap at 10.0).
-    let stddev = variance.sqrt().max(mean * 0.1);
-    Some((mean / stddev).min(10.0))
+    // Use population stddev; floor stddev to 10% of mean to avoid infinity when all loads are identical.
+    // Real-world identical loads → monotony is high but finite (cap at MONOTONY_CAP).
+    let stddev = variance.sqrt().max(mean * MONOTONY_STDDEV_FLOOR_RATIO);
+    Some((mean / stddev).min(MONOTONY_CAP))
 }
 
 pub fn compute_strain(loads_7d: &[f64], monotony: f64) -> f64 {
@@ -604,9 +606,9 @@ pub fn compute_polarisation(
     });
 
     Some(PolarisationMetrics {
-        z1_pct,
-        z2_pct,
-        z3_pct,
+        z1_pct: Some(z1_pct),
+        z2_pct: Some(z2_pct),
+        z3_pct: Some(z3_pct),
         ratio,
         state,
     })
@@ -630,9 +632,9 @@ pub fn parse_polarisation_from_api(
             Some("high_intensity_dominant".to_string())
         };
         return Some(PolarisationMetrics {
-            z1_pct: 0.0,
-            z2_pct: 0.0,
-            z3_pct: 0.0,
+            z1_pct: None,
+            z2_pct: None,
+            z3_pct: None,
             ratio: Some(index),
             state,
         });
@@ -1050,9 +1052,9 @@ mod tests {
     #[test]
     fn polarisation_preserves_input_percentages() {
         let m = compute_polarisation(0.70, 0.20, 0.10).unwrap();
-        assert!((m.z1_pct - 0.70).abs() < f64::EPSILON);
-        assert!((m.z2_pct - 0.20).abs() < f64::EPSILON);
-        assert!((m.z3_pct - 0.10).abs() < f64::EPSILON);
+        assert!((m.z1_pct.unwrap() - 0.70).abs() < f64::EPSILON);
+        assert!((m.z2_pct.unwrap() - 0.20).abs() < f64::EPSILON);
+        assert!((m.z3_pct.unwrap() - 0.10).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -1082,15 +1084,11 @@ mod tests {
 
     #[test]
     fn parse_polarisation_from_api_aggregates_5_zone_polarised() {
-        // Realistic 80/20 distribution across 5 zones:
-        // Z1: 6000+2000=8000 (easy), Z2: 1000 (threshold), Z3: 800+200=1000 (high)
-        // total = 10000, z1_pct=0.80, z2_pct=0.10, z3_pct=0.10
-        // ratio = (0.80 + 0.10) / (2 * 0.10) = 0.90 / 0.20 = 4.5 -> not polarised
-        // Need more threshold: z1=0.70, z2=0.20, z3=0.10 -> ratio = 0.80/0.40 = 2.0
-        // Let's use: z1=0.75, z2=0.15, z3=0.10 -> ratio = 0.85/0.30 = 2.83
-        // Actually let's aim for ratio ~0.9:
-        // z1=0.70, z2=0.20, z3=0.10 -> ratio = 0.80/0.40 = 2.0 (still high)
-        // z1=0.50, z2=0.35, z3=0.15 -> ratio = 0.65/0.70 = 0.928 (polarised!)
+        // Seiler mapping: zones 1+2 → Z1 (easy), zone 3 → Z2 (threshold), zones 4+5 → Z3 (high)
+        // Zone times: z1=3000, z2=2000, z3=3500, z4=1000, z5=500 → total=10000
+        // Macro zones: Z1=5000, Z2=3500, Z3=1500
+        // z1_pct=0.50, z2_pct=0.35, z3_pct=0.15
+        // ratio = (0.50 + 0.15) / (2 * 0.35) = 0.65 / 0.70 ≈ 0.93 → polarised
         let zone_times = json!([
             {"id": "z1", "secs": 3000},
             {"id": "z2", "secs": 2000},
@@ -1098,9 +1096,6 @@ mod tests {
             {"id": "z4", "secs": 1000},
             {"id": "z5", "secs": 500}
         ]);
-        // z1_macro = 5000, z2_macro = 3500, z3_macro = 1500, total=10000
-        // z1_pct=0.50, z2_pct=0.35, z3_pct=0.15
-        // ratio = 0.65 / 0.70 = 0.928 -> polarised
         let m = parse_polarisation_from_api(None, Some(&zone_times)).unwrap();
         assert!(m.ratio.unwrap() > 0.75);
         assert!(m.ratio.unwrap() <= 1.0);
