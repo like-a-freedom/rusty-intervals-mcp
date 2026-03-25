@@ -242,7 +242,7 @@ impl IntentHandler for PlanTrainingHandler {
 
             if !existing_conflicts.is_empty() {
                 conflict_content.push(ContentBlock::markdown(
-                    "## Conflict Detected\n\nExisting events overlap with the planned period. \
+                    "# Conflict Detected\nExisting events overlap with the planned period. \
                      Remove or reschedule them before creating a new plan."
                         .to_string(),
                 ));
@@ -262,7 +262,7 @@ impl IntentHandler for PlanTrainingHandler {
 
             if !upcoming_conflict_dates.is_empty() {
                 conflict_content.push(ContentBlock::markdown(format!(
-                    "## Existing Plan Detected\n\n{} workouts already scheduled in this period. \
+                    "# Existing Plan Detected\n{} workouts already scheduled in this period. \
                      Remove existing plan before creating a new one.",
                     upcoming_conflict_dates.len()
                 )));
@@ -353,15 +353,15 @@ impl IntentHandler for PlanTrainingHandler {
         let sport_line = sport_info
             .sport_name
             .as_ref()
-            .map(|n| format!("\n**Sport:** {}", n))
+            .map(|n| format!("\nSport: {}", n))
             .unwrap_or_default();
         let ftp_line = sport_info
             .ftp
-            .map(|v| format!("\n**FTP:** {:.0}W", v))
+            .map(|v| format!("\nFTP: {:.0}W", v))
             .unwrap_or_default();
         let lthr_line = sport_info
             .lthr
-            .map(|v| format!(" | **LTHR:** {:.0} bpm", v))
+            .map(|v| format!(" | LTHR: {:.0} bpm", v))
             .unwrap_or_default();
         let historical_line = historical_avg_hours
             .map(|(moving_avg, elapsed_avg)| {
@@ -369,7 +369,7 @@ impl IntentHandler for PlanTrainingHandler {
                     .map(|w| format!("{:.0}wk", w))
                     .unwrap_or_else(|| "8wk".into());
                 format!(
-                    "\n**Historical Avg ({}):** {:.1} hrs/wk (moving), {:.1} hrs/wk (elapsed)",
+                    "\nHistorical Avg ({}): {:.1} hrs/wk (moving), {:.1} hrs/wk (elapsed)",
                     wk_label, moving_avg, elapsed_avg
                 )
             })
@@ -385,7 +385,7 @@ impl IntentHandler for PlanTrainingHandler {
                 } else {
                     "Neutral"
                 };
-                format!("\n**Current TSB:** {:.0} ({})", tsb, state)
+                format!("\nCurrent TSB: {:.0} ({})", tsb, state)
             })
             .unwrap_or_default();
         let readiness_line = wellness_snapshot
@@ -398,16 +398,16 @@ impl IntentHandler for PlanTrainingHandler {
                 } else {
                     "Low"
                 };
-                format!("\n**Readiness:** {:.1} ({})", r, state)
+                format!("\nReadiness: {:.1} ({})", r, state)
             })
             .unwrap_or_default();
 
         content.push(ContentBlock::markdown(format!(
-            "## Training Plan: {}{}\n\n\
-             **Athlete:** {}{}{}{}{}{}{}\n\
-             **Period:** {} to {} ({} weeks)\n\
-             **Focus:** {}\n\
-             **Max Hours/Week:** {:.1}",
+            "# Training Plan: {}{}\n\
+             Athlete: {}{}{}{}{}{}{}\n\
+             Period: {} to {} ({} weeks)\n\
+             Focus: {}\n\
+             Max Hours/Week: {:.1}",
             focus.as_str().replace('_', " ").to_uppercase(),
             race_info,
             athlete_name,
@@ -430,7 +430,7 @@ impl IntentHandler for PlanTrainingHandler {
             for (date, name, category) in &race_anchors {
                 anchor_rows.push(vec![date.clone(), name.clone(), category.clone()]);
             }
-            content.push(ContentBlock::markdown("### Race Anchors".to_string()));
+            content.push(ContentBlock::markdown("Race Anchors".to_string()));
             content.push(ContentBlock::table(
                 anchor_rows[0].clone(),
                 anchor_rows[1..].to_vec(),
@@ -460,7 +460,7 @@ impl IntentHandler for PlanTrainingHandler {
         ));
 
         content.push(ContentBlock::markdown(format!(
-            "### Structure\n\n{}",
+            "Structure\n{}",
             structure
         )));
 
@@ -481,7 +481,7 @@ impl IntentHandler for PlanTrainingHandler {
             .map_err(|e| IntentError::api(format!("Failed to create events: {}", e)))?;
 
         content.push(ContentBlock::markdown(format!(
-            "### Created Events: {} workouts\n\nEvents successfully created in Intervals.icu.",
+            "Created Events: {} workouts\nEvents successfully created in Intervals.icu.",
             created_events.len()
         )));
 
@@ -752,7 +752,7 @@ impl PlanTrainingHandler {
                     });
                 }
                 format!(
-                    "- Weeks 1-{}: Base Period (aerobic base, {:.0}-{:.0} hrs/week)\n- Recovery weeks: every 3-4 weeks (-40-60% volume)",
+                    "  Weeks 1-{}: Base Period (aerobic base, {:.0}-{:.0} hrs/week)\n  Recovery weeks: every 3-4 weeks (-40-60% volume)",
                     base_weeks,
                     max_hours * 0.6,
                     max_hours * 0.8
@@ -766,7 +766,7 @@ impl PlanTrainingHandler {
                     focus: "Threshold + VO2".into(),
                 });
                 format!(
-                    "- Weeks 1-{}: Intensity development with 1-2 quality sessions each week\n- Keep easy days truly easy to absorb the work\n- Recovery weeks every 2-3 weeks or after stacked high-intensity sessions",
+                    "  Weeks 1-{}: Intensity development with 1-2 quality sessions each week\n  Keep easy days truly easy to absorb the work\n  Recovery weeks every 2-3 weeks or after stacked high-intensity sessions",
                     weeks
                 )
             }
@@ -791,7 +791,7 @@ impl PlanTrainingHandler {
                     });
                 }
                 format!(
-                    "- Weeks 1-{}: Race-specific preparation with terrain, fueling, and pace specificity\n- Rehearse key race demands in long sessions\n- Final days emphasize sharpening, logistics, and freshness",
+                    "  Weeks 1-{}: Race-specific preparation with terrain, fueling, and pace specificity\n  Rehearse key race demands in long sessions\n  Final days emphasize sharpening, logistics, and freshness",
                     weeks
                 )
             }
@@ -803,7 +803,7 @@ impl PlanTrainingHandler {
                     focus: "Race-specific, reduced volume".into(),
                 });
                 format!(
-                    "- Weeks 1-{}: Taper (volume -50-60%, maintain intensity)\n- Race readiness focus",
+                    "  Weeks 1-{}: Taper (volume -50-60%, maintain intensity)\n  Race readiness focus",
                     weeks
                 )
             }
@@ -815,7 +815,7 @@ impl PlanTrainingHandler {
                     focus: "Freshen up".into(),
                 });
                 format!(
-                    "- Weeks 1-{}: Recovery emphasis with low stress and reduced volume\n- Optional strides or drills only if freshness is improving\n- Use the block to restore motivation, sleep quality, and musculoskeletal resilience",
+                    "  Weeks 1-{}: Recovery emphasis with low stress and reduced volume\n  Optional strides or drills only if freshness is improving\n  Use the block to restore motivation, sleep quality, and musculoskeletal resilience",
                     weeks
                 )
             }
@@ -831,7 +831,7 @@ impl PlanTrainingHandler {
         match focus {
             TrainingFocus::AerobicBase => {
                 format!(
-                    "### Sample Week\n\n- Monday: REST\n- Tuesday: Easy Run {:.0}:{:02.0} (Z1-Z2){}\n- Wednesday: Recovery + Strength\n- Thursday: Easy Run {:.0}:{:02.0} (Z1-Z2){}\n- Friday: REST or cross-training\n- Saturday: Long Run {:.0}:{:02.0} (Z1-Z2){}\n- Sunday: Active Recovery",
+                    "Sample Week\n  Monday: REST\n  Tuesday: Easy Run {:.0}:{:02.0} (Z1-Z2){}\n  Wednesday: Recovery + Strength\n  Thursday: Easy Run {:.0}:{:02.0} (Z1-Z2){}\n  Friday: REST or cross-training\n  Saturday: Long Run {:.0}:{:02.0} (Z1-Z2){}\n  Sunday: Active Recovery",
                     max_hours / 5.0 * 60.0,
                     (max_hours / 5.0 * 60.0 % 60.0),
                     hr_hint,
@@ -844,16 +844,16 @@ impl PlanTrainingHandler {
                 )
             }
             TrainingFocus::Intensity => {
-                "### Sample Week\n\n- Monday: REST or short recovery jog\n- Tuesday: Threshold / VO2 session\n- Wednesday: Easy aerobic run\n- Thursday: Secondary quality session or hill reps\n- Friday: REST + mobility\n- Saturday: Long aerobic run with controlled finish\n- Sunday: Recovery shuffle or off".to_string()
+                "Sample Week\n  Monday: REST or short recovery jog\n  Tuesday: Threshold / VO2 session\n  Wednesday: Easy aerobic run\n  Thursday: Secondary quality session or hill reps\n  Friday: REST + mobility\n  Saturday: Long aerobic run with controlled finish\n  Sunday: Recovery shuffle or off".to_string()
             }
             TrainingFocus::Specific => {
-                "### Sample Week\n\n- Monday: REST\n- Tuesday: Race-pace intervals on target terrain\n- Wednesday: Easy aerobic maintenance\n- Thursday: Specific workout with fueling rehearsal\n- Friday: Recovery or travel/rest logistics\n- Saturday: Long race-specific session\n- Sunday: Short reset run with drills".to_string()
+                "Sample Week\n  Monday: REST\n  Tuesday: Race-pace intervals on target terrain\n  Wednesday: Easy aerobic maintenance\n  Thursday: Specific workout with fueling rehearsal\n  Friday: Recovery or travel/rest logistics\n  Saturday: Long race-specific session\n  Sunday: Short reset run with drills".to_string()
             }
             TrainingFocus::Taper => {
-                "### Sample Week\n\n- Monday: REST\n- Tuesday: Sharpening session with short pickups\n- Wednesday: Easy aerobic run\n- Thursday: Brief race-pace activation\n- Friday: REST and logistics\n- Saturday: Pre-race leg opener\n- Sunday: Race / key event".to_string()
+                "Sample Week\n  Monday: REST\n  Tuesday: Sharpening session with short pickups\n  Wednesday: Easy aerobic run\n  Thursday: Brief race-pace activation\n  Friday: REST and logistics\n  Saturday: Pre-race leg opener\n  Sunday: Race / key event".to_string()
             }
             TrainingFocus::Recovery => {
-                "### Sample Week\n\n- Monday: REST\n- Tuesday: Easy 30-45 min aerobic session\n- Wednesday: Mobility + strength maintenance\n- Thursday: Easy aerobic run with optional strides\n- Friday: REST\n- Saturday: Short relaxed endurance session\n- Sunday: Off or gentle cross-training".to_string()
+                "Sample Week\n  Monday: REST\n  Tuesday: Easy 30-45 min aerobic session\n  Wednesday: Mobility + strength maintenance\n  Thursday: Easy aerobic run with optional strides\n  Friday: REST\n  Saturday: Short relaxed endurance session\n  Sunday: Off or gentle cross-training".to_string()
             }
         }
     }

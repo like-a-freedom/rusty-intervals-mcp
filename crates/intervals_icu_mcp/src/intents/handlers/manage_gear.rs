@@ -140,13 +140,13 @@ impl ManageGearHandler {
 
         if filtered.is_empty() {
             content.push(ContentBlock::markdown(format!(
-                "## Gear: {}\n\n*No {} found*",
+                "# Gear: {}\nNo {} found",
                 type_name,
                 type_name.to_lowercase()
             )));
         } else {
             content.push(ContentBlock::markdown(format!(
-                "## Gear: {}\n\n*Showing {} {}*",
+                "# Gear: {}\nShowing {} {}",
                 type_name,
                 filtered.len(),
                 type_name.to_lowercase()
@@ -182,7 +182,7 @@ impl ManageGearHandler {
                                 (remaining, format!("🔶 {:.0}% worn", percent))
                             } else {
                                 let remaining = (distance_km * (100.0 - percent) / 100.0).max(0.0);
-                                (remaining, format!("✅ {:.0}% used", percent))
+                                (remaining, format!("{:.0}% used", percent))
                             }
                         } else {
                             (0.0, "ℹ️ No reminder set".to_string())
@@ -267,7 +267,7 @@ impl ManageGearHandler {
 
         let mut content = Vec::new();
         content.push(ContentBlock::markdown(format!(
-            "## Add Gear\n\n**Name:** {}\n**Type:** {}\n**ID:** {}\n\nCreated via Intervals.icu API.",
+            "# Add Gear\nName: {}\nType: {}\nID: {}\nCreated via Intervals.icu API.",
             new_gear_name, new_gear_type, created_id
         )));
 
@@ -324,7 +324,7 @@ impl ManageGearHandler {
 
             let mut content = Vec::new();
             content.push(ContentBlock::markdown(format!(
-                "## Retire Gear\n\n**Name:** {}\n**ID:** {}\n\nRetired via Intervals.icu API.",
+                "# Retire Gear\nName: {}\nID: {}\nRetired via Intervals.icu API.",
                 gear_name, gear_id
             )));
 
