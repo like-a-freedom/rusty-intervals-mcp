@@ -679,6 +679,23 @@ mod tests {
     }
 
     #[test]
+    fn fatigue_alert_fires_at_tsb_boundary_minus_10() {
+        let metrics = CoachMetrics {
+            fitness: Some(FitnessMetrics {
+                ctl: Some(50.0),
+                atl: Some(60.0),
+                tsb: Some(TSB_FATIGUED),
+                load_state: Some("fatigued".into()),
+            }),
+            ..Default::default()
+        };
+
+        let alerts = build_alerts(&metrics);
+        assert!(alerts.iter().any(|a| a.code == "fatigue"));
+        assert!(!alerts.iter().any(|a| a.code == "deep_fatigue"));
+    }
+
+    #[test]
     fn high_training_load_creates_alert() {
         let metrics = CoachMetrics {
             volume: Some(VolumeMetrics {
