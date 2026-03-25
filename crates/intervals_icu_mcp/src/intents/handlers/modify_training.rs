@@ -398,7 +398,9 @@ impl ModifyTrainingHandler {
         };
         content.push(ContentBlock::markdown(format!(
             "# Modify Training - {}\n\nAction: modify\nTarget: {}\nAffected: {} event(s)",
-            mode, target_label, matching.len()
+            mode,
+            target_label,
+            matching.len()
         )));
 
         let mut rows = Vec::new();

@@ -1130,7 +1130,7 @@ mod tests {
     #[test]
     fn test_intent_output_to_call_tool_result_includes_structured_content() {
         let output = IntentOutput::new(vec![
-            ContentBlock::markdown("## Analysis: Recovery Run"),
+            ContentBlock::markdown("# Analysis: Recovery Run"),
             ContentBlock::table(
                 vec!["Metric".into(), "Value".into()],
                 vec![vec!["Distance".into(), "7.04 km".into()]],
