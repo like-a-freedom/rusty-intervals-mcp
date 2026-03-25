@@ -504,8 +504,7 @@ impl Default for ManageProfileHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
-    use intervals_icu_client::{AthleteProfile, IntervalsError};
+    use crate::test_support::mock::MockIntervalsClient;
     use std::sync::Arc;
 
     // ========================================================================
@@ -965,448 +964,40 @@ mod tests {
     }
 
     // ========================================================================
-    // Mock Client for Integration Tests
-    // ========================================================================
-
-    struct MockClient {
-        profile: AthleteProfile,
-        sport_settings: Value,
-        fitness_summary: Option<Value>,
-        wellness: Option<Value>,
-    }
-
-    impl Default for MockClient {
-        fn default() -> Self {
-            Self {
-                profile: AthleteProfile {
-                    id: "ath1".to_string(),
-                    name: Some("Test Athlete".to_string()),
-                },
-                sport_settings: json!([{
-                    "name": "Run",
-                    "types": ["Run"],
-                    "hr_zones": [140, 160, 180],
-                    "lthr": 170,
-                    "max_hr": 190,
-                    "ftp": 250,
-                    "threshold_pace": 5.0,
-                    "pace_units": "MINS_KM",
-                    "load_order": "heart_rate"
-                }]),
-                fitness_summary: Some(json!({
-                    "ctl": 45.0,
-                    "atl": 30.0,
-                    "tsb": 15.0
-                })),
-                wellness: Some(json!({
-                    "weight": 75.5
-                })),
-            }
-        }
-    }
-
-    #[async_trait]
-    impl IntervalsClient for MockClient {
-        async fn get_athlete_profile(&self) -> Result<AthleteProfile, IntervalsError> {
-            Ok(self.profile.clone())
-        }
-
-        async fn get_sport_settings(&self) -> Result<Value, IntervalsError> {
-            Ok(self.sport_settings.clone())
-        }
-
-        async fn get_fitness_summary(&self) -> Result<Value, IntervalsError> {
-            self.fitness_summary
-                .clone()
-                .ok_or_else(|| IntervalsError::NotFound("No fitness summary".to_string()))
-        }
-
-        async fn get_wellness_for_date(&self, _date: &str) -> Result<Value, IntervalsError> {
-            self.wellness
-                .clone()
-                .ok_or_else(|| IntervalsError::NotFound("No wellness data".to_string()))
-        }
-
-        async fn update_sport_settings(
-            &self,
-            _sport_type: &str,
-            _recalc_hr_zones: bool,
-            _fields: &Value,
-        ) -> Result<Value, IntervalsError> {
-            Ok(json!({"updated": true}))
-        }
-
-        async fn apply_sport_settings(&self, _sport_type: &str) -> Result<Value, IntervalsError> {
-            Ok(json!({"applied": true}))
-        }
-
-        // Stub implementations for other required methods
-        async fn get_recent_activities(
-            &self,
-            _limit: Option<u32>,
-            _days_back: Option<i32>,
-        ) -> Result<Vec<intervals_icu_client::ActivitySummary>, IntervalsError> {
-            Ok(vec![])
-        }
-
-        async fn create_event(
-            &self,
-            event: intervals_icu_client::Event,
-        ) -> Result<intervals_icu_client::Event, IntervalsError> {
-            Ok(event)
-        }
-
-        async fn get_event(
-            &self,
-            event_id: &str,
-        ) -> Result<intervals_icu_client::Event, IntervalsError> {
-            Ok(intervals_icu_client::Event {
-                id: Some(event_id.to_string()),
-                start_date_local: "2026-03-04".to_string(),
-                name: "Mock event".to_string(),
-                category: intervals_icu_client::EventCategory::Workout,
-                description: None,
-                r#type: None,
-            })
-        }
-
-        async fn delete_event(&self, _event_id: &str) -> Result<(), IntervalsError> {
-            Ok(())
-        }
-
-        async fn get_events(
-            &self,
-            _days_back: Option<i32>,
-            _limit: Option<u32>,
-        ) -> Result<Vec<intervals_icu_client::Event>, IntervalsError> {
-            Ok(vec![])
-        }
-
-        async fn bulk_create_events(
-            &self,
-            _events: Vec<intervals_icu_client::Event>,
-        ) -> Result<Vec<intervals_icu_client::Event>, IntervalsError> {
-            Ok(vec![])
-        }
-
-        async fn get_activity_streams(
-            &self,
-            _activity_id: &str,
-            _streams: Option<Vec<String>>,
-        ) -> Result<Value, IntervalsError> {
-            Ok(json!({}))
-        }
-
-        async fn get_activity_intervals(
-            &self,
-            _activity_id: &str,
-        ) -> Result<Value, IntervalsError> {
-            Ok(json!({}))
-        }
-
-        async fn get_best_efforts(
-            &self,
-            _activity_id: &str,
-            _options: Option<intervals_icu_client::BestEffortsOptions>,
-        ) -> Result<Value, IntervalsError> {
-            Ok(json!({}))
-        }
-
-        async fn get_activity_details(&self, _activity_id: &str) -> Result<Value, IntervalsError> {
-            Ok(json!({}))
-        }
-
-        async fn search_activities(
-            &self,
-            _query: &str,
-            _limit: Option<u32>,
-        ) -> Result<Vec<intervals_icu_client::ActivitySummary>, IntervalsError> {
-            Ok(vec![])
-        }
-
-        async fn search_activities_full(
-            &self,
-            _query: &str,
-            _limit: Option<u32>,
-        ) -> Result<Value, IntervalsError> {
-            Ok(json!([]))
-        }
-
-        async fn get_activities_csv(&self) -> Result<String, IntervalsError> {
-            Ok("id,name\n1,Run".to_string())
-        }
-
-        async fn update_activity(
-            &self,
-            _activity_id: &str,
-            _fields: &Value,
-        ) -> Result<Value, IntervalsError> {
-            Ok(json!({}))
-        }
-
-        async fn download_activity_file(
-            &self,
-            _activity_id: &str,
-            _output_path: Option<std::path::PathBuf>,
-        ) -> Result<Option<String>, IntervalsError> {
-            Ok(None)
-        }
-
-        async fn download_activity_file_with_progress(
-            &self,
-            _activity_id: &str,
-            _output_path: Option<std::path::PathBuf>,
-            _progress_tx: tokio::sync::mpsc::Sender<intervals_icu_client::DownloadProgress>,
-            _cancel_rx: tokio::sync::watch::Receiver<bool>,
-        ) -> Result<Option<String>, IntervalsError> {
-            Ok(None)
-        }
-
-        async fn download_fit_file(
-            &self,
-            _activity_id: &str,
-            _output_path: Option<std::path::PathBuf>,
-        ) -> Result<Option<String>, IntervalsError> {
-            Ok(None)
-        }
-
-        async fn download_gpx_file(
-            &self,
-            _activity_id: &str,
-            _output_path: Option<std::path::PathBuf>,
-        ) -> Result<Option<String>, IntervalsError> {
-            Ok(None)
-        }
-
-        async fn get_gear_list(&self) -> Result<Value, IntervalsError> {
-            Ok(json!([]))
-        }
-
-        async fn get_power_curves(
-            &self,
-            _days_back: Option<i32>,
-            _sport: &str,
-        ) -> Result<Value, IntervalsError> {
-            Ok(json!([]))
-        }
-
-        async fn get_gap_histogram(&self, _activity_id: &str) -> Result<Value, IntervalsError> {
-            Ok(json!([]))
-        }
-
-        async fn delete_activity(&self, _activity_id: &str) -> Result<(), IntervalsError> {
-            Ok(())
-        }
-
-        async fn get_activities_around(
-            &self,
-            _activity_id: &str,
-            _limit: Option<u32>,
-            _route_id: Option<i64>,
-        ) -> Result<Value, IntervalsError> {
-            Ok(json!([]))
-        }
-
-        async fn search_intervals(
-            &self,
-            _min_secs: u32,
-            _max_secs: u32,
-            _min_intensity: u32,
-            _max_intensity: u32,
-            _interval_type: Option<String>,
-            _min_reps: Option<u32>,
-            _max_reps: Option<u32>,
-            _limit: Option<u32>,
-        ) -> Result<Value, IntervalsError> {
-            Ok(json!([]))
-        }
-
-        async fn get_power_histogram(&self, _activity_id: &str) -> Result<Value, IntervalsError> {
-            Ok(json!([]))
-        }
-
-        async fn get_hr_histogram(&self, _activity_id: &str) -> Result<Value, IntervalsError> {
-            Ok(json!([]))
-        }
-
-        async fn get_pace_histogram(&self, _activity_id: &str) -> Result<Value, IntervalsError> {
-            Ok(json!([]))
-        }
-
-        async fn get_wellness(&self, _days_back: Option<i32>) -> Result<Value, IntervalsError> {
-            Ok(json!([]))
-        }
-
-        async fn update_wellness(
-            &self,
-            _date: &str,
-            _data: &Value,
-        ) -> Result<Value, IntervalsError> {
-            Ok(json!({}))
-        }
-
-        async fn get_upcoming_workouts(
-            &self,
-            _days_ahead: Option<u32>,
-            _limit: Option<u32>,
-            _category: Option<String>,
-        ) -> Result<Value, IntervalsError> {
-            Ok(json!([]))
-        }
-
-        async fn update_event(
-            &self,
-            _event_id: &str,
-            _fields: &Value,
-        ) -> Result<Value, IntervalsError> {
-            Ok(json!({}))
-        }
-
-        async fn bulk_delete_events(&self, _event_ids: Vec<String>) -> Result<(), IntervalsError> {
-            Ok(())
-        }
-
-        async fn duplicate_event(
-            &self,
-            _event_id: &str,
-            _num_copies: Option<u32>,
-            _weeks_between: Option<u32>,
-        ) -> Result<Vec<intervals_icu_client::Event>, IntervalsError> {
-            Ok(vec![])
-        }
-
-        async fn get_hr_curves(
-            &self,
-            _days_back: Option<i32>,
-            _sport: &str,
-        ) -> Result<Value, IntervalsError> {
-            Ok(json!([]))
-        }
-
-        async fn get_pace_curves(
-            &self,
-            _days_back: Option<i32>,
-            _sport: &str,
-        ) -> Result<Value, IntervalsError> {
-            Ok(json!([]))
-        }
-
-        async fn get_workout_library(&self) -> Result<Value, IntervalsError> {
-            Ok(json!([]))
-        }
-
-        async fn get_workouts_in_folder(&self, _folder_id: &str) -> Result<Value, IntervalsError> {
-            Ok(json!([]))
-        }
-
-        async fn create_folder(&self, _folder: &Value) -> Result<Value, IntervalsError> {
-            Ok(json!({}))
-        }
-
-        async fn update_folder(
-            &self,
-            _folder_id: &str,
-            _fields: &Value,
-        ) -> Result<Value, IntervalsError> {
-            Ok(json!({}))
-        }
-
-        async fn delete_folder(&self, _folder_id: &str) -> Result<(), IntervalsError> {
-            Ok(())
-        }
-
-        async fn create_gear(&self, _gear: &Value) -> Result<Value, IntervalsError> {
-            Ok(json!({}))
-        }
-
-        async fn update_gear(
-            &self,
-            _gear_id: &str,
-            _fields: &Value,
-        ) -> Result<Value, IntervalsError> {
-            Ok(json!({}))
-        }
-
-        async fn delete_gear(&self, _gear_id: &str) -> Result<(), IntervalsError> {
-            Ok(())
-        }
-
-        async fn create_gear_reminder(
-            &self,
-            _gear_id: &str,
-            _reminder: &Value,
-        ) -> Result<Value, IntervalsError> {
-            Ok(json!({}))
-        }
-
-        async fn update_gear_reminder(
-            &self,
-            _gear_id: &str,
-            _reminder_id: &str,
-            _reset: bool,
-            _snooze_days: u32,
-            _fields: &Value,
-        ) -> Result<Value, IntervalsError> {
-            Ok(json!({}))
-        }
-
-        async fn create_sport_settings(&self, _settings: &Value) -> Result<Value, IntervalsError> {
-            Ok(json!({}))
-        }
-
-        async fn delete_sport_settings(&self, _sport_type: &str) -> Result<(), IntervalsError> {
-            Ok(())
-        }
-
-        async fn update_wellness_bulk(&self, _entries: &[Value]) -> Result<(), IntervalsError> {
-            Ok(())
-        }
-
-        async fn get_weather_config(&self) -> Result<Value, IntervalsError> {
-            Ok(json!({}))
-        }
-
-        async fn update_weather_config(&self, _config: &Value) -> Result<Value, IntervalsError> {
-            Ok(json!({}))
-        }
-
-        async fn list_routes(&self) -> Result<Value, IntervalsError> {
-            Ok(json!([]))
-        }
-
-        async fn get_route(
-            &self,
-            _route_id: i64,
-            _include_path: bool,
-        ) -> Result<Value, IntervalsError> {
-            Ok(json!({}))
-        }
-
-        async fn update_route(
-            &self,
-            _route_id: i64,
-            _route: &Value,
-        ) -> Result<Value, IntervalsError> {
-            Ok(json!({}))
-        }
-
-        async fn get_route_similarity(
-            &self,
-            _route_id: i64,
-            _other_id: i64,
-        ) -> Result<Value, IntervalsError> {
-            Ok(json!({}))
-        }
-    }
-
-    // ========================================================================
     // Handler Execution Tests
     // ========================================================================
+
+    fn profile_mock_client() -> MockIntervalsClient {
+        MockIntervalsClient::builder()
+            .with_athlete_profile(intervals_icu_client::AthleteProfile {
+                id: "ath1".to_string(),
+                name: Some("Test Athlete".to_string()),
+            })
+            .with_sport_settings(json!([{
+                "name": "Run",
+                "types": ["Run"],
+                "hr_zones": [140, 160, 180],
+                "lthr": 170,
+                "max_hr": 190,
+                "ftp": 250,
+                "threshold_pace": 5.0,
+                "pace_units": "MINS_KM",
+                "load_order": "heart_rate"
+            }]))
+            .with_fitness_summary(json!({
+                "ctl": 45.0,
+                "atl": 30.0,
+                "tsb": 15.0
+            }))
+            .with_wellness(json!({
+                "weight": 75.5
+            }))
+    }
 
     #[tokio::test]
     async fn test_execute_get_profile_action() {
         let handler = ManageProfileHandler::new();
-        let client = Arc::new(MockClient::default());
+        let client = Arc::new(profile_mock_client());
         let input = json!({
             "action": "get"
         });
@@ -1421,7 +1012,7 @@ mod tests {
     #[tokio::test]
     async fn test_execute_get_profile_with_all_sections() {
         let handler = ManageProfileHandler::new();
-        let client = Arc::new(MockClient::default());
+        let client = Arc::new(profile_mock_client());
         let input = json!({
             "action": "get",
             "sections": ["overview", "zones", "thresholds", "metrics"]
@@ -1437,7 +1028,7 @@ mod tests {
     #[tokio::test]
     async fn test_execute_get_profile_with_specific_sections() {
         let handler = ManageProfileHandler::new();
-        let client = Arc::new(MockClient::default());
+        let client = Arc::new(profile_mock_client());
         let input = json!({
             "action": "get",
             "sections": ["thresholds"]
@@ -1453,7 +1044,7 @@ mod tests {
     #[tokio::test]
     async fn test_execute_update_thresholds_action() {
         let handler = ManageProfileHandler::new();
-        let client = Arc::new(MockClient::default());
+        let client = Arc::new(profile_mock_client());
         let input = json!({
             "action": "update_thresholds",
             "new_aet_hr": 155,
@@ -1476,7 +1067,7 @@ mod tests {
     #[tokio::test]
     async fn test_execute_update_thresholds_without_apply() {
         let handler = ManageProfileHandler::new();
-        let client = Arc::new(MockClient::default());
+        let client = Arc::new(profile_mock_client());
         let input = json!({
             "action": "update_thresholds",
             "new_aet_hr": 150,
@@ -1496,7 +1087,7 @@ mod tests {
     #[tokio::test]
     async fn test_execute_invalid_action() {
         let handler = ManageProfileHandler::new();
-        let client = Arc::new(MockClient::default());
+        let client = Arc::new(profile_mock_client());
         let input = json!({
             "action": "invalid_action"
         });
@@ -1512,7 +1103,7 @@ mod tests {
     #[tokio::test]
     async fn test_execute_missing_action() {
         let handler = ManageProfileHandler::new();
-        let client = Arc::new(MockClient::default());
+        let client = Arc::new(profile_mock_client());
         let input = json!({});
 
         let result = handler.execute(input, client, None).await;
@@ -1526,7 +1117,7 @@ mod tests {
     #[tokio::test]
     async fn test_execute_update_thresholds_missing_token() {
         let handler = ManageProfileHandler::new();
-        let client = Arc::new(MockClient::default());
+        let client = Arc::new(profile_mock_client());
         let input = json!({
             "action": "update_thresholds",
             "new_aet_hr": 155,
@@ -1544,7 +1135,7 @@ mod tests {
     #[tokio::test]
     async fn test_execute_update_thresholds_missing_new_aet_hr() {
         let handler = ManageProfileHandler::new();
-        let client = Arc::new(MockClient::default());
+        let client = Arc::new(profile_mock_client());
         let input = json!({
             "action": "update_thresholds",
             "new_lt_hr": 171,
@@ -1562,7 +1153,7 @@ mod tests {
     #[tokio::test]
     async fn test_execute_update_thresholds_missing_new_lt_hr() {
         let handler = ManageProfileHandler::new();
-        let client = Arc::new(MockClient::default());
+        let client = Arc::new(profile_mock_client());
         let input = json!({
             "action": "update_thresholds",
             "new_aet_hr": 155,
@@ -1580,7 +1171,7 @@ mod tests {
     #[tokio::test]
     async fn test_execute_update_thresholds_default_source() {
         let handler = ManageProfileHandler::new();
-        let client = Arc::new(MockClient::default());
+        let client = Arc::new(profile_mock_client());
         let input = json!({
             "action": "update_thresholds",
             "new_aet_hr": 155,
@@ -1599,7 +1190,7 @@ mod tests {
     #[tokio::test]
     async fn test_execute_get_profile_suggestions() {
         let handler = ManageProfileHandler::new();
-        let client = Arc::new(MockClient::default());
+        let client = Arc::new(profile_mock_client());
         let input = json!({
             "action": "get"
         });
@@ -1615,7 +1206,7 @@ mod tests {
     #[tokio::test]
     async fn test_execute_update_thresholds_next_actions() {
         let handler = ManageProfileHandler::new();
-        let client = Arc::new(MockClient::default());
+        let client = Arc::new(profile_mock_client());
         let input = json!({
             "action": "update_thresholds",
             "new_aet_hr": 155,
