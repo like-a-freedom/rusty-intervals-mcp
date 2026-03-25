@@ -459,10 +459,7 @@ impl IntentHandler for PlanTrainingHandler {
             phase_rows[1..].to_vec(),
         ));
 
-        content.push(ContentBlock::markdown(format!(
-            "Structure\n{}",
-            structure
-        )));
+        content.push(ContentBlock::markdown(format!("Structure\n{}", structure)));
 
         // --- Sample week with HR zones ---
         content.push(ContentBlock::markdown(self.build_sample_week(
