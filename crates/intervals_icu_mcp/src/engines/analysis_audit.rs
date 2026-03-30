@@ -35,6 +35,7 @@ pub fn build_data_audit(fetched: &FetchedAnalysisData) -> DataAudit {
     if fetched.streams.is_some() && !streams_available {
         degraded_mode_reasons.push("stream data unavailable".to_string());
     }
+    degraded_mode_reasons.extend(fetched.fetch_warnings.iter().cloned());
 
     DataAudit {
         activities_available: !fetched.activities.is_empty() || fetched.workout_detail.is_some(),
@@ -396,6 +397,25 @@ mod tests {
         assert!(audit.intervals_available);
         assert!(audit.streams_available);
         assert!(audit.degraded_mode_reasons.is_empty());
+    }
+
+    #[test]
+    fn audit_includes_fetch_warnings_in_degraded_mode() {
+        let fetched = FetchedAnalysisData {
+            fetch_warnings: vec![
+                "planned workouts unavailable due to Intervals.icu rate limiting".to_string(),
+            ],
+            ..Default::default()
+        };
+
+        let audit = build_data_audit(&fetched);
+
+        assert!(
+            audit
+                .degraded_mode_reasons
+                .iter()
+                .any(|reason| reason.contains("rate limiting"))
+        );
     }
 
     #[test]

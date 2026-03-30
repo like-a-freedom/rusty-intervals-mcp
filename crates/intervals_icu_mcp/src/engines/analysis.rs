@@ -473,12 +473,12 @@ mod tests {
 
     #[test]
     fn test_trend_analysis() {
-        // Use recent dates (within 30 days of current date)
+        let now = chrono::Local::now().date_naive();
         let data = vec![
-            (NaiveDate::from_ymd_opt(2026, 2, 10).unwrap(), 100.0),
-            (NaiveDate::from_ymd_opt(2026, 2, 17).unwrap(), 105.0),
-            (NaiveDate::from_ymd_opt(2026, 2, 24).unwrap(), 110.0),
-            (NaiveDate::from_ymd_opt(2026, 3, 3).unwrap(), 115.0),
+            (now - Duration::days(21), 100.0),
+            (now - Duration::days(14), 105.0),
+            (now - Duration::days(7), 110.0),
+            (now, 115.0),
         ];
 
         let trend = AnalysisEngine::analyze_trend(&data, 30, "Volume");
@@ -615,7 +615,7 @@ mod tests {
         use chrono::Duration;
 
         // Increasing trend
-        let now = NaiveDate::from_ymd_opt(2026, 3, 4).unwrap();
+        let now = chrono::Local::now().date_naive();
         let increasing_data = vec![
             (now - Duration::days(21), 100.0),
             (now - Duration::days(14), 110.0),

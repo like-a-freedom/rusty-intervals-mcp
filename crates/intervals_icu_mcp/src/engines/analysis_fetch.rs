@@ -45,6 +45,7 @@ pub struct FetchedAnalysisData {
     pub activities: Vec<ActivitySummary>,
     pub comparison_activities: Vec<ActivitySummary>,
     pub calendar_events: Vec<Event>,
+    pub fetch_warnings: Vec<String>,
     pub activity_messages: Vec<ActivityMessage>,
     pub activity_details: HashMap<String, Value>,
     pub workout_detail: Option<Value>,
@@ -188,6 +189,10 @@ fn normalize_upcoming_events_payload(payload: Value) -> Value {
             })
             .collect(),
     )
+}
+
+fn upcoming_rate_limit_warning() -> String {
+    "planned workouts unavailable due to Intervals.icu rate limiting; continuing with completed-activity history only".to_string()
 }
 
 pub async fn fetch_calendar_events_between(
@@ -350,13 +355,47 @@ pub async fn fetch_period_data(
         ..Default::default()
     };
 
-    fetched.calendar_events = fetch_calendar_events_between(
-        client,
-        &request.window.start_date,
-        &request.window.end_date,
-        500,
-    )
-    .await?;
+    let today = chrono::Utc::now().date_naive();
+    let mut calendar_events = Vec::new();
+    let mut upcoming_workouts_payload: Option<Value> = None;
+
+    if request.window.start_date <= today {
+        let days_back = (today - request.window.start_date).num_days() as i32;
+        let mut historical = client
+            .get_events(Some(days_back), Some(500))
+            .await
+            .map_err(|e| IntentError::api(format!("Failed to fetch events: {}", e)))?;
+        calendar_events.append(&mut historical);
+    }
+
+    if request.window.end_date >= today {
+        let days_ahead = (request.window.end_date - today).num_days().max(0) as u32;
+        match client
+            .get_upcoming_workouts(Some(days_ahead), Some(500), None)
+            .await
+        {
+            Ok(upcoming) => {
+                let normalized_upcoming = normalize_upcoming_events_payload(upcoming.clone());
+                let mut parsed: Vec<Event> =
+                    serde_json::from_value(normalized_upcoming).map_err(|e| {
+                        IntentError::api(format!("Failed to decode upcoming events: {}", e))
+                    })?;
+                calendar_events.append(&mut parsed);
+                upcoming_workouts_payload = Some(upcoming);
+            }
+            Err(e) if e.is_rate_limited() => {
+                fetched.fetch_warnings.push(upcoming_rate_limit_warning());
+            }
+            Err(e) => {
+                return Err(IntentError::api(format!(
+                    "Failed to fetch upcoming events: {}",
+                    e
+                )));
+            }
+        }
+    }
+
+    fetched.calendar_events = dedupe_and_sort_events(calendar_events);
 
     if request.include_activity_details {
         for activity in &fetched.activities {
@@ -368,23 +407,18 @@ pub async fn fetch_period_data(
         }
     }
 
-    let today = chrono::Utc::now().date_naive();
-    if request.window.end_date >= today {
-        let days_ahead = (request.window.end_date - today).num_days().max(0) as u32;
-        let upcoming_workouts = client
-            .get_upcoming_workouts(Some(days_ahead), Some(200), Some("WORKOUT".to_string()))
-            .await
-            .map_err(|e| IntentError::api(format!("Failed to fetch upcoming workouts: {}", e)))?;
-
-        if let Some(events) = upcoming_workouts.as_array() {
-            for event in events {
-                if let Some((activity, detail)) = parse_planned_workout(event, &known_activity_ids)
-                {
-                    if request.include_activity_details {
-                        fetched.activity_details.insert(activity.id.clone(), detail);
-                    }
-                    fetched.activities.push(activity);
+    if let Some(upcoming_workouts) = upcoming_workouts_payload.as_ref()
+        && let Some(events) = upcoming_workouts.as_array()
+    {
+        for event in events {
+            if event.get("category").and_then(Value::as_str) != Some("WORKOUT") {
+                continue;
+            }
+            if let Some((activity, detail)) = parse_planned_workout(event, &known_activity_ids) {
+                if request.include_activity_details {
+                    fetched.activity_details.insert(activity.id.clone(), detail);
                 }
+                fetched.activities.push(activity);
             }
         }
     }
@@ -589,8 +623,9 @@ pub async fn fetch_race_data(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::mock::MockIntervalsClient;
     use chrono::NaiveDate;
-    use intervals_icu_client::EventCategory;
+    use intervals_icu_client::{EventCategory, IntervalsClient, IntervalsError};
     use serde_json::json;
 
     #[test]
@@ -1429,5 +1464,72 @@ mod tests {
         assert!(result.is_some());
         let (activity, _) = result.unwrap();
         assert_eq!(activity.id, "event:event_1");
+    }
+
+    #[tokio::test]
+    async fn fetch_period_data_reuses_single_upcoming_fetch_for_calendar_and_planned_workouts() {
+        let today = chrono::Utc::now().date_naive();
+        let client = MockIntervalsClient::builder()
+            .with_activities(vec![activity("a1", &today.to_string())])
+            .with_upcoming_workouts(json!([
+                {
+                    "id": 11,
+                    "category": "WORKOUT",
+                    "start_date_local": (today + Duration::days(1)).to_string(),
+                    "description": "Planned threshold session"
+                },
+                {
+                    "id": 12,
+                    "category": "NOTE",
+                    "start_date_local": (today + Duration::days(1)).to_string(),
+                    "description": "Coach note"
+                }
+            ]));
+
+        let request = PeriodFetchRequest {
+            window: AnalysisWindow::new(today - Duration::days(2), today + Duration::days(2)),
+            include_activity_details: false,
+            include_comparison_window: false,
+        };
+
+        let fetched = fetch_period_data(&client as &dyn IntervalsClient, &request)
+            .await
+            .expect("period fetch succeeds");
+
+        assert_eq!(client.upcoming_workouts_call_count(), 1);
+        assert_eq!(fetched.calendar_events.len(), 2);
+        assert!(
+            fetched
+                .activities
+                .iter()
+                .any(|activity| activity.id == "event:11")
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_period_data_degrades_gracefully_when_upcoming_workouts_are_rate_limited() {
+        let today = chrono::Utc::now().date_naive();
+        let client = MockIntervalsClient::builder()
+            .with_activities(vec![activity("a1", &today.to_string())])
+            .with_upcoming_workouts_error(IntervalsError::from_status(429, "rate limited"));
+
+        let request = PeriodFetchRequest {
+            window: AnalysisWindow::new(today - Duration::days(2), today + Duration::days(2)),
+            include_activity_details: false,
+            include_comparison_window: false,
+        };
+
+        let fetched = fetch_period_data(&client as &dyn IntervalsClient, &request)
+            .await
+            .expect("period fetch degrades");
+
+        assert_eq!(client.upcoming_workouts_call_count(), 1);
+        assert!(
+            fetched
+                .fetch_warnings
+                .iter()
+                .any(|warning| warning.contains("rate limiting"))
+        );
+        assert_eq!(fetched.activities.len(), 1);
     }
 }

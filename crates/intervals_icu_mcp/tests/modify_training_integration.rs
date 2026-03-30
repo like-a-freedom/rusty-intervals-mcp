@@ -21,13 +21,21 @@ struct TrackingMockClient {
 }
 
 impl TrackingMockClient {
+    fn relative_date(days_from_today: i64) -> String {
+        (chrono::Local::now().date_naive() + chrono::Duration::days(days_from_today))
+            .format("%Y-%m-%d")
+            .to_string()
+    }
+
     fn with_future_strength_workout() -> Self {
+        let workout_date = Self::relative_date(1);
+
         Self {
             events: vec![],
             upcoming_workouts: json!([
                 {
                     "id": 94131981,
-                    "start_date_local": "2026-03-26",
+                    "start_date_local": workout_date,
                     "name": "Gym — Legs (Recovery Week -30%)",
                     "category": "WORKOUT",
                     "description": "Strength session focused on neural stimulus and low soreness. (Recovery week -30% volume)",
@@ -43,12 +51,16 @@ impl TrackingMockClient {
     }
 
     fn with_future_training_block() -> Self {
+        let first_date = Self::relative_date(1);
+        let second_date = Self::relative_date(2);
+        let third_date = Self::relative_date(3);
+
         Self {
             events: vec![],
             upcoming_workouts: json!([
                 {
                     "id": 94131991,
-                    "start_date_local": "2026-03-26",
+                    "start_date_local": first_date,
                     "name": "Tempo Session",
                     "category": "WORKOUT",
                     "description": "Tempo build workout",
@@ -58,7 +70,7 @@ impl TrackingMockClient {
                 },
                 {
                     "id": 94131992,
-                    "start_date_local": "2026-03-27",
+                    "start_date_local": second_date,
                     "name": "Tempo Session",
                     "category": "WORKOUT",
                     "description": "Tempo build workout",
@@ -68,7 +80,7 @@ impl TrackingMockClient {
                 },
                 {
                     "id": 94131993,
-                    "start_date_local": "2026-03-28",
+                    "start_date_local": third_date,
                     "name": "Easy Run",
                     "category": "WORKOUT",
                     "description": "Recovery run",
@@ -84,12 +96,15 @@ impl TrackingMockClient {
     }
 
     fn with_future_calendar_events() -> Self {
+        let race_date = Self::relative_date(1);
+        let sick_date = Self::relative_date(2);
+
         Self {
             events: vec![],
             upcoming_workouts: json!([
                 {
                     "id": 94131994,
-                    "start_date_local": "2026-03-26",
+                    "start_date_local": race_date,
                     "name": "City Marathon",
                     "category": "RACE_A",
                     "description": "Race day",
@@ -99,7 +114,7 @@ impl TrackingMockClient {
                 },
                 {
                     "id": 94131995,
-                    "start_date_local": "2026-03-27",
+                    "start_date_local": sick_date,
                     "name": "Sick day",
                     "category": "SICK",
                     "description": "Out sick, rest only",
@@ -159,7 +174,7 @@ impl IntervalsClient for TrackingMockClient {
     async fn get_event(&self, event_id: &str) -> Result<Event, IntervalsError> {
         Ok(Event {
             id: Some(event_id.to_string()),
-            start_date_local: "2026-03-23".into(),
+            start_date_local: TrackingMockClient::relative_date(0),
             name: "Mock event".into(),
             category: EventCategory::Workout,
             description: None,
@@ -476,12 +491,13 @@ impl IntervalsClient for TrackingMockClient {
 async fn modify_training_dry_run_finds_future_workout_by_description() {
     let client = Arc::new(TrackingMockClient::with_future_strength_workout());
     let handler = ModifyTrainingHandler::new();
+    let target_date = TrackingMockClient::relative_date(1);
 
     let output = handler
         .execute(
             json!({
                 "action": "modify",
-                "target_date": "2026-03-26",
+                "target_date": target_date,
                 "target_description_contains": "neural stimulus",
                 "new_duration": "1:00",
                 "dry_run": true,
@@ -505,12 +521,13 @@ async fn modify_training_applies_duration_and_description_updates() {
     let client = Arc::new(TrackingMockClient::with_future_strength_workout());
     let updated_events = client.updated_events.clone();
     let handler = ModifyTrainingHandler::new();
+    let target_date = TrackingMockClient::relative_date(1);
 
     let output = handler
         .execute(
             json!({
                 "action": "modify",
-                "target_date": "2026-03-26",
+                "target_date": target_date,
                 "target_description_contains": "neural stimulus",
                 "new_duration": "1:00",
                 "new_description": "Strength session focused on neural stimulus. Duration 1h.",
@@ -541,12 +558,13 @@ async fn create_training_accepts_target_date_as_alias_for_new_date() {
     let client = Arc::new(TrackingMockClient::with_future_strength_workout());
     let created_events = client.created_events.clone();
     let handler = ModifyTrainingHandler::new();
+    let target_date = TrackingMockClient::relative_date(16);
 
     let output = handler
         .execute(
             json!({
                 "action": "create",
-                "target_date": "2026-04-10",
+                "target_date": target_date,
                 "new_name": "Technical Downhill Session",
                 "new_duration": "0:25",
                 "new_description": "Purpose: spend 25 min practicing technical descents.",
@@ -561,14 +579,17 @@ async fn create_training_accepts_target_date_as_alias_for_new_date() {
 
     let created = created_events.lock().unwrap();
     assert_eq!(created.len(), 1);
-    assert_eq!(created[0].start_date_local, "2026-04-10T00:00:00");
+    assert_eq!(
+        created[0].start_date_local,
+        format!("{target_date}T00:00:00")
+    );
     assert_eq!(created[0].name, "Technical Downhill Session");
     assert_eq!(created[0].r#type.as_deref(), Some("Run"));
     assert_eq!(
         created[0].description.as_deref(),
         Some("Purpose: spend 25 min practicing technical descents.")
     );
-    assert!(TrackingMockClient::markdown_text(&output).contains("2026-04-10"));
+    assert!(TrackingMockClient::markdown_text(&output).contains(&target_date));
 }
 
 #[tokio::test]
@@ -576,12 +597,13 @@ async fn create_training_preserves_explicit_new_type() {
     let client = Arc::new(TrackingMockClient::with_future_strength_workout());
     let created_events = client.created_events.clone();
     let handler = ModifyTrainingHandler::new();
+    let target_date = TrackingMockClient::relative_date(17);
 
     handler
         .execute(
             json!({
                 "action": "create",
-                "target_date": "2026-04-11",
+                "target_date": target_date,
                 "new_name": "Gym Session",
                 "new_duration": "0:45",
                 "new_category": "Workout",
@@ -597,7 +619,10 @@ async fn create_training_preserves_explicit_new_type() {
 
     let created = created_events.lock().unwrap();
     assert_eq!(created.len(), 1);
-    assert_eq!(created[0].start_date_local, "2026-04-11T00:00:00");
+    assert_eq!(
+        created[0].start_date_local,
+        format!("{target_date}T00:00:00")
+    );
     assert_eq!(created[0].r#type.as_deref(), Some("WeightTraining"));
 }
 
@@ -606,14 +631,16 @@ async fn modify_training_normalizes_new_date_before_update() {
     let client = Arc::new(TrackingMockClient::with_future_strength_workout());
     let updated_events = client.updated_events.clone();
     let handler = ModifyTrainingHandler::new();
+    let target_date = TrackingMockClient::relative_date(1);
+    let new_date = TrackingMockClient::relative_date(2);
 
     handler
         .execute(
             json!({
                 "action": "modify",
-                "target_date": "2026-03-26",
+                "target_date": target_date,
                 "target_description_contains": "neural stimulus",
-                "new_date": "2026-03-27",
+                "new_date": new_date,
                 "idempotency_token": "modify-normalized-date"
             }),
             client,
@@ -623,10 +650,11 @@ async fn modify_training_normalizes_new_date_before_update() {
         .expect("modify should normalize date before update");
 
     let updates = updated_events.lock().unwrap();
+    let expected_start = format!("{new_date}T00:00:00");
     assert_eq!(updates.len(), 1);
     assert_eq!(
         updates[0].1.get("start_date_local").and_then(Value::as_str),
-        Some("2026-03-27T00:00:00")
+        Some(expected_start.as_str())
     );
 }
 
@@ -634,12 +662,13 @@ async fn modify_training_normalizes_new_date_before_update() {
 async fn modify_training_reports_filter_miss_when_date_has_events() {
     let client = Arc::new(TrackingMockClient::with_future_strength_workout());
     let handler = ModifyTrainingHandler::new();
+    let target_date = TrackingMockClient::relative_date(1);
 
     let output = handler
         .execute(
             json!({
                 "action": "modify",
-                "target_date": "2026-03-26",
+                "target_date": target_date,
                 "target_description_contains": "tempo",
                 "new_duration": "1:00",
                 "dry_run": true,
@@ -661,12 +690,13 @@ async fn modify_training_finds_future_race_events() {
     let client = Arc::new(TrackingMockClient::with_future_calendar_events());
     let updated_events = client.updated_events.clone();
     let handler = ModifyTrainingHandler::new();
+    let target_date = TrackingMockClient::relative_date(1);
 
     handler
         .execute(
             json!({
                 "action": "modify",
-                "target_date": "2026-03-26",
+                "target_date": target_date,
                 "target_description_contains": "marathon",
                 "new_name": "City Marathon — Confirmed",
                 "idempotency_token": "future-race-event"
@@ -690,12 +720,13 @@ async fn modify_training_finds_future_sick_events() {
     let client = Arc::new(TrackingMockClient::with_future_calendar_events());
     let deleted_event_ids = client.deleted_event_ids.clone();
     let handler = ModifyTrainingHandler::new();
+    let target_date = TrackingMockClient::relative_date(2);
 
     handler
         .execute(
             json!({
                 "action": "delete",
-                "target_date": "2026-03-27",
+                "target_date": target_date,
                 "target_description_contains": "sick",
                 "idempotency_token": "future-sick-event"
             }),
@@ -713,6 +744,7 @@ async fn modify_training_finds_future_sick_events() {
 async fn router_allows_apply_after_dry_run_with_same_token() {
     let client = Arc::new(TrackingMockClient::with_future_strength_workout());
     let updated_events = client.updated_events.clone();
+    let target_date = TrackingMockClient::relative_date(1);
     let router = IntentRouter::new(
         vec![Box::new(ModifyTrainingHandler::new())],
         client,
@@ -724,7 +756,7 @@ async fn router_allows_apply_after_dry_run_with_same_token() {
             "modify_training",
             json!({
                 "action": "modify",
-                "target_date": "2026-03-26",
+                "target_date": target_date,
                 "target_description_contains": "neural stimulus",
                 "new_duration": "1:00",
                 "dry_run": true,
@@ -741,7 +773,7 @@ async fn router_allows_apply_after_dry_run_with_same_token() {
             "modify_training",
             json!({
                 "action": "modify",
-                "target_date": "2026-03-26",
+                "target_date": target_date,
                 "target_description_contains": "neural stimulus",
                 "new_duration": "1:00",
                 "idempotency_token": "shared-preview-apply-token"
@@ -763,13 +795,15 @@ async fn router_rejects_same_token_for_different_mutation_payload() {
         client,
         Arc::new(IdempotencyMiddleware::new()),
     );
+    let target_date = TrackingMockClient::relative_date(1);
+    let new_date = TrackingMockClient::relative_date(16);
 
     router
         .route(
             "modify_training",
             json!({
                 "action": "modify",
-                "target_date": "2026-03-23",
+                "target_date": target_date,
                 "target_description_contains": "neural stimulus",
                 "new_duration": "1:00",
                 "idempotency_token": "reused-mutation-token"
@@ -784,7 +818,7 @@ async fn router_rejects_same_token_for_different_mutation_payload() {
             "modify_training",
             json!({
                 "action": "create",
-                "new_date": "2026-04-10",
+                "new_date": new_date,
                 "new_name": "Technical Downhill Session",
                 "new_duration": "0:25",
                 "idempotency_token": "reused-mutation-token"
@@ -802,13 +836,15 @@ async fn modify_training_range_updates_all_matching_events() {
     let client = Arc::new(TrackingMockClient::with_future_training_block());
     let updated_events = client.updated_events.clone();
     let handler = ModifyTrainingHandler::new();
+    let start_date = TrackingMockClient::relative_date(1);
+    let end_date = TrackingMockClient::relative_date(2);
 
     let output = handler
         .execute(
             json!({
                 "action": "modify",
-                "target_date_from": "2026-03-26",
-                "target_date_to": "2026-03-27",
+                "target_date_from": start_date,
+                "target_date_to": end_date,
                 "target_description_contains": "tempo",
                 "new_duration": "1:00",
                 "new_description": "Adjusted tempo block",
@@ -831,13 +867,15 @@ async fn delete_training_range_bulk_deletes_all_matching_events() {
     let client = Arc::new(TrackingMockClient::with_future_training_block());
     let deleted_event_ids = client.deleted_event_ids.clone();
     let handler = ModifyTrainingHandler::new();
+    let start_date = TrackingMockClient::relative_date(1);
+    let end_date = TrackingMockClient::relative_date(2);
 
     let output = handler
         .execute(
             json!({
                 "action": "delete",
-                "target_date_from": "2026-03-26",
-                "target_date_to": "2026-03-27",
+                "target_date_from": start_date,
+                "target_date_to": end_date,
                 "target_description_contains": "tempo",
                 "idempotency_token": "delete-range-block"
             }),
