@@ -69,6 +69,8 @@ pub(crate) mod mock {
     };
     use serde_json::{Value, json};
     use std::collections::HashMap;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// Shared mock for `IntervalsClient`. Covers both single-activity and period test scenarios.
     ///
@@ -98,6 +100,9 @@ pub(crate) mod mock {
         pub sport_settings: Option<Value>,
         pub gear_list: Option<Value>,
         pub update_error: Option<String>,
+        pub upcoming_workouts: Option<Value>,
+        pub upcoming_workouts_error: Option<IntervalsError>,
+        pub upcoming_workouts_calls: Arc<AtomicUsize>,
     }
 
     impl MockIntervalsClient {
@@ -202,6 +207,20 @@ pub(crate) mod mock {
         pub fn with_update_error(mut self, error: impl Into<String>) -> Self {
             self.update_error = Some(error.into());
             self
+        }
+
+        pub fn with_upcoming_workouts(mut self, workouts: Value) -> Self {
+            self.upcoming_workouts = Some(workouts);
+            self
+        }
+
+        pub fn with_upcoming_workouts_error(mut self, error: IntervalsError) -> Self {
+            self.upcoming_workouts_error = Some(error);
+            self
+        }
+
+        pub fn upcoming_workouts_call_count(&self) -> usize {
+            self.upcoming_workouts_calls.load(Ordering::SeqCst)
         }
     }
 
@@ -451,7 +470,78 @@ pub(crate) mod mock {
             _limit: Option<u32>,
             _category: Option<String>,
         ) -> Result<Value, IntervalsError> {
-            Ok(json!([]))
+            self.upcoming_workouts_calls.fetch_add(1, Ordering::SeqCst);
+            if let Some(err) = &self.upcoming_workouts_error {
+                return Err(match err {
+                    IntervalsError::Http(e) => IntervalsError::from_status(
+                        e.status().map(|status| status.as_u16()).unwrap_or(500),
+                        e.to_string(),
+                    ),
+                    IntervalsError::Config(e) => IntervalsError::Config(match e {
+                        intervals_icu_client::ConfigError::MissingEnvVar(value) => {
+                            intervals_icu_client::ConfigError::MissingEnvVar(value.clone())
+                        }
+                        intervals_icu_client::ConfigError::InvalidValue { key, message } => {
+                            intervals_icu_client::ConfigError::InvalidValue {
+                                key: key.clone(),
+                                message: message.clone(),
+                            }
+                        }
+                        intervals_icu_client::ConfigError::Other(message) => {
+                            intervals_icu_client::ConfigError::Other(message.clone())
+                        }
+                    }),
+                    IntervalsError::Api(api) => {
+                        IntervalsError::Api(intervals_icu_client::ApiError {
+                            status: api.status,
+                            message: api.message.clone(),
+                            raw_body: api.raw_body.clone(),
+                        })
+                    }
+                    IntervalsError::JsonDecode(_) => {
+                        IntervalsError::from_status(500, "json decode")
+                    }
+                    IntervalsError::Validation(validation) => {
+                        IntervalsError::Validation(match validation {
+                            intervals_icu_client::ValidationError::EmptyField { field } => {
+                                intervals_icu_client::ValidationError::EmptyField {
+                                    field: field.clone(),
+                                }
+                            }
+                            intervals_icu_client::ValidationError::InvalidFormat {
+                                field,
+                                value,
+                            } => intervals_icu_client::ValidationError::InvalidFormat {
+                                field: field.clone(),
+                                value: value.clone(),
+                            },
+                            intervals_icu_client::ValidationError::UnknownVariant {
+                                field,
+                                value,
+                            } => intervals_icu_client::ValidationError::UnknownVariant {
+                                field: field.clone(),
+                                value: value.clone(),
+                            },
+                            intervals_icu_client::ValidationError::MissingParameter(value) => {
+                                intervals_icu_client::ValidationError::MissingParameter(
+                                    value.clone(),
+                                )
+                            }
+                            intervals_icu_client::ValidationError::InvalidParameterCombination(
+                                value,
+                            ) => {
+                                intervals_icu_client::ValidationError::InvalidParameterCombination(
+                                    value.clone(),
+                                )
+                            }
+                        })
+                    }
+                    IntervalsError::NotFound(message) => IntervalsError::NotFound(message.clone()),
+                    IntervalsError::Auth(message) => IntervalsError::Auth(message.clone()),
+                });
+            }
+
+            Ok(self.upcoming_workouts.clone().unwrap_or_else(|| json!([])))
         }
 
         async fn update_event(

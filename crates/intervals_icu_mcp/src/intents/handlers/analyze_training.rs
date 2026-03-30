@@ -788,7 +788,9 @@ impl AnalyzeTrainingHandler {
 
             if !calendar_events.is_empty() {
                 let calendar_rows = build_calendar_event_rows(&calendar_events);
-                content.push(ContentBlock::markdown("Calendar Events".to_string()));
+                content.push(ContentBlock::markdown(
+                    "Calendar Events in Window".to_string(),
+                ));
                 content.push(ContentBlock::table(
                     vec![
                         "Date".into(),

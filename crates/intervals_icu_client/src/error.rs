@@ -59,6 +59,11 @@ impl ApiError {
     pub fn is_auth_error(&self) -> bool {
         matches!(self.status, 401 | 403)
     }
+
+    /// Check if this error represents an upstream rate limit response.
+    pub fn is_rate_limited(&self) -> bool {
+        self.status == 429
+    }
 }
 
 /// Input validation errors.
@@ -167,6 +172,14 @@ impl IntervalsError {
             _ => false,
         }
     }
+
+    /// Check if this error represents an upstream rate limit response.
+    pub fn is_rate_limited(&self) -> bool {
+        match self {
+            Self::Api(e) => e.is_rate_limited(),
+            _ => false,
+        }
+    }
 }
 
 /// Result type alias for Intervals.icu operations.
@@ -199,6 +212,12 @@ mod tests {
     }
 
     #[test]
+    fn api_error_is_rate_limited() {
+        let err = ApiError::new(429, "rate limit", "body");
+        assert!(err.is_rate_limited());
+    }
+
+    #[test]
     fn intervals_error_from_status_404() {
         let err = IntervalsError::from_status(404, "not found");
         assert!(err.is_not_found());
@@ -222,6 +241,12 @@ mod tests {
         assert!(!err.is_not_found());
         assert!(!err.is_auth_error());
         assert!(!err.is_validation_error());
+    }
+
+    #[test]
+    fn intervals_error_from_status_429() {
+        let err = IntervalsError::from_status(429, "rate limited");
+        assert!(err.is_rate_limited());
     }
 
     #[test]

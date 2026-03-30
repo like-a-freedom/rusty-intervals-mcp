@@ -374,7 +374,14 @@ pub fn intent_error_to_error_data(error: &IntentError) -> rmcp::ErrorData {
         IntentError::IdempotencyConflict(msg) => {
             format!("Idempotency conflict: {}. Returning cached.", msg)
         }
-        IntentError::ApiClientError(msg) => format!("API error: {}. Check connection.", msg),
+        IntentError::ApiClientError(msg) => {
+            let lower = msg.to_ascii_lowercase();
+            if lower.contains("status 429") || lower.contains("rate limit") {
+                format!("API rate limit exceeded: {}. Wait briefly and retry.", msg)
+            } else {
+                format!("API error: {}. Check connection.", msg)
+            }
+        }
         IntentError::InternalError(msg) => format!("Internal error: {}. Try again.", msg),
     };
     rmcp::ErrorData::invalid_params(message, None)
@@ -673,6 +680,15 @@ mod tests {
         let error_data = intent_error_to_error_data(&err);
         assert!(error_data.message.contains("API error"));
         assert!(error_data.message.contains("Network error"));
+    }
+
+    #[test]
+    fn test_intent_error_to_error_data_rate_limit() {
+        let err =
+            IntentError::api("Failed to fetch upcoming workouts: API error: status 429, message: ");
+        let error_data = intent_error_to_error_data(&err);
+        assert!(error_data.message.contains("rate limit"));
+        assert!(error_data.message.contains("retry"));
     }
 
     #[test]
