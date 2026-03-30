@@ -1,6 +1,6 @@
 [package]
 name = "intervals_icu_client"
-version = "2.4.0"
+version = "2.4.1"
 edition = "2024"
 resolver = "3"
 
