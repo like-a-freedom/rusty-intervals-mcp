@@ -6,7 +6,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cfg = match Config::from_env() {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("config error: {}", e);
+            eprintln!("config error: {e}");
             return Ok(());
         }
     };

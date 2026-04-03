@@ -68,8 +68,8 @@ pub fn compute_stream_stats(arr: &[Value]) -> Value {
     let count = nums.len();
     let sum: f64 = nums.iter().sum();
     let avg = sum / count as f64;
-    let min = nums.iter().cloned().fold(f64::INFINITY, f64::min);
-    let max = nums.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let min = nums.iter().copied().fold(f64::INFINITY, f64::min);
+    let max = nums.iter().copied().fold(f64::NEG_INFINITY, f64::max);
 
     let mut sorted = nums.clone();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));

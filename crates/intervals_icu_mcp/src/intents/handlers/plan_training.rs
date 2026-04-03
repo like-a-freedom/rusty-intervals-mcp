@@ -14,11 +14,13 @@ use crate::intents::utils::parse_date;
 
 pub struct PlanTrainingHandler;
 impl PlanTrainingHandler {
+    #[must_use]
     pub fn new() -> Self {
         Self
     }
 }
 
+#[must_use]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TrainingFocus {
     AerobicBase,
@@ -39,6 +41,7 @@ impl TrainingFocus {
         }
     }
 
+    #[must_use]
     fn as_str(self) -> &'static str {
         match self {
             Self::AerobicBase => "aerobic_base",
@@ -78,6 +81,7 @@ impl IntentHandler for PlanTrainingHandler {
         })
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn execute(
         &self,
         input: Value,
@@ -111,7 +115,7 @@ impl IntentHandler for PlanTrainingHandler {
             ));
         }
 
-        let weeks: u32 = ((end_date - start_date).num_days() / 7 + 1) as u32;
+        let weeks: u32 = u32::try_from((end_date - start_date).num_days() / 7 + 1).unwrap_or(0);
 
         // --- Required fetches ---
         let profile = client
@@ -470,7 +474,7 @@ impl IntentHandler for PlanTrainingHandler {
 
         // --- Task 5: Generate and create events ---
         let events_to_create = generate_events(&phases, start_date, focus, weeks);
-        let events_count = events_to_create.len() as u32;
+        let events_count = u32::try_from(events_to_create.len()).unwrap_or(0);
 
         let created_events = client
             .bulk_create_events(events_to_create)
@@ -565,6 +569,7 @@ impl IntentHandler for PlanTrainingHandler {
     }
 }
 
+#[must_use]
 struct Phase {
     name: String,
     weeks: String,
@@ -574,6 +579,7 @@ struct Phase {
 
 // --- Task 1: Sport settings extraction ---
 
+#[must_use]
 #[derive(Default)]
 struct ExtractedSportSettings {
     sport_name: Option<String>,
@@ -615,6 +621,7 @@ impl ExtractedSportSettings {
 
 // --- Task 2: Wellness snapshot ---
 
+#[must_use]
 #[derive(Default)]
 struct WellnessSnapshot {
     readiness: Option<f64>,
@@ -641,6 +648,7 @@ impl WellnessSnapshot {
 
 // --- Task 5: Event generation ---
 
+#[must_use]
 fn generate_events(
     _phases: &[Phase],
     start_date: chrono::NaiveDate,

@@ -46,21 +46,25 @@ impl ApiError {
     }
 
     /// Check if this error represents a 404 Not Found response.
+    #[must_use]
     pub fn is_not_found(&self) -> bool {
         self.status == 404
     }
 
     /// Check if this error represents a 422 Unprocessable Entity response.
+    #[must_use]
     pub fn is_validation_error(&self) -> bool {
         self.status == 422
     }
 
     /// Check if this error represents an authentication failure (401/403).
+    #[must_use]
     pub fn is_auth_error(&self) -> bool {
         matches!(self.status, 401 | 403)
     }
 
     /// Check if this error represents an upstream rate limit response.
+    #[must_use]
     pub fn is_rate_limited(&self) -> bool {
         self.status == 429
     }
@@ -147,6 +151,7 @@ impl IntervalsError {
     }
 
     /// Check if this error represents a 404 Not Found response.
+    #[must_use]
     pub fn is_not_found(&self) -> bool {
         match self {
             Self::NotFound(_) => true,
@@ -156,6 +161,7 @@ impl IntervalsError {
     }
 
     /// Check if this error represents a 422 validation error.
+    #[must_use]
     pub fn is_validation_error(&self) -> bool {
         match self {
             Self::Validation(_) => true,
@@ -165,6 +171,7 @@ impl IntervalsError {
     }
 
     /// Check if this error represents an authentication failure.
+    #[must_use]
     pub fn is_auth_error(&self) -> bool {
         match self {
             Self::Auth(_) => true,
@@ -174,6 +181,7 @@ impl IntervalsError {
     }
 
     /// Check if this error represents an upstream rate limit response.
+    #[must_use]
     pub fn is_rate_limited(&self) -> bool {
         match self {
             Self::Api(e) => e.is_rate_limited(),

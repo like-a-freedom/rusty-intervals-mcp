@@ -9,6 +9,7 @@ use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
 /// Planning horizon types
+#[must_use]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PlanningHorizon {
     /// 1 week: detailed daily planning
@@ -38,6 +39,7 @@ pub enum PlanningHorizon {
 }
 
 /// Training phases
+#[must_use]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum TrainingPhase {
     Transition,
@@ -51,6 +53,7 @@ pub enum TrainingPhase {
 }
 
 /// Training focus areas
+#[must_use]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum TrainingFocus {
     AerobicBase,
@@ -62,6 +65,7 @@ pub enum TrainingFocus {
 }
 
 /// Race distances
+#[must_use]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum RaceDistance {
     _5K,
@@ -76,6 +80,7 @@ pub enum RaceDistance {
 }
 
 /// Key race for annual planning
+#[must_use]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KeyRace {
     pub name: String,
@@ -85,6 +90,7 @@ pub struct KeyRace {
 }
 
 /// Period block for annual planning
+#[must_use]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PeriodBlock {
     pub name: String,
@@ -95,6 +101,7 @@ pub struct PeriodBlock {
 }
 
 /// Periodization business rules
+#[must_use]
 pub struct PeriodizationRules;
 
 impl PeriodizationRules {
@@ -112,6 +119,7 @@ impl PeriodizationRules {
     pub const BASE_PERIOD_Z1Z2_MAX: f32 = 0.95;
 
     /// Taper protocols by distance
+    #[must_use]
     pub fn taper_protocol(distance: &RaceDistance) -> TaperProtocol {
         match distance {
             RaceDistance::_5K | RaceDistance::_10K | RaceDistance::HalfMarathon => TaperProtocol {
@@ -152,16 +160,19 @@ impl PeriodizationRules {
     }
 
     /// Calculate recovery week volume
+    #[must_use]
     pub fn recovery_week_volume(normal_volume: f32) -> f32 {
         normal_volume * (1.0 - Self::RECOVERY_WEEK_REDUCTION)
     }
 
     /// Check if week should be recovery week
+    #[must_use]
     pub fn is_recovery_week(week_number: u8) -> bool {
         week_number.is_multiple_of(Self::RECOVERY_WEEK_FREQUENCY)
     }
 
     /// Calculate progressive overload for week
+    #[must_use]
     pub fn weekly_volume(base_volume: f32, week: u8) -> f32 {
         let progression = (week as f32 - 1.0) * Self::MAX_WEEKLY_PROGRESSION;
         base_volume * (1.0 + progression.min(0.30)) // Cap at 30% increase
@@ -231,6 +242,7 @@ impl PlanningHorizon {
     }
 
     /// Get number of weeks for this horizon
+    #[must_use]
     pub fn weeks(&self) -> u32 {
         match self {
             PlanningHorizon::Microcycle { .. } => 1,
@@ -243,6 +255,7 @@ impl PlanningHorizon {
 
 impl TrainingPhase {
     /// Get zone distribution for phase
+    #[must_use]
     pub fn zone_distribution(&self) -> ZoneDistribution {
         match self {
             TrainingPhase::Transition | TrainingPhase::Recovery => ZoneDistribution {
@@ -288,6 +301,7 @@ pub struct ZoneDistribution {
 }
 
 /// Generate sample workout for phase
+#[must_use]
 pub fn generate_workout_for_phase(
     phase: &TrainingPhase,
     focus: &TrainingFocus,
@@ -300,17 +314,17 @@ pub fn generate_workout_for_phase(
             vec![
                 ZoneSegment {
                     zone: 1,
-                    duration_minutes: (duration_minutes as f32 * 0.1) as u32,
+                    duration_minutes: (duration_minutes as f32 * 0.1).round() as u32,
                     description: Some("Warm-up".into()),
                 },
                 ZoneSegment {
                     zone: 2,
-                    duration_minutes: (duration_minutes as f32 * distribution.z1_z2) as u32,
+                    duration_minutes: (duration_minutes as f32 * distribution.z1_z2).round() as u32,
                     description: Some("Aerobic base".into()),
                 },
                 ZoneSegment {
                     zone: 1,
-                    duration_minutes: (duration_minutes as f32 * 0.1) as u32,
+                    duration_minutes: (duration_minutes as f32 * 0.1).round() as u32,
                     description: Some("Cool-down".into()),
                 },
             ]
@@ -319,22 +333,22 @@ pub fn generate_workout_for_phase(
             vec![
                 ZoneSegment {
                     zone: 1,
-                    duration_minutes: (duration_minutes as f32 * 0.15) as u32,
+                    duration_minutes: (duration_minutes as f32 * 0.15).round() as u32,
                     description: Some("Warm-up".into()),
                 },
                 ZoneSegment {
                     zone: 4,
-                    duration_minutes: (duration_minutes as f32 * distribution.z4_z5) as u32,
+                    duration_minutes: (duration_minutes as f32 * distribution.z4_z5).round() as u32,
                     description: Some("Intervals".into()),
                 },
                 ZoneSegment {
                     zone: 2,
-                    duration_minutes: (duration_minutes as f32 * 0.2) as u32,
+                    duration_minutes: (duration_minutes as f32 * 0.2).round() as u32,
                     description: Some("Recovery".into()),
                 },
                 ZoneSegment {
                     zone: 1,
-                    duration_minutes: (duration_minutes as f32 * 0.1) as u32,
+                    duration_minutes: (duration_minutes as f32 * 0.1).round() as u32,
                     description: Some("Cool-down".into()),
                 },
             ]
@@ -344,22 +358,23 @@ pub fn generate_workout_for_phase(
             vec![
                 ZoneSegment {
                     zone: 1,
-                    duration_minutes: (duration_minutes as f32 * 0.1) as u32,
+                    duration_minutes: (duration_minutes as f32 * 0.1).round() as u32,
                     description: Some("Warm-up".into()),
                 },
                 ZoneSegment {
                     zone: 2,
-                    duration_minutes: (duration_minutes as f32 * distribution.z1_z2 * 0.8) as u32,
+                    duration_minutes: (duration_minutes as f32 * distribution.z1_z2 * 0.8).round()
+                        as u32,
                     description: None,
                 },
                 ZoneSegment {
                     zone: 3,
-                    duration_minutes: (duration_minutes as f32 * distribution.z3) as u32,
+                    duration_minutes: (duration_minutes as f32 * distribution.z3).round() as u32,
                     description: None,
                 },
                 ZoneSegment {
                     zone: 1,
-                    duration_minutes: (duration_minutes as f32 * 0.1) as u32,
+                    duration_minutes: (duration_minutes as f32 * 0.1).round() as u32,
                     description: Some("Cool-down".into()),
                 },
             ]

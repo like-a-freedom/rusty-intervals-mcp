@@ -6,7 +6,7 @@ use crate::intents::ContentBlock;
 pub(crate) fn build_load_management_text(
     metrics: Option<&crate::domains::coach::LoadManagementMetrics>,
 ) -> String {
-    let mut lines = vec!["Load Context".to_string()];
+    let mut lines = vec![String::from("Load Context")];
 
     let Some(metrics) = metrics else {
         lines.push(
@@ -68,7 +68,7 @@ pub(crate) fn requested_metrics(input: &Value) -> Vec<String> {
             items
                 .iter()
                 .filter_map(Value::as_str)
-                .map(|metric| metric.to_lowercase())
+                .map(str::to_lowercase)
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default()
@@ -122,7 +122,7 @@ pub(crate) fn build_calendar_event_rows(
                 event
                     .description
                     .clone()
-                    .unwrap_or_else(|| "n/a".to_string()),
+                    .unwrap_or_else(|| String::from("n/a")),
             ]
         })
         .collect()
@@ -313,16 +313,16 @@ pub(crate) fn build_activity_message_rows(
                 .created
                 .as_deref()
                 .map(|created| created.replace('T', " ").replace('Z', ""))
-                .unwrap_or_else(|| "n/a".to_string());
+                .unwrap_or_else(|| String::from("n/a"));
             let author = message
                 .name
                 .clone()
                 .or_else(|| message.athlete_id.clone())
-                .unwrap_or_else(|| "Unknown".to_string());
+                .unwrap_or_else(|| String::from("Unknown"));
             let kind = message
                 .message_type
                 .clone()
-                .unwrap_or_else(|| "TEXT".to_string());
+                .unwrap_or_else(|| String::from("TEXT"));
 
             Some(vec![when, author, kind, content.to_string()])
         })
@@ -682,7 +682,7 @@ pub(crate) fn build_requested_period_metric_rows(
 pub(crate) fn build_zone_distribution_rows(
     zones: &serde_json::Map<String, Value>,
 ) -> Vec<Vec<String>> {
-    let total_time: i64 = zones.values().filter_map(|x| x.as_i64()).sum();
+    let total_time: i64 = zones.values().filter_map(Value::as_i64).sum();
 
     zones
         .iter()
@@ -881,8 +881,8 @@ pub(crate) fn format_best_effort_average(
     if let Some(avg) = average {
         let stream = best_efforts.get("stream").and_then(Value::as_str);
         match stream {
-            Some("watts") | Some("power") => return Some(format!("{avg:.1} W")),
-            Some("speed") | Some("velocity") | Some("pace") => {
+            Some("watts" | "power") => return Some(format!("{avg:.1} W")),
+            Some("speed" | "velocity" | "pace") => {
                 // Speed in m/s, convert to pace per km
                 if avg > 0.0 {
                     let secs_per_km = (1000.0 / avg).round() as i64;

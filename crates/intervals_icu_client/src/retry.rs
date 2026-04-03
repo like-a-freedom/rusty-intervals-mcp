@@ -17,6 +17,10 @@ impl Default for RetryPolicy {
 }
 
 impl RetryPolicy {
+    /// Execute an async operation with retry and exponential backoff.
+    ///
+    /// # Errors
+    /// Returns the error from the last failed attempt.
     pub async fn retry_async<F, Fut, T, E>(&self, mut f: F) -> Result<T, E>
     where
         F: FnMut() -> Fut,
@@ -32,10 +36,12 @@ impl RetryPolicy {
                         return Err(e);
                     }
                     // exponential backoff with jitter
-                    let max_delay = self.base_delay * (1u32 << attempt);
+                    let base_ms =
+                        u64::from(u32::try_from(self.base_delay.as_millis()).unwrap_or(u32::MAX));
+                    let max_delay = base_ms * (1u64 << attempt);
                     let mut rng = rng();
-                    let jitter = rng.random_range(0..max_delay.as_millis() as u64);
-                    let delay = Duration::from_millis(jitter.min(max_delay.as_millis() as u64));
+                    let jitter = rng.random_range(0..max_delay);
+                    let delay = Duration::from_millis(jitter.min(max_delay));
                     tokio::time::sleep(delay).await;
                 }
             }

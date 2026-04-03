@@ -164,8 +164,8 @@ impl ManageGearHandler {
                     .get("name")
                     .and_then(|v| v.as_str())
                     .unwrap_or("Unknown");
-                let distance_m = gear.get("distance").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                let distance_km = distance_m / 1000.0;
+                let total_km =
+                    gear.get("distance").and_then(|v| v.as_f64()).unwrap_or(0.0) / 1000.0;
 
                 let (remaining_km, status_str): (f64, String) =
                     if let Some(reminders) = gear.get("reminders").and_then(|r| r.as_array()) {
@@ -178,10 +178,10 @@ impl ManageGearHandler {
                             if percent >= 100.0 {
                                 (0.0, "🔴 Replace now".to_string())
                             } else if percent >= 80.0 {
-                                let remaining = (distance_km * (100.0 - percent) / 100.0).max(0.0);
+                                let remaining = (total_km * (100.0 - percent) / 100.0).max(0.0);
                                 (remaining, format!("🔶 {:.0}% worn", percent))
                             } else {
-                                let remaining = (distance_km * (100.0 - percent) / 100.0).max(0.0);
+                                let remaining = (total_km * (100.0 - percent) / 100.0).max(0.0);
                                 (remaining, format!("{:.0}% used", percent))
                             }
                         } else {
@@ -199,7 +199,7 @@ impl ManageGearHandler {
 
                 rows.push(vec![
                     name.to_string(),
-                    format!("{:.1} km", distance_km),
+                    format!("{:.1} km", total_km),
                     format!("{:.1} km", remaining_km),
                     status_str,
                 ]);

@@ -197,8 +197,8 @@ impl AnalysisEngine {
     pub fn compare_periods(
         period_a: &PeriodSummary,
         period_b: &PeriodSummary,
-        period_a_label: &str,
-        period_b_label: &str,
+        label_a: &str,
+        label_b: &str,
     ) -> LikeForLikeComparison {
         // Workout count
         let mut metrics = vec![MetricComparison {
@@ -266,8 +266,8 @@ impl AnalysisEngine {
         };
 
         LikeForLikeComparison {
-            period_a_label: period_a_label.into(),
-            period_b_label: period_b_label.into(),
+            period_a_label: label_a.into(),
+            period_b_label: label_b.into(),
             metrics,
             summary,
         }
@@ -335,18 +335,18 @@ impl AnalysisEngine {
 
         let mut sum_x = 0.0;
         let mut sum_y = 0.0;
-        let mut sum_xy = 0.0;
+        let mut cross_product = 0.0;
         let mut sum_xx = 0.0;
 
         for (i, (_, y)) in data.iter().enumerate() {
             let x = i as f32;
             sum_x += x;
             sum_y += *y;
-            sum_xy += x * y;
+            cross_product += x * y;
             sum_xx += x * x;
         }
 
-        let slope = (n * sum_xy - sum_x * sum_y) / (n * sum_xx - sum_x * sum_x);
+        let slope = (n * cross_product - sum_x * sum_y) / (n * sum_xx - sum_x * sum_x);
         let intercept = (sum_y - slope * sum_x) / n;
 
         (slope, intercept)

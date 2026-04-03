@@ -884,7 +884,10 @@ async fn get_sport_settings_ok() {
         SecretString::new("tok".into()),
     );
     let settings = client.get_sport_settings().await.expect("settings");
-    assert_eq!(settings.get("ftp").and_then(|v| v.as_u64()), Some(250));
+    assert_eq!(
+        settings.get("ftp").and_then(serde_json::Value::as_u64),
+        Some(250)
+    );
 }
 
 #[tokio::test]
@@ -1093,7 +1096,7 @@ async fn bulk_create_events_propagates_error_body() {
     assert!(res.is_err());
     // Error should mention the invalid date
     let err = format!("{}", res.err().unwrap());
-    eprintln!("bulk_create error: {}", err);
+    eprintln!("bulk_create error: {err}");
     assert!(
         err.contains("2026-13-01")
             || err.contains("invalid")
@@ -1155,7 +1158,7 @@ async fn workout_library_and_folder_paths_match_spec() {
     );
 
     let lib = client.get_workout_library().await.expect("library");
-    assert_eq!(lib.as_array().map(|a| a.len()), Some(1));
+    assert_eq!(lib.as_array().map(Vec::len), Some(1));
 
     // get_workouts_in_folder returns the full library (API limitation)
     let filtered = client.get_workouts_in_folder("10").await.expect("workouts");
@@ -1196,7 +1199,7 @@ async fn sport_settings_update_includes_recalc_flag() {
     Mock::given(method("GET"))
         .and(path("/api/v1/athlete/ath/sport-settings"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
-            {"id": 1783043, "types": ["Run", "VirtualRun", "TrailRun"]}
+            {"id": 1_783_043, "types": ["Run", "VirtualRun", "TrailRun"]}
         ])))
         .mount(&server)
         .await;
@@ -1241,7 +1244,7 @@ async fn delete_sport_settings_handles_non_success() {
     Mock::given(method("GET"))
         .and(path("/api/v1/athlete/ath/sport-settings"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
-            {"id": 1783043, "types": ["Run", "VirtualRun", "TrailRun"]}
+            {"id": 1_783_043, "types": ["Run", "VirtualRun", "TrailRun"]}
         ])))
         .mount(&server)
         .await;
@@ -1540,7 +1543,7 @@ async fn get_workouts_in_folder_missing_folder_id_filters_none() {
 
     let res = client.get_workouts_in_folder("123").await.expect("ok");
     // API returns all items (no server-side filtering)
-    assert_eq!(res.as_array().map(|a| a.len()), Some(2));
+    assert_eq!(res.as_array().map(Vec::len), Some(2));
 }
 
 #[tokio::test]
@@ -1588,7 +1591,10 @@ async fn get_workouts_in_folder_handles_string_folder_id() {
         .expect("workouts");
     let arr = filtered.as_array().cloned().unwrap_or_default();
     assert_eq!(arr.len(), 1);
-    assert_eq!(arr[0].get("id").and_then(|v| v.as_i64()), Some(1));
+    assert_eq!(
+        arr[0].get("id").and_then(serde_json::Value::as_i64),
+        Some(1)
+    );
 }
 
 #[tokio::test]
@@ -1621,7 +1627,7 @@ async fn download_activity_file_zero_length_creates_empty_file_no_progress() {
     // No progress updates should have been sent for an empty stream
     // No progress should have been sent; any TryRecvError is fine for this assertion
     if let Ok(p) = rx.try_recv() {
-        panic!("unexpected progress: {:?}", p)
+        panic!("unexpected progress: {p:?}")
     }
 
     let metadata = std::fs::metadata(&path).expect("file exists");
@@ -1652,16 +1658,16 @@ async fn download_activity_file_with_progress_can_be_cancelled() {
     // A tiny TCP server that returns a chunked response in two parts with a pause
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let server_url = format!("http://{}", addr);
+    let server_url = format!("http://{addr}");
 
     // spawn the server task with a oneshot gate to coordinate second chunk
     let (go_tx, go_rx) = tokio::sync::oneshot::channel::<()>();
     tokio::spawn(async move {
         if let Ok((mut socket, _)) = listener.accept().await {
             use tokio::io::{AsyncReadExt, AsyncWriteExt};
-            let mut _buf = [0u8; 1024];
+            let mut buf = [0u8; 1024];
             // read and ignore request
-            let _ = socket.read(&mut _buf).await;
+            let _ = socket.read(&mut buf).await;
 
             // respond with chunked-encoded body
             let headers = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n";
@@ -1726,7 +1732,7 @@ async fn download_activity_file_with_progress_can_be_cancelled() {
             let msg = cfg_err.to_string();
             assert!(msg.contains("download cancelled"));
         }
-        e => panic!("expected Config error, got: {:?}", e),
+        e => panic!("expected Config error, got: {e:?}"),
     }
 }
 

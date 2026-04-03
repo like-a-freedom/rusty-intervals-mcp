@@ -1,3 +1,5 @@
+#![allow(clippy::semicolon_if_nothing_returned)]
+
 use criterion::{Criterion, criterion_group, criterion_main};
 use intervals_icu_client::{IntervalsClient, http_client::ReqwestIntervalsClient};
 use secrecy::SecretString;

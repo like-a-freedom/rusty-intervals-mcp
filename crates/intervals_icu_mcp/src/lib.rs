@@ -1,3 +1,40 @@
+#![allow(
+    clippy::cast_lossless,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    clippy::doc_link_with_quotes,
+    clippy::doc_markdown,
+    clippy::format_push_string,
+    clippy::if_not_else,
+    clippy::implicit_clone,
+    clippy::implicit_hasher,
+    clippy::items_after_statements,
+    clippy::manual_let_else,
+    clippy::manual_midpoint,
+    clippy::manual_string_new,
+    clippy::map_unwrap_or,
+    clippy::match_same_arms,
+    clippy::missing_errors_doc,
+    clippy::missing_fields_in_debug,
+    clippy::must_use_candidate,
+    clippy::needless_pass_by_value,
+    clippy::redundant_closure_for_method_calls,
+    clippy::return_self_not_must_use,
+    clippy::semicolon_if_nothing_returned,
+    clippy::similar_names,
+    clippy::single_char_pattern,
+    clippy::struct_excessive_bools,
+    clippy::too_many_lines,
+    clippy::unchecked_time_subtraction,
+    clippy::uninlined_format_args,
+    clippy::unnested_or_patterns,
+    clippy::unused_self,
+    clippy::used_underscore_binding,
+    clippy::wildcard_imports
+)]
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -52,6 +89,7 @@ pub struct IntervalsMcpHandler {
 }
 
 impl IntervalsMcpHandler {
+    #[must_use]
     pub fn new(client: Arc<dyn IntervalsClient>) -> Self {
         Self::with_dynamic_runtime(client, dynamic::DynamicRuntime::from_env())
     }
@@ -60,6 +98,7 @@ impl IntervalsMcpHandler {
     /// In this mode, credentials are extracted from JWT tokens per-request,
     /// and a new client is created for each request.
     /// The client field is initialized with a placeholder that will be ignored.
+    #[must_use]
     pub fn new_multi_tenant() -> Self {
         // Create a minimal placeholder client - it won't be used in multi-tenant mode
         // because we create per-request clients from JWT credentials
@@ -73,6 +112,7 @@ impl IntervalsMcpHandler {
         Self::with_dynamic_runtime(placeholder_client, dynamic::DynamicRuntime::from_env())
     }
 
+    #[must_use]
     pub fn with_dynamic_runtime(
         client: Arc<dyn IntervalsClient>,
         dynamic_runtime: dynamic::DynamicRuntime,
@@ -96,7 +136,7 @@ impl IntervalsMcpHandler {
         let intent_router = Arc::new(IntentRouter::new(handlers, client.clone(), idempotency));
 
         Self {
-            client: client.clone(),
+            client,
             dynamic_runtime,
             intent_router,
             webhooks: Arc::new(Mutex::new(HashMap::new())),
@@ -104,6 +144,7 @@ impl IntervalsMcpHandler {
         }
     }
 
+    #[must_use]
     pub fn tool_count(&self) -> usize {
         // Return only intent tool count (8 high-level business intents)
         // Dynamic OpenAPI tools are internal-only and NOT exposed to LLM host
@@ -125,10 +166,17 @@ impl IntervalsMcpHandler {
         }
     }
 
+    #[must_use]
     fn webhook_service(&self) -> services::WebhookService {
         services::WebhookService::new(self.webhooks.clone(), self.webhook_secret.clone())
     }
 
+    /// Process an incoming webhook payload after signature verification.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error string when the webhook secret is missing, the signature
+    /// is invalid, the payload cannot be processed, or the event is rejected.
     pub async fn process_webhook(
         &self,
         signature: &str,
@@ -143,24 +191,27 @@ impl IntervalsMcpHandler {
         self.webhook_service().set_secret(secret.into()).await;
     }
 
+    #[must_use]
     fn request_parts(extensions: &rmcp::model::Extensions) -> Option<&axum::http::request::Parts> {
         extensions.get::<axum::http::request::Parts>()
     }
 
+    #[must_use]
     fn request_credentials(extensions: &rmcp::model::Extensions) -> Option<DecryptedCredentials> {
         Self::request_parts(extensions)
             .and_then(|parts| parts.extensions.get::<DecryptedCredentials>())
             .cloned()
     }
 
+    #[must_use]
     fn request_base_url(extensions: &rmcp::model::Extensions) -> Option<String> {
         Self::request_parts(extensions)
             .and_then(|parts| parts.extensions.get::<HttpBaseUrl>())
             .map(|base_url| base_url.0.clone())
     }
 
+    #[must_use]
     fn client_for_extensions(
-        &self,
         extensions: &rmcp::model::Extensions,
     ) -> Option<Arc<dyn IntervalsClient>> {
         let credentials = Self::request_credentials(extensions)?;
@@ -244,7 +295,7 @@ impl ServerHandler for IntervalsMcpHandler {
     ) -> Result<CallToolResult, ErrorData> {
         metrics::record_mcp_method_call("tools/call");
         // For multi-tenant mode: extract credentials from HTTP request parts and create per-request client.
-        let client_for_request = self.client_for_extensions(&context.extensions);
+        let client_for_request = Self::client_for_extensions(&context.extensions);
         let athlete_id = Self::request_credentials(&context.extensions).map(|c| c.athlete_id);
 
         // Route to intent handler by name
@@ -334,8 +385,7 @@ impl ServerHandler for IntervalsMcpHandler {
     ) -> Result<ReadResourceResult, ErrorData> {
         metrics::record_mcp_method_call("resources/read");
         if request.uri == "intervals-icu://athlete/profile" {
-            let client = self
-                .client_for_extensions(&context.extensions)
+            let client = Self::client_for_extensions(&context.extensions)
                 .unwrap_or_else(|| self.client.clone());
 
             let text = domains::resources::build_athlete_profile_text(&*client)
@@ -958,15 +1008,13 @@ mod tests {
 
     #[test]
     fn client_for_extensions_returns_none_without_credentials() {
-        let handler = test_handler();
         let extensions = rmcp::model::Extensions::default();
-        let result = handler.client_for_extensions(&extensions);
+        let result = IntervalsMcpHandler::client_for_extensions(&extensions);
         assert!(result.is_none());
     }
 
     #[test]
     fn client_for_extensions_creates_client_with_credentials() {
-        let handler = test_handler();
         let mut extensions = rmcp::model::Extensions::default();
         let (mut parts, _body) = axum::http::Request::builder()
             .uri("http://localhost/mcp")
@@ -983,13 +1031,12 @@ mod tests {
             .insert(HttpBaseUrl("http://test.local".to_string()));
         extensions.insert(parts);
 
-        let result = handler.client_for_extensions(&extensions);
+        let result = IntervalsMcpHandler::client_for_extensions(&extensions);
         assert!(result.is_some());
     }
 
     #[test]
     fn client_for_extensions_uses_default_base_url_when_missing() {
-        let handler = test_handler();
         let mut extensions = rmcp::model::Extensions::default();
         let (mut parts, _body) = axum::http::Request::builder()
             .uri("http://localhost/mcp")
@@ -1004,7 +1051,7 @@ mod tests {
         // No HttpBaseUrl inserted
         extensions.insert(parts);
 
-        let result = handler.client_for_extensions(&extensions);
+        let result = IntervalsMcpHandler::client_for_extensions(&extensions);
         assert!(result.is_some());
     }
 

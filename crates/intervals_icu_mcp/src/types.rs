@@ -2,51 +2,72 @@ use crate::{DownloadStatus, EventId, FolderId};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// Parameters for recent activity queries.
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[must_use]
 pub struct RecentParams {
+    /// Maximum number of results to return.
     pub limit: Option<u32>,
+    /// Number of days back to include.
     pub days_back: Option<i32>,
 }
 
+/// Result for athlete profile queries.
 #[derive(Debug, Serialize, JsonSchema)]
+#[must_use]
 pub struct ProfileResult {
+    /// Athlete ID.
     pub id: String,
+    /// Athlete name.
     pub name: Option<String>,
 }
 
+/// Summary result for an activity.
 #[derive(Debug, Serialize, JsonSchema)]
+#[must_use]
 pub struct ActivitySummaryResult {
+    /// Activity ID.
     pub id: String,
+    /// Activity name.
     pub name: Option<String>,
 }
 
+/// Result for recent activities query.
 #[derive(Debug, Serialize, JsonSchema)]
+#[must_use]
 pub struct RecentActivitiesResult {
+    /// List of recent activities.
     pub activities: Vec<ActivitySummaryResult>,
 }
 
+/// Result for events query.
 #[derive(Debug, Serialize, JsonSchema)]
+#[must_use]
 pub struct EventsResult {
+    /// List of events.
     pub events: Vec<intervals_icu_client::Event>,
 }
 
+/// Wrapper for arbitrary JSON value results.
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[must_use]
 pub struct ObjectResult {
+    /// The JSON value.
     pub value: serde_json::Value,
 }
 
-/// Parameters for get_activity_details with optional compact mode.
+/// Parameters for `get_activity_details` with optional compact mode.
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct ActivityDetailsParams {
     /// Activity ID
     pub activity_id: String,
-    /// Return full payload (default: false = compact summary)
+    /// Return full payload (default: `false` = compact summary)
     pub expand: Option<bool>,
-    /// Specific fields to return (e.g., ["id", "name", "distance", "moving_time"])
+    /// Specific fields to return (e.g., `["id", "name", "distance", "moving_time"]`)
     pub fields: Option<Vec<String>>,
 }
 
-/// Compact activity summary for token-efficient responses
+/// Compact activity summary for token-efficient responses.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct ActivitySummaryCompact {
     pub id: String,
@@ -67,14 +88,14 @@ pub struct ActivityIdParam {
     pub activity_id: String,
 }
 
-/// Parameters for get_event with optional compact mode
+/// Parameters for `get_event` with optional compact mode.
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct GetEventParams {
     /// Event ID
     pub event_id: EventId,
-    /// Return compact summary (default: true)
+    /// Return compact summary (default: `true`)
     pub compact: Option<bool>,
-    /// Specific fields to return (default: id,name,start_date_local,category,type,description)
+    /// Specific fields to return (default: `id,name,start_date_local,category,type,description`)
     pub fields: Option<Vec<String>>,
 }
 
@@ -82,34 +103,38 @@ pub struct GetEventParams {
 pub struct BulkCreateEventsToolParams {
     /// Array of calendar events to create (title, start_date_local, category, etc.)
     pub events: Vec<intervals_icu_client::Event>,
-    /// Return compact summaries for created events (default: true)
+    /// Return compact summaries for created events (default: `true`)
     pub compact: Option<bool>,
-    /// Specific fields to return per event (default: id,name,start_date_local,category,type)
+    /// Specific fields to return per event (default: `id,name,start_date_local,category,type`)
     pub fields: Option<Vec<String>>,
 }
 
-/// Parameters for create_event with optional response filtering
+/// Parameters for `create_event` with optional response filtering.
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct CreateEventParams {
     #[serde(flatten)]
     pub event: intervals_icu_client::Event,
-    /// Return compact summary (default: true)
+    /// Return compact summary (default: `true`)
     pub compact: Option<bool>,
-    /// Specific fields to return (default: id,name,start_date_local,category,type,description)
+    /// Specific fields to return (default: `id,name,start_date_local,category,type,description`)
     pub fields: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 /// Parameters for finding peak performances (best efforts) in an activity.
-/// All parameters are flat (no nested "options" object). Use SINGULAR values, NOT arrays.
+/// All parameters are flat (no nested `options` object). Use singular values, not arrays.
 pub struct BestEffortsToolParams {
-    /// REQUIRED. The activity ID, e.g. "i112895444"
+    /// Required. The activity ID, e.g. `i112895444`.
     pub activity_id: String,
-    /// REQUIRED. Stream to analyze: "power", "heartrate", "speed", "pace", "cadence", or "distance"
+    /// Required. Stream to analyze: `power`, `heartrate`, `speed`, `pace`, `cadence`, or `distance`.
     pub stream: String,
-    /// A SINGLE integer in seconds (NOT an array). Use for time-based efforts. Example: 300 means 5 minutes. Provide duration OR distance, not both.
+    /// A single integer in seconds (not an array).
+    /// Use for time-based efforts. Example: `300` means 5 minutes.
+    /// Provide `duration` or `distance`, not both.
     pub duration: Option<i32>,
-    /// A SINGLE number in meters (NOT an array). Use for distance-based efforts. Example: 1000 means 1 km. Provide duration OR distance, not both.
+    /// A single number in meters (not an array).
+    /// Use for distance-based efforts. Example: `1000` means 1 km.
+    /// Provide `duration` or `distance`, not both.
     pub distance: Option<f64>,
     /// Maximum number of best efforts to return (optional)
     pub count: Option<i32>,
@@ -132,79 +157,80 @@ pub struct SearchParams {
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct IntervalSearchParams {
-    /// Minimum time for interval (seconds)
+    /// Minimum time for interval (seconds).
     pub min_secs: u32,
-    /// Maximum time for interval (seconds)
+    /// Maximum time for interval (seconds).
     pub max_secs: u32,
-    /// Minimum intensity percentage (0-100)
+    /// Minimum intensity percentage (`0-100`).
     pub min_intensity: u32,
-    /// Maximum intensity percentage (0-100)
+    /// Maximum intensity percentage (`0-100`).
     pub max_intensity: u32,
     #[serde(rename = "type")]
     pub interval_type: Option<String>,
     pub min_reps: Option<u32>,
     pub max_reps: Option<u32>,
     pub limit: Option<u32>,
-    /// Return compact summaries (default: true)
+    /// Return compact summaries (default: `true`)
     pub compact: Option<bool>,
-    /// Specific fields to return per interval (default: type,start,end,duration,intensity)
+    /// Specific fields to return per interval (default: `type,start,end,duration,intensity`)
     pub fields: Option<Vec<String>>,
 }
 
 // === Token-Efficient Parameters ===
 
-/// Parameters for get_activities_csv with optional filtering
+/// Parameters for `get_activities_csv` with optional filtering.
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct ActivitiesCsvParams {
-    /// Limit number of rows (default: 100, max: 1000)
+    /// Limit number of rows (default: `100`, max: `1000`).
     pub limit: Option<u32>,
-    /// Number of days back to include (default: 90)
+    /// Number of days back to include (default: `90`).
     pub days_back: Option<i32>,
-    /// Specific columns to include (default: id,start_date_local,name,type,moving_time,distance)
+    /// Specific columns to include (default: `id,start_date_local,name,type,moving_time,distance`)
     pub columns: Option<Vec<String>>,
 }
 
-/// Parameters for search_activities_full with compact mode
+/// Parameters for `search_activities_full` with compact mode.
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct SearchActivitiesFullParams {
     /// Search query
     #[serde(rename = "q", alias = "query")]
     pub q: String,
-    /// Maximum results (default: 10)
+    /// Maximum results (default: `10`)
     pub limit: Option<u32>,
-    /// Return compact summaries (default: true)
+    /// Return compact summaries (default: `true`)
     pub compact: Option<bool>,
-    /// Specific fields to return when compact=false
+    /// Specific fields to return when `compact=false`.
     pub fields: Option<Vec<String>>,
 }
 
-/// Parameters for get_activity_intervals with compact mode
+/// Parameters for `get_activity_intervals` with compact mode.
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct ActivityIntervalsParams {
     /// Activity ID
     pub activity_id: String,
-    /// Return summary statistics only (default: false)
+    /// Return summary statistics only (default: `false`)
     pub summary: Option<bool>,
-    /// Maximum intervals to return (default: 20)
+    /// Maximum intervals to return (default: `20`)
     pub max_intervals: Option<u32>,
-    /// Specific fields per interval (default: type,start_index,end_index,duration,distance)
+    /// Specific fields per interval (default: `type,start_index,end_index,duration,distance`)
     pub fields: Option<Vec<String>>,
 }
 
-/// Parameters for get_best_efforts with compact mode
+/// Parameters for `get_best_efforts` with compact mode.
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct BestEffortsCompactParams {
     /// Activity ID
     pub activity_id: String,
-    /// Stream to analyze: watts (power), heartrate, speed, pace, cadence, distance. Aliases 'power'→'watts' and 'hr'→'heartrate' are also accepted.
+    /// Stream to analyze: `watts` (power), `heartrate`, `speed`, `pace`, `cadence`, or `distance`.
+    /// Aliases `power` → `watts` and `hr` → `heartrate` are also accepted.
     pub stream: String,
-    /// Duration in seconds (REQUIRED: provide duration OR distance, not both)
+    /// Duration in seconds. Provide `duration` or `distance`, not both.
     pub duration: Option<i32>,
-    /// Distance in meters (REQUIRED: provide duration OR distance, not both)
+    /// Distance in meters. Provide `duration` or `distance`, not both.
     pub distance: Option<f64>,
-    /// Max results (default: 5)
+    /// Max results (default: `5`)
     pub count: Option<i32>,
-    /// Return summary only (default: false)
+    /// Return summary only (default: `false`)
     pub summary: Option<bool>,
     /// Minimum value threshold
     pub min_value: Option<f64>,
@@ -216,104 +242,104 @@ pub struct BestEffortsCompactParams {
     pub end_index: Option<i32>,
 }
 
-/// Parameters for power/hr/pace curves with compact mode
+/// Parameters for power/HR/pace curves with compact mode.
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct CurvesParams {
-    /// Sport type (e.g., "Ride", "Run")
+    /// Sport type (e.g., `Ride`, `Run`).
     #[serde(rename = "type")]
     pub sport: String,
-    /// Days back to analyze (default: 90)
+    /// Days back to analyze (default: `90`)
     pub days_back: Option<i32>,
-    /// Specific durations in seconds to return (e.g., [5, 60, 300, 1200, 3600])
+    /// Specific durations in seconds to return (e.g., `[5, 60, 300, 1200, 3600]`).
     pub durations: Option<Vec<u32>>,
-    /// Return summary with key durations only (default: false)
+    /// Return summary with key durations only (default: `false`)
     pub summary: Option<bool>,
 }
 
-/// Parameters for get_workouts_in_folder with compact mode
+/// Parameters for `get_workouts_in_folder` with compact mode.
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct WorkoutsInFolderParams {
     /// Folder ID (accepts string or integer)
     pub folder_id: FolderId,
-    /// Return compact summaries (default: true)
+    /// Return compact summaries (default: `true`)
     pub compact: Option<bool>,
-    /// Max workouts to return (default: 20)
+    /// Max workouts to return (default: `20`)
     pub limit: Option<u32>,
     /// Specific fields to return
     pub fields: Option<Vec<String>>,
 }
 
-/// Parameters for get_workout_library with compact mode
+/// Parameters for `get_workout_library` with compact mode.
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct WorkoutLibraryParams {
-    /// Return compact summaries (default: true)
+    /// Return compact summaries (default: `true`)
     pub compact: Option<bool>,
-    /// Specific fields to return (default: id,name,description)
+    /// Specific fields to return (default: `id,name,description`)
     pub fields: Option<Vec<String>>,
 }
 
-/// Parameters for get_gear_list with compact mode
+/// Parameters for `get_gear_list` with compact mode.
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct GearListParams {
-    /// Return compact summaries (default: true)
+    /// Return compact summaries (default: `true`)
     pub compact: Option<bool>,
-    /// Specific fields to return (default: id,name,type,distance)
+    /// Specific fields to return (default: `id,name,type,distance`)
     pub fields: Option<Vec<String>>,
 }
 
-/// Parameters for histogram tools with compact mode
+/// Parameters for histogram tools with compact mode.
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct HistogramParams {
     /// Activity ID
     pub activity_id: String,
-    /// Return summary statistics only (default: false)
+    /// Return summary statistics only (default: `false`)
     pub summary: Option<bool>,
-    /// Number of bins (default: 10, max: 50)
+    /// Number of bins (default: `10`, max: `50`)
     pub bins: Option<u32>,
 }
 
-/// Parameters for get_wellness with compact mode
+/// Parameters for `get_wellness` with compact mode.
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct WellnessParams {
-    /// Days back (default: 7)
+    /// Days back (default: `7`)
     pub days_back: Option<i32>,
-    /// Return summary/trends only (default: false)
+    /// Return summary/trends only (default: `false`)
     pub summary: Option<bool>,
-    /// Specific fields to return (default: all)
+    /// Specific fields to return (default: all available fields).
     pub fields: Option<Vec<String>>,
 }
 
-/// Parameters for get_sport_settings with compact mode
+/// Parameters for `get_sport_settings` with compact mode.
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct SportSettingsParams {
-    /// Return compact summary (default: true)
+    /// Return compact summary (default: `true`)
     pub compact: Option<bool>,
-    /// Specific sport types to return (default: all)
+    /// Specific sport types to return (default: all).
     pub sports: Option<Vec<String>>,
-    /// Specific fields to return per sport (default: type,ftp,fthr,hrzones,powerzones)
+    /// Specific fields to return per sport (default: `type,ftp,fthr,hrzones,powerzones`)
     pub fields: Option<Vec<String>>,
 }
 
-/// Parameters for get_fitness_summary with compact mode
+/// Parameters for `get_fitness_summary` with compact mode.
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct FitnessSummaryParams {
-    /// Return compact summary (default: true)
+    /// Return compact summary (default: `true`)
     pub compact: Option<bool>,
-    /// Specific fields to return (default: fitness,fatigue,form,rampRate)
-    /// Note: API returns fitness (CTL), fatigue (ATL), form (TSB), rampRate
+    /// Specific fields to return (default: `fitness,fatigue,form,rampRate`)
+    /// Note: the API returns `fitness` (CTL), `fatigue` (ATL), `form` (TSB), and `rampRate`.
     pub fields: Option<Vec<String>>,
 }
 
-/// Parameters for get_events with compact mode
+/// Parameters for `get_events` with compact mode.
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct EventsParams {
-    /// Days back (default: 30)
+    /// Days back (default: `30`)
     pub days_back: Option<i32>,
-    /// Maximum events to return (default: 50)
+    /// Maximum events to return (default: `50`)
     pub limit: Option<u32>,
-    /// Return compact summaries (default: true)
+    /// Return compact summaries (default: `true`)
     pub compact: Option<bool>,
-    /// Specific fields to return (default: id,start_date_local,name,category)
+    /// Specific fields to return (default: `id,start_date_local,name,category`)
     pub fields: Option<Vec<String>>,
 }
 
@@ -321,13 +347,13 @@ pub struct EventsParams {
 pub struct UpdateActivityParams {
     pub activity_id: String,
     pub fields: serde_json::Value,
-    /// Return compact summary (default: true)
+    /// Return compact summary (default: `true`)
     pub compact: Option<bool>,
-    /// Specific fields to return (default: id,name,start_date_local,type,distance,moving_time)
+    /// Specific fields to return (default: `id,name,start_date_local,type,distance,moving_time`)
     pub response_fields: Option<Vec<String>>,
 }
 
-/// Parameters for get_activity_streams with optional compact mode.
+/// Parameters for `get_activity_streams` with optional compact mode.
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct StreamsParams {
     /// Activity ID
@@ -336,7 +362,7 @@ pub struct StreamsParams {
     pub max_points: Option<u32>,
     /// Return summary statistics (min/max/avg/count) instead of raw arrays.
     pub summary: Option<bool>,
-    /// Specific streams to return (e.g., ["power", "heartrate"]). Default: all available.
+    /// Specific streams to return (e.g., `["power", "heartrate"]`). Default: all available.
     pub streams: Option<Vec<String>>,
 }
 
@@ -373,12 +399,12 @@ pub struct DownloadStatusResult {
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct ActivitiesAroundParams {
     pub activity_id: String,
-    /// Maximum activities to return (default: 10)
+    /// Maximum activities to return (default: `10`)
     pub limit: Option<u32>,
     pub route_id: Option<i64>,
-    /// Return compact summaries (default: true)
+    /// Return compact summaries (default: `true`)
     pub compact: Option<bool>,
-    /// Specific fields to return (default: id,name,start_date_local,type,distance,moving_time)
+    /// Specific fields to return (default: `id,name,start_date_local,type,distance,moving_time`)
     pub fields: Option<Vec<String>>,
 }
 
@@ -387,13 +413,13 @@ pub struct DateParam {
     pub date: String,
 }
 
-/// Parameters for get_wellness_for_date with compact mode
+/// Parameters for `get_wellness_for_date` with compact mode.
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct WellnessDateParams {
     pub date: String,
-    /// Return compact summary (default: true)
+    /// Return compact summary (default: `true`)
     pub compact: Option<bool>,
-    /// Specific fields to return (default: id,sleepSecs,stress,restingHR,hrv,weight,fatigue,motivation)
+    /// Specific fields to return (default: `id,sleepSecs,stress,restingHR,hrv,weight,fatigue,motivation`)
     pub fields: Option<Vec<String>>,
 }
 
@@ -401,23 +427,23 @@ pub struct WellnessDateParams {
 pub struct WellnessUpdateParams {
     pub date: String,
     pub data: serde_json::Value,
-    /// Return compact summary (default: true)
+    /// Return compact summary (default: `true`)
     pub compact: Option<bool>,
-    /// Specific fields to return (default: id,sleepSecs,stress,restingHR,hrv,weight,fatigue,motivation)
+    /// Specific fields to return (default: `id,sleepSecs,stress,restingHR,hrv,weight,fatigue,motivation`)
     pub response_fields: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct DaysAheadParams {
     pub days_ahead: Option<u32>,
-    /// Event category filter. Default: "WORKOUT".
-    /// Use "all" to include all event categories.
+    /// Event category filter. Default: `WORKOUT`.
+    /// Use `all` to include all event categories.
     pub category: Option<String>,
-    /// Return compact summaries (default: true)
+    /// Return compact summaries (default: `true`)
     pub compact: Option<bool>,
-    /// Maximum workouts to return (default: 20)
+    /// Maximum workouts to return (default: `20`)
     pub limit: Option<u32>,
-    /// Specific fields to return (default: id,name,start_date_local,category,type)
+    /// Specific fields to return (default: `id,name,start_date_local,category,type`)
     pub fields: Option<Vec<String>>,
 }
 
@@ -425,9 +451,9 @@ pub struct DaysAheadParams {
 pub struct UpdateEventParams {
     pub event_id: EventId,
     pub fields: serde_json::Value,
-    /// Return compact summary (default: true)
+    /// Return compact summary (default: `true`)
     pub compact: Option<bool>,
-    /// Specific fields to return (default: id,name,start_date_local,category,type,description)
+    /// Specific fields to return (default: `id,name,start_date_local,category,type,description`)
     pub response_fields: Option<Vec<String>>,
 }
 
@@ -441,9 +467,9 @@ pub struct DuplicateEventParams {
     pub event_id: EventId,
     pub num_copies: Option<u32>,
     pub weeks_between: Option<u32>,
-    /// Return compact summaries (default: true)
+    /// Return compact summaries (default: `true`)
     pub compact: Option<bool>,
-    /// Specific fields to return per event (default: id,name,start_date_local,category,type)
+    /// Specific fields to return per event (default: `id,name,start_date_local,category,type`)
     pub fields: Option<Vec<String>>,
 }
 
@@ -454,11 +480,11 @@ pub struct FolderIdParam {
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct CreateFolderParams {
-    /// Folder data (name, description, etc.)
+    /// Folder data (`name`, `description`, etc.).
     pub folder: serde_json::Value,
-    /// Return compact summary (default: true)
+    /// Return compact summary (default: `true`)
     pub compact: Option<bool>,
-    /// Specific fields to return (default: id,name,description)
+    /// Specific fields to return (default: `id,name,description`)
     pub response_fields: Option<Vec<String>>,
 }
 
@@ -466,9 +492,9 @@ pub struct CreateFolderParams {
 pub struct UpdateFolderParams {
     pub folder_id: FolderId,
     pub fields: serde_json::Value,
-    /// Return compact summary (default: true)
+    /// Return compact summary (default: `true`)
     pub compact: Option<bool>,
-    /// Specific fields to return (default: id,name,description)
+    /// Specific fields to return (default: `id,name,description`)
     pub response_fields: Option<Vec<String>>,
 }
 
@@ -480,9 +506,9 @@ pub struct DeleteFolderParams {
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct CreateGearParams {
     pub gear: serde_json::Value,
-    /// Return compact summary (default: true)
+    /// Return compact summary (default: `true`)
     pub compact: Option<bool>,
-    /// Specific fields to return (default: id,name,type,distance)
+    /// Specific fields to return (default: `id,name,type,distance`)
     pub response_fields: Option<Vec<String>>,
 }
 
@@ -490,9 +516,9 @@ pub struct CreateGearParams {
 pub struct UpdateGearParams {
     pub gear_id: String,
     pub fields: serde_json::Value,
-    /// Return compact summary (default: true)
+    /// Return compact summary (default: `true`)
     pub compact: Option<bool>,
-    /// Specific fields to return (default: id,name,type,distance)
+    /// Specific fields to return (default: `id,name,type,distance`)
     pub response_fields: Option<Vec<String>>,
 }
 
@@ -505,9 +531,9 @@ pub struct GearIdParam {
 pub struct CreateGearReminderParams {
     pub gear_id: String,
     pub reminder: serde_json::Value,
-    /// Return compact summary (default: true)
+    /// Return compact summary (default: `true`)
     pub compact: Option<bool>,
-    /// Specific fields to return (default: id,name,due_date,snoozed)
+    /// Specific fields to return (default: `id,name,due_date,snoozed`)
     pub response_fields: Option<Vec<String>>,
 }
 
@@ -518,9 +544,9 @@ pub struct UpdateGearReminderParams {
     pub reset: bool,
     pub snooze_days: u32,
     pub fields: serde_json::Value,
-    /// Return compact summary (default: true)
+    /// Return compact summary (default: `true`)
     pub compact: Option<bool>,
-    /// Specific fields to return (default: id,name,due_date,snoozed)
+    /// Specific fields to return (default: `id,name,due_date,snoozed`)
     pub response_fields: Option<Vec<String>>,
 }
 
@@ -534,16 +560,16 @@ pub struct UpdateSportSettingsParams {
     pub sport_type: String,
     pub recalc_hr_zones: bool,
     pub fields: serde_json::Value,
-    /// Return compact summary (default: true)
+    /// Return compact summary (default: `true`)
     pub compact: Option<bool>,
-    /// Specific fields to return (default: type,ftp,fthr,hrZones,powerZones)
+    /// Specific fields to return (default: `type,ftp,fthr,hrZones,powerZones`)
     pub response_fields: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct ApplySportSettingsParams {
     pub sport_type: String,
-    /// Return compact summary (default: true)
+    /// Return compact summary (default: `true`)
     pub compact: Option<bool>,
     /// Specific fields to return
     pub response_fields: Option<Vec<String>>,
@@ -552,16 +578,16 @@ pub struct ApplySportSettingsParams {
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct CreateSportSettingsParams {
     pub settings: serde_json::Value,
-    /// Return compact summary (default: true)
+    /// Return compact summary (default: `true`)
     pub compact: Option<bool>,
-    /// Specific fields to return (default: type,ftp,fthr,hrZones,powerZones)
+    /// Specific fields to return (default: `type,ftp,fthr,hrZones,powerZones`)
     pub response_fields: Option<Vec<String>>,
 }
 
-/// Parameters for list_downloads with optional limit
+/// Parameters for `list_downloads` with an optional limit.
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct ListDownloadsParams {
-    /// Maximum downloads to return (default: all)
+    /// Maximum downloads to return (default: all available downloads).
     pub limit: Option<u32>,
 }
 

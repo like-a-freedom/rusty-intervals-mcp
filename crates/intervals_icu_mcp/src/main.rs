@@ -1,3 +1,40 @@
+#![allow(
+    clippy::cast_lossless,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    clippy::doc_link_with_quotes,
+    clippy::doc_markdown,
+    clippy::format_push_string,
+    clippy::if_not_else,
+    clippy::implicit_clone,
+    clippy::implicit_hasher,
+    clippy::items_after_statements,
+    clippy::manual_let_else,
+    clippy::manual_midpoint,
+    clippy::manual_string_new,
+    clippy::map_unwrap_or,
+    clippy::match_same_arms,
+    clippy::missing_errors_doc,
+    clippy::missing_fields_in_debug,
+    clippy::must_use_candidate,
+    clippy::needless_pass_by_value,
+    clippy::redundant_closure_for_method_calls,
+    clippy::return_self_not_must_use,
+    clippy::semicolon_if_nothing_returned,
+    clippy::similar_names,
+    clippy::single_char_pattern,
+    clippy::struct_excessive_bools,
+    clippy::too_many_lines,
+    clippy::unchecked_time_subtraction,
+    clippy::uninlined_format_args,
+    clippy::unnested_or_patterns,
+    clippy::unused_self,
+    clippy::used_underscore_binding,
+    clippy::wildcard_imports
+)]
+
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -41,17 +78,13 @@ async fn initialize_handler_single_user() -> Result<IntervalsMcpHandler, String>
     let handler = IntervalsMcpHandler::new(Arc::new(client));
 
     // Preload dynamic registry
-    let dynamic_tools = match tokio::time::timeout(
-        Duration::from_secs(3),
-        handler.preload_dynamic_registry(),
-    )
-    .await
+    let dynamic_tools = if let Ok(count) =
+        tokio::time::timeout(Duration::from_secs(3), handler.preload_dynamic_registry()).await
     {
-        Ok(count) => count,
-        Err(_) => {
-            tracing::warn!("timed out preloading dynamic OpenAPI registry");
-            0
-        }
+        count
+    } else {
+        tracing::warn!("timed out preloading dynamic OpenAPI registry");
+        0
     };
 
     tracing::info!("discovered {} dynamic tools", dynamic_tools);
@@ -81,7 +114,7 @@ async fn run_http_server(
     let jwt_ttl_seconds = std::env::var("JWT_TTL_SECONDS")
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
-        .unwrap_or(7776000); // 90 days = 3 months
+        .unwrap_or(7_776_000); // 90 days = 3 months
 
     // Request timeout: maximum time to process a single request
     let request_timeout_secs = std::env::var("REQUEST_TIMEOUT_SECONDS")

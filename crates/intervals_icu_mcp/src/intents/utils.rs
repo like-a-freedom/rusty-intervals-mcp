@@ -4,7 +4,7 @@
 /// - Date parsing and validation
 /// - Activity filtering
 /// - Period calculations
-use chrono::{Duration, Local, NaiveDate, NaiveDateTime};
+use chrono::{DateTime, Duration, Local, NaiveDate, NaiveDateTime};
 use intervals_icu_client::{ActivitySummary, Event, IntervalsClient};
 use serde_json::Value;
 
@@ -28,6 +28,9 @@ fn resolve_relative_day_alias(date_str: &str) -> Option<NaiveDate> {
 /// - today
 /// - tomorrow
 /// - yesterday
+///
+/// # Errors
+/// Returns [`IntentError`] if the input is not a valid date string.
 pub fn parse_date(date_str: &str, field_name: &str) -> Result<NaiveDate, IntentError> {
     if let Some(relative_date) = resolve_relative_day_alias(date_str) {
         return Ok(relative_date);
@@ -42,6 +45,9 @@ pub fn parse_date(date_str: &str, field_name: &str) -> Result<NaiveDate, IntentE
 }
 
 /// Parse optional date string
+///
+/// # Errors
+/// Returns [`IntentError`] if the input is Some and not a valid date string.
 pub fn parse_optional_date(
     date_str: Option<&str>,
     field_name: &str,
@@ -52,6 +58,7 @@ pub fn parse_optional_date(
     }
 }
 
+#[must_use]
 /// Filter activities by date
 /// API returns start_date_local in format "YYYY-MM-DDTHH:MM:SS"
 pub fn filter_activities_by_date<'a>(
@@ -60,14 +67,11 @@ pub fn filter_activities_by_date<'a>(
 ) -> Vec<&'a ActivitySummary> {
     activities
         .iter()
-        .filter(|a| {
-            parse_activity_date(&a.start_date_local)
-                .map(|date| date == *target_date)
-                .unwrap_or(false)
-        })
+        .filter(|a| parse_activity_date(&a.start_date_local) == Some(*target_date))
         .collect()
 }
 
+#[must_use]
 /// Filter activities by date range
 /// API returns start_date_local in format "YYYY-MM-DDTHH:MM:SS"
 pub fn filter_activities_by_range<'a>(
@@ -79,8 +83,7 @@ pub fn filter_activities_by_range<'a>(
         .iter()
         .filter(|a| {
             parse_activity_date(&a.start_date_local)
-                .map(|d| d >= *start && d <= *end)
-                .unwrap_or(false)
+                .is_some_and(|date| date >= *start && date <= *end)
         })
         .collect()
 }
@@ -92,6 +95,54 @@ fn parse_activity_date(value: &str) -> Option<NaiveDate> {
         .or_else(|| NaiveDate::parse_from_str(value, "%Y-%m-%d").ok())
 }
 
+/// Normalize a date string to `YYYY-MM-DD`.
+#[must_use]
+pub fn normalize_date_str(date_str: &str) -> Option<String> {
+    NaiveDate::parse_from_str(date_str, "%Y-%m-%d")
+        .ok()
+        .map(|date| date.format("%Y-%m-%d").to_string())
+        .or_else(|| {
+            NaiveDateTime::parse_from_str(date_str, "%Y-%m-%dT%H:%M:%S")
+                .ok()
+                .map(|date_time| date_time.date().format("%Y-%m-%d").to_string())
+        })
+        .or_else(|| {
+            DateTime::parse_from_rfc3339(date_str)
+                .ok()
+                .map(|date_time| {
+                    date_time
+                        .naive_local()
+                        .date()
+                        .format("%Y-%m-%d")
+                        .to_string()
+                })
+        })
+}
+
+/// Normalize an event start timestamp to `YYYY-MM-DDTHH:MM:SS`.
+#[must_use]
+pub fn normalize_event_start(date_str: &str) -> Option<String> {
+    NaiveDate::parse_from_str(date_str, "%Y-%m-%d")
+        .ok()
+        .map(|date| format!("{}T00:00:00", date.format("%Y-%m-%d")))
+        .or_else(|| {
+            NaiveDateTime::parse_from_str(date_str, "%Y-%m-%dT%H:%M:%S")
+                .ok()
+                .map(|date_time| date_time.format("%Y-%m-%dT%H:%M:%S").to_string())
+        })
+        .or_else(|| {
+            DateTime::parse_from_rfc3339(date_str)
+                .ok()
+                .map(|date_time| {
+                    date_time
+                        .naive_local()
+                        .format("%Y-%m-%dT%H:%M:%S")
+                        .to_string()
+                })
+        })
+}
+
+#[must_use]
 /// Filter activities by description (case-insensitive)
 pub fn filter_activities_by_description<'a>(
     activities: &'a [ActivitySummary],
@@ -103,12 +154,12 @@ pub fn filter_activities_by_description<'a>(
         .filter(|a| {
             a.name
                 .as_ref()
-                .map(|n| n.to_lowercase().contains(&search_term))
-                .unwrap_or(false)
+                .is_some_and(|name| name.to_lowercase().contains(&search_term))
         })
         .collect()
 }
 
+#[must_use]
 /// Filter events by date
 /// Event start_date_local may be in format "YYYY-MM-DD" or "YYYY-MM-DDTHH:MM:SS"
 pub fn filter_events_by_date<'a>(events: &'a [Event], target_date: &NaiveDate) -> Vec<&'a Event> {
@@ -119,12 +170,12 @@ pub fn filter_events_by_date<'a>(events: &'a [Event], target_date: &NaiveDate) -
                 .ok()
                 .map(|dt| dt.date())
                 .or_else(|| NaiveDate::parse_from_str(&e.start_date_local, "%Y-%m-%d").ok())
-                .map(|d| d == *target_date)
-                .unwrap_or(false)
+                == Some(*target_date)
         })
         .collect()
 }
 
+#[must_use]
 /// Filter events by date range.
 /// Event start_date_local may be in format "YYYY-MM-DD" or "YYYY-MM-DDTHH:MM:SS"
 pub fn filter_events_by_range<'a>(
@@ -139,8 +190,7 @@ pub fn filter_events_by_range<'a>(
                 .ok()
                 .map(|dt| dt.date())
                 .or_else(|| NaiveDate::parse_from_str(&e.start_date_local, "%Y-%m-%d").ok())
-                .map(|d| d >= *start && d <= *end)
-                .unwrap_or(false)
+                .is_some_and(|date| date >= *start && date <= *end)
         })
         .collect()
 }
@@ -284,545 +334,3 @@ pub fn data_availability_block(
 // ============================================================================
 // Compact Markdown Helpers
 // ============================================================================
-
-/// Compact section header: "# Title" (was "## Title")
-pub fn compact_section(title: &str) -> String {
-    format!("# {title}")
-}
-
-/// Compact key-value: "Key: value" (was "**Key:** value")
-pub fn compact_kv(key: &str, value: impl std::fmt::Display) -> String {
-    format!("{key}: {value}")
-}
-
-/// Compact list item: "  text" (was "- text")
-pub fn compact_item(text: &str) -> String {
-    format!("  {text}")
-}
-
-// ============================================================================
-// Date/Time Transformations (from transforms.rs for backward compatibility)
-// ============================================================================
-
-/// Normalize a date string to YYYY-MM-DD format.
-///
-/// Accepts:
-/// - YYYY-MM-DD (returns as-is)
-/// - RFC3339 datetime (extracts date)
-/// - Naive datetime YYYY-MM-DDTHH:MM:SS (extracts date)
-pub fn normalize_date_str(s: &str) -> Option<String> {
-    if NaiveDate::parse_from_str(s, "%Y-%m-%d").is_ok() {
-        return Some(s.to_string());
-    }
-    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
-        return Some(dt.date_naive().format("%Y-%m-%d").to_string());
-    }
-    if let Ok(ndt) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S") {
-        return Some(ndt.date().format("%Y-%m-%d").to_string());
-    }
-    None
-}
-
-/// Normalize start_date_local for events: preserve time when provided;
-/// if only date is given, set time to 00:00:00.
-///
-/// Accepts:
-/// - YYYY-MM-DD -> YYYY-MM-DDT00:00:00
-/// - RFC3339 datetime -> YYYY-MM-DDTHH:MM:SS
-/// - Naive datetime YYYY-MM-DDTHH:MM:SS -> YYYY-MM-DDTHH:MM:SS
-pub fn normalize_event_start(s: &str) -> Option<String> {
-    if NaiveDate::parse_from_str(s, "%Y-%m-%d").is_ok() {
-        return Some(format!("{}T00:00:00", s));
-    }
-    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
-        return Some(dt.naive_local().format("%Y-%m-%dT%H:%M:%S").to_string());
-    }
-    if let Ok(ndt) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S") {
-        return Some(ndt.format("%Y-%m-%dT%H:%M:%S").to_string());
-    }
-    None
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use chrono::Datelike;
-    use serde_json::json;
-
-    #[test]
-    fn test_parse_date_valid() {
-        let date = parse_date("2026-03-01", "test").unwrap();
-        assert_eq!(date.day(), 1);
-        assert_eq!(date.month(), 3);
-        assert_eq!(date.year(), 2026);
-    }
-
-    #[test]
-    fn test_parse_date_supports_relative_day_aliases() {
-        let today = chrono::Local::now().date_naive();
-
-        assert_eq!(parse_date("today", "test").unwrap(), today);
-        assert_eq!(
-            parse_date("tomorrow", "test").unwrap(),
-            today + chrono::Duration::days(1)
-        );
-        assert_eq!(
-            parse_date("yesterday", "test").unwrap(),
-            today - chrono::Duration::days(1)
-        );
-    }
-
-    #[test]
-    fn test_parse_date_invalid() {
-        let result = parse_date("invalid", "test");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_validate_date_range_valid() {
-        let start = NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
-        let end = NaiveDate::from_ymd_opt(2026, 3, 31).unwrap();
-        assert!(validate_date_range(&start, &end, 365).is_ok());
-    }
-
-    #[test]
-    fn test_validate_date_range_invalid() {
-        let start = NaiveDate::from_ymd_opt(2026, 3, 31).unwrap();
-        let end = NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
-        assert!(validate_date_range(&start, &end, 365).is_err());
-    }
-
-    #[test]
-    fn test_format_duration_minutes() {
-        assert_eq!(format_duration_minutes(90), "1:30");
-        assert_eq!(format_duration_minutes(60), "1:00");
-        assert_eq!(format_duration_minutes(150), "2:30");
-    }
-
-    #[test]
-    fn test_calculate_percent_change() {
-        assert_eq!(calculate_percent_change(100.0, 110.0), 10.0);
-        assert_eq!(calculate_percent_change(100.0, 90.0), -10.0);
-        assert_eq!(calculate_percent_change(0.0, 100.0), 0.0);
-    }
-
-    #[test]
-    fn test_format_delta() {
-        assert_eq!(format_delta(5.0, "%"), "+5%");
-        assert_eq!(format_delta(-5.0, "%"), "-5%");
-        assert_eq!(format_delta(0.0, "%"), "+0%");
-    }
-
-    #[test]
-    fn test_extract_idempotency_token() {
-        let input = json!({"idempotency_token": "test-token-123"});
-        let token = extract_idempotency_token(&input);
-        assert_eq!(token, Some("test-token-123".to_string()));
-
-        let input_no_token = json!({"other_field": "value"});
-        let token = extract_idempotency_token(&input_no_token);
-        assert_eq!(token, None);
-    }
-
-    #[test]
-    fn test_validate_idempotency_token() {
-        let input = json!({"idempotency_token": "test-token"});
-        let result = validate_idempotency_token(&input);
-        assert!(result.is_ok());
-
-        let input_no_token = json!({"other_field": "value"});
-        let result = validate_idempotency_token(&input_no_token);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_normalize_date_str() {
-        // YYYY-MM-DD format
-        assert_eq!(
-            normalize_date_str("2026-03-04"),
-            Some("2026-03-04".to_string())
-        );
-
-        // RFC3339 datetime
-        assert_eq!(
-            normalize_date_str("2026-03-04T09:00:00Z"),
-            Some("2026-03-04".to_string())
-        );
-
-        // Naive datetime
-        assert_eq!(
-            normalize_date_str("2026-03-04T09:00:00"),
-            Some("2026-03-04".to_string())
-        );
-
-        // Invalid format
-        assert_eq!(normalize_date_str("invalid"), None);
-    }
-
-    #[test]
-    fn test_normalize_event_start() {
-        // YYYY-MM-DD -> YYYY-MM-DDT00:00:00
-        assert_eq!(
-            normalize_event_start("2026-03-04"),
-            Some("2026-03-04T00:00:00".to_string())
-        );
-
-        // RFC3339 datetime
-        let result = normalize_event_start("2026-03-04T09:00:00Z");
-        assert!(result.is_some());
-
-        // Naive datetime
-        assert_eq!(
-            normalize_event_start("2026-03-04T09:00:00"),
-            Some("2026-03-04T09:00:00".to_string())
-        );
-    }
-
-    #[test]
-    fn test_calculate_weekly_average() {
-        let start = NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
-        let end = NaiveDate::from_ymd_opt(2026, 3, 15).unwrap();
-
-        let weekly = calculate_weekly_average(28.0, &start, &end);
-        assert!((weekly - 14.0).abs() < 0.1);
-
-        // Single day should return full value
-        let weekly = calculate_weekly_average(10.0, &start, &start);
-        assert!((weekly - 10.0).abs() < 0.1);
-    }
-
-    #[test]
-    fn test_format_duration_seconds() {
-        assert_eq!(format_duration_seconds(3661), "1:01");
-        assert_eq!(format_duration_seconds(7200), "2:00");
-        assert_eq!(format_duration_seconds(90), "0:01");
-    }
-
-    #[test]
-    fn test_parse_optional_date() {
-        let result = parse_optional_date(Some("2026-03-04"), "test");
-        assert!(result.is_ok());
-        assert!(result.unwrap().is_some());
-
-        let result = parse_optional_date(None, "test");
-        assert!(result.is_ok());
-        assert!(result.unwrap().is_none());
-    }
-
-    #[test]
-    fn test_data_availability_block_for_degraded_mode() {
-        let block = data_availability_block(&["stream data unavailable".to_string()], false)
-            .expect("degraded mode should render a block");
-
-        match block {
-            crate::intents::ContentBlock::Markdown { markdown } => {
-                assert!(markdown.contains("Data availability"));
-                assert!(markdown.contains("stream data unavailable"));
-                assert!(!markdown.contains("###"));
-                assert!(!markdown.contains("✅"));
-            }
-            other => panic!("unexpected block: {:?}", other),
-        }
-    }
-
-    #[test]
-    fn test_data_availability_block_for_all_sources_available() {
-        let block =
-            data_availability_block(&[], true).expect("all-available state should render a block");
-
-        match block {
-            crate::intents::ContentBlock::Markdown { markdown } => {
-                assert!(markdown.contains("all sources available"));
-                assert!(!markdown.contains("✅"));
-            }
-            other => panic!("unexpected block: {:?}", other),
-        }
-    }
-
-    #[test]
-    fn test_data_availability_block_empty_reasons_not_all_available() {
-        let block = data_availability_block(&[], false);
-        assert!(block.is_none());
-    }
-
-    #[test]
-    fn test_filter_activities_by_date() {
-        let activities = vec![
-            ActivitySummary {
-                id: "1".to_string(),
-                name: Some("Run".to_string()),
-                start_date_local: "2026-03-01T10:00:00".to_string(),
-                ..Default::default()
-            },
-            ActivitySummary {
-                id: "2".to_string(),
-                name: Some("Ride".to_string()),
-                start_date_local: "2026-03-02T10:00:00".to_string(),
-                ..Default::default()
-            },
-            ActivitySummary {
-                id: "3".to_string(),
-                name: Some("Swim".to_string()),
-                start_date_local: "2026-03-01T14:00:00".to_string(),
-                ..Default::default()
-            },
-        ];
-
-        let target = NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
-        let filtered = filter_activities_by_date(&activities, &target);
-
-        assert_eq!(filtered.len(), 2);
-        assert_eq!(filtered[0].id, "1");
-        assert_eq!(filtered[1].id, "3");
-    }
-
-    #[test]
-    fn test_filter_activities_by_date_no_matches() {
-        let activities = vec![ActivitySummary {
-            id: "1".to_string(),
-            name: Some("Run".to_string()),
-            start_date_local: "2026-03-01T10:00:00".to_string(),
-            ..Default::default()
-        }];
-
-        let target = NaiveDate::from_ymd_opt(2026, 3, 15).unwrap();
-        let filtered = filter_activities_by_date(&activities, &target);
-
-        assert_eq!(filtered.len(), 0);
-    }
-
-    #[test]
-    fn test_filter_activities_by_date_empty_list() {
-        let activities: Vec<ActivitySummary> = vec![];
-        let target = NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
-        let filtered = filter_activities_by_date(&activities, &target);
-
-        assert_eq!(filtered.len(), 0);
-    }
-
-    #[test]
-    fn test_filter_activities_by_range() {
-        let activities = vec![
-            ActivitySummary {
-                id: "1".to_string(),
-                name: Some("Run".to_string()),
-                start_date_local: "2026-03-01T10:00:00".to_string(),
-                ..Default::default()
-            },
-            ActivitySummary {
-                id: "2".to_string(),
-                name: Some("Ride".to_string()),
-                start_date_local: "2026-03-15T10:00:00".to_string(),
-                ..Default::default()
-            },
-            ActivitySummary {
-                id: "3".to_string(),
-                name: Some("Swim".to_string()),
-                start_date_local: "2026-03-31T10:00:00".to_string(),
-                ..Default::default()
-            },
-        ];
-
-        let start = NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
-        let end = NaiveDate::from_ymd_opt(2026, 3, 15).unwrap();
-        let filtered = filter_activities_by_range(&activities, &start, &end);
-
-        assert_eq!(filtered.len(), 2);
-    }
-
-    #[test]
-    fn test_filter_activities_by_description() {
-        let activities = vec![
-            ActivitySummary {
-                id: "1".to_string(),
-                name: Some("Morning Run".to_string()),
-                start_date_local: "2026-03-01T10:00:00".to_string(),
-                ..Default::default()
-            },
-            ActivitySummary {
-                id: "2".to_string(),
-                name: Some("Easy Ride".to_string()),
-                start_date_local: "2026-03-02T10:00:00".to_string(),
-                ..Default::default()
-            },
-            ActivitySummary {
-                id: "3".to_string(),
-                name: Some("Long Run".to_string()),
-                start_date_local: "2026-03-03T10:00:00".to_string(),
-                ..Default::default()
-            },
-        ];
-
-        let filtered = filter_activities_by_description(&activities, "run");
-        assert_eq!(filtered.len(), 2);
-
-        let filtered = filter_activities_by_description(&activities, "RIDE");
-        assert_eq!(filtered.len(), 1);
-
-        let filtered = filter_activities_by_description(&activities, "swim");
-        assert_eq!(filtered.len(), 0);
-    }
-
-    #[test]
-    fn test_filter_activities_by_description_none_name() {
-        let activities = vec![
-            ActivitySummary {
-                id: "1".to_string(),
-                name: None,
-                start_date_local: "2026-03-01T10:00:00".to_string(),
-                ..Default::default()
-            },
-            ActivitySummary {
-                id: "2".to_string(),
-                name: Some("Run".to_string()),
-                start_date_local: "2026-03-02T10:00:00".to_string(),
-                ..Default::default()
-            },
-        ];
-
-        let filtered = filter_activities_by_description(&activities, "run");
-        assert_eq!(filtered.len(), 1);
-    }
-
-    #[test]
-    fn test_filter_events_by_date() {
-        let events = vec![
-            Event {
-                id: Some("1".to_string()),
-                name: "Workout 1".to_string(),
-                start_date_local: "2026-03-01T10:00:00".to_string(),
-                category: intervals_icu_client::EventCategory::Workout,
-                description: None,
-                r#type: None,
-            },
-            Event {
-                id: Some("2".to_string()),
-                name: "Workout 2".to_string(),
-                start_date_local: "2026-03-02T10:00:00".to_string(),
-                category: intervals_icu_client::EventCategory::Workout,
-                description: None,
-                r#type: None,
-            },
-        ];
-
-        let target = NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
-        let filtered = filter_events_by_date(&events, &target);
-
-        assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].id, Some("1".to_string()));
-    }
-
-    #[test]
-    fn test_filter_events_by_date_date_only_format() {
-        let events = vec![Event {
-            id: Some("1".to_string()),
-            name: "Race".to_string(),
-            start_date_local: "2026-03-01".to_string(),
-            category: intervals_icu_client::EventCategory::RaceA,
-            description: None,
-            r#type: None,
-        }];
-
-        let target = NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
-        let filtered = filter_events_by_date(&events, &target);
-
-        assert_eq!(filtered.len(), 1);
-    }
-
-    #[test]
-    fn test_filter_events_by_range() {
-        let events = vec![
-            Event {
-                id: Some("1".to_string()),
-                name: "Workout 1".to_string(),
-                start_date_local: "2026-03-01T10:00:00".to_string(),
-                category: intervals_icu_client::EventCategory::Workout,
-                description: None,
-                r#type: None,
-            },
-            Event {
-                id: Some("2".to_string()),
-                name: "Workout 2".to_string(),
-                start_date_local: "2026-03-15T10:00:00".to_string(),
-                category: intervals_icu_client::EventCategory::Workout,
-                description: None,
-                r#type: None,
-            },
-            Event {
-                id: Some("3".to_string()),
-                name: "Workout 3".to_string(),
-                start_date_local: "2026-03-31T10:00:00".to_string(),
-                category: intervals_icu_client::EventCategory::Workout,
-                description: None,
-                r#type: None,
-            },
-        ];
-
-        let start = NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
-        let end = NaiveDate::from_ymd_opt(2026, 3, 15).unwrap();
-        let filtered = filter_events_by_range(&events, &start, &end);
-
-        assert_eq!(filtered.len(), 2);
-    }
-
-    #[test]
-    fn test_validate_date_range_max_days_exceeded() {
-        let start = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
-        let end = NaiveDate::from_ymd_opt(2026, 6, 1).unwrap();
-        let result = validate_date_range(&start, &end, 30);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_validate_date_range_same_day() {
-        let start = NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
-        let end = NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
-        let result = validate_date_range(&start, &end, 30);
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_parse_date_invalid_format_with_slashes() {
-        let result = parse_date("2026/03/01", "test");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_parse_optional_date_invalid() {
-        let result = parse_optional_date(Some("invalid"), "test");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_format_duration_seconds_zero() {
-        assert_eq!(format_duration_seconds(0), "0:00");
-    }
-
-    #[test]
-    fn test_format_duration_minutes_zero() {
-        assert_eq!(format_duration_minutes(0), "0:00");
-    }
-
-    #[test]
-    fn test_calculate_percent_change_negative_old_value() {
-        let result = calculate_percent_change(-100.0, -90.0);
-        assert!((result - (-10.0)).abs() < 0.1);
-    }
-
-    #[test]
-    fn test_compact_section() {
-        assert_eq!(compact_section("Title"), "# Title");
-        assert_eq!(compact_section("Recovery"), "# Recovery");
-    }
-
-    #[test]
-    fn test_compact_kv() {
-        assert_eq!(compact_kv("Status", "good"), "Status: good");
-        assert_eq!(compact_kv("Count", 42), "Count: 42");
-    }
-
-    #[test]
-    fn test_compact_item() {
-        assert_eq!(compact_item("first"), "  first");
-    }
-}

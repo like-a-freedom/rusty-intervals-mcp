@@ -333,8 +333,8 @@ pub async fn auth_middleware(
         .map(|addr| addr.to_string())
         .unwrap_or_else(|| "unknown".to_string());
 
-    let credentials = match auth_header {
-        Some(token) => match jwt_manager.verify_token(token) {
+    let credentials = if let Some(token) = auth_header {
+        match jwt_manager.verify_token(token) {
             Ok(creds) => {
                 // Record successful verification
                 metrics::record_token_verification("valid");
@@ -355,17 +355,16 @@ pub async fn auth_middleware(
                 metrics::record_auth_failure("invalid_token");
                 return Err(StatusCode::UNAUTHORIZED);
             }
-        },
-        None => {
-            tracing::warn!(
-                client_ip = %client_ip,
-                "Missing Authorization header"
-            );
-            // Record failed verification (missing token)
-            metrics::record_token_verification("invalid");
-            metrics::record_auth_failure("missing_token");
-            return Err(StatusCode::UNAUTHORIZED);
         }
+    } else {
+        tracing::warn!(
+            client_ip = %client_ip,
+            "Missing Authorization header"
+        );
+        // Record failed verification (missing token)
+        metrics::record_token_verification("invalid");
+        metrics::record_auth_failure("missing_token");
+        return Err(StatusCode::UNAUTHORIZED);
     };
 
     tracing::info!(athlete_id = %credentials.athlete_id, "Authenticated request");

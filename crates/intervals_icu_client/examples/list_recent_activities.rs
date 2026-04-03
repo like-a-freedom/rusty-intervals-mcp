@@ -13,14 +13,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let activities = client
         .get_recent_activities(Some(limit), None)
         .await
-        .map_err(|e| format!("failed to fetch activities: {}", e))?;
+        .map_err(|e| format!("failed to fetch activities: {e}"))?;
 
     if activities.is_empty() {
         println!("No recent activities returned (check date range or credentials)");
         return Ok(());
     }
 
-    println!("Recent activities (limit {}):", limit);
+    println!("Recent activities (limit {limit}):");
     for a in activities {
         let name = a.name.unwrap_or_else(|| "(no name)".to_string());
         println!("- {} — {}", a.id, name);

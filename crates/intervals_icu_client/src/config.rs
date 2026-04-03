@@ -20,6 +20,9 @@ impl Config {
     /// Testable helper that reads configuration values using the provided
     /// function. This avoids mutating global environment in tests and keeps
     /// `from_env()` small and safe.
+    ///
+    /// # Errors
+    /// Returns `ConfigError::MissingEnvVar` if required variables are not set.
     pub fn from_env_with<F>(mut get: F) -> Result<Self>
     where
         F: FnMut(&str) -> Option<String>,
@@ -52,7 +55,6 @@ mod tests {
     #[test]
     fn from_env_missing_api_key() {
         let get = |k: &str| match k {
-            "INTERVALS_ICU_API_KEY" => None,
             "INTERVALS_ICU_ATHLETE_ID" => Some("42".into()),
             "INTERVALS_ICU_BASE_URL" => Some("http://localhost".into()),
             _ => None,
@@ -70,7 +72,6 @@ mod tests {
     fn from_env_missing_athlete_id() {
         let get = |k: &str| match k {
             "INTERVALS_ICU_API_KEY" => Some("sekrit".into()),
-            "INTERVALS_ICU_ATHLETE_ID" => None,
             "INTERVALS_ICU_BASE_URL" => Some("http://localhost".into()),
             _ => None,
         };
@@ -114,7 +115,6 @@ mod tests {
         let get = |k: &str| match k {
             "INTERVALS_ICU_API_KEY" => Some("sekrit".into()),
             "INTERVALS_ICU_ATHLETE_ID" => Some("42".into()),
-            "INTERVALS_ICU_BASE_URL" => None,
             _ => None,
         };
         let cfg = Config::from_env_with(get).expect("cfg");
@@ -127,7 +127,7 @@ mod tests {
         let mut m = HashMap::new();
         m.insert("INTERVALS_ICU_API_KEY", "sekrit");
         m.insert("INTERVALS_ICU_ATHLETE_ID", "99");
-        let get = |k: &str| m.get(k).map(|v| v.to_string());
+        let get = |k: &str| m.get(k).map(std::string::ToString::to_string);
         let cfg = Config::from_env_with(get).expect("cfg from env");
         assert_eq!(cfg.athlete_id, "99");
         assert_eq!(cfg.base_url, "https://intervals.icu");
