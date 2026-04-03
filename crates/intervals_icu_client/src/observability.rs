@@ -3,6 +3,7 @@ pub struct Health {
 }
 
 impl Health {
+    #[must_use]
     pub fn readiness() -> Self {
         Self { ready: true }
     }

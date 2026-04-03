@@ -10,10 +10,7 @@ async fn search_intervals_calls_interval_search_path() {
     let athlete = "ath";
 
     Mock::given(method("GET"))
-        .and(path(format!(
-            "/api/v1/athlete/{}/activities/interval-search",
-            athlete
-        )))
+        .and(path("/api/v1/athlete/ath/activities/interval-search"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([{"id":"a1"}])))
         .mount(&mock_server)
         .await;

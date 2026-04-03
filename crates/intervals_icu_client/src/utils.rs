@@ -25,6 +25,7 @@ pub struct QueryBuilder<'a> {
 
 impl<'a> QueryBuilder<'a> {
     /// Create a new empty query builder.
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -34,6 +35,7 @@ impl<'a> QueryBuilder<'a> {
     /// # Arguments
     /// * `key` - Parameter name
     /// * `value` - Parameter value (anything that implements `Display`)
+    #[must_use]
     pub fn add(mut self, key: &'a str, value: impl Display) -> Self {
         self.params.push((key, value.to_string()));
         self
@@ -44,6 +46,7 @@ impl<'a> QueryBuilder<'a> {
     /// # Arguments
     /// * `key` - Parameter name
     /// * `opt` - Optional value
+    #[must_use]
     pub fn add_opt(mut self, key: &'a str, opt: Option<impl Display>) -> Self {
         if let Some(value) = opt {
             self.params.push((key, value.to_string()));
@@ -52,6 +55,7 @@ impl<'a> QueryBuilder<'a> {
     }
 
     /// Add multiple parameters at once.
+    #[must_use]
     pub fn extend<I>(mut self, params: I) -> Self
     where
         I: IntoIterator<Item = (&'a str, String)>,
@@ -63,21 +67,23 @@ impl<'a> QueryBuilder<'a> {
     /// Build the query parameter vector with owned strings.
     ///
     /// Returns a `Vec<(&'a str, String)>` which owns the values.
+    #[must_use]
     pub fn build_owned(self) -> Vec<(&'a str, String)> {
         self.params
     }
 }
 
-/// Normalize start_date_local for events: preserve time when provided;
+/// Normalize `start_date_local` for events: preserve time when provided;
 /// if only date is given, set time to 00:00:00.
 ///
 /// Accepts:
 /// - YYYY-MM-DD -> YYYY-MM-DDT00:00:00
 /// - RFC3339 datetime -> YYYY-MM-DDTHH:MM:SS
 /// - Naive datetime YYYY-MM-DDTHH:MM:SS -> YYYY-MM-DDTHH:MM:SS
+#[must_use]
 pub fn normalize_event_start(s: &str) -> Option<String> {
     if chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").is_ok() {
-        return Some(format!("{}T00:00:00", s));
+        return Some(format!("{s}T00:00:00"));
     }
     if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
         return Some(dt.naive_local().format("%Y-%m-%dT%H:%M:%S").to_string());

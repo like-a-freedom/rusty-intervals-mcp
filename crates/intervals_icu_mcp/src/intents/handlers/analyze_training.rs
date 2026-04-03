@@ -404,12 +404,12 @@ impl AnalyzeTrainingHandler {
         fetched.activities = vec![(*activity).clone()];
         fetched.fitness = client.get_fitness_summary().await.ok();
 
-        let mut context = CoachContext::new(
+        let mut workout_context = CoachContext::new(
             AnalysisKind::TrainingSingle,
             AnalysisWindow::new(target_date, target_date),
         );
-        context.audit = build_data_audit(&fetched);
-        context.metrics.fitness = parse_fitness_metrics(fetched.fitness.as_ref());
+        workout_context.audit = build_data_audit(&fetched);
+        workout_context.metrics.fitness = parse_fitness_metrics(fetched.fitness.as_ref());
 
         let workout_detail = fetched.workout_detail.as_ref();
         let _interval_count = fetched
@@ -440,7 +440,7 @@ impl AnalyzeTrainingHandler {
             ));
         }
         if analysis_mode.include_streams() {
-            if context.audit.streams_available {
+            if workout_context.audit.streams_available {
                 execution_notes.push("Stream data available for deeper execution review.".into());
             } else {
                 execution_notes.push("Stream review requested; stream data unavailable.".into());
@@ -455,9 +455,10 @@ impl AnalyzeTrainingHandler {
             derive_workout_metrics_context(work_interval_count, avg_hr, avg_power, execution_notes);
         workout_metrics.efficiency_factor = efficiency_factor;
         workout_metrics.aerobic_decoupling = aerobic_decoupling;
-        context.metrics.workout = Some(workout_metrics);
-        context.alerts = build_alerts(&context.metrics);
-        context.guidance = build_guidance(&context.metrics, &context.alerts);
+        workout_context.metrics.workout = Some(workout_metrics);
+        workout_context.alerts = build_alerts(&workout_context.metrics);
+        workout_context.guidance =
+            build_guidance(&workout_context.metrics, &workout_context.alerts);
 
         let mut content = Vec::new();
         content.push(ContentBlock::markdown(format!(
@@ -515,7 +516,7 @@ impl AnalyzeTrainingHandler {
         }
 
         if analysis_mode.show_execution_context()
-            && let Some(workout) = &context.metrics.workout
+            && let Some(workout) = &workout_context.metrics.workout
             && (!workout.execution_notes.is_empty()
                 || workout.efficiency_factor.is_some()
                 || workout.aerobic_decoupling.is_some())
@@ -619,7 +620,7 @@ impl AnalyzeTrainingHandler {
         }
 
         if analysis_mode.show_quality_findings()
-            && let Some(workout) = &context.metrics.workout
+            && let Some(workout) = &workout_context.metrics.workout
         {
             let mut findings = Vec::new();
             if let Some(count) = workout.interval_count {
@@ -643,22 +644,22 @@ impl AnalyzeTrainingHandler {
 
         if analysis_mode.show_data_availability()
             && let Some(block) = data_availability_block(
-                &context.audit.degraded_mode_reasons,
-                context.audit.all_available(),
+                &workout_context.audit.degraded_mode_reasons,
+                workout_context.audit.all_available(),
             )
         {
             content.push(block);
         }
 
         // Use shared guidance from coach engine
-        let suggestions = context.guidance.suggestions.clone();
+        let suggestions = workout_context.guidance.suggestions.clone();
 
         let mut next_actions = vec![
             "To compare with similar workouts: compare_periods".into(),
             "To analyze training load: assess_recovery".into(),
             "To view period summary: analyze_training with target_type: period".into(),
         ];
-        for action in &context.guidance.next_actions {
+        for action in &workout_context.guidance.next_actions {
             if !next_actions.contains(action) {
                 next_actions.push(action.clone());
             }
@@ -819,21 +820,22 @@ impl AnalyzeTrainingHandler {
                 .with_next_actions(next_actions));
         }
 
-        let mut context = CoachContext::new(AnalysisKind::TrainingPeriod, window.clone());
-        context.audit = build_data_audit(&fetched);
+        let mut period_context = CoachContext::new(AnalysisKind::TrainingPeriod, window.clone());
+        period_context.audit = build_data_audit(&fetched);
 
         let period_snapshot = build_trend_snapshot(&period, &fetched.activity_details);
         let previous_snapshot = build_trend_snapshot(&previous_period, &fetched.activity_details);
 
-        context.metrics.volume = Some(derive_volume_metrics(
-            context.meta.window_days,
+        period_context.metrics.volume = Some(derive_volume_metrics(
+            period_context.meta.window_days,
             period_snapshot.total_time_secs,
             period_snapshot.total_distance_m,
             period_snapshot.total_elevation_m,
             period.len(),
         ));
-        context.metrics.trend = Some(derive_trend_metrics(period_snapshot, previous_snapshot));
-        context.metrics.fitness = parse_fitness_metrics(fetched.fitness.as_ref());
+        period_context.metrics.trend =
+            Some(derive_trend_metrics(period_snapshot, previous_snapshot));
+        period_context.metrics.fitness = parse_fitness_metrics(fetched.fitness.as_ref());
 
         let load_window = AnalysisWindow::new(
             window.end_date - chrono::Duration::days(27),
@@ -878,27 +880,27 @@ impl AnalyzeTrainingHandler {
                 .iter()
                 .map(|(_, load)| *load)
                 .collect::<Vec<_>>();
-            let recovery_index = context
+            let recovery_index = period_context
                 .metrics
                 .wellness
                 .as_ref()
                 .and_then(|w| w.recovery_index);
-            context.metrics.load_management =
+            period_context.metrics.load_management =
                 compute_load_management_metrics(&load_values, recovery_index);
         }
 
         if let Some(api_acwr) = api_load_snapshot {
-            context
+            period_context
                 .metrics
                 .load_management
                 .get_or_insert_with(Default::default)
                 .acwr = Some(api_acwr);
         }
 
-        context.alerts = build_alerts(&context.metrics);
-        context.guidance = build_guidance(&context.metrics, &context.alerts);
+        period_context.alerts = build_alerts(&period_context.metrics);
+        period_context.guidance = build_guidance(&period_context.metrics, &period_context.alerts);
 
-        let weekly_hrs = context
+        let weekly_hrs = period_context
             .metrics
             .volume
             .as_ref()
@@ -1017,7 +1019,7 @@ impl AnalyzeTrainingHandler {
 
         let show_context_sections = analysis_type != "summary";
         if show_context_sections {
-            if let Some(trend) = &context.metrics.trend {
+            if let Some(trend) = &period_context.metrics.trend {
                 content.push(ContentBlock::markdown(format!(
                     "Trend Context\n  Activity delta: {}\n  Time delta: {}\n  Distance delta: {}\n  Elevation delta: {}",
                     trend
@@ -1031,12 +1033,12 @@ impl AnalyzeTrainingHandler {
             }
 
             content.push(ContentBlock::markdown(build_load_management_text(
-                context.metrics.load_management.as_ref(),
+                period_context.metrics.load_management.as_ref(),
             )));
 
             if let Some(block) = data_availability_block(
-                &context.audit.degraded_mode_reasons,
-                context.audit.all_available(),
+                &period_context.audit.degraded_mode_reasons,
+                period_context.audit.all_available(),
             ) {
                 content.push(block);
             }
@@ -1095,7 +1097,7 @@ impl AnalyzeTrainingHandler {
             }
         }
 
-        let mut suggestions = context.guidance.suggestions.clone();
+        let mut suggestions = period_context.guidance.suggestions.clone();
         if suggestions.is_empty() {
             suggestions = if weekly_hrs < 5.0 {
                 vec!["Training volume is below average. Consider gradual increase.".into()]
@@ -1110,7 +1112,7 @@ impl AnalyzeTrainingHandler {
             "To compare with another period: compare_periods".into(),
             "To assess recovery: assess_recovery".into(),
         ];
-        for action in &context.guidance.next_actions {
+        for action in &period_context.guidance.next_actions {
             if !next_actions.contains(action) {
                 next_actions.push(action.clone());
             }

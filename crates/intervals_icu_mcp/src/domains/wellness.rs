@@ -43,11 +43,11 @@ pub fn transform_wellness(value: &Value, summary_only: bool, fields: Option<&[St
         let mut sleep_total: f64 = 0.0;
         let mut stress_total: f64 = 0.0;
         let mut hr_total: f64 = 0.0;
-        let mut hrv_total: f64 = 0.0;
+        let mut hrv_sum: f64 = 0.0;
         let mut sleep_count: usize = 0;
         let mut stress_count: usize = 0;
         let mut hr_count: usize = 0;
-        let mut hrv_count: usize = 0;
+        let mut hrv_occurrences: usize = 0;
 
         for item in arr {
             if let Some(obj) = item.as_object() {
@@ -64,8 +64,8 @@ pub fn transform_wellness(value: &Value, summary_only: bool, fields: Option<&[St
                     hr_count += 1;
                 }
                 if let Some(v) = obj.get("hrv").and_then(|v| v.as_f64()) {
-                    hrv_total += v;
-                    hrv_count += 1;
+                    hrv_sum += v;
+                    hrv_occurrences += 1;
                 }
             }
         }
@@ -75,7 +75,7 @@ pub fn transform_wellness(value: &Value, summary_only: bool, fields: Option<&[St
             "avg_sleep_hours": if sleep_count > 0 { (sleep_total / sleep_count as f64 * 10.0).round() / 10.0 } else { 0.0 },
             "avg_stress": if stress_count > 0 { (stress_total / stress_count as f64 * 10.0).round() / 10.0 } else { 0.0 },
             "avg_resting_hr": if hr_count > 0 { (hr_total / hr_count as f64).round() } else { 0.0 },
-            "avg_hrv": if hrv_count > 0 { (hrv_total / hrv_count as f64).round() } else { 0.0 }
+            "avg_hrv": if hrv_occurrences > 0 { (hrv_sum / hrv_occurrences as f64).round() } else { 0.0 }
         });
     }
 

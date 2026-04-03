@@ -33,11 +33,12 @@ impl std::fmt::Debug for CircuitBreaker {
             .field("failure_count", &self.failure_count.load(Ordering::Relaxed))
             .field("failure_threshold", &self.failure_threshold)
             .field("reset_timeout", &self.reset_timeout)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
 impl CircuitBreaker {
+    #[must_use]
     pub fn new(failure_threshold: u32, reset_timeout: Duration) -> Self {
         Self {
             state: Mutex::new(CircuitState::Closed),
@@ -48,6 +49,10 @@ impl CircuitBreaker {
         }
     }
 
+    /// Returns the current circuit state.
+    ///
+    /// # Panics
+    /// Panics if the internal mutex is poisoned.
     pub fn state(&self) -> CircuitState {
         let state = self.state.lock().unwrap();
         if *state == CircuitState::Open
@@ -61,7 +66,7 @@ impl CircuitBreaker {
         *state
     }
 
-    fn record_state(&self, state: CircuitState) {
+    fn record_state(state: CircuitState) {
         let value = match state {
             CircuitState::Closed => 0.0,
             CircuitState::Open => 1.0,
@@ -70,27 +75,34 @@ impl CircuitBreaker {
         gauge!("intervals_icu_client_circuit_state").set(value);
     }
 
+    /// Records a successful request.
+    ///
+    /// # Panics
+    /// Panics if the internal mutex is poisoned.
     pub fn record_success(&self) {
         self.failure_count.store(0, Ordering::Relaxed);
         *self.state.lock().unwrap() = CircuitState::Closed;
-        self.record_state(CircuitState::Closed);
+        Self::record_state(CircuitState::Closed);
     }
 
+    /// Records a failed request.
+    ///
+    /// # Panics
+    /// Panics if the internal mutex is poisoned.
     pub fn record_failure(&self) {
         let count = self.failure_count.fetch_add(1, Ordering::Relaxed) + 1;
         *self.last_failure_at.lock().unwrap() = Some(Instant::now());
 
         if count >= self.failure_threshold {
             *self.state.lock().unwrap() = CircuitState::Open;
-            self.record_state(CircuitState::Open);
+            Self::record_state(CircuitState::Open);
         }
     }
 
     pub fn allow_request(&self) -> bool {
         match self.state() {
-            CircuitState::Closed => true,
             CircuitState::Open => false,
-            CircuitState::HalfOpen => true,
+            CircuitState::Closed | CircuitState::HalfOpen => true,
         }
     }
 }

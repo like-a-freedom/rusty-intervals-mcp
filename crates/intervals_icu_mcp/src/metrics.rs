@@ -25,6 +25,7 @@ struct AthleteTracker {
 }
 
 impl AthleteTracker {
+    #[must_use]
     fn new(window_secs: u64) -> Self {
         Self {
             athletes: Mutex::new(HashMap::new()),
@@ -32,6 +33,7 @@ impl AthleteTracker {
         }
     }
 
+    /// Record activity for an athlete by ID.
     fn record_activity(&self, athlete_id: &str) {
         let now = std::time::Instant::now();
         let mut athletes = self.athletes.lock().unwrap();
@@ -50,11 +52,17 @@ impl AthleteTracker {
         self.cleanup_old_entries(&mut athletes);
     }
 
+    /// Remove athletes whose last seen time is outside the window.
     fn cleanup_old_entries(&self, athletes: &mut HashMap<String, std::time::Instant>) {
         let now = std::time::Instant::now();
-        let cutoff = now - self.window_duration;
+        let cutoff = now.checked_sub(self.window_duration);
 
-        athletes.retain(|_id, last_seen| *last_seen > cutoff);
+        if let Some(cutoff) = cutoff {
+            athletes.retain(|_id, last_seen| *last_seen > cutoff);
+        } else {
+            // If subtraction failed, clear all (should never happen)
+            athletes.clear();
+        }
 
         // Update gauge with current count
         gauge!("intervals_icu_mcp_active_athletes").set(athletes.len() as f64);
@@ -64,13 +72,18 @@ impl AthleteTracker {
 /// Global athlete tracker with 5-minute window
 static ATHLETE_TRACKER: std::sync::OnceLock<AthleteTracker> = std::sync::OnceLock::new();
 
-/// Initialize the Prometheus recorder. Returns a handle for rendering metrics.
+/// Initialize the Prometheus recorder.
 ///
-/// This should be called once at startup in HTTP mode.
-/// In STDIO mode, this is a no-op and returns None.
+/// # Errors
+///
+/// Returns an error if metrics are not available or initialization fails.
+///
+/// # Returns
+///
+/// A handle for rendering metrics.
 pub fn init_prometheus_recorder() -> Result<PrometheusHandle, Box<dyn std::error::Error>> {
     // Check if we're in HTTP mode
-    let transport_mode = std::env::var("MCP_TRANSPORT").unwrap_or_else(|_| "stdio".to_string());
+    let transport_mode = std::env::var("MCP_TRANSPORT").unwrap_or_else(|_| String::from("stdio"));
 
     if transport_mode != "http" {
         // In STDIO mode, metrics are disabled
@@ -103,13 +116,17 @@ pub fn record_tool_call(tool: &str, success: bool, duration_secs: f64) {
     let status = if success { "success" } else { "error" };
 
     // Increment counter
-    counter!("intervals_icu_mcp_tool_calls_total", "tool" => tool.to_string(), "status" => status)
-        .increment(1);
+    counter!(
+        "intervals_icu_mcp_tool_calls_total",
+        "tool" => tool.to_owned(),
+        "status" => status.to_owned()
+    )
+    .increment(1);
 
     // Record duration histogram
     histogram!(
         "intervals_icu_mcp_tool_duration_seconds",
-        "tool" => tool.to_string()
+        "tool" => tool.to_owned()
     )
     .record(duration_secs);
 }
@@ -123,25 +140,25 @@ pub fn record_token_issued() {
 pub fn record_token_verification(status: &str) {
     counter!(
         "intervals_icu_mcp_token_verifications_total",
-        "status" => status.to_string()
+        "status" => status.to_owned()
     )
     .increment(1);
 }
 
-/// Record rate limited request.
+/// Record rate-limited request.
 pub fn record_rate_limited(endpoint: &str) {
     counter!(
         "intervals_icu_mcp_rate_limited_total",
-        "endpoint" => endpoint.to_string()
+        "endpoint" => endpoint.to_owned()
     )
     .increment(1);
 }
 
-/// Record auth failure with reason.
+/// Record authentication failure with reason.
 pub fn record_auth_failure(reason: &str) {
     counter!(
         "intervals_icu_mcp_auth_failures_total",
-        "reason" => reason.to_string()
+        "reason" => reason.to_owned()
     )
     .increment(1);
 }
@@ -150,7 +167,7 @@ pub fn record_auth_failure(reason: &str) {
 pub fn record_mcp_session(status: &str) {
     counter!(
         "intervals_icu_mcp_mcp_sessions_total",
-        "status" => status.to_string()
+        "status" => status.to_owned()
     )
     .increment(1);
 }
@@ -159,7 +176,7 @@ pub fn record_mcp_session(status: &str) {
 pub fn record_mcp_method_call(method: &str) {
     counter!(
         "intervals_icu_mcp_mcp_method_calls_total",
-        "method" => method.to_string()
+        "method" => method.to_owned()
     )
     .increment(1);
 }
@@ -168,20 +185,20 @@ pub fn record_mcp_method_call(method: &str) {
 pub fn record_idempotency(result: &str) {
     counter!(
         "intervals_icu_mcp_idempotency_total",
-        "result" => result.to_string()
+        "result" => result.to_owned()
     )
     .increment(1);
 }
 
 /// Record HTTP request with duration.
 pub fn record_http_request(method: &str, path: &str, status: u16, duration_secs: f64) {
-    let status_str = status.to_string();
+    let status_str = format!("{status}");
 
     // Increment counter
     counter!(
         "intervals_icu_mcp_http_requests_total",
-        "method" => method.to_string(),
-        "path" => path.to_string(),
+        "method" => method.to_owned(),
+        "path" => path.to_owned(),
         "status" => status_str
     )
     .increment(1);
@@ -189,8 +206,8 @@ pub fn record_http_request(method: &str, path: &str, status: u16, duration_secs:
     // Record duration histogram
     histogram!(
         "intervals_icu_mcp_http_request_duration_seconds",
-        "method" => method.to_string(),
-        "path" => path.to_string()
+        "method" => method.to_owned(),
+        "path" => path.to_owned()
     )
     .record(duration_secs);
 }
@@ -217,13 +234,14 @@ pub fn record_athlete_activity(athlete_id: &str) {
 }
 
 /// Get the Prometheus handle for rendering metrics.
+#[must_use]
 pub fn get_prometheus_handle() -> Option<&'static PrometheusHandle> {
     PROMETHEUS_HANDLE.get()
 }
 
 /// Create an Axum router for the metrics endpoint.
 ///
-/// The endpoint will require authentication if PROMETHEUS_METRICS_TOKEN is set.
+/// The endpoint will require authentication if `PROMETHEUS_METRICS_TOKEN` is set.
 pub fn create_metrics_router() -> axum::Router {
     use axum::{
         Router,
@@ -278,7 +296,7 @@ pub async fn metrics_middleware(
         .extensions()
         .get::<MatchedPath>()
         .map(|p| p.as_str().to_string())
-        .unwrap_or_else(|| "unknown".to_string());
+        .unwrap_or_else(|| String::from("unknown"));
 
     // Increment active requests
     increment_active_requests();

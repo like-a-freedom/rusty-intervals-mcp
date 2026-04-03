@@ -47,7 +47,7 @@ impl std::fmt::Debug for ReqwestIntervalsClient {
             .field("base_url", &self.base_url)
             .field("athlete_id", &self.athlete_id)
             .field("circuit_breaker", &self.circuit_breaker)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -55,9 +55,12 @@ impl ReqwestIntervalsClient {
     /// Create a new client instance.
     ///
     /// # Arguments
-    /// * `base_url` - The base URL of the Intervals.icu API (e.g., "https://intervals.icu")
+    /// * `base_url` - The base URL of the Intervals.icu API (e.g., `<https://intervals.icu>`)
     /// * `athlete_id` - The athlete ID for authentication
     /// * `api_key` - The API key for authentication
+    ///
+    /// # Panics
+    /// Panics if the reqwest client fails to build.
     pub fn new(base_url: &str, athlete_id: impl Into<String>, api_key: SecretString) -> Self {
         let client = reqwest::Client::builder()
             .build()
@@ -90,7 +93,7 @@ impl ReqwestIntervalsClient {
     /// Build query parameters from a vector of (key, String) pairs.
     ///
     /// This is a helper to avoid repeating the conversion from Vec<(&str, String)> to Vec<(&str, &str)>.
-    fn build_query<'a>(&'a self, params: &'a [(&str, String)]) -> Vec<(&'a str, &'a str)> {
+    fn build_query<'a>(params: &'a [(&'a str, String)]) -> Vec<(&'a str, &'a str)> {
         params.iter().map(|(k, v)| (*k, v.as_str())).collect()
     }
 
@@ -126,12 +129,11 @@ impl ReqwestIntervalsClient {
                 entry
                     .get("types")
                     .and_then(serde_json::Value::as_array)
-                    .map(|types| {
+                    .is_some_and(|types| {
                         types
                             .iter()
                             .any(|value| value.as_str() == Some(normalized.as_str()))
                     })
-                    .unwrap_or(false)
                     || entry.get("name").and_then(serde_json::Value::as_str)
                         == Some(normalized.as_str())
             })
@@ -147,8 +149,7 @@ impl ReqwestIntervalsClient {
                 IntervalsError::Validation(ValidationError::InvalidFormat {
                     field: "sport_type".to_string(),
                     value: format!(
-                        "could not resolve sport settings id for sport type '{}'",
-                        sport_type_or_id
+                        "could not resolve sport settings id for sport type '{sport_type_or_id}'"
                     ),
                 })
             })
@@ -394,6 +395,7 @@ impl ReqwestIntervalsClient {
 
 impl ReqwestIntervalsClient {
     /// Map case-insensitive sport names to their canonical API form.
+    #[must_use]
     pub fn normalize_sport(s: &str) -> String {
         const SPORTS: &[&str] = &[
             "Ride",
@@ -475,7 +477,7 @@ impl ReqwestIntervalsClient {
         format!("{}{}", first, chrs.as_str())
     }
 
-    /// Normalize start_date_local for events: preserve time when provided;
+    /// Normalize `start_date_local` for events: preserve time when provided;
     /// if only date is given, set time to 00:00:00.
     fn normalize_event_start(s: &str) -> Option<String> {
         crate::utils::normalize_event_start(s)
@@ -493,7 +495,7 @@ impl ReqwestIntervalsClient {
             let normalized = Self::normalize_event_start(start_date_local).ok_or_else(|| {
                 IntervalsError::Validation(ValidationError::InvalidFormat {
                     field: "start_date_local".to_string(),
-                    value: format!("invalid start_date_local: {}", start_date_local),
+                    value: format!("invalid start_date_local: {start_date_local}"),
                 })
             })?;
             object.insert(
@@ -510,6 +512,17 @@ impl ReqwestIntervalsClient {
 // Service Trait Implementations
 // ============================================================================
 
+#[derive(serde::Deserialize)]
+struct ProfilePayload {
+    athlete: Option<ProfileAthlete>,
+}
+
+#[derive(serde::Deserialize)]
+struct ProfileAthlete {
+    id: Option<String>,
+    name: Option<String>,
+}
+
 #[async_trait]
 impl AthleteService for ReqwestIntervalsClient {
     async fn get_athlete_profile(&self) -> Result<AthleteProfile> {
@@ -518,16 +531,6 @@ impl AthleteService for ReqwestIntervalsClient {
         let status = resp.status();
         if !status.is_success() {
             return Err(self.error_from_response(resp).await);
-        }
-
-        #[derive(serde::Deserialize)]
-        struct ProfilePayload {
-            athlete: Option<ProfileAthlete>,
-        }
-        #[derive(serde::Deserialize)]
-        struct ProfileAthlete {
-            id: Option<String>,
-            name: Option<String>,
         }
 
         let payload: ProfilePayload = resp.json().await?;
@@ -546,6 +549,7 @@ impl AthleteService for ReqwestIntervalsClient {
 }
 
 #[async_trait]
+#[allow(clippy::too_many_lines)]
 impl ActivityService for ReqwestIntervalsClient {
     async fn get_recent_activities(
         &self,
@@ -554,7 +558,7 @@ impl ActivityService for ReqwestIntervalsClient {
     ) -> Result<Vec<crate::ActivitySummary>> {
         let url = self.api_url(&["athlete", &self.athlete_id, "activities"]);
         let today = Utc::now().date_naive();
-        let oldest = today - Duration::days(days_back.unwrap_or(7) as i64);
+        let oldest = today - Duration::days(i64::from(days_back.unwrap_or(7)));
 
         let mut pairs: Vec<(&str, String)> = vec![
             ("oldest", oldest.to_string()),
@@ -564,7 +568,7 @@ impl ActivityService for ReqwestIntervalsClient {
             pairs.push(("limit", limit.to_string()));
         }
 
-        self.execute_json(self.get_request(&url).query(&self.build_query(&pairs)))
+        self.execute_json(self.get_request(&url).query(&Self::build_query(&pairs)))
             .await
     }
 
@@ -665,7 +669,7 @@ impl ActivityService for ReqwestIntervalsClient {
             vec![("stream", "power"), ("duration", "300")],
         ];
 
-        for params in attempts.iter() {
+        for params in &attempts {
             let qp: Vec<(&str, &str)> = params.iter().map(|(k, v)| (*k, *v)).collect();
             let resp = self.get_request(&url).query(&qp).send().await?;
 
@@ -704,13 +708,13 @@ impl ActivityService for ReqwestIntervalsClient {
                         ordered_streams.push(cand.to_string());
                     }
                 }
-                for s in available_streams.iter() {
+                for s in &available_streams {
                     if !ordered_streams.contains(s) {
                         ordered_streams.push(s.clone());
                     }
                 }
 
-                for cand in ordered_streams.iter() {
+                for cand in &ordered_streams {
                     let param_sets = [
                         vec![("stream", cand.as_str()), ("duration", "60")],
                         vec![("stream", cand.as_str()), ("distance", "1000")],
@@ -1057,8 +1061,7 @@ impl EventService for ReqwestIntervalsClient {
         serde_json::from_str::<crate::Event>(&text).map_err(|e| {
             let body_snippet: String = text.chars().take(512).collect();
             IntervalsError::Config(crate::ConfigError::Other(format!(
-                "decoding event: {} - body: {}",
-                e, body_snippet
+                "decoding event: {e} - body: {body_snippet}"
             )))
         })
     }
@@ -1077,14 +1080,14 @@ impl EventService for ReqwestIntervalsClient {
         let mut pairs: Vec<(&str, String)> = Vec::new();
         if let Some(d) = days_back {
             let today = Utc::now().date_naive();
-            let oldest = today - Duration::days(d as i64);
+            let oldest = today - Duration::days(i64::from(d));
             pairs.push(("oldest", oldest.to_string()));
             pairs.push(("newest", today.to_string()));
         }
         if let Some(l) = limit {
             pairs.push(("limit", l.to_string()));
         }
-        self.execute_json(self.get_request(&url).query(&self.build_query(&pairs)))
+        self.execute_json(self.get_request(&url).query(&Self::build_query(&pairs)))
             .await
     }
 
@@ -1106,7 +1109,7 @@ impl EventService for ReqwestIntervalsClient {
         let url = self.api_url(&["athlete", &self.athlete_id, "events"]);
         let mut pairs: Vec<(&str, String)> = Vec::new();
         let today = Utc::now().date_naive();
-        let newest = today + Duration::days(days_ahead.unwrap_or(7) as i64);
+        let newest = today + Duration::days(i64::from(days_ahead.unwrap_or(7)));
         pairs.push(("oldest", today.to_string()));
         pairs.push(("newest", newest.to_string()));
         if let Some(l) = limit {
@@ -1115,7 +1118,7 @@ impl EventService for ReqwestIntervalsClient {
         if let Some(c) = category {
             pairs.push(("category", c));
         }
-        self.execute_json(self.get_request(&url).query(&self.build_query(&pairs)))
+        self.execute_json(self.get_request(&url).query(&Self::build_query(&pairs)))
             .await
     }
 
@@ -1177,7 +1180,7 @@ impl FitnessService for ReqwestIntervalsClient {
         );
         let today = chrono::Utc::now().date_naive();
         let oldest = if let Some(days) = days_back {
-            today - chrono::Duration::days(days as i64)
+            today - chrono::Duration::days(i64::from(days))
         } else {
             today - chrono::Duration::days(90)
         };
@@ -1203,7 +1206,7 @@ impl FitnessService for ReqwestIntervalsClient {
         );
         let today = chrono::Utc::now().date_naive();
         let oldest = if let Some(days) = days_back {
-            today - chrono::Duration::days(days as i64)
+            today - chrono::Duration::days(i64::from(days))
         } else {
             today - chrono::Duration::days(90)
         };
@@ -1229,7 +1232,7 @@ impl FitnessService for ReqwestIntervalsClient {
         );
         let today = chrono::Utc::now().date_naive();
         let oldest = if let Some(days) = days_back {
-            today - chrono::Duration::days(days as i64)
+            today - chrono::Duration::days(i64::from(days))
         } else {
             today - chrono::Duration::days(90)
         };
@@ -1314,11 +1317,11 @@ impl WellnessService for ReqwestIntervalsClient {
         let mut pairs: Vec<(&str, String)> = Vec::new();
         if let Some(d) = days_back {
             let today = Utc::now().date_naive();
-            let oldest = today - Duration::days(d as i64);
+            let oldest = today - Duration::days(i64::from(d));
             pairs.push(("oldest", oldest.to_string()));
             pairs.push(("newest", today.to_string()));
         }
-        self.execute_json(self.get_request(&url).query(&self.build_query(&pairs)))
+        self.execute_json(self.get_request(&url).query(&Self::build_query(&pairs)))
             .await
     }
 
@@ -1330,10 +1333,11 @@ impl WellnessService for ReqwestIntervalsClient {
     async fn update_wellness(
         &self,
         date: &str,
-        data: &serde_json::Value,
+        payload: &serde_json::Value,
     ) -> Result<serde_json::Value> {
         let url = self.api_url(&["athlete", &self.athlete_id, "wellness", date]);
-        self.execute_json(self.put_request(&url).json(data)).await
+        self.execute_json(self.put_request(&url).json(payload))
+            .await
     }
 
     async fn update_wellness_bulk(&self, entries: &[serde_json::Value]) -> Result<()> {
@@ -1716,9 +1720,9 @@ impl crate::IntervalsClient for ReqwestIntervalsClient {
     async fn update_wellness(
         &self,
         date: &str,
-        data: &serde_json::Value,
+        payload: &serde_json::Value,
     ) -> Result<serde_json::Value> {
-        <Self as WellnessService>::update_wellness(self, date, data).await
+        <Self as WellnessService>::update_wellness(self, date, payload).await
     }
 
     async fn update_wellness_bulk(&self, entries: &[serde_json::Value]) -> Result<()> {
@@ -1909,7 +1913,7 @@ fn extract_available_streams(json: &serde_json::Value) -> Vec<String> {
         if let Some(obj) = sv.as_object() {
             available_streams.extend(obj.keys().cloned());
         } else if let Some(arr) = sv.as_array() {
-            for item in arr.iter() {
+            for item in arr {
                 if let Some(obj) = item.as_object() {
                     if let Some(name) = obj.get("name").and_then(|n| n.as_str()) {
                         available_streams.push(name.to_string());
@@ -1920,7 +1924,7 @@ fn extract_available_streams(json: &serde_json::Value) -> Vec<String> {
             }
         }
     } else if let Some(arr) = json.as_array() {
-        for item in arr.iter() {
+        for item in arr {
             if let Some(obj) = item.as_object() {
                 if let Some(name) = obj.get("name").and_then(|n| n.as_str())
                     && !name.is_empty()
@@ -1932,7 +1936,7 @@ fn extract_available_streams(json: &serde_json::Value) -> Vec<String> {
             }
         }
     } else if let Some(obj) = json.as_object() {
-        for (k, v) in obj.iter() {
+        for (k, v) in obj {
             if v.is_array() {
                 available_streams.push(k.clone());
             }
@@ -2056,10 +2060,7 @@ mod tests {
         let athlete = "ath";
 
         Mock::given(method("GET"))
-            .and(path(format!(
-                "/api/v1/athlete/{}/activities-around",
-                athlete
-            )))
+            .and(path("/api/v1/athlete/ath/activities-around"))
             .and(query_param("activity_id", "a1"))
             .and(query_param("limit", "5"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
@@ -2082,18 +2083,15 @@ mod tests {
         let athlete = "ath";
 
         Mock::given(method("GET"))
-            .and(path(format!("/api/v1/athlete/{}/sport-settings", athlete)))
+            .and(path(format!("/api/v1/athlete/{athlete}/sport-settings")))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
-                {"id": 1783043, "types": ["Run", "VirtualRun", "TrailRun"]}
+                {"id": 1_783_043, "types": ["Run", "VirtualRun", "TrailRun"]}
             ])))
             .mount(&mock_server)
             .await;
 
         Mock::given(method("PUT"))
-            .and(path(format!(
-                "/api/v1/athlete/{}/sport-settings/{}/apply",
-                athlete, 1783043
-            )))
+            .and(path("/api/v1/athlete/ath/sport-settings/1783043/apply"))
             .respond_with(
                 ResponseTemplate::new(200).set_body_json(serde_json::json!({"status":"ok"})),
             )
@@ -2119,7 +2117,7 @@ mod tests {
         let oldest = today - Duration::days(5);
 
         Mock::given(method("GET"))
-            .and(path(format!("/api/v1/athlete/{}/wellness", athlete)))
+            .and(path(format!("/api/v1/athlete/{athlete}/wellness")))
             .and(query_param("oldest", oldest.to_string()))
             .and(query_param("newest", today.to_string()))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
@@ -2143,7 +2141,7 @@ mod tests {
         let oldest = today - Duration::days(7);
 
         Mock::given(method("GET"))
-            .and(path(format!("/api/v1/athlete/{}/events", athlete)))
+            .and(path(format!("/api/v1/athlete/{athlete}/events")))
             .and(query_param("oldest", oldest.to_string()))
             .and(query_param("newest", today.to_string()))
             .and(query_param("limit", "3"))
@@ -2325,7 +2323,10 @@ mod tests {
         assert_eq!(routes.as_array().map(Vec::len), Some(1));
 
         let route = client.get_route(11, true).await.expect("get route");
-        assert_eq!(route.get("id").and_then(|v| v.as_i64()), Some(11));
+        assert_eq!(
+            route.get("id").and_then(serde_json::Value::as_i64),
+            Some(11)
+        );
 
         let updated = client
             .update_route(11, &serde_json::json!({"name": "Updated Loop"}))
@@ -2341,7 +2342,9 @@ mod tests {
             .await
             .expect("route similarity");
         assert_eq!(
-            similarity.get("similarity").and_then(|v| v.as_f64()),
+            similarity
+                .get("similarity")
+                .and_then(serde_json::Value::as_f64),
             Some(0.97)
         );
     }

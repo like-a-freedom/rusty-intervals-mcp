@@ -58,10 +58,7 @@ fn primary_sport_setting<'a>(
                 .and_then(Value::as_array)
                 .map(|types| {
                     types.iter().any(|value| {
-                        matches!(
-                            value.as_str(),
-                            Some("Run") | Some("TrailRun") | Some("VirtualRun")
-                        )
+                        matches!(value.as_str(), Some("Run" | "TrailRun" | "VirtualRun"))
                     })
                 })
                 .unwrap_or(false)

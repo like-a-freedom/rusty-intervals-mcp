@@ -11,10 +11,7 @@ async fn get_fitness_summary_uses_athlete_path() {
 
     // API returns array of SummaryWithCats objects (most recent first)
     Mock::given(method("GET"))
-        .and(path(format!(
-            "/api/v1/athlete/{}/athlete-summary.json",
-            athlete
-        )))
+        .and(path("/api/v1/athlete/ath/athlete-summary.json"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
             {
                 "fitness": 12.3,
@@ -38,7 +35,7 @@ async fn get_fitness_summary_uses_athlete_path() {
         ReqwestIntervalsClient::new(&mock_server.uri(), athlete, SecretString::new("key".into()));
     let res = client.get_fitness_summary().await;
     if let Err(ref e) = res {
-        println!("Error: {:?}", e);
+        println!("Error: {e:?}");
     }
     assert!(res.is_ok());
     let v = res.unwrap();
@@ -47,8 +44,20 @@ async fn get_fitness_summary_uses_athlete_path() {
     let arr = v.as_array().unwrap();
     assert!(!arr.is_empty());
     let first = &arr[0];
-    assert_eq!(first.get("fitness").and_then(|f| f.as_f64()), Some(12.3));
-    assert_eq!(first.get("fatigue").and_then(|f| f.as_f64()), Some(8.1));
-    assert_eq!(first.get("form").and_then(|f| f.as_f64()), Some(4.2));
-    assert_eq!(first.get("rampRate").and_then(|f| f.as_f64()), Some(1.5));
+    assert_eq!(
+        first.get("fitness").and_then(serde_json::Value::as_f64),
+        Some(12.3)
+    );
+    assert_eq!(
+        first.get("fatigue").and_then(serde_json::Value::as_f64),
+        Some(8.1)
+    );
+    assert_eq!(
+        first.get("form").and_then(serde_json::Value::as_f64),
+        Some(4.2)
+    );
+    assert_eq!(
+        first.get("rampRate").and_then(serde_json::Value::as_f64),
+        Some(1.5)
+    );
 }

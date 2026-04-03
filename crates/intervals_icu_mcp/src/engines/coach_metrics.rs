@@ -37,6 +37,7 @@ pub struct TrendSnapshot {
     pub total_elevation_m: f64,
 }
 
+#[must_use]
 pub fn build_trend_snapshot(
     activities: &[&ActivitySummary],
     details: &HashMap<String, Value>,
@@ -68,6 +69,7 @@ pub fn build_trend_snapshot(
     )
 }
 
+#[must_use]
 pub fn derive_volume_metrics(
     window_days: i64,
     total_moving_time_secs: i64,
@@ -93,6 +95,7 @@ pub fn derive_volume_metrics(
     }
 }
 
+#[must_use]
 pub fn interpret_fitness_metrics(
     ctl: Option<f64>,
     atl: Option<f64>,
@@ -116,6 +119,7 @@ pub fn interpret_fitness_metrics(
     }
 }
 
+#[must_use]
 pub fn compute_acwr(loads: &[f64]) -> Option<AcwrMetrics> {
     if loads.len() < 28 {
         return None;
@@ -135,6 +139,7 @@ pub fn compute_acwr(loads: &[f64]) -> Option<AcwrMetrics> {
     build_acwr_metrics(acute_load, chronic_load)
 }
 
+#[must_use]
 pub fn parse_api_load_snapshot(payload: Option<&Value>) -> Option<AcwrMetrics> {
     let object = payload?.as_object()?;
     let acute_load = get_number(object, API_LOAD_ACUTE_KEYS)?;
@@ -171,6 +176,7 @@ fn classify_acwr_ratio(ratio: f64) -> &'static str {
     }
 }
 
+#[must_use]
 pub fn compute_monotony(loads_7d: &[f64]) -> Option<f64> {
     if loads_7d.len() < 7 {
         return None;
@@ -196,6 +202,7 @@ pub fn compute_monotony(loads_7d: &[f64]) -> Option<f64> {
     Some((mean / stddev).min(MONOTONY_CAP))
 }
 
+#[must_use]
 pub fn compute_strain(loads_7d: &[f64], monotony: f64) -> f64 {
     loads_7d.iter().sum::<f64>() * monotony
 }

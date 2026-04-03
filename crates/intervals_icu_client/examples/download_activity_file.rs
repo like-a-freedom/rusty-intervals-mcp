@@ -18,8 +18,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let output_path = std::env::var("INTERVALS_ICU_OUTPUT")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("activity.bin"));
+        .map_or_else(|_| PathBuf::from("activity.bin"), PathBuf::from);
 
     let client = ReqwestIntervalsClient::new(&cfg.base_url, cfg.athlete_id.clone(), cfg.api_key);
 
@@ -27,7 +26,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     client
         .download_activity_file(&activity_id, Some(output_path.clone()))
         .await
-        .map_err(|e| format!("download failed: {}", e))?;
+        .map_err(|e| format!("download failed: {e}"))?;
 
     println!("Saved activity {activity_id} to {}", output_path.display());
     Ok(())

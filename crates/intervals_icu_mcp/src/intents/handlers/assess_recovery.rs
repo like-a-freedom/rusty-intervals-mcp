@@ -351,17 +351,18 @@ impl IntentHandler for AssessRecoveryHandler {
             .await
             .ok();
 
-        let mut context = CoachContext::new(
+        let mut recovery_context = CoachContext::new(
             AnalysisKind::RecoveryAssessment,
             AnalysisWindow::new(start_date, end_date),
         );
-        context.audit = build_data_audit(&fetched);
-        context.metrics.fitness = parse_fitness_metrics(fetched.fitness.as_ref());
-        context.metrics.wellness = parse_wellness_metrics(fetched.wellness.as_ref());
+        recovery_context.audit = build_data_audit(&fetched);
+        recovery_context.metrics.fitness = parse_fitness_metrics(fetched.fitness.as_ref());
+        recovery_context.metrics.wellness = parse_wellness_metrics(fetched.wellness.as_ref());
         if include_red_flags {
-            context.alerts = build_alerts(&context.metrics);
+            recovery_context.alerts = build_alerts(&recovery_context.metrics);
         }
-        context.guidance = build_guidance(&context.metrics, &context.alerts);
+        recovery_context.guidance =
+            build_guidance(&recovery_context.metrics, &recovery_context.alerts);
 
         content.push(ContentBlock::markdown(format!(
             "# Recovery Assessment ({} - {})\nReadiness for: {}",
@@ -370,8 +371,12 @@ impl IntentHandler for AssessRecoveryHandler {
             planned_activity.as_str()
         )));
 
-        let wellness = context.metrics.wellness.clone().unwrap_or_default();
-        let fitness = context.metrics.fitness.clone().unwrap_or_default();
+        let wellness = recovery_context
+            .metrics
+            .wellness
+            .clone()
+            .unwrap_or_default();
+        let fitness = recovery_context.metrics.fitness.clone().unwrap_or_default();
         let rows = Self::build_recovery_metric_rows(&wellness, &fitness);
         content.push(ContentBlock::table(
             vec!["Metric".into(), "Value".into(), "Status".into()],
@@ -389,7 +394,7 @@ impl IntentHandler for AssessRecoveryHandler {
 
         // Calculate red flags first
         let red_flags = if include_red_flags {
-            context
+            recovery_context
                 .alerts
                 .iter()
                 .map(|alert| format!("{}: {}", alert.title, alert.evidence.join(", ")))
@@ -422,14 +427,14 @@ impl IntentHandler for AssessRecoveryHandler {
         )));
 
         if let Some(block) = data_availability_block(
-            &context.audit.degraded_mode_reasons,
-            context.audit.all_available(),
+            &recovery_context.audit.degraded_mode_reasons,
+            recovery_context.audit.all_available(),
         ) {
             content.push(block);
         }
 
         // Use shared guidance from coach engine
-        let mut suggestions = context.guidance.suggestions.clone();
+        let mut suggestions = recovery_context.guidance.suggestions.clone();
 
         // Look-ahead: warn if key workout scheduled in next 7 days
         if let Some(ref workouts) = upcoming
@@ -479,7 +484,7 @@ impl IntentHandler for AssessRecoveryHandler {
                 "Recheck recovery markers before committing to race effort".into(),
             ),
         }
-        for action in &context.guidance.next_actions {
+        for action in &recovery_context.guidance.next_actions {
             if !next_actions.contains(action) {
                 next_actions.insert(0, action.clone());
             }

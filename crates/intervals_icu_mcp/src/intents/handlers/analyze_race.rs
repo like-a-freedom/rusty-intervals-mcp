@@ -215,13 +215,13 @@ impl IntentHandler for AnalyzeRaceHandler {
             let race_date = NaiveDate::parse_from_str(&race.start_date_local, "%Y-%m-%d")
                 .ok()
                 .unwrap_or_else(|| chrono::Local::now().date_naive());
-            let mut context = CoachContext::new(
+            let mut race_context = CoachContext::new(
                 AnalysisKind::RaceAnalysis,
                 AnalysisWindow::new(race_date, race_date),
             );
-            context.audit = build_data_audit(&fetched);
-            context.metrics.fitness = parse_fitness_metrics(fetched.fitness.as_ref());
-            context.metrics.wellness = parse_wellness_metrics(fetched.wellness.as_ref());
+            race_context.audit = build_data_audit(&fetched);
+            race_context.metrics.fitness = parse_fitness_metrics(fetched.fitness.as_ref());
+            race_context.metrics.wellness = parse_wellness_metrics(fetched.wellness.as_ref());
 
             let details = fetched.workout_detail.clone().unwrap_or_else(|| json!({}));
             let segment_count = fetched
@@ -237,7 +237,7 @@ impl IntentHandler for AnalyzeRaceHandler {
                     fetched.workout_detail.as_ref(),
                     fetched.streams.as_ref(),
                 );
-            let post_race_recovery_note = context
+            let post_race_recovery_note = race_context
                 .metrics
                 .fitness
                 .as_ref()
@@ -249,7 +249,7 @@ impl IntentHandler for AnalyzeRaceHandler {
                         format!("Post-race load looks manageable (TSB {:.1}); resume structure gradually.", tsb)
                     }
                 });
-            context.metrics.race = Some(RaceMetrics {
+            race_context.metrics.race = Some(RaceMetrics {
                 race_duration_secs,
                 race_distance_m,
                 avg_hr,
@@ -259,8 +259,8 @@ impl IntentHandler for AnalyzeRaceHandler {
                 efficiency_factor,
                 aerobic_decoupling,
             });
-            context.alerts = build_alerts(&context.metrics);
-            context.guidance = build_guidance(&context.metrics, &context.alerts);
+            race_context.alerts = build_alerts(&race_context.metrics);
+            race_context.guidance = build_guidance(&race_context.metrics, &race_context.alerts);
 
             let name = race.name.as_deref().unwrap_or("Race");
             content.push(ContentBlock::markdown(format!(
@@ -286,7 +286,7 @@ impl IntentHandler for AnalyzeRaceHandler {
                 content.push(ContentBlock::table(rows[0].clone(), rows[1..].to_vec()));
             }
 
-            if let Some(race_metrics) = &context.metrics.race {
+            if let Some(race_metrics) = &race_context.metrics.race {
                 let mut execution_lines = Vec::new();
                 if let Some(segments) = race_metrics.segment_count {
                     execution_lines.push(format!(
@@ -397,14 +397,14 @@ impl IntentHandler for AnalyzeRaceHandler {
             }
 
             if let Some(block) = data_availability_block(
-                &context.audit.degraded_mode_reasons,
-                context.audit.all_available(),
+                &race_context.audit.degraded_mode_reasons,
+                race_context.audit.all_available(),
             ) {
                 content.push(block);
             }
 
             // Use shared guidance from coach engine with race-specific additions
-            let mut suggestions = context.guidance.suggestions.clone();
+            let mut suggestions = race_context.guidance.suggestions.clone();
             if !suggestions.iter().any(|s| s.contains("nutrition")) {
                 suggestions.push("Review nutrition and hydration strategy for next race.".into());
             }
@@ -413,7 +413,7 @@ impl IntentHandler for AnalyzeRaceHandler {
                 "To assess recovery: assess_recovery with period_days: 14".into(),
                 "To plan next buildup: plan_training".into(),
             ];
-            for action in &context.guidance.next_actions {
+            for action in &race_context.guidance.next_actions {
                 if !next_actions.contains(action) {
                     next_actions.insert(0, action.clone());
                 }
@@ -422,9 +422,9 @@ impl IntentHandler for AnalyzeRaceHandler {
             return Ok(IntentOutput::new(content)
                 .with_suggestions(suggestions)
                 .with_next_actions(next_actions));
-        } else {
-            content.push(ContentBlock::markdown("Results\n| Metric | Value |\n|--------|-------|\n| Time | -:-:-:-- |\n| Place | -/- |\n| Pace | -'--\"/km |"));
         }
+
+        content.push(ContentBlock::markdown("Results\n| Metric | Value |\n|--------|-------|\n| Time | -:-:-:-- |\n| Place | -/- |\n| Pace | -'--\"/km |"));
 
         let suggestions = vec!["Review nutrition and hydration strategy for next race.".into()];
 

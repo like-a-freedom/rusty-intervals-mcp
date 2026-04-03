@@ -164,7 +164,7 @@ mod tests {
 
         assert_eq!(event.id, "webhook_123");
         assert_eq!(event.payload["key"], "value");
-        assert_eq!(event.received_at, 1234567890);
+        assert_eq!(event.received_at, 1_234_567_890);
     }
 
     #[test]
@@ -183,7 +183,7 @@ mod tests {
         let event = WebhookEvent {
             id: "webhook_clone".into(),
             payload: serde_json::json!({"data": [1, 2, 3]}),
-            received_at: 9999999999,
+            received_at: 9_999_999_999,
         };
 
         let cloned = event.clone();
