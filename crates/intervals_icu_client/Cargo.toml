@@ -1,6 +1,6 @@
 [package]
 name = "intervals_icu_client"
-version = "2.4.2"
+version = "2.4.3"
 edition = "2024"
 resolver = "3"
 
@@ -9,7 +9,7 @@ name = "intervals_icu_client"
 path = "src/lib.rs"
 
 [dependencies]
-tokio = { version = "1.50.0", features = ["macros", "rt"] }
+tokio = { version = "1.51.0", features = ["macros", "rt"] }
 reqwest = { version = "0.13.2", features = ["json", "gzip", "stream", "query"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
