@@ -150,7 +150,7 @@ impl IntentHandler for AnalyzeTrainingHandler {
                 "include_histograms": {
                     "type": "boolean",
                     "default": false,
-                    "description": "Include power/HR/pace histograms (single workout only)"
+                    "description": "Include power/HR/pace histograms. Only valid when target_type is 'single'."
                 },
                 "metrics": {
                     "type": "array",
@@ -162,7 +162,18 @@ impl IntentHandler for AnalyzeTrainingHandler {
             "oneOf": [
                 {"required": ["target_type", "date"]},
                 {"required": ["target_type", "period_start", "period_end"]}
-            ]
+            ],
+            "if": {
+                "properties": {
+                    "target_type": { "const": "period" }
+                }
+            },
+            "then": {
+                "properties": {
+                    "include_histograms": { "const": false },
+                    "description_contains": false
+                }
+            }
         })
     }
 
@@ -3112,5 +3123,86 @@ mod tests {
         let result = handler.execute(input, client, None).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("target_type"));
+    }
+
+    // ========================================================================
+    // Regression: include_histograms forbidden for period analysis
+    // ========================================================================
+
+    #[test]
+    fn test_schema_has_if_then_constraints() {
+        let handler = AnalyzeTrainingHandler::new();
+        let schema = IntentHandler::input_schema(&handler);
+
+        assert!(schema.get("if").is_some(), "Schema should have 'if' clause");
+        assert!(
+            schema.get("then").is_some(),
+            "Schema should have 'then' clause"
+        );
+
+        let if_clause = schema.get("if").unwrap();
+        let then_clause = schema.get("then").unwrap();
+
+        assert_eq!(
+            if_clause
+                .get("properties")
+                .and_then(|p| p.get("target_type"))
+                .and_then(|t| t.get("const"))
+                .and_then(|c| c.as_str()),
+            Some("period"),
+            "'if' should check target_type == 'period'"
+        );
+
+        let then_props = then_clause.get("properties").unwrap().as_object().unwrap();
+        assert!(
+            then_props.contains_key("include_histograms"),
+            "'then' should constrain include_histograms"
+        );
+        assert_eq!(
+            then_props
+                .get("include_histograms")
+                .and_then(|v| v.get("const")),
+            Some(&json!(false)),
+            "include_histograms should be const: false for period"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_period_with_histograms_rejected() {
+        let handler = AnalyzeTrainingHandler::new();
+        let client = Arc::new(MockIntervalsClient::builder());
+
+        let input = json!({
+            "target_type": "period",
+            "period_start": "2026-05-04",
+            "period_end": "2026-06-07",
+            "include_histograms": true
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("include_histograms"),
+            "Error should mention include_histograms, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_schema_include_histograms_description_mentions_single() {
+        let handler = AnalyzeTrainingHandler::new();
+        let schema = IntentHandler::input_schema(&handler);
+        let props = schema.get("properties").unwrap().as_object().unwrap();
+        let histograms = props.get("include_histograms").unwrap();
+        let desc = histograms
+            .get("description")
+            .and_then(|v| v.as_str())
+            .unwrap();
+        assert!(
+            desc.contains("single"),
+            "Description should mention 'single', got: {}",
+            desc
+        );
     }
 }
