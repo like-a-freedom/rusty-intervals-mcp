@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 /// Plans training across various horizons (microcycle to annual plan).
 use std::sync::Arc;
 
+use crate::domains::events::validate_and_prepare_event;
 use crate::intents::utils::parse_date;
 
 pub struct PlanTrainingHandler;
@@ -476,8 +477,16 @@ impl IntentHandler for PlanTrainingHandler {
         let events_to_create = generate_events(&phases, start_date, focus, weeks);
         let events_count = u32::try_from(events_to_create.len()).unwrap_or(0);
 
+        let validated_events: Result<Vec<_>, _> = events_to_create
+            .into_iter()
+            .map(validate_and_prepare_event)
+            .collect();
+
+        let validated_events = validated_events
+            .map_err(|e| IntentError::api(format!("Failed to validate events: {}", e)))?;
+
         let created_events = client
-            .bulk_create_events(events_to_create)
+            .bulk_create_events(validated_events)
             .await
             .map_err(|e| IntentError::api(format!("Failed to create events: {}", e)))?;
 
@@ -1393,5 +1402,99 @@ mod tests {
             workout,
             intervals_icu_client::EventCategory::RaceA | intervals_icu_client::EventCategory::RaceB
         ));
+    }
+
+    // ========================================================================
+    // Regression: generated events must pass validate_and_prepare_event
+    // ========================================================================
+
+    #[test]
+    fn test_generated_events_pass_validation_aerobic_base() {
+        let handler = PlanTrainingHandler::new();
+        let (phases, _) = handler.build_periodization(4, TrainingFocus::AerobicBase, 10.0);
+        let start = chrono::NaiveDate::from_ymd_opt(2026, 3, 2).unwrap();
+        let events = generate_events(&phases, start, TrainingFocus::AerobicBase, 4);
+
+        for event in &events {
+            let result = validate_and_prepare_event(event.clone());
+            assert!(
+                result.is_ok(),
+                "Event '{}' failed validation: {:?}",
+                event.name,
+                result.err()
+            );
+        }
+    }
+
+    #[test]
+    fn test_generated_events_have_type_after_validation() {
+        let handler = PlanTrainingHandler::new();
+        let (phases, _) = handler.build_periodization(4, TrainingFocus::AerobicBase, 10.0);
+        let start = chrono::NaiveDate::from_ymd_opt(2026, 3, 2).unwrap();
+        let events = generate_events(&phases, start, TrainingFocus::AerobicBase, 4);
+
+        for event in &events {
+            assert!(
+                event.r#type.is_none(),
+                "Generated event should have type=None before validation"
+            );
+            let validated = validate_and_prepare_event(event.clone()).unwrap();
+            assert_eq!(
+                validated.r#type.as_deref(),
+                Some("Run"),
+                "Validated WORKOUT event must have type='Run'"
+            );
+        }
+    }
+
+    #[test]
+    fn test_generated_events_all_workout_category() {
+        let handler = PlanTrainingHandler::new();
+        let (phases, _) = handler.build_periodization(6, TrainingFocus::Intensity, 10.0);
+        let start = chrono::NaiveDate::from_ymd_opt(2026, 3, 2).unwrap();
+        let events = generate_events(&phases, start, TrainingFocus::Intensity, 6);
+
+        assert!(!events.is_empty());
+        for event in &events {
+            assert_eq!(
+                event.category,
+                intervals_icu_client::EventCategory::Workout,
+                "All generated events should be WORKOUT category"
+            );
+        }
+    }
+
+    #[test]
+    fn test_generated_events_valid_dates_after_validation() {
+        let handler = PlanTrainingHandler::new();
+        let (phases, _) = handler.build_periodization(4, TrainingFocus::Taper, 10.0);
+        let start = chrono::NaiveDate::from_ymd_opt(2026, 3, 2).unwrap();
+        let events = generate_events(&phases, start, TrainingFocus::Taper, 4);
+
+        for event in &events {
+            let validated = validate_and_prepare_event(event.clone()).unwrap();
+            assert!(
+                validated.start_date_local.contains("T"),
+                "Validated event should have ISO datetime, got: {}",
+                validated.start_date_local
+            );
+        }
+    }
+
+    #[test]
+    fn test_validate_and_prepare_event_rejects_unknown_category_in_generated() {
+        let ev = intervals_icu_client::Event {
+            id: None,
+            start_date_local: "2026-03-02".into(),
+            name: "Bad Event".into(),
+            category: intervals_icu_client::EventCategory::Unknown,
+            description: Some("test".into()),
+            r#type: None,
+        };
+        let result = validate_and_prepare_event(ev);
+        assert!(
+            result.is_err(),
+            "Unknown category should be rejected by validation"
+        );
     }
 }
