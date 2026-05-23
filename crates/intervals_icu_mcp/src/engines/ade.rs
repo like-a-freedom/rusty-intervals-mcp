@@ -1,7 +1,37 @@
 #![allow(clippy::collapsible_if)]
 
-/// Adaptive Decision Engine (ADE v1).
-/// Synthesizes multiple signals into an operational state directive.
+//! Adaptive Decision Engine (ADE v1).
+//! Synthesizes multiple signals into an operational state directive.
+//! Source: Montis ADE v1 — 2-state model.
+
+// =============================================================================
+// ADE Constants
+// =============================================================================
+
+/// TSB threshold for maladaptation risk.
+const TSB_MALADAPTATION: f64 = -30.0;
+
+/// TSB threshold for functional overreach.
+const TSB_FUNCTIONAL_OVERREACH: f64 = -20.0;
+
+/// TSB threshold for load pressure.
+const TSB_LOAD_PRESSURE: f64 = -10.0;
+
+/// HRV ratio threshold for maladaptation when TSB unavailable.
+/// Source: Front. Physiol. 2025 — RMSSD suppression at 10% below baseline.
+const HRV_MALADAPTATION_RATIO: f64 = 0.90;
+
+/// CTL ramp rate threshold for load pressure (>8 CTL/week = rapid ramp).
+const RAMP_RATE_THRESHOLD: f64 = 8.0;
+
+/// ACWR safe zone lower bound.
+const ACWR_SAFE_LOWER: f64 = 0.8;
+
+/// ACWR safe zone upper bound.
+const ACWR_SAFE_UPPER: f64 = 1.3;
+
+/// NDLI high-intensity days threshold for loaded_taper check.
+const NDLI_LOADED_TAPER_DAYS: usize = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum OperationalState {
@@ -56,11 +86,11 @@ pub fn compute_ade(
 
     // TSB escalation
     if let Some(t) = tsb {
-        if t <= -30.0 {
+        if t <= TSB_MALADAPTATION {
             maladaptation_risk = true;
-        } else if t <= -20.0 {
+        } else if t <= TSB_FUNCTIONAL_OVERREACH {
             functional_overreach = true;
-        } else if t <= -10.0 {
+        } else if t <= TSB_LOAD_PRESSURE {
             load_pressure = true;
         }
     }
@@ -68,15 +98,15 @@ pub fn compute_ade(
     // HRV + load_pressure → maladaptation_risk (when no TSB)
     if tsb.is_none() {
         if let Some(hrv_r) = hrv_ratio {
-            if hrv_r < 0.90 && load_pressure {
+            if hrv_r < HRV_MALADAPTATION_RATIO && load_pressure {
                 maladaptation_risk = true;
             }
         }
     }
 
-    // rampRate > 8 → load_pressure
+    // rampRate > threshold → load_pressure
     if let Some(rr) = ramp_rate {
-        if rr > 8.0 {
+        if rr > RAMP_RATE_THRESHOLD {
             load_pressure = true;
         }
     }
@@ -91,9 +121,9 @@ pub fn compute_ade(
         }
     }
 
-    // ACWR validation gate: [0.8, 1.3] + durable → reduce severity
+    // ACWR validation gate: safe zone + durable → reduce severity
     if let Some(acwr) = acwr_ratio {
-        if (0.8..=1.3).contains(&acwr) && !durability_drifting {
+        if (ACWR_SAFE_LOWER..=ACWR_SAFE_UPPER).contains(&acwr) && !durability_drifting {
             if maladaptation_risk {
                 maladaptation_risk = false;
                 functional_overreach = true;
@@ -105,7 +135,7 @@ pub fn compute_ade(
     }
 
     // NDLI red + TSB > 0 → loaded_taper warning
-    if ndli_high >= 4 {
+    if ndli_high >= NDLI_LOADED_TAPER_DAYS {
         if let Some(tsb_val) = tsb_value {
             if tsb_val > 0.0 {
                 loaded_taper = true;

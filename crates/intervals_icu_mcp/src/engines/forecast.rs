@@ -1,4 +1,36 @@
-/// Banister impulse-response TSB projection and taper efficiency.
+//! Banister impulse-response TSB projection and taper efficiency.
+//! Source: Banister impulse-response model (standard CTL/ATL time constants).
+
+// =============================================================================
+// Forecast Constants
+// =============================================================================
+
+/// CTL time constant (42 days = 6 weeks half-life).
+/// Source: Banister model — standard endurance sports value.
+const CTL_TIME_CONSTANT: f64 = 42.0;
+
+/// ATL time constant (7 days = 1 week half-life).
+const ATL_TIME_CONSTANT: f64 = 7.0;
+
+/// TSB fatigue classification thresholds.
+const TSB_OVERREACHED: f64 = -30.0;
+const TSB_LOAD_PRESSURE: f64 = -10.0;
+const TSB_BALANCED_UPPER: f64 = 10.0;
+const TSB_FRESH_UPPER: f64 = 25.0;
+
+/// Default TSS values by training intensity.
+/// These are rough defaults; personalized values should scale from athlete's CTL.
+const DEFAULT_TSS_EASY: f64 = 50.0;
+const DEFAULT_TSS_TEMPO: f64 = 100.0;
+const DEFAULT_TSS_HARD: f64 = 150.0;
+const DEFAULT_TSS_RACE: f64 = 250.0;
+
+/// Taper efficiency clamp bounds.
+const TAPER_EFFICIENCY_MIN: f64 = 0.0;
+const TAPER_EFFICIENCY_MAX: f64 = 2.0;
+
+/// Fallback intensity multiplier for unrecognized labels.
+const FALLBACK_INTENSITY_MULTIPLIER: f64 = 1.5;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TsbProjection {
@@ -8,9 +40,6 @@ pub struct TsbProjection {
     pub tsb: f64,
     pub fatigue_class: &'static str,
 }
-
-const CTL_TIME_CONSTANT: f64 = 42.0;
-const ATL_TIME_CONSTANT: f64 = 7.0;
 
 /// Project TSB forward N days using Banister impulse-response model.
 /// `current_ctl` / `current_atl`: current CTL and ATL values.
@@ -25,13 +54,13 @@ pub fn project_tsb(current_ctl: f64, current_atl: f64, daily_loads: &[f64]) -> V
         atl = atl + (load - atl) / ATL_TIME_CONSTANT;
         let tsb = ctl - atl;
 
-        let fatigue_class = if tsb < -30.0 {
+        let fatigue_class = if tsb < TSB_OVERREACHED {
             "overreached"
-        } else if tsb < -10.0 {
+        } else if tsb < TSB_LOAD_PRESSURE {
             "load_pressure"
-        } else if tsb < 10.0 {
+        } else if tsb < TSB_BALANCED_UPPER {
             "balanced"
-        } else if tsb < 25.0 {
+        } else if tsb < TSB_FRESH_UPPER {
             "fresh"
         } else {
             "transition"
@@ -50,13 +79,15 @@ pub fn project_tsb(current_ctl: f64, current_atl: f64, daily_loads: &[f64]) -> V
 }
 
 /// Parameterized load values by intensity.
+/// Note: these are rough defaults. For personalized forecasting,
+/// scale from athlete's CTL (e.g., easy = 0.5×CTL, hard = 1.5×CTL).
 pub fn parameterized_load(intensity: &str) -> f64 {
     match intensity {
-        "easy" => 50.0,
-        "tempo" => 100.0,
-        "hard" => 150.0,
-        "race" => 250.0,
-        _ => 75.0,
+        "easy" => DEFAULT_TSS_EASY,
+        "tempo" => DEFAULT_TSS_TEMPO,
+        "hard" => DEFAULT_TSS_HARD,
+        "race" => DEFAULT_TSS_RACE,
+        _ => DEFAULT_TSS_EASY * FALLBACK_INTENSITY_MULTIPLIER,
     }
 }
 
@@ -70,7 +101,8 @@ pub fn compute_taper_efficiency(
     tsb_gain: f64,
 ) -> (f64, f64) {
     let efficiency = if target_volume_reduction_pct > 0.0 {
-        (actual_volume_reduction_pct / target_volume_reduction_pct).clamp(0.0, 2.0)
+        (actual_volume_reduction_pct / target_volume_reduction_pct)
+            .clamp(TAPER_EFFICIENCY_MIN, TAPER_EFFICIENCY_MAX)
     } else {
         1.0
     };

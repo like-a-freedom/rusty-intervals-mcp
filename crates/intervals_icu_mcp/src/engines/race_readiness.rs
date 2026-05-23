@@ -1,7 +1,38 @@
 #![allow(clippy::collapsible_if)]
 
-/// 5-factor Race Readiness Score Engine.
-/// Baseline 90, penalties applied for each risk factor.
+//! 5-factor Race Readiness Score Engine.
+//! Baseline 90, penalties applied for each risk factor.
+//! Source: Montis.icu Coach V5 — Race Readiness Dashboard design.
+
+// =============================================================================
+// Race Readiness Constants
+// =============================================================================
+
+/// Baseline score before any modifiers.
+const RACE_READINESS_BASELINE: i32 = 90;
+
+/// TSB bonus when fresh (TSB > threshold).
+const TSB_BONUS: i32 = 5;
+
+/// TSB threshold for "fresh" classification.
+const TSB_FRESH_THRESHOLD: f64 = 12.0;
+
+/// Durability drifting penalty.
+const DURABILITY_DRIFTING_PENALTY: i32 = -15;
+
+/// Neural overload penalty (NDLI red).
+const NEURAL_OVERLOAD_PENALTY: i32 = -15;
+
+/// System alignment mismatch penalty.
+const SYSTEM_MISMATCH_PENALTY: i32 = -10;
+
+/// Maximum taper detraining penalty (CTL drop magnitude).
+const TAPER_MAX_PENALTY: i32 = -60;
+
+/// Score tier boundaries.
+const TIER_READY: i32 = 80;
+const TIER_MONITOR: i32 = 60;
+const TIER_CAUTION: i32 = 40;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RaceReadinessScore {
@@ -27,39 +58,39 @@ pub fn compute_race_readiness(
     system_mismatch: bool,
     ctl_drop: Option<f64>,
 ) -> RaceReadinessScore {
-    let mut score: i32 = 90;
+    let mut score: i32 = RACE_READINESS_BASELINE;
     let mut tsb_modifier: i32 = 0;
     let mut durability_modifier: i32 = 0;
     let mut neural_modifier: i32 = 0;
     let mut system_modifier: i32 = 0;
     let mut taper_modifier: i32 = 0;
 
-    // TSB: Fresh >12 → +5
+    // TSB: Fresh > threshold → bonus
     if let Some(t) = tsb {
-        if t > 12.0 {
-            tsb_modifier = 5;
+        if t > TSB_FRESH_THRESHOLD {
+            tsb_modifier = TSB_BONUS;
         }
     }
 
-    // Durability: drifting → -15
+    // Durability: drifting → penalty
     if durability_drifting {
-        durability_modifier = -15;
+        durability_modifier = DURABILITY_DRIFTING_PENALTY;
     }
 
-    // Neural: NDLI overload → -15 (-20 would be for low-intensity race)
+    // Neural: NDLI overload → penalty
     if ndli_overload {
-        neural_modifier = -15;
+        neural_modifier = NEURAL_OVERLOAD_PENALTY;
     }
 
-    // System mismatch → -10
+    // System mismatch → penalty
     if system_mismatch {
-        system_modifier = -10;
+        system_modifier = SYSTEM_MISMATCH_PENALTY;
     }
 
-    // Taper: detraining penalty → up to -60 based on CTL drop
+    // Taper: detraining penalty → up to max based on CTL drop
     if let Some(drop) = ctl_drop {
         if drop > 0.0 {
-            taper_modifier = -(drop as i32).min(60);
+            taper_modifier = -(drop as i32).min(-TAPER_MAX_PENALTY);
         }
     }
 
@@ -67,11 +98,11 @@ pub fn compute_race_readiness(
         tsb_modifier + durability_modifier + neural_modifier + system_modifier + taper_modifier;
     score = score.clamp(0, 100);
 
-    let tier = if score >= 80 {
+    let tier = if score >= TIER_READY {
         "ready"
-    } else if score >= 60 {
+    } else if score >= TIER_MONITOR {
         "monitor"
-    } else if score >= 40 {
+    } else if score >= TIER_CAUTION {
         "caution"
     } else {
         "not_ready"

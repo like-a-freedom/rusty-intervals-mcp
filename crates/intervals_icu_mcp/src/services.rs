@@ -1,4 +1,4 @@
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, Mac, KeyInit};
 use sha2::Sha256;
 use std::collections::HashMap;
 use std::sync::Arc;
