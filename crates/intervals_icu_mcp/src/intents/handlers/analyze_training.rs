@@ -477,7 +477,7 @@ impl AnalyzeTrainingHandler {
             fetched.workout_detail.as_ref(),
             espe_anchors.w_prime,
         );
-        let espe_derived = derive_espe_metrics(&espe_anchors);
+        let espe_derived = derive_espe_metrics(&espe_anchors, None, None, None, None);
         workout_context.metrics.espe_anchors = Some(espe_anchors);
         workout_context.metrics.espe_derived = Some(espe_derived);
         workout_context.metrics.wdrm = Some(wdrm);

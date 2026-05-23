@@ -369,10 +369,15 @@ impl ServerHandler for IntervalsMcpHandler {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, ErrorData> {
         metrics::record_mcp_method_call("resources/list");
-        let res = domains::resources::athlete_profile_resource().no_annotation();
+        let mut resources = vec![domains::resources::athlete_profile_resource().no_annotation()];
+
+        // P4.3 — streaming resources
+        for stream_res in domains::resources::activity_stream_resources() {
+            resources.push(stream_res.no_annotation());
+        }
 
         Ok(ListResourcesResult {
-            resources: vec![res],
+            resources,
             next_cursor: None,
             meta: None,
         })
@@ -384,10 +389,22 @@ impl ServerHandler for IntervalsMcpHandler {
         context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResult, ErrorData> {
         metrics::record_mcp_method_call("resources/read");
-        if request.uri == "intervals-icu://athlete/profile" {
-            let client = Self::client_for_extensions(&context.extensions)
-                .unwrap_or_else(|| self.client.clone());
+        let client =
+            Self::client_for_extensions(&context.extensions).unwrap_or_else(|| self.client.clone());
 
+        // P4.3 — activity stream resources
+        if request.uri.starts_with("activity://") {
+            let text = domains::resources::resolve_stream_resource(&request.uri, &*client)
+                .await
+                .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+
+            return Ok(ReadResourceResult::new(vec![ResourceContents::text(
+                request.uri.clone(),
+                text,
+            )]));
+        }
+
+        if request.uri == "intervals-icu://athlete/profile" {
             let text = domains::resources::build_athlete_profile_text(&*client)
                 .await
                 .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
