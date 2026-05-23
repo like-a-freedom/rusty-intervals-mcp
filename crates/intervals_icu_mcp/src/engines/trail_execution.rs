@@ -68,7 +68,12 @@ pub fn compute_terrain_context(
     let vam = compute_vam(elevation_gain_m, moving_time_secs);
 
     let terrain_induced = terrain_index
-        .map(|ti| ti > TERRAIN_STEEP_THRESHOLD && efficiency_drift.map(|ed| ed < EFFICIENCY_DRIFT_THRESHOLD).unwrap_or(false))
+        .map(|ti| {
+            ti > TERRAIN_STEEP_THRESHOLD
+                && efficiency_drift
+                    .map(|ed| ed < EFFICIENCY_DRIFT_THRESHOLD)
+                    .unwrap_or(false)
+        })
         .unwrap_or(false);
 
     TerrainContext {

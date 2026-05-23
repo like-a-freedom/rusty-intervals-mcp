@@ -172,7 +172,8 @@ pub fn classify_adaptation(
     }
 
     // AnaerobicBuild: neural_delta > 5% && ana_1m_delta > 2%
-    if neural > ADAPTATION_ANAEROBIC_NEURAL_THRESHOLD && ana_1m > ADAPTATION_ANAEROBIC_1M_THRESHOLD {
+    if neural > ADAPTATION_ANAEROBIC_NEURAL_THRESHOLD && ana_1m > ADAPTATION_ANAEROBIC_1M_THRESHOLD
+    {
         return AdaptationState::AnaerobicBuild;
     }
 

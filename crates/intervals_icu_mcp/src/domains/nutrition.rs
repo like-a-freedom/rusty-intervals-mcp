@@ -130,9 +130,7 @@ pub fn compute_nutrition_balance(
         (Some(carbs), _) if carbs < carb_demand * CARB_SEVERE_FRACTION => {
             "severely_underfuelled".to_string()
         }
-        (Some(carbs), _) if carbs < carb_demand * CARB_UNDER_FRACTION => {
-            "underfuelled".to_string()
-        }
+        (Some(carbs), _) if carbs < carb_demand * CARB_UNDER_FRACTION => "underfuelled".to_string(),
         (Some(carbs), _) if carbs > carb_demand * CARB_OVER_FRACTION => "overfuelled".to_string(),
         (_, Some(protein)) if protein < protein_demand * PROTEIN_UNDER_FRACTION => {
             "underfuelled".to_string()
