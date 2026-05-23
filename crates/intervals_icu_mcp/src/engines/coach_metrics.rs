@@ -744,7 +744,13 @@ pub fn parse_wellness_metrics(payload: Option<&Value>) -> Option<WellnessMetrics
 
     let sleep_values = collect_numbers(recent_entries, SLEEP_KEYS)
         .into_iter()
-        .map(|value| if value > WELLNESS_SLEEP_HEURISTIC_THRESHOLD { value / SECONDS_PER_HOUR } else { value })
+        .map(|value| {
+            if value > WELLNESS_SLEEP_HEURISTIC_THRESHOLD {
+                value / SECONDS_PER_HOUR
+            } else {
+                value
+            }
+        })
         .collect::<Vec<_>>();
     let rhr_values = collect_numbers(recent_entries, RESTING_HR_KEYS);
     let hrv_values = collect_numbers(recent_entries, HRV_KEYS);
@@ -754,7 +760,8 @@ pub fn parse_wellness_metrics(payload: Option<&Value>) -> Option<WellnessMetrics
     let avg_hrv = average(&hrv_values);
     let hrv_baseline = average(&baseline_hrv_values);
     let hrv_deviation_pct = hrv_baseline.zip(avg_hrv).and_then(|(baseline, current)| {
-        percent_delta(baseline, current).map(|delta| (delta * ROUNDING_DECIMAL_FACTOR).round() / ROUNDING_DECIMAL_FACTOR)
+        percent_delta(baseline, current)
+            .map(|delta| (delta * ROUNDING_DECIMAL_FACTOR).round() / ROUNDING_DECIMAL_FACTOR)
     });
 
     let avg_sleep_hours = average(&sleep_values);
@@ -1201,7 +1208,7 @@ pub fn compute_wdr_metrics(
             };
             let depletion_pct = w_prime
                 .filter(|w| *w > 0.0)
-        .map(|w| (max_depletion / w).clamp(0.0, WDRM_MAX_DEPLETION_PCT));
+                .map(|w| (max_depletion / w).clamp(0.0, WDRM_MAX_DEPLETION_PCT));
             let joules_above_ftp =
                 get_number(detail_obj, &["icu_joules_above_ftp", "joules_above_ftp"]);
             return WdrMetrics {
@@ -1345,7 +1352,11 @@ pub fn compute_ndli_7d(
 
         // Collect mean IF, EF, VI
         if let Some(if_val) = get_number(detail, &["icu_intensity_factor", "intensity_factor"]) {
-            let normalized = if if_val > NDLI_IF_NORMALIZATION_THRESHOLD { if_val / 100.0 } else { if_val };
+            let normalized = if if_val > NDLI_IF_NORMALIZATION_THRESHOLD {
+                if_val / 100.0
+            } else {
+                if_val
+            };
             if_values.push(normalized);
         }
         if let Some(ef) = get_number(detail, &["icu_efficiency_factor", "efficiency_factor"]) {

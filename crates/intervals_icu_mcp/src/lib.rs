@@ -422,6 +422,230 @@ impl ServerHandler for IntervalsMcpHandler {
     }
 }
 
+// =============================================================================
+// Server Bootstrap Functions
+// =============================================================================
+
+/// Initialize tracing/logging with sensible defaults.
+pub fn init_tracing() {
+    let log_env = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
+    let combined_filter = format!("{},rmcp=warn,serve_inner=warn", log_env);
+    let env_filter = tracing_subscriber::EnvFilter::try_new(&combined_filter)
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,rmcp=warn,serve_inner=warn"));
+
+    tracing_subscriber::fmt()
+        .compact()
+        .with_writer(std::io::stderr)
+        .with_ansi(false)
+        .with_target(false)
+        .with_env_filter(env_filter)
+        .init();
+}
+
+/// STDIO mode: initialize with credentials from env vars.
+pub async fn initialize_handler_single_user() -> Result<IntervalsMcpHandler, String> {
+    let base = std::env::var("INTERVALS_ICU_BASE_URL")
+        .unwrap_or_else(|_| "https://intervals.icu".to_string());
+    let athlete = std::env::var("INTERVALS_ICU_ATHLETE_ID")
+        .map_err(|_| "INTERVALS_ICU_ATHLETE_ID is required for STDIO mode")?;
+    let api_key = std::env::var("INTERVALS_ICU_API_KEY")
+        .map_err(|_| "INTERVALS_ICU_API_KEY is required for STDIO mode")?;
+
+    if api_key.trim().is_empty() || athlete.trim().is_empty() {
+        return Err("Credentials cannot be empty".to_string());
+    }
+
+    tracing::info!(athlete_id = %athlete, "credentials validated");
+
+    let api_key = secrecy::SecretString::new(api_key.into());
+    let client =
+        intervals_icu_client::http_client::ReqwestIntervalsClient::new(&base, athlete, api_key);
+    let handler = IntervalsMcpHandler::new(std::sync::Arc::new(client));
+
+    let dynamic_tools = if let Ok(count) = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        handler.preload_dynamic_registry(),
+    )
+    .await
+    {
+        count
+    } else {
+        tracing::warn!("timed out preloading dynamic OpenAPI registry");
+        0
+    };
+
+    tracing::info!("discovered {} dynamic tools", dynamic_tools);
+    Ok(handler)
+}
+
+/// HTTP mode: multi-tenant with JWT authentication.
+pub async fn run_http_server(
+    address: std::net::SocketAddr,
+    max_body_size: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let _ = metrics::init_prometheus_recorder();
+
+    let jwt_master_key_hex = std::env::var("JWT_MASTER_KEY")
+        .map_err(|_| "JWT_MASTER_KEY environment variable is required for HTTP mode")?;
+
+    let master_key_config = auth::MasterKeyConfig::from_hex(&jwt_master_key_hex)
+        .map_err(|e| format!("Invalid JWT_MASTER_KEY: {e}"))?;
+
+    let jwt_manager = std::sync::Arc::new(auth::JwtManager::from_master_key(&master_key_config));
+
+    let jwt_ttl_seconds = std::env::var("JWT_TTL_SECONDS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(7_776_000);
+
+    let request_timeout_secs = std::env::var("REQUEST_TIMEOUT_SECONDS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(30);
+    let request_timeout = std::time::Duration::from_secs(request_timeout_secs);
+
+    let idle_timeout_secs = std::env::var("IDLE_TIMEOUT_SECONDS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(60);
+    let _idle_timeout = std::time::Duration::from_secs(idle_timeout_secs);
+
+    let base_url = std::env::var("INTERVALS_ICU_BASE_URL")
+        .unwrap_or_else(|_| "https://intervals.icu".to_string());
+
+    let app_state = std::sync::Arc::new(auth::AppState {
+        jwt_manager: jwt_manager.clone(),
+        jwt_ttl_seconds,
+        base_url: base_url.clone(),
+    });
+
+    let handler = IntervalsMcpHandler::new_multi_tenant();
+
+    let auth_config = tower_governor::governor::GovernorConfigBuilder::default()
+        .per_second(1)
+        .burst_size(3)
+        .finish()
+        .unwrap();
+    let auth_route = axum::Router::new()
+        .route("/auth", axum::routing::post(auth::auth_endpoint))
+        .layer(tower_governor::GovernorLayer::new(auth_config))
+        .layer(tower_http::timeout::TimeoutLayer::with_status_code(
+            axum::http::StatusCode::REQUEST_TIMEOUT,
+            request_timeout,
+        ))
+        .with_state(app_state.clone());
+
+    let session = std::sync::Arc::new(
+        rmcp::transport::streamable_http_server::session::local::LocalSessionManager::default(),
+    );
+    let mcp_service = rmcp::transport::streamable_http_server::tower::StreamableHttpService::new(
+        move || Ok(handler.clone()),
+        session,
+        rmcp::transport::streamable_http_server::tower::StreamableHttpServerConfig::default(),
+    );
+
+    let mcp_config = tower_governor::governor::GovernorConfigBuilder::default()
+        .per_second(2)
+        .burst_size(10)
+        .finish()
+        .unwrap();
+    let mcp_route = axum::Router::new()
+        .nest_service("/mcp", mcp_service)
+        .layer(axum::Extension(auth::HttpBaseUrl(base_url.clone())))
+        .layer(axum::middleware::from_fn_with_state(
+            jwt_manager.clone(),
+            auth::auth_middleware,
+        ))
+        .layer(tower_governor::GovernorLayer::new(mcp_config))
+        .layer(axum::extract::DefaultBodyLimit::max(max_body_size))
+        .layer(tower_http::timeout::TimeoutLayer::with_status_code(
+            axum::http::StatusCode::REQUEST_TIMEOUT,
+            request_timeout,
+        ));
+
+    let health_route = axum::Router::new().route("/health", axum::routing::get(|| async { "ok" }));
+
+    let metrics_route = metrics::create_metrics_router();
+
+    let app = axum::Router::new()
+        .merge(auth_route)
+        .merge(mcp_route)
+        .merge(health_route)
+        .merge(metrics_route);
+
+    tracing::info!(
+        %address,
+        request_timeout_secs = request_timeout.as_secs(),
+        "starting HTTP server with JWT authentication"
+    );
+
+    let listener = tokio::net::TcpListener::bind(address).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
+
+    Ok(())
+}
+
+/// STDIO mode: run handler over stdio transport.
+pub async fn run_stdio_server(
+    handler: IntervalsMcpHandler,
+) -> Result<(), Box<dyn std::error::Error>> {
+    tracing::info!("starting STDIO MCP server...");
+
+    use rmcp::serve_server;
+    let transport = (tokio::io::stdin(), tokio::io::stdout());
+    let _server = serve_server(handler, transport).await?;
+
+    tracing::info!("STDIO service initialized");
+    _server.waiting().await?;
+
+    Ok(())
+}
+
+/// Top-level application entry point.
+/// Initializes tracing, reads env vars, and dispatches to HTTP or STDIO mode.
+pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    init_tracing();
+
+    let version = env!("CARGO_PKG_VERSION");
+    tracing::info!(version = %version, "intervals_icu_mcp starting");
+
+    let transport_mode = std::env::var("MCP_TRANSPORT").unwrap_or_else(|_| "stdio".to_string());
+    tracing::info!(%transport_mode, "using transport mode");
+
+    match transport_mode.as_str() {
+        "stdio" => {
+            let handler = initialize_handler_single_user().await.map_err(|e| {
+                tracing::error!("{e}");
+                e
+            })?;
+            run_stdio_server(handler).await?;
+        }
+        "http" => {
+            let address: std::net::SocketAddr = std::env::var("MCP_HTTP_ADDRESS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or_else(|| std::net::SocketAddr::from(([127, 0, 0, 1], 3000)));
+
+            let max_body_size = std::env::var("MAX_HTTP_BODY_SIZE")
+                .ok()
+                .and_then(|s| s.parse::<usize>().ok())
+                .unwrap_or(4 * 1024 * 1024);
+
+            run_http_server(address, max_body_size).await?;
+        }
+        other => {
+            tracing::error!(mode = %other, "unknown transport mode; must be 'stdio' or 'http'");
+            std::process::exit(1);
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -998,7 +1222,7 @@ mod tests {
         handler.set_webhook_secret_value("test_secret").await;
 
         // Create valid signature
-        use hmac::{Hmac, Mac, KeyInit};
+        use hmac::{Hmac, KeyInit, Mac};
         use sha2::Sha256;
         let mut mac: Hmac<Sha256> = Hmac::new_from_slice(b"test_secret").unwrap();
         let payload = serde_json::json!({"id": "dup-test-123"});
