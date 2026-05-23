@@ -1,3 +1,5 @@
+pub mod adaptation;
+pub mod ade;
 pub mod analysis;
 /// Engines module - Planning and Analysis engines
 ///
@@ -9,7 +11,10 @@ pub mod analysis_audit;
 pub mod analysis_fetch;
 pub mod coach_guidance;
 pub mod coach_metrics;
+pub mod forecast;
 pub mod planning;
+pub mod race_readiness;
+pub mod trail_execution;
 
 pub use analysis::{AnalysisEngine, WorkoutInsights};
 pub use planning::PeriodizationRules;

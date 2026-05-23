@@ -1,6 +1,11 @@
+#![allow(clippy::collapsible_match)]
+
 use chrono::NaiveDate;
 use serde_json::Value;
 
+use crate::domains::coach::{
+    DecouplingMetrics, EspeDerivedMetrics, EspePowerAnchors, HeatMetrics, NdliMetrics, WdrMetrics,
+};
 use crate::intents::ContentBlock;
 
 pub(crate) fn build_load_management_text(
@@ -1042,6 +1047,164 @@ pub(crate) fn append_stream_insights(content: &mut Vec<ContentBlock>, streams: O
         vec!["Stream".into(), "Points".into(), "Min".into(), "Max".into()],
         rows,
     ));
+}
+
+pub(crate) fn render_espe_section(
+    anchors: &Option<EspePowerAnchors>,
+    derived: &Option<EspeDerivedMetrics>,
+) -> Option<String> {
+    let anchors = anchors.as_ref()?;
+    if !anchors.supported {
+        return None;
+    }
+    let mut lines = vec!["Power-Duration Anchors".to_string()];
+    if let Some(eftp) = anchors.eftp {
+        lines.push(format!("  eFTP: {:.0} W", eftp));
+    }
+    if let Some(w_prime) = anchors.w_prime {
+        lines.push(format!("  W′: {:.0} J", w_prime));
+    }
+    if let Some(p_max) = anchors.p_max {
+        lines.push(format!("  pMax: {:.0} W", p_max));
+    }
+    if let Some(derived) = derived
+        && let Some(glycolytic_bias) = derived.glycolytic_bias
+    {
+        lines.push(format!(
+            "  Glycolytic Bias (pMax/eFTP): {:.2}",
+            glycolytic_bias
+        ));
+    }
+    Some(lines.join("\n"))
+}
+
+pub(crate) fn render_wdrm_section(wdrm: &Option<WdrMetrics>) -> Option<String> {
+    let wdrm = wdrm.as_ref()?;
+    if !wdrm.supported {
+        return None;
+    }
+    let mut lines = vec!["W′ Depletion (WDRM)".to_string()];
+    if let Some(max_depletion) = wdrm.max_wbal_depletion {
+        lines.push(format!("  Max W′ Depletion: {:.0} J", max_depletion));
+    }
+    if let Some(depletion_pct) = wdrm.depletion_pct {
+        lines.push(format!("  Depletion: {:.0}%", depletion_pct * 100.0));
+    }
+    if let Some(joules) = wdrm.joules_above_ftp {
+        lines.push(format!("  Joules Above FTP: {:.0}", joules));
+    }
+    if wdrm.sessions_with_data_7d > 0
+        && let Some(mean_depletion) = wdrm.mean_depletion_pct_7d
+    {
+        lines.push(format!(
+            "  Mean 7d Depletion: {:.0}%",
+            mean_depletion * 100.0
+        ));
+    }
+    if wdrm.sessions_with_data_7d > 0 {
+        lines.push(format!(
+            "  High Depletion Sessions (7d): {}",
+            wdrm.high_depletion_sessions_7d
+        ));
+    }
+    Some(lines.join("\n"))
+}
+
+pub(crate) fn render_isdm_section(decoupling: &Option<DecouplingMetrics>) -> Option<String> {
+    let decoupling = decoupling.as_ref()?;
+    let mut lines = vec!["Aerobic Decoupling (ISDM)".to_string()];
+    lines.push(format!(
+        "  Signed Decoupling: {:.1}%",
+        decoupling.signed_decoupling_pct
+    ));
+    lines.push(format!(
+        "  Absolute Decoupling: {:.1}%",
+        decoupling.decoupling_pct
+    ));
+    lines.push(format!(
+        "  Durability State: {}",
+        decoupling.durability_state
+    ));
+    if let Some(ef1) = decoupling.efficiency_factor_first_half {
+        lines.push(format!("  EF First Half: {:.3}", ef1));
+    }
+    if let Some(ef2) = decoupling.efficiency_factor_second_half {
+        lines.push(format!("  EF Second Half: {:.3}", ef2));
+    }
+    if let Some(variance) = decoupling.z2_hr_variance {
+        let stability = if variance < 25.0 {
+            "stable"
+        } else if variance < 50.0 {
+            "moderate"
+        } else {
+            "unstable"
+        };
+        lines.push(format!(
+            "  Z2 HR Variance: {:.1} bpm² ({})",
+            variance, stability
+        ));
+    }
+    Some(lines.join("\n"))
+}
+
+pub(crate) fn render_ndli_section(ndli: &Option<NdliMetrics>) -> Option<String> {
+    let ndli = ndli.as_ref()?;
+    if !ndli.supported {
+        return None;
+    }
+    let mut lines = vec!["Neural Density Load Index (NDLI)".to_string()];
+    lines.push(format!("  State: {}", ndli.ndli_state));
+    lines.push(format!(
+        "  High-Intensity Days (7d): {}",
+        ndli.high_intensity_days_7d
+    ));
+    if let Some(if_val) = ndli.mean_intensity_factor_7d {
+        lines.push(format!("  Mean IF: {:.3}", if_val));
+    }
+    if let Some(ef) = ndli.mean_efficiency_factor_7d {
+        lines.push(format!("  Mean EF: {:.3}", ef));
+    }
+    if let Some(vi) = ndli.mean_variability_index_7d {
+        lines.push(format!("  Mean VI: {:.2}", vi));
+    }
+    Some(lines.join("\n"))
+}
+
+#[expect(dead_code)]
+pub(crate) fn render_heat_section(heat: &Option<HeatMetrics>) -> Option<String> {
+    let heat = heat.as_ref()?;
+    if !heat.supported {
+        return None;
+    }
+    let mut lines = vec!["Heat Stress Context".to_string()];
+    lines.push(format!("  State: {}", heat.heat_state));
+    if let Some(index) = heat.heat_index_7d {
+        lines.push(format!("  Heat Index (7d): {:.2}", index));
+    }
+    if let Some(max_temp) = heat.heat_max_7d {
+        lines.push(format!("  Max Temperature: {:.1} °C", max_temp));
+    }
+    Some(lines.join("\n"))
+}
+
+#[expect(dead_code)]
+pub(crate) fn render_z2_stability_section(
+    z2_lower: f64,
+    z2_upper: f64,
+    variance: Option<f64>,
+) -> Option<String> {
+    let variance = variance?;
+    let stability = if variance < 25.0 {
+        "stable"
+    } else if variance < 50.0 {
+        "moderate"
+    } else {
+        "unstable"
+    };
+    Some(format!(
+        "Z2 HR Stability\n  Z2 Range: {:.0}–{:.0} bpm\n  HR Variance: {:.1} bpm²\n  Assessment: {}",
+        z2_lower, z2_upper, variance, stability
+    ))
 }
 
 #[cfg(test)]

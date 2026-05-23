@@ -18,9 +18,10 @@ use crate::engines::analysis_fetch::{
 };
 use crate::engines::coach_guidance::{build_alerts, build_guidance};
 use crate::engines::coach_metrics::{
-    build_trend_snapshot, compute_load_management_metrics, derive_trend_metrics,
-    derive_volume_metrics, derive_workout_metrics_context, parse_api_load_snapshot,
-    parse_fitness_metrics,
+    build_trend_snapshot, compute_load_management_metrics, compute_ndli_7d, compute_wdr_metrics,
+    derive_espe_metrics, derive_trend_metrics, derive_volume_metrics,
+    derive_workout_metrics_context, enrich_anchors_from_activity, extract_sportinfo_anchors,
+    parse_api_load_snapshot, parse_fitness_metrics,
 };
 use crate::intents::utils::{
     data_availability_block, filter_activities_by_date, filter_activities_by_range,
@@ -467,6 +468,20 @@ impl AnalyzeTrainingHandler {
         workout_metrics.efficiency_factor = efficiency_factor;
         workout_metrics.aerobic_decoupling = aerobic_decoupling;
         workout_context.metrics.workout = Some(workout_metrics);
+
+        // P0 — Performance Intelligence
+        let mut espe_anchors = extract_sportinfo_anchors(fetched.wellness.as_ref());
+        enrich_anchors_from_activity(&mut espe_anchors, fetched.workout_detail.as_ref());
+        let wdrm = compute_wdr_metrics(
+            fetched.intervals.as_ref(),
+            fetched.workout_detail.as_ref(),
+            espe_anchors.w_prime,
+        );
+        let espe_derived = derive_espe_metrics(&espe_anchors);
+        workout_context.metrics.espe_anchors = Some(espe_anchors);
+        workout_context.metrics.espe_derived = Some(espe_derived);
+        workout_context.metrics.wdrm = Some(wdrm);
+
         workout_context.alerts = build_alerts(&workout_context.metrics);
         workout_context.guidance =
             build_guidance(&workout_context.metrics, &workout_context.alerts);
@@ -546,6 +561,21 @@ impl AnalyzeTrainingHandler {
                 "Execution Context\n  {}",
                 lines.join("\n  ")
             )));
+        }
+
+        if let Some(espe_text) = render_espe_section(
+            &workout_context.metrics.espe_anchors,
+            &workout_context.metrics.espe_derived,
+        ) {
+            content.push(ContentBlock::markdown(espe_text));
+        }
+        if let Some(wdrm_text) = render_wdrm_section(&workout_context.metrics.wdrm) {
+            content.push(ContentBlock::markdown(wdrm_text));
+        }
+        if let Some(workout) = &workout_context.metrics.workout
+            && let Some(isdm_text) = render_isdm_section(&workout.aerobic_decoupling)
+        {
+            content.push(ContentBlock::markdown(isdm_text));
         }
 
         // Add interval analysis
@@ -908,6 +938,10 @@ impl AnalyzeTrainingHandler {
                 .acwr = Some(api_acwr);
         }
 
+        let period_ids: Vec<String> = period.iter().map(|a| a.id.clone()).collect();
+        let ndli = compute_ndli_7d(&fetched.activity_details, &period_ids);
+        period_context.metrics.ndli = Some(ndli);
+
         period_context.alerts = build_alerts(&period_context.metrics);
         period_context.guidance = build_guidance(&period_context.metrics, &period_context.alerts);
 
@@ -1046,6 +1080,10 @@ impl AnalyzeTrainingHandler {
             content.push(ContentBlock::markdown(build_load_management_text(
                 period_context.metrics.load_management.as_ref(),
             )));
+
+            if let Some(ndli_text) = render_ndli_section(&period_context.metrics.ndli) {
+                content.push(ContentBlock::markdown(ndli_text));
+            }
 
             if let Some(block) = data_availability_block(
                 &period_context.audit.degraded_mode_reasons,
