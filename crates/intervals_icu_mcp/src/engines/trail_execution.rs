@@ -1,5 +1,24 @@
 use serde::{Deserialize, Serialize};
 
+// =============================================================================
+// Trail Execution Constants
+// Sources: Vernillo et al. Sports Med 2017, Di Prampero et al. JAP 1986
+// =============================================================================
+
+/// KM per meter conversion factor.
+const METERS_PER_KM: f64 = 1000.0;
+
+/// Seconds per hour conversion factor.
+const SECONDS_PER_HOUR: f64 = 3600.0;
+
+/// Terrain index threshold for steep classification (m/km).
+/// >20 m/km = steep terrain per Vernillo classification.
+const TERRAIN_STEEP_THRESHOLD: f64 = 20.0;
+
+/// Efficiency drift threshold for terrain-induced fatigue (%).
+/// Drift >5% drop = terrain-induced efficiency loss.
+const EFFICIENCY_DRIFT_THRESHOLD: f64 = -5.0;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TerrainContext {
     pub terrain_index: Option<f64>,
@@ -26,7 +45,7 @@ pub fn compute_terrain_index(elevation_gain_m: f64, distance_m: f64) -> Option<f
     if distance_m <= 0.0 {
         return None;
     }
-    Some(elevation_gain_m / (distance_m / 1000.0))
+    Some(elevation_gain_m / (distance_m / METERS_PER_KM))
 }
 
 /// Compute VAM = elevation_gain / (moving_time_secs / 3600).
@@ -34,7 +53,7 @@ pub fn compute_vam(elevation_gain_m: f64, moving_time_secs: i64) -> Option<f64> 
     if moving_time_secs <= 0 {
         return None;
     }
-    Some(elevation_gain_m / (moving_time_secs as f64 / 3600.0))
+    Some(elevation_gain_m / (moving_time_secs as f64 / SECONDS_PER_HOUR))
 }
 
 /// Compute terrain execution context from activity detail.
@@ -49,7 +68,7 @@ pub fn compute_terrain_context(
     let vam = compute_vam(elevation_gain_m, moving_time_secs);
 
     let terrain_induced = terrain_index
-        .map(|ti| ti > 20.0 && efficiency_drift.map(|ed| ed < -5.0).unwrap_or(false))
+        .map(|ti| ti > TERRAIN_STEEP_THRESHOLD && efficiency_drift.map(|ed| ed < EFFICIENCY_DRIFT_THRESHOLD).unwrap_or(false))
         .unwrap_or(false);
 
     TerrainContext {

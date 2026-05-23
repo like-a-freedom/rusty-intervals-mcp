@@ -998,7 +998,7 @@ mod tests {
         handler.set_webhook_secret_value("test_secret").await;
 
         // Create valid signature
-        use hmac::{Hmac, Mac};
+        use hmac::{Hmac, Mac, KeyInit};
         use sha2::Sha256;
         let mut mac: Hmac<Sha256> = Hmac::new_from_slice(b"test_secret").unwrap();
         let payload = serde_json::json!({"id": "dup-test-123"});

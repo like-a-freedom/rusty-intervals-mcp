@@ -9,6 +9,10 @@ use crate::domains::coach::{CoachAlert, CoachAlertSeverity, CoachGuidance, Coach
 // Wellness Thresholds
 // =============================================================================
 
+/// WDRM: High W' depletion threshold (60% of W′).
+/// Source: Montis.icu WDRM validation, same as WDRM_HIGH_DEPLETION_PCT in coach_metrics.
+const WDRM_HIGH_DEPLETION_THRESHOLD: f64 = 0.60;
+
 /// Sleep: good threshold (≥ this value)
 pub const SLEEP_GOOD_HOURS: f64 = 7.0;
 /// Sleep: fair minimum threshold (6.0–7.0)
@@ -363,7 +367,7 @@ pub fn build_alerts(metrics: &CoachMetrics) -> Vec<CoachAlert> {
     if let Some(wdrm) = &metrics.wdrm
         && wdrm.supported
         && let Some(depletion_pct) = wdrm.depletion_pct
-        && depletion_pct >= 0.60
+        && depletion_pct >= WDRM_HIGH_DEPLETION_THRESHOLD
     {
         alerts.push(CoachAlert {
             severity: CoachAlertSeverity::Caution,

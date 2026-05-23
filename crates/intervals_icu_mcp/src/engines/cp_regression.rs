@@ -1,6 +1,17 @@
-/// Rust-native Critical Power regression.
-/// Implements the 2-parameter CP model: P(t) = CP + W'/t
-/// Uses linear regression on transformed data (P·t = CP·t + W').
+//! Rust-native Critical Power regression.
+//! Implements the 2-parameter CP model: P(t) = CP + W'/t
+//! Uses linear regression on transformed data (P·t = CP·t + W').
+
+// =============================================================================
+// CP Regression Constants
+// =============================================================================
+
+/// Minimum number of data points required for valid CP regression.
+const MIN_CP_DATA_POINTS: usize = 3;
+
+/// Minimum R² threshold for valid CP model fit.
+/// Source: standard goodness-of-fit threshold for physiological models.
+const CP_R_SQUARED_MIN: f64 = 0.5;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CpResult {
@@ -13,7 +24,7 @@ pub struct CpResult {
 /// Fit 2-parameter CP model from (duration_secs, power_watts) data points.
 /// Minimum 3 data points required. Returns None for invalid data.
 pub fn fit_cp(data: &[(f64, f64)]) -> Option<CpResult> {
-    if data.len() < 3 {
+    if data.len() < MIN_CP_DATA_POINTS {
         return None;
     }
 
@@ -69,7 +80,7 @@ pub fn fit_cp(data: &[(f64, f64)]) -> Option<CpResult> {
         cp,
         w_prime,
         r_squared,
-        valid: cp > 0.0 && w_prime > 0.0 && r_squared > 0.5,
+        valid: cp > 0.0 && w_prime > 0.0 && r_squared > CP_R_SQUARED_MIN,
     })
 }
 
