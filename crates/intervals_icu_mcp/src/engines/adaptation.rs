@@ -371,4 +371,147 @@ mod tests {
             CurveProfile::BalancedRunner
         );
     }
+
+    #[test]
+    fn adaptation_baseline_all_present_no_match() {
+        assert_eq!(
+            classify_adaptation(Some(0.5), Some(1.0), Some(0.5), Some(1.0), None),
+            AdaptationState::Baseline
+        );
+    }
+
+    #[test]
+    fn curve_profile_anaerobic_specialist() {
+        assert_eq!(
+            classify_curve_profile(
+                Some(700.0),
+                Some(500.0),
+                Some(400.0),
+                Some(330.0),
+                Some(300.0),
+                false
+            ),
+            CurveProfile::AnaerobicSpecialist
+        );
+    }
+
+    #[test]
+    fn curve_profile_punchy_climber() {
+        assert_eq!(
+            classify_curve_profile(
+                Some(640.0),
+                Some(500.0),
+                Some(430.0),
+                Some(300.0),
+                Some(290.0),
+                false
+            ),
+            CurveProfile::PunchyClimber
+        );
+    }
+
+    #[test]
+    fn curve_profile_punchy() {
+        assert_eq!(
+            classify_curve_profile(
+                Some(590.0),
+                Some(500.0),
+                Some(424.0),
+                Some(320.0),
+                Some(296.0),
+                false
+            ),
+            CurveProfile::Punchy
+        );
+    }
+
+    #[test]
+    fn curve_profile_time_trialist() {
+        assert_eq!(
+            classify_curve_profile(
+                Some(625.0),
+                Some(500.0),
+                Some(410.0),
+                Some(340.0),
+                Some(300.0),
+                false
+            ),
+            CurveProfile::TimeTrialist
+        );
+    }
+
+    #[test]
+    fn curve_profile_cycling_all_rounder() {
+        assert_eq!(
+            classify_curve_profile(
+                Some(500.0),
+                Some(450.0),
+                Some(400.0),
+                Some(350.0),
+                Some(320.0),
+                false
+            ),
+            CurveProfile::AllRounder
+        );
+    }
+
+    #[test]
+    fn curve_profile_speed_runner() {
+        assert_eq!(
+            classify_curve_profile(
+                Some(500.0),
+                Some(280.0),
+                Some(290.0),
+                Some(296.0),
+                Some(300.0),
+                true
+            ),
+            CurveProfile::SpeedRunner
+        );
+    }
+
+    #[test]
+    fn curve_profile_endurance_runner() {
+        assert_eq!(
+            classify_curve_profile(
+                Some(500.0),
+                Some(280.0),
+                Some(284.0),
+                Some(296.0),
+                Some(300.0),
+                true
+            ),
+            CurveProfile::EnduranceRunner
+        );
+    }
+
+    #[test]
+    fn curve_profile_punchy_runner() {
+        assert_eq!(
+            classify_curve_profile(
+                Some(500.0),
+                Some(280.0),
+                Some(296.0),
+                Some(400.0),
+                Some(300.0),
+                true
+            ),
+            CurveProfile::PunchyRunner
+        );
+    }
+
+    #[test]
+    fn curve_profile_running_balanced_runner() {
+        assert_eq!(
+            classify_curve_profile(
+                Some(500.0),
+                Some(280.0),
+                Some(284.0),
+                Some(320.0),
+                Some(280.0),
+                true
+            ),
+            CurveProfile::BalancedRunner
+        );
+    }
 }

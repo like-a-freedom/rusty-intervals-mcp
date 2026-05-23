@@ -161,6 +161,11 @@ pub async fn resolve_stream_resource(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::mock::MockIntervalsClient;
+    use intervals_icu_client::AthleteProfile;
+    use serde_json::json;
+
+    // ── downsample_stream edge cases ──
 
     #[test]
     fn downsample_returns_all_when_under_limit() {
@@ -178,11 +183,251 @@ mod tests {
     }
 
     #[test]
+    fn downsample_empty() {
+        let data: Vec<f64> = vec![];
+        let result = downsample_stream(&data, 200);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn downsample_exactly_at_limit() {
+        let data: Vec<f64> = (0..200).map(|i| i as f64).collect();
+        let result = downsample_stream(&data, 200);
+        assert_eq!(result.len(), 200);
+        assert!((result[0] - 0.0).abs() < 0.01);
+        assert!((result[199] - 199.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn downsample_single_element() {
+        let data = vec![42.0];
+        let result = downsample_stream(&data, 200);
+        assert_eq!(result.len(), 1);
+        assert!((result[0] - 42.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn downsample_exact_multiple() {
+        let data: Vec<f64> = (0..400).map(|i| i as f64).collect();
+        let result = downsample_stream(&data, 200);
+        assert_eq!(result.len(), 200);
+        assert!((result[0] - 0.0).abs() < 0.01);
+        assert!((result[1] - 2.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn downsample_exactly_one_below_limit() {
+        let data: Vec<f64> = (0..199).map(|i| i as f64).collect();
+        let result = downsample_stream(&data, 200);
+        assert_eq!(result.len(), 199);
+    }
+
+    // ── activity_stream_resources ──
+
+    #[test]
     fn activity_stream_resources_returns_three_uris() {
         let resources = activity_stream_resources();
         assert_eq!(resources.len(), 3);
         assert!(resources.iter().any(|r| r.uri.contains("power")));
         assert!(resources.iter().any(|r| r.uri.contains("hr")));
         assert!(resources.iter().any(|r| r.uri.contains("pace")));
+    }
+
+    #[test]
+    fn activity_stream_resources_all_have_descriptions_and_mime() {
+        let resources = activity_stream_resources();
+        for r in &resources {
+            assert!(
+                r.description.is_some(),
+                "resource {} missing description",
+                r.uri
+            );
+            assert_eq!(
+                r.mime_type,
+                Some("application/json".into()),
+                "resource {} missing mime type",
+                r.uri
+            );
+        }
+    }
+
+    #[test]
+    fn activity_stream_resources_uri_templates() {
+        let resources = activity_stream_resources();
+        for r in &resources {
+            assert!(
+                r.uri.contains("{activity_id}"),
+                "URI doesn't contain template: {}",
+                r.uri
+            );
+        }
+    }
+
+    // ── athlete_profile_resource ──
+
+    #[test]
+    fn athlete_profile_resource_basic() {
+        let resource = athlete_profile_resource();
+        assert_eq!(resource.uri, "intervals-icu://athlete/profile");
+        assert_eq!(resource.name, "Athlete Profile");
+        assert!(resource.description.is_some());
+        assert!(
+            resource
+                .description
+                .as_ref()
+                .unwrap()
+                .contains("Athlete profile data")
+        );
+        assert_eq!(resource.mime_type, Some("application/json".to_string()));
+    }
+
+    // ── resolve_stream_resource error cases ──
+
+    #[tokio::test]
+    async fn resolve_stream_uri_too_short() {
+        let client = MockIntervalsClient::default();
+        let err = resolve_stream_resource("activity://a1/streams", &client)
+            .await
+            .unwrap_err();
+        assert!(err.contains("Invalid resource URI"));
+    }
+
+    #[tokio::test]
+    async fn resolve_stream_uri_unknown_type() {
+        let client = MockIntervalsClient::default();
+        let err = resolve_stream_resource("activity://a1/streams/unknown", &client)
+            .await
+            .unwrap_err();
+        assert!(err.contains("Unknown stream type"));
+    }
+
+    #[tokio::test]
+    async fn resolve_stream_not_an_object() {
+        let client = MockIntervalsClient::builder().with_streams(json!([1, 2, 3]));
+        let err = resolve_stream_resource("activity://a1/streams/power", &client)
+            .await
+            .unwrap_err();
+        assert!(err.contains("not an object"));
+    }
+
+    #[tokio::test]
+    async fn resolve_stream_type_not_found() {
+        let client = MockIntervalsClient::builder().with_streams(json!({"heartrate": [100, 110]}));
+        let err = resolve_stream_resource("activity://a1/streams/power", &client)
+            .await
+            .unwrap_err();
+        assert!(err.contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn resolve_stream_empty_object() {
+        let client = MockIntervalsClient::builder().with_streams(json!({}));
+        let err = resolve_stream_resource("activity://a1/streams/power", &client)
+            .await
+            .unwrap_err();
+        assert!(err.contains("not found"));
+    }
+
+    // ── resolve_stream_resource success cases ──
+
+    #[tokio::test]
+    async fn resolve_stream_power_success() {
+        let client = MockIntervalsClient::builder()
+            .with_streams(json!({"watts": [100, 200, 300, 400, 500]}));
+        let result = resolve_stream_resource("activity://a1/streams/power", &client)
+            .await
+            .unwrap();
+        let parsed: Vec<f64> = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed.len(), 5);
+        assert!((parsed[0] - 100.0).abs() < 0.01);
+    }
+
+    #[tokio::test]
+    async fn resolve_stream_hr_success() {
+        let client =
+            MockIntervalsClient::builder().with_streams(json!({"heartrate": [120, 130, 140]}));
+        let result = resolve_stream_resource("activity://a1/streams/hr", &client)
+            .await
+            .unwrap();
+        let parsed: Vec<f64> = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed.len(), 3);
+        assert!((parsed[0] - 120.0).abs() < 0.01);
+    }
+
+    #[tokio::test]
+    async fn resolve_stream_pace_success() {
+        let client = MockIntervalsClient::builder()
+            .with_streams(json!({"velocity_smooth": [3.5, 4.0, 4.5]}));
+        let result = resolve_stream_resource("activity://a1/streams/pace", &client)
+            .await
+            .unwrap();
+        let parsed: Vec<f64> = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed.len(), 3);
+        assert!((parsed[0] - 3.5).abs() < 0.01);
+    }
+
+    #[tokio::test]
+    async fn resolve_stream_large_downsampled() {
+        let watts: Vec<i64> = (0..1000).collect();
+        let client = MockIntervalsClient::builder().with_streams(json!({"watts": watts}));
+        let result = resolve_stream_resource("activity://a1/streams/power", &client)
+            .await
+            .unwrap();
+        let parsed: Vec<f64> = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed.len(), 200);
+    }
+
+    #[tokio::test]
+    async fn resolve_stream_empty_numeric_data() {
+        let client = MockIntervalsClient::builder().with_streams(json!({"watts": []}));
+        let result = resolve_stream_resource("activity://a1/streams/power", &client)
+            .await
+            .unwrap();
+        assert_eq!(result, "[]");
+    }
+
+    // ── build_athlete_profile_text ──
+
+    #[tokio::test]
+    async fn build_athlete_profile_text_success() {
+        let client = MockIntervalsClient::builder()
+            .with_athlete_profile(AthleteProfile {
+                id: "athlete-1".into(),
+                name: Some("Test Athlete".into()),
+            })
+            .with_fitness_summary(json!({"ctl": 80, "atl": 60, "tsb": 20}))
+            .with_sport_settings(json!([{"sport": "cycling", "ftp": 250}]));
+        let text = build_athlete_profile_text(&client).await.unwrap();
+        assert!(text.contains("athlete-1"), "should contain athlete id");
+        assert!(text.contains("Test Athlete"), "should contain athlete name");
+        assert!(text.contains("ctl"), "should contain fitness data");
+        assert!(text.contains("ftp"), "should contain sport settings");
+    }
+
+    #[tokio::test]
+    async fn build_athlete_profile_text_no_name() {
+        let client = MockIntervalsClient::builder()
+            .with_athlete_profile(AthleteProfile {
+                id: "athlete-2".into(),
+                name: None,
+            })
+            .with_fitness_summary(json!({"ctl": 50}))
+            .with_sport_settings(json!([]));
+        let text = build_athlete_profile_text(&client).await.unwrap();
+        assert!(text.contains("athlete-2"));
+        assert!(text.contains("null"), "name should be null when None");
+    }
+
+    #[tokio::test]
+    async fn build_athlete_profile_text_null_fitness() {
+        let client = MockIntervalsClient::builder()
+            .with_athlete_profile(AthleteProfile {
+                id: "athlete-3".into(),
+                name: None,
+            })
+            .with_fitness_summary(json!(null))
+            .with_sport_settings(json!([]));
+        let text = build_athlete_profile_text(&client).await.unwrap();
+        assert!(text.contains("athlete-3"));
     }
 }

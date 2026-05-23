@@ -1170,7 +1170,7 @@ pub(crate) fn render_ndli_section(ndli: &Option<NdliMetrics>) -> Option<String> 
     Some(lines.join("\n"))
 }
 
-#[expect(dead_code)]
+#[cfg_attr(not(test), expect(dead_code))]
 pub(crate) fn render_heat_section(heat: &Option<HeatMetrics>) -> Option<String> {
     let heat = heat.as_ref()?;
     if !heat.supported {
@@ -1187,7 +1187,7 @@ pub(crate) fn render_heat_section(heat: &Option<HeatMetrics>) -> Option<String> 
     Some(lines.join("\n"))
 }
 
-#[expect(dead_code)]
+#[cfg_attr(not(test), expect(dead_code))]
 pub(crate) fn render_z2_stability_section(
     z2_lower: f64,
     z2_upper: f64,
@@ -1210,223 +1210,1855 @@ pub(crate) fn render_z2_stability_section(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domains::coach::LoadManagementMetrics;
+    use crate::domains::coach::{
+        AcwrMetrics, DecouplingMetrics, EspeDerivedMetrics, EspePowerAnchors, HeatMetrics,
+        LoadManagementMetrics, NdliMetrics, WdrMetrics,
+    };
+    use crate::engines::coach_metrics::TrendSnapshot;
+    use crate::intents::ContentBlock;
+    use intervals_icu_client::{ActivityMessage, ActivitySummary, Event, EventCategory};
+    use std::collections::HashMap;
+
+    // ── build_load_management_text ────────────────────────────────────
 
     #[test]
-    fn load_management_text_renders_durability_index_robust() {
+    fn load_management_text_none() {
+        let text = build_load_management_text(None);
+        assert!(text.contains("Load Context"));
+        assert!(text.contains("too short"));
+    }
+
+    #[test]
+    fn load_management_text_all_fields() {
         let metrics = LoadManagementMetrics {
+            acwr: Some(AcwrMetrics {
+                acute_load: 300.0,
+                chronic_load: 250.0,
+                ratio: 1.2,
+                state: "balanced".into(),
+            }),
+            monotony: Some(1.5),
+            strain: Some(4500.0),
+            stress_tolerance: Some(2.3),
+            fatigue_index: Some(1.1),
             durability_index: Some(0.92),
-            ..Default::default()
         };
         let text = build_load_management_text(Some(&metrics));
+        assert!(text.contains("ACWR"));
+        assert!(text.contains("1.20"));
+        assert!(text.contains("Monotony"));
+        assert!(text.contains("Strain"));
+        assert!(text.contains("Stress Tolerance"));
+        assert!(text.contains("Fatigue Index"));
         assert!(text.contains("Durability Index"));
-        assert!(text.contains("0.920"));
-        assert!(!text.contains("###"));
     }
 
     #[test]
-    fn load_management_text_renders_durability_index_low() {
-        let metrics = LoadManagementMetrics {
-            durability_index: Some(0.80),
-            ..Default::default()
-        };
+    fn load_management_text_no_data() {
+        let metrics = LoadManagementMetrics::default();
         let text = build_load_management_text(Some(&metrics));
-        assert!(text.contains("Durability Index"));
-        assert!(text.contains("0.800"));
+        assert!(text.contains("Load Context"));
+        assert!(text.contains("no deterministic load signal"));
+    }
+
+    // ── format_duration_compact ───────────────────────────────────────
+
+    #[test]
+    fn format_duration_compact_under_hour() {
+        assert_eq!(format_duration_compact(90), "1:30");
+        assert_eq!(format_duration_compact(59), "0:59");
+        assert_eq!(format_duration_compact(0), "0:00");
     }
 
     #[test]
-    fn parse_activity_date_iso8601() {
-        let result = parse_activity_date("2026-03-23T10:30:00");
-        assert_eq!(result, Some(NaiveDate::from_ymd_opt(2026, 3, 23).unwrap()));
+    fn format_duration_compact_over_hour() {
+        assert_eq!(format_duration_compact(3661), "1:01:01");
+        assert_eq!(format_duration_compact(3600), "1:00:00");
+    }
+
+    // ── build_calendar_event_rows ─────────────────────────────────────
+
+    #[test]
+    fn build_calendar_event_rows_basic() {
+        let events = [
+            Event {
+                id: Some("1".into()),
+                start_date_local: "2026-03-23T10:00:00".into(),
+                name: "Morning Ride".into(),
+                category: EventCategory::Workout,
+                description: Some("Zone 2".into()),
+                r#type: None,
+            },
+            Event {
+                id: Some("2".into()),
+                start_date_local: "2026-03-24".into(),
+                name: "Rest Day".into(),
+                category: EventCategory::Holiday,
+                description: None,
+                r#type: None,
+            },
+        ];
+        let refs: Vec<&Event> = events.iter().collect();
+        let rows = build_calendar_event_rows(&refs);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0][0], "2026-03-23");
+        assert!(rows[0][1].contains("Workout"));
+        assert_eq!(rows[0][2], "Morning Ride");
+        assert_eq!(rows[0][3], "Zone 2");
+        assert_eq!(rows[1][0], "2026-03-24");
+        assert_eq!(rows[1][3], "n/a");
+    }
+
+    // ── count_work_intervals ──────────────────────────────────────────
+
+    #[test]
+    fn count_work_intervals_few_data_points() {
+        let intervals: Vec<Value> = vec![
+            serde_json::json!({"average_speed": 5.0}),
+            serde_json::json!({"average_speed": 6.0}),
+            serde_json::json!({}),
+        ];
+        // Fewer than 3 speed and 0 hr -> fallback to all intervals
+        assert_eq!(count_work_intervals(&intervals), 3);
     }
 
     #[test]
-    fn parse_activity_date_plain() {
-        let result = parse_activity_date("2026-03-23");
-        assert_eq!(result, Some(NaiveDate::from_ymd_opt(2026, 3, 23).unwrap()));
+    fn count_work_intervals_with_work_split() {
+        let intervals: Vec<Value> = vec![
+            serde_json::json!({"average_speed": 10.0, "average_heartrate": 150.0}),
+            serde_json::json!({"average_speed": 12.0, "average_heartrate": 160.0}),
+            serde_json::json!({"average_speed": 8.0, "average_heartrate": 140.0}),
+            serde_json::json!({"average_speed": 5.0, "average_heartrate": 120.0}),
+        ];
+        // 4 data points each -> median speed ~9, median HR ~145
+        // work: >=9 && >=145 -> 2 intervals (indices 0 and 1)
+        let count = count_work_intervals(&intervals);
+        assert_eq!(count, 2);
     }
 
     #[test]
-    fn parse_activity_date_invalid() {
-        assert!(parse_activity_date("invalid").is_none());
+    fn count_work_intervals_no_data_assume_work() {
+        let intervals: Vec<Value> = vec![
+            serde_json::json!({"average_speed": 10.0, "average_heartrate": 150.0}),
+            serde_json::json!({"average_speed": 8.0, "average_heartrate": 130.0}),
+            serde_json::json!({"average_speed": 5.0, "average_heartrate": 120.0}),
+            serde_json::json!({"average_speed": 12.0, "average_heartrate": 160.0}),
+            serde_json::json!({}), // No data, assume work
+        ];
+        let count = count_work_intervals(&intervals);
+        // 4 intervals with data, 1 without data -> min(5, 5) = 5... wait, let me think.
+        // median_speed = sorted [5,8,10,12] -> (8+10)/2 = 9
+        // median_hr = sorted [120,130,150,160] -> (130+150)/2 = 140
+        // interval 0: s=10>=9, hr=150>=140 -> work
+        // interval 1: s=8<9, hr=130<140 -> not work
+        // interval 2: s=5<9, hr=120<140 -> not work
+        // interval 3: s=12>=9, hr=160>=140 -> work
+        // interval 4: (None, None) -> assume work
+        // work_count = 3
+        assert_eq!(count, 3);
     }
 
     #[test]
-    fn format_duration_hhmm_under_hour() {
-        assert_eq!(format_duration_hhmm(90), "1:30");
-        assert_eq!(format_duration_hhmm(59), "0:59");
-        assert_eq!(format_duration_hhmm(0), "0:00");
+    fn count_work_intervals_hr_only() {
+        let intervals: Vec<Value> = vec![
+            serde_json::json!({"average_heartrate": 150.0}),
+            serde_json::json!({"average_heartrate": 160.0}),
+            serde_json::json!({"average_heartrate": 140.0}),
+            serde_json::json!({"average_heartrate": 130.0}),
+        ];
+        // 0 speed, 4 hr -> median_hr = 145
+        // interval 0: s=None, hr=150>=145 -> work
+        // interval 1: s=None, hr=160>=145 -> work
+        // interval 2: s=None, hr=140<145 -> not work
+        // interval 3: s=None, hr=130<145 -> not work
+        assert_eq!(count_work_intervals(&intervals), 2);
     }
 
     #[test]
-    fn format_duration_hhmm_over_hour() {
-        assert_eq!(format_duration_hhmm(3661), "1:01:01");
-        assert_eq!(format_duration_hhmm(3600), "1:00:00");
-        assert_eq!(format_duration_hhmm(7200), "2:00:00");
+    fn count_work_intervals_speed_only() {
+        let intervals: Vec<Value> = vec![
+            serde_json::json!({"average_speed": 5.0}),
+            serde_json::json!({"average_speed": 8.0}),
+            serde_json::json!({"average_speed": 10.0}),
+            serde_json::json!({"average_speed": 12.0}),
+        ];
+        // 4 speed, 0 hr -> median_speed = (8+10)/2 = 9
+        // interval 0: s=5<9 -> not work
+        // interval 1: s=8<9 -> not work
+        // interval 2: s=10>=9 -> work
+        // interval 3: s=12>=9 -> work
+        assert_eq!(count_work_intervals(&intervals), 2);
+    }
+
+    // ── calculate_median ──────────────────────────────────────────────
+
+    #[test]
+    fn calculate_median_empty() {
+        assert_eq!(calculate_median(&mut []), 0.0);
     }
 
     #[test]
-    fn format_pace_per_km_valid() {
-        let result = format_pace_per_km(300, 5000.0);
-        assert_eq!(result, Some("1:00 /km".to_string()));
+    fn calculate_median_odd_count() {
+        assert_eq!(calculate_median(&mut [1.0, 3.0, 2.0]), 2.0);
     }
 
     #[test]
-    fn format_pace_per_km_zero_speed() {
-        assert!(format_pace_per_km(0, 5000.0).is_none());
-        assert!(format_pace_per_km(300, 0.0).is_none());
-        assert!(format_pace_per_km(-100, 5000.0).is_none());
+    fn calculate_median_even_count() {
+        assert_eq!(calculate_median(&mut [1.0, 4.0, 2.0, 3.0]), 2.5);
     }
 
     #[test]
-    fn is_planned_workout_id_true() {
-        assert!(is_planned_workout_id("event:123"));
-        assert!(is_planned_workout_id("event:abc-def"));
+    fn calculate_median_single_value() {
+        assert_eq!(calculate_median(&mut [42.0]), 42.0);
     }
 
     #[test]
-    fn is_planned_workout_id_false() {
-        assert!(!is_planned_workout_id("activity:123"));
-        assert!(!is_planned_workout_id("123456"));
-        assert!(!is_planned_workout_id("abc-def"));
+    fn calculate_median_nan_handling() {
+        assert_eq!(calculate_median(&mut [f64::NAN, 3.0, 1.0]), 1.0);
     }
 
-    #[test]
-    fn requested_metrics_with_array() {
-        let input = serde_json::json!({"metrics": ["time", "distance", "pace"]});
-        let result = requested_metrics(&input);
-        assert_eq!(result, vec!["time", "distance", "pace"]);
-    }
+    // ── build_detailed_workout_rows ───────────────────────────────────
 
     #[test]
-    fn requested_metrics_without_metrics_field() {
-        let input = serde_json::json!({"foo": "bar"});
-        let result = requested_metrics(&input);
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn format_best_effort_duration_under_minute() {
-        assert_eq!(format_best_effort_duration(30), "30s");
-    }
-
-    #[test]
-    fn format_best_effort_duration_minutes() {
-        assert_eq!(format_best_effort_duration(60), "1:00");
-        assert_eq!(format_best_effort_duration(300), "5:00");
-    }
-
-    #[test]
-    fn format_best_effort_duration_hours() {
-        assert_eq!(format_best_effort_duration(3600), "1:00:00");
-        assert_eq!(format_best_effort_duration(3661), "1:01:01");
-    }
-
-    #[test]
-    fn count_work_intervals_empty() {
-        assert_eq!(count_work_intervals(&[]), 0);
-    }
-
-    #[test]
-    fn build_basic_workout_metric_rows_empty() {
-        let rows = build_basic_workout_metric_rows(None);
+    fn build_detailed_workout_rows_empty() {
+        let rows = build_detailed_workout_rows(None);
         assert!(rows.is_empty());
     }
 
     #[test]
-    fn build_basic_workout_metric_rows_with_data() {
+    fn build_detailed_workout_rows_pace_and_metrics() {
         let detail = serde_json::json!({
-            "distance": 10000.0,
             "moving_time": 3600,
-            "average_heartrate": 145.0,
-            "average_watts": 220.0,
-            "total_elevation_gain": 150.0
+            "distance": 12000.0,
+            "average_speed": 3.33,
+            "average_cadence": 85.0,
+            "icu_training_load": 120.5,
+            "tss": 115.0,
+            "average_temp": 22.5
         });
-        let rows = build_basic_workout_metric_rows(Some(&detail));
-        assert_eq!(rows.len(), 5);
+        let rows = build_detailed_workout_rows(Some(&detail));
+        assert_eq!(rows.len(), 6);
+        assert_eq!(rows[0][0], "Avg Pace");
+        assert!(rows[1][1].contains("km/h"));
+        assert!(rows[2][1].contains("spm"));
+        assert!(rows[3][1].contains("120.5"));
+        assert!(rows[4][1].contains("115.0"));
+        assert!(rows[5][1].contains("°C"));
     }
 
     #[test]
-    fn interval_number_f64() {
-        let json_val = serde_json::json!({"power": 250.5});
+    fn build_detailed_workout_rows_no_pace_when_no_movement() {
+        let detail = serde_json::json!({
+            "moving_time": 0,
+            "distance": 0.0,
+        });
+        let rows = build_detailed_workout_rows(Some(&detail));
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn build_detailed_workout_rows_training_load_fallback() {
+        let detail = serde_json::json!({
+            "moving_time": 1800,
+            "distance": 5000.0,
+            "load": 95.0,
+        });
+        let rows = build_detailed_workout_rows(Some(&detail));
+        assert!(rows.iter().any(|r| r[1].contains("95.0")));
+    }
+
+    // ── build_activity_message_rows ───────────────────────────────────
+
+    #[test]
+    fn build_activity_message_rows_basic() {
+        let msgs = vec![ActivityMessage {
+            id: 1,
+            athlete_id: Some("42".into()),
+            name: Some("Coach".into()),
+            created: Some("2026-03-23T10:30:00Z".into()),
+            message_type: Some("TEXT".into()),
+            content: Some(" Great session!  ".into()),
+            activity_id: Some("100".into()),
+            start_index: None,
+            end_index: None,
+            attachment_url: None,
+            attachment_mime_type: None,
+            deleted: None,
+        }];
+        let rows = build_activity_message_rows(&msgs);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0][0], "2026-03-23 10:30:00");
+        assert_eq!(rows[0][1], "Coach");
+        assert_eq!(rows[0][2], "TEXT");
+        assert_eq!(rows[0][3], "Great session!");
+    }
+
+    #[test]
+    fn build_activity_message_rows_deleted_filtered() {
+        let msgs = vec![ActivityMessage {
+            id: 1,
+            athlete_id: None,
+            name: None,
+            created: None,
+            message_type: None,
+            content: Some("Hello".into()),
+            activity_id: None,
+            start_index: None,
+            end_index: None,
+            attachment_url: None,
+            attachment_mime_type: None,
+            deleted: Some("2026-03-24".into()),
+        }];
+        let rows = build_activity_message_rows(&msgs);
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn build_activity_message_rows_empty_content_filtered() {
+        let msgs = vec![ActivityMessage {
+            id: 1,
+            athlete_id: None,
+            name: None,
+            created: None,
+            message_type: None,
+            content: Some("   ".into()),
+            activity_id: None,
+            start_index: None,
+            end_index: None,
+            attachment_url: None,
+            attachment_mime_type: None,
+            deleted: None,
+        }];
+        let rows = build_activity_message_rows(&msgs);
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn build_activity_message_rows_missing_fields() {
+        let msgs = vec![ActivityMessage {
+            id: 1,
+            athlete_id: Some("42".into()),
+            name: None,
+            created: None,
+            message_type: None,
+            content: Some("Hello".into()),
+            activity_id: None,
+            start_index: None,
+            end_index: None,
+            attachment_url: None,
+            attachment_mime_type: None,
+            deleted: None,
+        }];
+        let rows = build_activity_message_rows(&msgs);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0][0], "n/a");
+        assert_eq!(rows[0][1], "42"); // falls back to athlete_id
+        assert_eq!(rows[0][2], "TEXT"); // default type
+    }
+
+    // ── interval_number i64 branch ────────────────────────────────────
+
+    #[test]
+    fn interval_number_i64() {
+        let json_val = serde_json::json!({"power": 250});
         let obj = json_val.as_object().unwrap();
-        assert!(interval_number(obj, "power").is_some());
+        assert_eq!(interval_number(obj, "power"), Some(250.0));
     }
 
-    #[test]
-    fn interval_number_missing() {
-        let json_val = serde_json::json!({"foo": 250});
-        let obj = json_val.as_object().unwrap();
-        assert!(interval_number(obj, "power").is_none());
-    }
+    // ── extract_exact_tss i64 branch ──────────────────────────────────
 
     #[test]
-    fn numeric_value_f64() {
-        let json_val = serde_json::json!({"speed": 3.5});
-        let obj = json_val.as_object().unwrap();
-        assert!(numeric_value(obj, "speed").is_some());
-    }
-
-    #[test]
-    fn numeric_value_i64() {
-        let json_val = serde_json::json!({"speed": 3});
-        let obj = json_val.as_object().unwrap();
-        assert!(numeric_value(obj, "speed").is_some());
-    }
-
-    #[test]
-    fn numeric_value_missing() {
-        let json_val = serde_json::json!({"foo": 3.5});
-        let obj = json_val.as_object().unwrap();
-        assert!(numeric_value(obj, "speed").is_none());
-    }
-
-    #[test]
-    fn extract_exact_tss_priority() {
+    fn extract_exact_tss_i64() {
         let mut obj = serde_json::Map::new();
-        obj.insert("tss".to_string(), serde_json::json!(150.0));
-        obj.insert("icu_training_load".to_string(), serde_json::json!(140.0));
+        obj.insert("tss".to_string(), serde_json::json!(150));
         assert_eq!(extract_exact_tss(&obj), Some(150.0));
     }
 
+    // ── stream_series ─────────────────────────────────────────────────
+
     #[test]
-    fn extract_exact_tss_falls_back() {
+    fn stream_series_none() {
+        assert!(stream_series(None, &["watts"]).is_none());
+    }
+
+    #[test]
+    fn stream_series_found() {
+        let data = serde_json::json!({"watts": [100, 200, 300]});
+        let result = stream_series(Some(&data), &["watts"]);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().len(), 3);
+    }
+
+    #[test]
+    fn stream_series_missing_key() {
+        let data = serde_json::json!({"heartrate": [100]});
+        assert!(stream_series(Some(&data), &["watts", "power"]).is_none());
+    }
+
+    #[test]
+    fn stream_series_not_an_object() {
+        let data = serde_json::json!([1, 2, 3]);
+        assert!(stream_series(Some(&data), &["watts"]).is_none());
+    }
+
+    // ── format_pace_from_speed ────────────────────────────────────────
+
+    #[test]
+    fn format_pace_from_speed_valid() {
+        let pace = format_pace_from_speed(5.0); // 5 m/s = 200 s/km = 3:20 /km
+        assert_eq!(pace, Some("3:20 /km".to_string()));
+    }
+
+    #[test]
+    fn format_pace_from_speed_zero() {
+        assert!(format_pace_from_speed(0.0).is_none());
+        assert!(format_pace_from_speed(-1.0).is_none());
+    }
+
+    // ── average_numeric_stream_value ──────────────────────────────────
+
+    #[test]
+    fn average_numeric_stream_value_valid() {
+        let data = serde_json::json!({"watts": [100, 200, 300]});
+        let avg = average_numeric_stream_value(Some(&data), &["watts"]);
+        assert_eq!(avg, Some(200.0));
+    }
+
+    #[test]
+    fn average_numeric_stream_value_empty() {
+        let data = serde_json::json!({"watts": []});
+        let avg = average_numeric_stream_value(Some(&data), &["watts"]);
+        assert!(avg.is_none());
+        assert!(average_numeric_stream_value(None, &["watts"]).is_none());
+    }
+
+    #[test]
+    fn average_numeric_stream_value_missing_stream() {
+        let data = serde_json::json!({"hr": [100]});
+        assert!(average_numeric_stream_value(Some(&data), &["watts"]).is_none());
+    }
+
+    // ── quality_output_finding ────────────────────────────────────────
+
+    #[test]
+    fn quality_output_finding_power() {
+        let detail = serde_json::json!({"average_watts": 250.0});
+        let result = quality_output_finding(Some(&detail), None);
+        assert_eq!(result, Some("Average power tracked at 250 W.".into()));
+    }
+
+    #[test]
+    fn quality_output_finding_speed() {
+        let detail = serde_json::json!({"average_speed": 5.0});
+        let result = quality_output_finding(Some(&detail), None);
+        // 5 m/s = 3:20 /km
+        assert_eq!(result, Some("Average pace held at 3:20 /km.".into()));
+    }
+
+    #[test]
+    fn quality_output_finding_speed_from_streams() {
+        let streams = serde_json::json!({"velocity_smooth": [4.0, 5.0, 6.0]});
+        let result = quality_output_finding(None, Some(&streams));
+        // avg = 5.0 m/s -> 3:20 /km
+        assert_eq!(result, Some("Average pace held at 3:20 /km.".into()));
+    }
+
+    #[test]
+    fn quality_output_finding_speed_fallback_kmh() {
+        let detail = serde_json::json!({"average_speed": 0.0});
+        let result = quality_output_finding(Some(&detail), None);
+        // average_speed = 0.0, format_pace_from_speed returns None,
+        // falls to km/h format: 0.0 * 3.6 = 0.0
+        assert_eq!(result, Some("Average speed tracked at 0.0 km/h.".into()));
+    }
+
+    #[test]
+    fn quality_output_finding_speed_from_stream_or_else() {
+        let streams = serde_json::json!({"velocity_smooth": [4.0, 5.0, 6.0]});
+        // no detail, no power, no average_speed in detail -> or_else fires -> stream avg = 5.0 -> 3:20 /km
+        let result = quality_output_finding(None, Some(&streams));
+        assert_eq!(result, Some("Average pace held at 3:20 /km.".into()));
+    }
+
+    #[test]
+    fn quality_output_finding_none() {
+        assert!(quality_output_finding(None, None).is_none());
+    }
+
+    // ── IntervalOutputValue ───────────────────────────────────────────
+
+    #[test]
+    fn interval_output_kind_power() {
+        let val = IntervalOutputValue::Power(250.0);
+        assert_eq!(val.kind(), IntervalOutputKind::Power);
+    }
+
+    #[test]
+    fn interval_output_kind_pace() {
+        let val = IntervalOutputValue::Pace(5.0);
+        assert_eq!(val.kind(), IntervalOutputKind::Pace);
+    }
+
+    #[test]
+    fn interval_output_value_format_power() {
+        let val = IntervalOutputValue::Power(250.0);
+        assert_eq!(val.format(), "250 W");
+    }
+
+    #[test]
+    fn interval_output_value_format_pace() {
+        let val = IntervalOutputValue::Pace(5.0);
+        assert_eq!(val.format(), "3:20 /km");
+    }
+
+    #[test]
+    fn interval_output_value_format_pace_invalid() {
+        let val = IntervalOutputValue::Pace(0.0);
+        assert_eq!(val.format(), "n/a");
+    }
+
+    // ── derive_interval_output ────────────────────────────────────────
+
+    #[test]
+    fn derive_interval_output_power_from_field() {
+        let obj = serde_json::json!({"average_watts": 250.0});
+        let map = obj.as_object().unwrap();
+        let result = derive_interval_output(map, None);
+        assert_eq!(result.map(|v| v.format()), Some("250 W".to_string()));
+    }
+
+    #[test]
+    fn derive_interval_output_power_from_alt() {
+        let obj = serde_json::json!({"average_watts_alt": 230.0});
+        let map = obj.as_object().unwrap();
+        let result = derive_interval_output(map, None);
+        assert_eq!(result.map(|v| v.format()), Some("230 W".to_string()));
+    }
+
+    #[test]
+    fn derive_interval_output_power_from_weighted() {
+        let obj = serde_json::json!({"weighted_average_watts": 240.0});
+        let map = obj.as_object().unwrap();
+        let result = derive_interval_output(map, None);
+        assert_eq!(result.map(|v| v.format()), Some("240 W".to_string()));
+    }
+
+    #[test]
+    fn derive_interval_output_power_from_stream() {
+        let obj = serde_json::json!({"start_index": 0, "end_index": 3});
+        let streams = serde_json::json!({"watts": [200, 220, 240, 260]});
+        let map = obj.as_object().unwrap();
+        let result = derive_interval_output(map, Some(&streams));
+        // avg of [200, 220, 240] = 220
+        assert_eq!(result.map(|v| v.format()), Some("220 W".to_string()));
+    }
+
+    #[test]
+    fn derive_interval_output_pace_from_field() {
+        let obj = serde_json::json!({"average_speed": 5.0});
+        let map = obj.as_object().unwrap();
+        let result = derive_interval_output(map, None);
+        assert_eq!(result.map(|v| v.format()), Some("3:20 /km".to_string()));
+    }
+
+    #[test]
+    fn derive_interval_output_pace_from_stream() {
+        let obj = serde_json::json!({"start_index": 0, "end_index": 3});
+        let streams = serde_json::json!({"velocity_smooth": [4.0, 5.0, 6.0]});
+        let map = obj.as_object().unwrap();
+        let result = derive_interval_output(map, Some(&streams));
+        assert_eq!(result.map(|v| v.format()), Some("3:20 /km".to_string()));
+    }
+
+    #[test]
+    fn derive_interval_output_none() {
+        let obj = serde_json::json!({});
+        let map = obj.as_object().unwrap();
+        assert!(derive_interval_output(map, None).is_none());
+    }
+
+    // ── preferred_interval_output_kind ────────────────────────────────
+
+    #[test]
+    fn preferred_interval_output_kind_power() {
+        let intervals: Vec<Value> = vec![serde_json::json!({"average_watts": 250})];
+        assert_eq!(
+            preferred_interval_output_kind(&intervals, None),
+            IntervalOutputKind::Power
+        );
+    }
+
+    #[test]
+    fn preferred_interval_output_kind_pace() {
+        let intervals: Vec<Value> = vec![serde_json::json!({"average_speed": 5.0})];
+        assert_eq!(
+            preferred_interval_output_kind(&intervals, None),
+            IntervalOutputKind::Pace
+        );
+    }
+
+    #[test]
+    fn preferred_interval_output_kind_default() {
+        let intervals: Vec<Value> = vec![serde_json::json!({})];
+        assert_eq!(
+            preferred_interval_output_kind(&intervals, None),
+            IntervalOutputKind::Power
+        );
+    }
+
+    // ── build_interval_analysis_rows ──────────────────────────────────
+
+    #[test]
+    fn build_interval_analysis_rows_power() {
+        let intervals: Vec<Value> = vec![
+            serde_json::json!({
+                "moving_time": 300,
+                "average_heartrate": 150.0,
+                "average_watts": 250.0,
+            }),
+            serde_json::json!({
+                "moving_time": 180,
+                "average_heartrate": 145.0,
+                "average_watts": 230.0,
+            }),
+        ];
+        let rows = build_interval_analysis_rows(&intervals, None, IntervalOutputKind::Power);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0][0], "1");
+        assert_eq!(rows[0][1], "5:00");
+        assert_eq!(rows[0][2], "150 bpm");
+        assert_eq!(rows[0][3], "250 W");
+    }
+
+    #[test]
+    fn build_interval_analysis_rows_no_hr() {
+        let intervals: Vec<Value> = vec![serde_json::json!({
+            "moving_time": 120,
+            "average_watts": 200.0,
+        })];
+        let rows = build_interval_analysis_rows(&intervals, None, IntervalOutputKind::Power);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0][2], "n/a");
+    }
+
+    // ── build_period_summary_rows ─────────────────────────────────────
+
+    #[test]
+    fn build_period_summary_rows_basic() {
+        let snapshot = TrendSnapshot {
+            activity_count: 5,
+            total_time_secs: 36000,
+            total_distance_m: 50000.0,
+            total_elevation_m: 800.0,
+        };
+        let rows = build_period_summary_rows(5, &snapshot, 10.0);
+        assert_eq!(rows.len(), 4);
+        assert_eq!(rows[0][0], "Total Time");
+        assert_eq!(rows[1][0], "Distance");
+        assert_eq!(rows[2][0], "Elevation");
+        assert_eq!(rows[3][0], "Weekly Avg");
+        assert!(rows[1][1].contains("50.0 km"));
+        assert!(rows[3][1].contains("10.0 hrs"));
+    }
+
+    // ── build_requested_single_metric_rows ────────────────────────────
+
+    #[test]
+    fn build_requested_single_metric_rows_time() {
+        let detail = serde_json::json!({"moving_time": 3600});
+        let obj = detail.as_object();
+        let rows = build_requested_single_metric_rows(obj, &["time".to_string()]);
+        assert_eq!(rows[0][1], "1:00:00");
+        assert_eq!(rows[0][2], "available");
+    }
+
+    #[test]
+    fn build_requested_single_metric_rows_distance() {
+        let detail = serde_json::json!({"distance": 10000.0});
+        let obj = detail.as_object();
+        let rows = build_requested_single_metric_rows(obj, &["distance".to_string()]);
+        assert_eq!(rows[0][1], "10.00 km");
+        assert_eq!(rows[0][2], "available");
+    }
+
+    #[test]
+    fn build_requested_single_metric_rows_vertical() {
+        let detail = serde_json::json!({"total_elevation_gain": 350.0});
+        let obj = detail.as_object();
+        let rows = build_requested_single_metric_rows(obj, &["vertical".to_string()]);
+        assert_eq!(rows[0][1], "350 m");
+        assert_eq!(rows[0][2], "available");
+    }
+
+    #[test]
+    fn build_requested_single_metric_rows_hr() {
+        let detail = serde_json::json!({"average_heartrate": 145.0});
+        let obj = detail.as_object();
+        let rows = build_requested_single_metric_rows(obj, &["hr".to_string()]);
+        assert_eq!(rows[0][1], "145 bpm");
+        assert_eq!(rows[0][2], "available");
+    }
+
+    #[test]
+    fn build_requested_single_metric_rows_pace() {
+        let detail = serde_json::json!({
+            "moving_time": 1800,
+            "distance": 6000.0,
+        });
+        let obj = detail.as_object();
+        let rows = build_requested_single_metric_rows(obj, &["pace".to_string()]);
+        assert!(rows[0][1].contains("/km"));
+        assert_eq!(rows[0][2], "available");
+    }
+
+    #[test]
+    fn build_requested_single_metric_rows_pace_unavailable() {
+        let detail = serde_json::json!({"moving_time": 0, "distance": 0.0});
+        let obj = detail.as_object();
+        let rows = build_requested_single_metric_rows(obj, &["pace".to_string()]);
+        assert_eq!(rows[0][1], "n/a");
+        assert_eq!(rows[0][2], "unavailable");
+    }
+
+    #[test]
+    fn build_requested_single_metric_rows_tss() {
+        let detail = serde_json::json!({"tss": 150.0});
+        let obj = detail.as_object();
+        let rows = build_requested_single_metric_rows(obj, &["tss".to_string()]);
+        assert_eq!(rows[0][1], "150.0");
+        assert_eq!(rows[0][2], "available");
+    }
+
+    #[test]
+    fn build_requested_single_metric_rows_unsupported() {
+        let detail = serde_json::json!({"foo": "bar"});
+        let obj = detail.as_object();
+        let rows = build_requested_single_metric_rows(obj, &["cadence".to_string()]);
+        assert_eq!(rows[0][1], "n/a");
+        assert_eq!(rows[0][2], "unsupported");
+    }
+
+    #[test]
+    fn build_requested_single_metric_rows_no_detail() {
+        let rows = build_requested_single_metric_rows(None, &["time".to_string()]);
+        assert_eq!(rows[0][1], "n/a");
+        assert_eq!(rows[0][2], "unavailable");
+    }
+
+    #[test]
+    fn build_requested_single_metric_rows_time_unavailable() {
+        let detail = serde_json::json!({"moving_time": "not_a_number"});
+        let obj = detail.as_object();
+        let rows = build_requested_single_metric_rows(obj, &["time".to_string()]);
+        assert_eq!(rows[0][1], "n/a");
+        assert_eq!(rows[0][2], "unavailable");
+    }
+
+    #[test]
+    fn build_requested_single_metric_rows_tss_unavailable() {
+        let detail = serde_json::json!({"foo": "bar"});
+        let obj = detail.as_object();
+        let rows = build_requested_single_metric_rows(obj, &["tss".to_string()]);
+        assert_eq!(rows[0][1], "n/a");
+        assert_eq!(rows[0][2], "unavailable");
+    }
+
+    #[test]
+    fn build_requested_single_metric_rows_multiple() {
+        let detail = serde_json::json!({
+            "moving_time": 3600,
+            "distance": 15000.0,
+            "total_elevation_gain": 200.0,
+            "average_heartrate": 140.0,
+            "tss": 180.0,
+        });
+        let obj = detail.as_object();
+        let rows = build_requested_single_metric_rows(
+            obj,
+            &[
+                "time".to_string(),
+                "distance".to_string(),
+                "vertical".to_string(),
+                "hr".to_string(),
+                "tss".to_string(),
+                "unknown".to_string(),
+            ],
+        );
+        assert_eq!(rows.len(), 6);
+        assert_eq!(rows[0][0], "TIME");
+        assert_eq!(rows[1][0], "DISTANCE");
+        assert_eq!(rows[2][0], "VERTICAL");
+        assert_eq!(rows[3][0], "HR");
+        assert_eq!(rows[4][0], "TSS");
+        assert_eq!(rows[5][0], "UNKNOWN");
+        assert_eq!(rows[5][2], "unsupported");
+    }
+
+    // ── build_requested_period_metric_rows ────────────────────────────
+
+    #[test]
+    fn build_requested_period_metric_rows_basic() {
+        let snapshot = TrendSnapshot {
+            activity_count: 3,
+            total_time_secs: 18000,
+            total_distance_m: 30000.0,
+            total_elevation_m: 500.0,
+        };
+        let period: Vec<&ActivitySummary> = vec![];
+        let details = HashMap::new();
+        let rows = build_requested_period_metric_rows(
+            &[
+                "time".to_string(),
+                "distance".to_string(),
+                "vertical".to_string(),
+            ],
+            &period,
+            &snapshot,
+            &details,
+        );
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0][1], "5:00:00");
+        assert_eq!(rows[1][1], "30.0 km");
+        assert_eq!(rows[2][1], "500 m");
+    }
+
+    #[test]
+    fn build_requested_period_metric_rows_hr() {
+        let snapshot = TrendSnapshot {
+            activity_count: 2,
+            total_time_secs: 7200,
+            total_distance_m: 0.0,
+            total_elevation_m: 0.0,
+        };
+        let act1 = ActivitySummary {
+            id: "1".into(),
+            name: None,
+            start_date_local: "2026-03-23".into(),
+            moving_time: None,
+            elapsed_time: None,
+            distance: None,
+            training_load: None,
+        };
+        let act2 = ActivitySummary {
+            id: "2".into(),
+            name: None,
+            start_date_local: "2026-03-24".into(),
+            moving_time: None,
+            elapsed_time: None,
+            distance: None,
+            training_load: None,
+        };
+        let period = vec![&act1, &act2];
+        let details = HashMap::new();
+        let rows =
+            build_requested_period_metric_rows(&["hr".to_string()], &period, &snapshot, &details);
+        // No details -> weighted_avg_hr returns None -> unavailable
+        assert_eq!(rows[0][1], "n/a");
+        assert_eq!(rows[0][2], "unavailable");
+    }
+
+    #[test]
+    fn build_requested_period_metric_rows_hr_with_details() {
+        let snapshot = TrendSnapshot {
+            activity_count: 0,
+            total_time_secs: 0,
+            total_distance_m: 0.0,
+            total_elevation_m: 0.0,
+        };
+        let act1 = ActivitySummary {
+            id: "1".into(),
+            ..Default::default()
+        };
+        let period = vec![&act1];
+        let mut details = HashMap::new();
+        details.insert(
+            "1".into(),
+            serde_json::json!({
+                "moving_time": 3600,
+                "average_heartrate": 150.0,
+            }),
+        );
+        let rows =
+            build_requested_period_metric_rows(&["hr".to_string()], &period, &snapshot, &details);
+        assert_eq!(rows[0][1], "150 bpm");
+        assert_eq!(rows[0][2], "available");
+    }
+
+    #[test]
+    fn build_requested_period_metric_rows_pace() {
+        let snapshot = TrendSnapshot {
+            activity_count: 0,
+            total_time_secs: 1800,
+            total_distance_m: 6000.0,
+            total_elevation_m: 0.0,
+        };
+        let rows = build_requested_period_metric_rows(
+            &["pace".to_string()],
+            &[],
+            &snapshot,
+            &HashMap::new(),
+        );
+        assert!(rows[0][1].contains("/km"));
+        assert_eq!(rows[0][2], "available");
+    }
+
+    #[test]
+    fn build_requested_period_metric_rows_pace_unavailable() {
+        let snapshot = TrendSnapshot {
+            activity_count: 0,
+            total_time_secs: 0,
+            total_distance_m: 0.0,
+            total_elevation_m: 0.0,
+        };
+        let rows = build_requested_period_metric_rows(
+            &["pace".to_string()],
+            &[],
+            &snapshot,
+            &HashMap::new(),
+        );
+        assert_eq!(rows[0][1], "n/a");
+        assert_eq!(rows[0][2], "unavailable");
+    }
+
+    #[test]
+    fn build_requested_period_metric_rows_tss() {
+        let snapshot = TrendSnapshot {
+            activity_count: 0,
+            total_time_secs: 0,
+            total_distance_m: 0.0,
+            total_elevation_m: 0.0,
+        };
+        let act1 = ActivitySummary {
+            id: "1".into(),
+            ..Default::default()
+        };
+        let period = vec![&act1];
+        let mut details = HashMap::new();
+        details.insert("1".into(), serde_json::json!({"tss": 150.0}));
+        let rows =
+            build_requested_period_metric_rows(&["tss".to_string()], &period, &snapshot, &details);
+        assert_eq!(rows[0][1], "150.0");
+        assert_eq!(rows[0][2], "available");
+    }
+
+    #[test]
+    fn build_requested_period_metric_rows_tss_unavailable() {
+        let snapshot = TrendSnapshot {
+            activity_count: 0,
+            total_time_secs: 0,
+            total_distance_m: 0.0,
+            total_elevation_m: 0.0,
+        };
+        let act1 = ActivitySummary {
+            id: "1".into(),
+            ..Default::default()
+        };
+        let period = vec![&act1];
+        let details = HashMap::new();
+        let rows =
+            build_requested_period_metric_rows(&["tss".to_string()], &period, &snapshot, &details);
+        assert_eq!(rows[0][1], "n/a");
+        assert_eq!(rows[0][2], "unavailable");
+    }
+
+    #[test]
+    fn build_requested_period_metric_rows_unsupported() {
+        let snapshot = TrendSnapshot {
+            activity_count: 0,
+            total_time_secs: 0,
+            total_distance_m: 0.0,
+            total_elevation_m: 0.0,
+        };
+        let rows = build_requested_period_metric_rows(
+            &["unknown".to_string()],
+            &[],
+            &snapshot,
+            &HashMap::new(),
+        );
+        assert_eq!(rows[0][1], "n/a");
+        assert_eq!(rows[0][2], "unsupported");
+    }
+
+    // ── build_zone_distribution_rows ──────────────────────────────────
+
+    #[test]
+    fn build_zone_distribution_rows_basic() {
+        let mut zones = serde_json::Map::new();
+        zones.insert("z1".into(), serde_json::json!(600));
+        zones.insert("z2".into(), serde_json::json!(1200));
+        zones.insert("z3".into(), serde_json::json!(200));
+        let rows = build_zone_distribution_rows(&zones);
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0][0], "Z1");
+        assert!(rows[0][1].contains("10:00"));
+        assert_eq!(rows[1][0], "Z2");
+        assert_eq!(rows[2][0], "Z3");
+    }
+
+    #[test]
+    fn build_zone_distribution_rows_zero_total() {
+        let mut zones = serde_json::Map::new();
+        zones.insert("z1".into(), serde_json::json!(0));
+        let rows = build_zone_distribution_rows(&zones);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0][2], "0%");
+    }
+
+    #[test]
+    fn build_zone_distribution_rows_skips_non_number() {
+        let mut zones = serde_json::Map::new();
+        zones.insert("z1".into(), serde_json::json!(300));
+        zones.insert("foo".into(), serde_json::json!("bar"));
+        let rows = build_zone_distribution_rows(&zones);
+        assert_eq!(rows.len(), 1);
+    }
+
+    // ── build_range_histogram_rows ────────────────────────────────────
+
+    #[test]
+    fn build_range_histogram_rows_basic() {
+        let buckets = serde_json::json!([
+            {"min": 0, "max": 100, "secs": 600},
+            {"min": 100, "max": 200, "secs": 1200},
+        ]);
+        let buckets_arr = buckets.as_array().unwrap();
+        let rows = build_range_histogram_rows(buckets_arr, "W");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0][0], "0-100 W");
+        assert_eq!(rows[0][1], "10:00");
+        assert_eq!(rows[1][0], "100-200 W");
+        assert_eq!(rows[1][1], "20:00");
+    }
+
+    #[test]
+    fn build_range_histogram_rows_missing_secs() {
+        let buckets = serde_json::json!([
+            {"min": 0.0, "max": 100.0},
+        ]);
+        let buckets_arr = buckets.as_array().unwrap();
+        let rows = build_range_histogram_rows(buckets_arr, "W");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0][1], "0:00");
+    }
+
+    // ── build_bucket_histogram_rows ───────────────────────────────────
+
+    #[test]
+    fn build_bucket_histogram_rows_basic() {
+        let buckets = serde_json::json!([
+            {"start": 0, "secs": 600, "movingSecs": 590},
+            {"start": 10, "secs": 300, "movingSecs": 290},
+        ]);
+        let rows = build_bucket_histogram_rows(buckets.as_array().unwrap(), None, "");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0][0], "0");
+        assert_eq!(rows[0][1], "10:00");
+        assert_eq!(rows[0][2], "9:50");
+        assert_eq!(rows[0][3], "n/a");
+    }
+
+    #[test]
+    fn build_bucket_histogram_rows_with_suffix() {
+        let buckets = serde_json::json!([
+            {"start": 5, "secs": 600},
+        ]);
+        let rows = build_bucket_histogram_rows(buckets.as_array().unwrap(), None, "km");
+        assert_eq!(rows[0][0], "5 km");
+    }
+
+    #[test]
+    fn build_bucket_histogram_rows_with_average() {
+        let buckets = serde_json::json!([
+            {"start": 0, "secs": 600, "movingSecs": 590, "avg_watts": 250.0},
+        ]);
+        let rows = build_bucket_histogram_rows(buckets.as_array().unwrap(), Some("avg_watts"), "");
+        assert_eq!(rows[0][3], "250");
+    }
+
+    #[test]
+    fn build_bucket_histogram_rows_average_as_i64() {
+        let buckets = serde_json::json!([
+            {"start": 0, "secs": 600, "movingSecs": 590, "avg_hr": 145},
+        ]);
+        let rows = build_bucket_histogram_rows(buckets.as_array().unwrap(), Some("avg_hr"), "");
+        assert_eq!(rows[0][3], "145");
+    }
+
+    #[test]
+    fn build_bucket_histogram_rows_no_moving_secs() {
+        let buckets = serde_json::json!([
+            {"start": 0, "secs": 600},
+        ]);
+        let rows = build_bucket_histogram_rows(buckets.as_array().unwrap(), None, "");
+        assert_eq!(rows[0][2], "10:00"); // falls back to secs
+    }
+
+    // ── append_histogram_section ──────────────────────────────────────
+
+    #[test]
+    fn append_histogram_section_none_payload() {
+        let mut content = vec![];
+        append_histogram_section(&mut content, "Test", None, None, "", "W");
+        assert!(content.is_empty());
+    }
+
+    #[test]
+    fn append_histogram_section_with_zones() {
+        let payload = serde_json::json!({
+            "zones": {"z1": 600, "z2": 300},
+        });
+        let mut content = vec![];
+        append_histogram_section(&mut content, "Power Zones", Some(&payload), None, "", "W");
+        assert_eq!(content.len(), 2);
+        assert_eq!(content[0], ContentBlock::markdown("Power Zones"));
+    }
+
+    #[test]
+    fn append_histogram_section_with_range_buckets() {
+        let payload = serde_json::json!([
+            {"min": 0.0, "max": 100.0, "secs": 600},
+        ]);
+        let mut content = vec![];
+        append_histogram_section(&mut content, "Power Range", Some(&payload), None, "", "W");
+        assert_eq!(content.len(), 2);
+        assert_eq!(content[0], ContentBlock::markdown("Power Range"));
+    }
+
+    #[test]
+    fn append_histogram_section_with_bucket_buckets() {
+        let payload = serde_json::json!([
+            {"start": 0, "secs": 600, "movingSecs": 590},
+        ]);
+        let mut content = vec![];
+        append_histogram_section(
+            &mut content,
+            "Bucketed",
+            Some(&payload),
+            Some("avg_watts"),
+            "km",
+            "W",
+        );
+        assert_eq!(content.len(), 2);
+        assert_eq!(content[0], ContentBlock::markdown("Bucketed"));
+    }
+
+    #[test]
+    fn append_histogram_section_empty_zones() {
+        let payload = serde_json::json!({"zones": {}});
+        let mut content = vec![];
+        append_histogram_section(&mut content, "Empty Zones", Some(&payload), None, "", "W");
+        assert!(content.is_empty());
+    }
+
+    #[test]
+    fn append_histogram_section_empty_buckets() {
+        let payload = serde_json::json!([]);
+        let mut content = vec![];
+        append_histogram_section(&mut content, "Empty Buckets", Some(&payload), None, "", "W");
+        assert!(content.is_empty());
+    }
+
+    // ── best_efforts_array ────────────────────────────────────────────
+
+    #[test]
+    fn best_efforts_array_direct() {
+        let data = serde_json::json!([{"seconds": 300}]);
+        let result = best_efforts_array(&data);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().len(), 1);
+    }
+
+    #[test]
+    fn best_efforts_array_nested_best_efforts() {
+        let data = serde_json::json!({
+            "best_efforts": [{"seconds": 300}],
+        });
+        let result = best_efforts_array(&data);
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn best_efforts_array_nested_efforts() {
+        let data = serde_json::json!({
+            "efforts": [{"seconds": 300}],
+        });
+        let result = best_efforts_array(&data);
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn best_efforts_array_not_array() {
+        let data = serde_json::json!({"foo": "bar"});
+        assert!(best_efforts_array(&data).is_none());
+    }
+
+    // ── format_best_effort_average ────────────────────────────────────
+
+    #[test]
+    fn format_best_effort_average_watts() {
+        let best_efforts = serde_json::json!({});
+        let mut effort = serde_json::Map::new();
+        effort.insert("watts".into(), serde_json::json!(300.0));
+        let result = format_best_effort_average(&best_efforts, &effort);
+        assert_eq!(result, Some("300 W".into()));
+    }
+
+    #[test]
+    fn format_best_effort_average_stream_watts() {
+        let best_efforts = serde_json::json!({"stream": "watts"});
+        let mut effort = serde_json::Map::new();
+        effort.insert("average".into(), serde_json::json!(250.0));
+        let result = format_best_effort_average(&best_efforts, &effort);
+        assert_eq!(result, Some("250.0 W".into()));
+    }
+
+    #[test]
+    fn format_best_effort_average_stream_speed() {
+        let best_efforts = serde_json::json!({"stream": "speed"});
+        let mut effort = serde_json::Map::new();
+        effort.insert("average".into(), serde_json::json!(5.0));
+        let result = format_best_effort_average(&best_efforts, &effort);
+        assert_eq!(result, Some("3:20 /km".into()));
+    }
+
+    #[test]
+    fn format_best_effort_average_stream_pace() {
+        let best_efforts = serde_json::json!({"stream": "pace"});
+        let mut effort = serde_json::Map::new();
+        effort.insert("value".into(), serde_json::json!(4.0));
+        let result = format_best_effort_average(&best_efforts, &effort);
+        // 1000 / 4.0 = 250. 250 / 60 = 4 min, remainder 10 sec -> 4:10 /km
+        assert_eq!(result, Some("4:10 /km".into()));
+    }
+
+    #[test]
+    fn format_best_effort_average_stream_other() {
+        let best_efforts = serde_json::json!({"stream": "cadence"});
+        let mut effort = serde_json::Map::new();
+        effort.insert("average".into(), serde_json::json!(85.0));
+        let result = format_best_effort_average(&best_efforts, &effort);
+        // "cadence" doesn't match any special stream type -> falls through
+        // Falls to priority 3: speed/velocity field -> not present
+        // Falls to priority 4: heartrate -> not present
+        // Falls to priority 5: generic average
+        assert_eq!(result, Some("85.00".into()));
+    }
+
+    #[test]
+    fn format_best_effort_average_speed_field() {
+        let mut effort = serde_json::Map::new();
+        effort.insert("speed".into(), serde_json::json!(5.0));
+        let result = format_best_effort_average(&serde_json::json!({}), &effort);
+        assert_eq!(result, Some("3:20 /km".into()));
+    }
+
+    #[test]
+    fn format_best_effort_average_velocity_field() {
+        let mut effort = serde_json::Map::new();
+        effort.insert("velocity".into(), serde_json::json!(5.0));
+        let result = format_best_effort_average(&serde_json::json!({}), &effort);
+        assert_eq!(result, Some("3:20 /km".into()));
+    }
+
+    #[test]
+    fn format_best_effort_average_heartrate() {
+        let mut effort = serde_json::Map::new();
+        effort.insert("heartrate".into(), serde_json::json!(150.0));
+        let result = format_best_effort_average(&serde_json::json!({}), &effort);
+        assert_eq!(result, Some("150 bpm".into()));
+    }
+
+    #[test]
+    fn format_best_effort_average_fallback() {
+        let mut effort = serde_json::Map::new();
+        effort.insert("average".into(), serde_json::json!(42.5));
+        let result = format_best_effort_average(&serde_json::json!({}), &effort);
+        assert_eq!(result, Some("42.50".into()));
+    }
+
+    #[test]
+    fn format_best_effort_average_none() {
+        let effort = serde_json::Map::new();
+        assert!(format_best_effort_average(&serde_json::json!({}), &effort).is_none());
+    }
+
+    // ── append_best_efforts_section ───────────────────────────────────
+
+    #[test]
+    fn append_best_efforts_section_empty() {
+        let mut content = vec![];
+        append_best_efforts_section(&mut content, &serde_json::json!([]));
+        assert!(content.is_empty());
+    }
+
+    #[test]
+    fn append_best_efforts_section_legacy_hr() {
+        let best_efforts = serde_json::json!([
+            {"seconds": 300, "watts": 300.0, "heartrate": 150.0},
+            {"seconds": 600, "watts": 280.0, "heartrate": 145.0},
+        ]);
+        let mut content = vec![];
+        append_best_efforts_section(&mut content, &best_efforts);
+        assert_eq!(content.len(), 2);
+        if let ContentBlock::Table { headers, rows } = &content[1] {
+            assert_eq!(headers[1], "Power");
+            assert_eq!(headers[2], "HR");
+            assert_eq!(rows[0][1], "300 W");
+            assert_eq!(rows[0][2], "150 bpm");
+        } else {
+            panic!("Expected Table");
+        }
+    }
+
+    #[test]
+    fn append_best_efforts_section_modern() {
+        let best_efforts = serde_json::json!([
+            {"seconds": 300, "watts": 300.0},
+            {"seconds": 600, "watts": 280.0},
+        ]);
+        let mut content = vec![];
+        append_best_efforts_section(&mut content, &best_efforts);
+        assert_eq!(content.len(), 2);
+        if let ContentBlock::Table { headers, rows } = &content[1] {
+            assert_eq!(headers[0], "Duration");
+            assert_eq!(headers[1], "Average");
+            assert_eq!(rows[0][1], "300 W");
+        } else {
+            panic!("Expected Table");
+        }
+    }
+
+    #[test]
+    fn append_best_efforts_section_no_format_possible() {
+        let best_efforts = serde_json::json!([
+            {"seconds": 300},
+            {"seconds": 600},
+        ]);
+        let mut content = vec![];
+        append_best_efforts_section(&mut content, &best_efforts);
+        // Still adds markdown header, but only header row no data rows -> only 1 content block
+        assert_eq!(content.len(), 1);
+        assert_eq!(content[0], ContentBlock::markdown("Best Efforts"));
+    }
+
+    // ── append_stream_insights ────────────────────────────────────────
+
+    fn assert_content_markdown_contains(block: &ContentBlock, needle: &str) {
+        if let ContentBlock::Markdown { markdown } = block {
+            assert!(
+                markdown.contains(needle),
+                "markdown '{markdown}' does not contain '{needle}'"
+            );
+        } else {
+            panic!("Expected Markdown block, got {block:?}");
+        }
+    }
+
+    #[test]
+    fn append_stream_insights_unavailable() {
+        let mut content = vec![];
+        append_stream_insights(&mut content, None);
+        assert_eq!(content.len(), 1);
+        assert_content_markdown_contains(&content[0], "unavailable");
+    }
+
+    #[test]
+    fn append_stream_insights_unavailable_not_object() {
+        let mut content = vec![];
+        append_stream_insights(&mut content, Some(&serde_json::json!([1, 2, 3])));
+        assert_eq!(content.len(), 1);
+        assert_content_markdown_contains(&content[0], "unavailable");
+    }
+
+    #[test]
+    fn append_stream_insights_with_data() {
+        let streams = serde_json::json!({
+            "heartrate": [120, 130, 140, 150],
+            "watts": [200, 250, 300],
+            "cadence": [80, 85, 90],
+        });
+        let mut content = vec![];
+        append_stream_insights(&mut content, Some(&streams));
+        assert_eq!(content.len(), 2);
+        if let ContentBlock::Table { headers, rows } = &content[1] {
+            assert_eq!(headers[0], "Stream");
+            // heartrate has priority 0, watts has 1, cadence has 3
+            assert_eq!(rows[0][0], "heartrate");
+            assert_eq!(rows[1][0], "watts");
+            assert_eq!(rows[2][0], "cadence");
+        } else {
+            panic!("Expected Table");
+        }
+    }
+
+    #[test]
+    fn append_stream_insights_empty_data() {
+        let streams = serde_json::json!({
+            "heartrate": [],
+        });
+        let mut content = vec![];
+        append_stream_insights(&mut content, Some(&streams));
+        assert_content_markdown_contains(&content[0], "unavailable");
+    }
+
+    #[test]
+    fn append_stream_insights_sorting_by_name_tiebreaker() {
+        let streams = serde_json::json!({
+            "altitude": [100, 200],
+            "temp": [20, 25],
+        });
+        let mut content = vec![];
+        append_stream_insights(&mut content, Some(&streams));
+        if let ContentBlock::Table { headers: _, rows } = &content[1] {
+            // altitude has priority 5, temp has priority 6
+            assert_eq!(rows[0][0], "altitude");
+            assert_eq!(rows[1][0], "temp");
+        }
+    }
+
+    #[test]
+    fn append_stream_insights_unrecognized_stream_priority() {
+        let streams = serde_json::json!({
+            "FooStream": [1, 2, 3],
+            "BarStream": [4, 5],
+        });
+        let mut content = vec![];
+        append_stream_insights(&mut content, Some(&streams));
+        if let ContentBlock::Table { headers: _, rows } = &content[1] {
+            // Both have priority 50, sorted alphabetically
+            assert_eq!(rows[0][0], "BarStream");
+            assert_eq!(rows[1][0], "FooStream");
+        }
+    }
+
+    // ── render_espe_section ──────────────────────────────────────────
+
+    #[test]
+    fn render_espe_section_none() {
+        assert!(render_espe_section(&None, &None).is_none());
+    }
+
+    #[test]
+    fn render_espe_section_unsupported() {
+        let anchors = EspePowerAnchors::unsupported();
+        assert!(render_espe_section(&Some(anchors), &None).is_none());
+    }
+
+    #[test]
+    fn render_espe_section_supported() {
+        let anchors = EspePowerAnchors {
+            eftp: Some(250.0),
+            w_prime: Some(20000.0),
+            p_max: Some(800.0),
+            supported: true,
+            ..Default::default()
+        };
+        let derived = EspeDerivedMetrics {
+            glycolytic_bias: Some(3.2),
+            supported: true,
+            ..Default::default()
+        };
+        let text = render_espe_section(&Some(anchors), &Some(derived));
+        let text = text.expect("should render");
+        assert!(text.contains("eFTP"));
+        assert!(text.contains("W′"));
+        assert!(text.contains("pMax"));
+        assert!(text.contains("Glycolytic Bias"));
+    }
+
+    #[test]
+    fn render_espe_section_no_derived() {
+        let anchors = EspePowerAnchors {
+            eftp: Some(250.0),
+            supported: true,
+            ..Default::default()
+        };
+        let text = render_espe_section(&Some(anchors), &None);
+        let text = text.expect("should render");
+        assert!(text.contains("eFTP"));
+        assert!(!text.contains("Glycolytic Bias"));
+    }
+
+    // ── render_wdrm_section ──────────────────────────────────────────
+
+    #[test]
+    fn render_wdrm_section_none() {
+        assert!(render_wdrm_section(&None).is_none());
+    }
+
+    #[test]
+    fn render_wdrm_section_unsupported() {
+        let wdrm = WdrMetrics::unsupported();
+        assert!(render_wdrm_section(&Some(wdrm)).is_none());
+    }
+
+    #[test]
+    fn render_wdrm_section_supported() {
+        let wdrm = WdrMetrics {
+            supported: true,
+            max_wbal_depletion: Some(15000.0),
+            depletion_pct: Some(0.75),
+            joules_above_ftp: Some(5000.0),
+            mean_depletion_pct_7d: Some(0.65),
+            high_depletion_sessions_7d: 3,
+            sessions_with_data_7d: 5,
+        };
+        let text = render_wdrm_section(&Some(wdrm));
+        let text = text.expect("should render");
+        assert!(text.contains("W′ Depletion"));
+        assert!(text.contains("Max W′ Depletion"));
+        assert!(text.contains("Depletion: 75%"));
+        assert!(text.contains("Joules Above FTP"));
+        assert!(text.contains("Mean 7d Depletion: 65%"));
+        assert!(text.contains("High Depletion Sessions (7d): 3"));
+    }
+
+    #[test]
+    fn render_wdrm_section_no_7d_data() {
+        let wdrm = WdrMetrics {
+            supported: true,
+            max_wbal_depletion: Some(10000.0),
+            ..Default::default()
+        };
+        let text = render_wdrm_section(&Some(wdrm));
+        let text = text.expect("should render");
+        assert!(text.contains("Max W′ Depletion"));
+        assert!(!text.contains("Mean 7d"));
+        assert!(!text.contains("High Depletion Sessions"));
+    }
+
+    // ── render_isdm_section ──────────────────────────────────────────
+
+    #[test]
+    fn render_isdm_section_none() {
+        assert!(render_isdm_section(&None).is_none());
+    }
+
+    #[test]
+    fn render_isdm_section_basic() {
+        let decoupling = DecouplingMetrics {
+            decoupling_pct: 5.5,
+            signed_decoupling_pct: -3.2,
+            state: "decoupled".into(),
+            durability_state: "moderate".into(),
+            ..Default::default()
+        };
+        let text = render_isdm_section(&Some(decoupling));
+        let text = text.expect("should render");
+        assert!(text.contains("Aerobic Decoupling"));
+        assert!(text.contains("Signed Decoupling"));
+        assert!(text.contains("-3.2%"));
+        assert!(text.contains("Absolute Decoupling"));
+        assert!(text.contains("5.5%"));
+        assert!(text.contains("Durability State: moderate"));
+    }
+
+    #[test]
+    fn render_isdm_section_with_z2_variance_stable() {
+        let decoupling = DecouplingMetrics {
+            decoupling_pct: 5.0,
+            signed_decoupling_pct: -3.0,
+            state: "some".into(),
+            durability_state: "good".into(),
+            efficiency_factor_first_half: Some(0.85),
+            efficiency_factor_second_half: Some(0.82),
+            z2_hr_variance: Some(20.0),
+        };
+        let text = render_isdm_section(&Some(decoupling));
+        let text = text.expect("should render");
+        assert!(text.contains("EF First Half"));
+        assert!(text.contains("EF Second Half"));
+        assert!(text.contains("Z2 HR Variance"));
+        assert!(text.contains("stable"));
+    }
+
+    #[test]
+    fn render_isdm_section_with_z2_variance_moderate() {
+        let decoupling = DecouplingMetrics {
+            decoupling_pct: 5.0,
+            signed_decoupling_pct: -3.0,
+            state: "some".into(),
+            durability_state: "good".into(),
+            z2_hr_variance: Some(35.0),
+            ..Default::default()
+        };
+        let text = render_isdm_section(&Some(decoupling));
+        assert!(text.unwrap().contains("moderate"));
+    }
+
+    #[test]
+    fn render_isdm_section_with_z2_variance_unstable() {
+        let decoupling = DecouplingMetrics {
+            decoupling_pct: 5.0,
+            signed_decoupling_pct: -3.0,
+            state: "some".into(),
+            durability_state: "good".into(),
+            z2_hr_variance: Some(60.0),
+            ..Default::default()
+        };
+        let text = render_isdm_section(&Some(decoupling));
+        assert!(text.unwrap().contains("unstable"));
+    }
+
+    // ── render_ndli_section ──────────────────────────────────────────
+
+    #[test]
+    fn render_ndli_section_none() {
+        assert!(render_ndli_section(&None).is_none());
+    }
+
+    #[test]
+    fn render_ndli_section_unsupported() {
+        let ndli = NdliMetrics::default();
+        assert!(render_ndli_section(&Some(ndli)).is_none());
+    }
+
+    #[test]
+    fn render_ndli_section_supported() {
+        let ndli = NdliMetrics {
+            supported: true,
+            high_intensity_days_7d: 4,
+            mean_intensity_factor_7d: Some(0.95),
+            mean_efficiency_factor_7d: Some(0.88),
+            mean_variability_index_7d: Some(1.25),
+            ndli_state: "moderate".into(),
+            ndli_overload_flag: false,
+        };
+        let text = render_ndli_section(&Some(ndli));
+        let text = text.expect("should render");
+        assert!(text.contains("Neural Density"));
+        assert!(text.contains("State: moderate"));
+        assert!(text.contains("High-Intensity Days"));
+        assert!(text.contains("Mean IF: 0.950"));
+        assert!(text.contains("Mean EF: 0.880"));
+        assert!(text.contains("Mean VI: 1.25"));
+    }
+
+    #[test]
+    fn render_ndli_section_partial_derived() {
+        let ndli = NdliMetrics {
+            supported: true,
+            high_intensity_days_7d: 3,
+            ndli_state: "low".into(),
+            ..Default::default()
+        };
+        let text = render_ndli_section(&Some(ndli));
+        let text = text.expect("should render");
+        assert!(text.contains("State: low"));
+        assert!(!text.contains("Mean IF"));
+        assert!(!text.contains("Mean EF"));
+        assert!(!text.contains("Mean VI"));
+    }
+
+    // ── render_heat_section ──────────────────────────────────────────
+
+    #[test]
+    fn render_heat_section_none() {
+        assert!(render_heat_section(&None).is_none());
+    }
+
+    #[test]
+    fn render_heat_section_unsupported() {
+        let heat = HeatMetrics::default();
+        assert!(render_heat_section(&Some(heat)).is_none());
+    }
+
+    #[test]
+    fn render_heat_section_supported() {
+        let heat = HeatMetrics {
+            supported: true,
+            heat_index_7d: Some(28.5),
+            heat_max_7d: Some(35.0),
+            heat_state: "elevated".into(),
+        };
+        let text = render_heat_section(&Some(heat));
+        let text = text.expect("should render");
+        assert!(text.contains("Heat Stress"));
+        assert!(text.contains("State: elevated"));
+        assert!(text.contains("Heat Index"));
+        assert!(text.contains("Max Temperature"));
+    }
+
+    #[test]
+    fn render_heat_section_partial() {
+        let heat = HeatMetrics {
+            supported: true,
+            heat_state: "normal".into(),
+            ..Default::default()
+        };
+        let text = render_heat_section(&Some(heat));
+        let text = text.expect("should render");
+        assert!(text.contains("State: normal"));
+        assert!(!text.contains("Heat Index"));
+        assert!(!text.contains("Max Temperature"));
+    }
+
+    // ── render_z2_stability_section ──────────────────────────────────
+
+    #[test]
+    fn render_z2_stability_section_none() {
+        assert!(render_z2_stability_section(120.0, 150.0, None).is_none());
+    }
+
+    #[test]
+    fn render_z2_stability_section_stable() {
+        let text = render_z2_stability_section(120.0, 150.0, Some(20.0));
+        let text = text.expect("should render");
+        assert!(text.contains("Z2 HR Stability"));
+        assert!(text.contains("120–150 bpm"));
+        assert!(text.contains("HR Variance: 20.0"));
+        assert!(text.contains("stable"));
+    }
+
+    #[test]
+    fn render_z2_stability_section_moderate() {
+        let text = render_z2_stability_section(120.0, 150.0, Some(35.0));
+        let text = text.expect("should render");
+        assert!(text.contains("moderate"));
+    }
+
+    #[test]
+    fn render_z2_stability_section_unstable() {
+        let text = render_z2_stability_section(120.0, 150.0, Some(55.0));
+        let text = text.expect("should render");
+        assert!(text.contains("unstable"));
+    }
+
+    // ── extract_exact_tss: training_load fallback ─────────────────────
+
+    #[test]
+    fn extract_exact_tss_training_load_string() {
         let mut obj = serde_json::Map::new();
-        obj.insert("icu_training_load".to_string(), serde_json::json!(140.0));
-        assert_eq!(extract_exact_tss(&obj), Some(140.0));
+        obj.insert("training_load".to_string(), serde_json::json!(130));
+        // i64 value should be converted to f64
+        assert_eq!(extract_exact_tss(&obj), Some(130.0));
     }
 
-    #[test]
-    fn extract_exact_tss_not_found() {
-        let json_val = serde_json::json!({"foo": 140});
-        let obj = json_val.as_object().unwrap();
-        assert!(extract_exact_tss(obj).is_none());
-    }
+    // ── build_detailed_workout_rows: tss via training_load ────────────
 
     #[test]
-    fn format_histogram_number_integer() {
-        assert_eq!(format_histogram_number(5.0), "5");
-        assert_eq!(format_histogram_number(100.0), "100");
+    fn build_detailed_workout_rows_tss_via_training_load() {
+        let detail = serde_json::json!({
+            "moving_time": 1800,
+            "distance": 5000.0,
+            "training_load": 95.1,
+        });
+        let rows = build_detailed_workout_rows(Some(&detail));
+        // "training_load" is found by extract_exact_tss after "tss" and "icu_training_load"
+        assert!(rows.iter().any(|r| r[1].contains("95.1")));
     }
 
-    #[test]
-    fn format_histogram_number_decimal() {
-        assert_eq!(format_histogram_number(5.5), "5.50");
-        assert_eq!(format_histogram_number(1.23456), "1.23");
-    }
+    // ── build_detailed_workout_rows: partial data ─────────────────────
 
     #[test]
-    fn average_stream_slice_valid() {
-        let values: Vec<serde_json::Value> = (0..10).map(|i| serde_json::json!(i)).collect();
-        assert_eq!(average_stream_slice(&values, 2, 5), Some(3.0));
-        assert_eq!(average_stream_slice(&values, 0, 10), Some(4.5));
+    fn build_detailed_workout_rows_partial() {
+        let detail = serde_json::json!({
+            "moving_time": 900,
+            "distance": 3000.0,
+        });
+        let rows = build_detailed_workout_rows(Some(&detail));
+        assert_eq!(rows.len(), 1); // Only pace
+        assert_eq!(rows[0][0], "Avg Pace");
     }
 
+    // ── build_activity_message_rows: no content filtering ─────────────
+
     #[test]
-    fn average_stream_slice_out_of_bounds() {
-        let values: Vec<serde_json::Value> = (0..5).map(|i| serde_json::json!(i)).collect();
-        assert!(average_stream_slice(&values, 10, 20).is_none());
-        assert!(average_stream_slice(&values, 5, 3).is_none());
+    fn build_activity_message_rows_none_content() {
+        let msgs = vec![ActivityMessage {
+            id: 1,
+            athlete_id: None,
+            name: None,
+            created: None,
+            message_type: None,
+            content: None,
+            activity_id: None,
+            start_index: None,
+            end_index: None,
+            attachment_url: None,
+            attachment_mime_type: None,
+            deleted: None,
+        }];
+        let rows = build_activity_message_rows(&msgs);
+        assert!(rows.is_empty());
+    }
+
+    // ── derive_interval_output: stream power alt key ─────────────────
+
+    #[test]
+    fn derive_interval_output_power_stream_power_key() {
+        let obj = serde_json::json!({"start_index": 0, "end_index": 3});
+        let streams = serde_json::json!({"power": [200, 220, 240, 260]});
+        let map = obj.as_object().unwrap();
+        let result = derive_interval_output(map, Some(&streams));
+        // avg of [200, 220, 240] = 220
+        assert_eq!(result.map(|v| v.format()), Some("220 W".to_string()));
+    }
+
+    // ── derive_interval_output: pace stream with pace key ─────────────
+
+    #[test]
+    fn derive_interval_output_pace_stream_pace_key() {
+        let obj = serde_json::json!({"start_index": 0, "end_index": 3});
+        let streams = serde_json::json!({"pace": [4.0, 5.0, 6.0]});
+        let map = obj.as_object().unwrap();
+        let result = derive_interval_output(map, Some(&streams));
+        let result = result.map(|v| v.format());
+        assert_eq!(result, Some("3:20 /km".to_string()));
+    }
+
+    // ── derive_interval_output: average_speed zero filtered ───────────
+
+    #[test]
+    fn derive_interval_output_zero_speed_filtered() {
+        let obj = serde_json::json!({"average_speed": 0.0});
+        let map = obj.as_object().unwrap();
+        let result = derive_interval_output(map, None);
+        assert!(result.is_none());
+    }
+
+    // ── derive_interval_output: pace stream zero filtered ─────────────
+
+    #[test]
+    fn derive_interval_output_pace_stream_zero() {
+        let obj = serde_json::json!({"start_index": 0, "end_index": 3});
+        let streams = serde_json::json!({"velocity_smooth": [0.0, 0.0, 0.0]});
+        let map = obj.as_object().unwrap();
+        let result = derive_interval_output(map, Some(&streams));
+        // avg = 0.0, filtered by .filter(|speed| *speed > 0.0)
+        assert!(result.is_none());
+    }
+
+    // ── count_work_intervals: careful about NaN edge case ─────────────
+
+    #[test]
+    fn count_work_intervals_single_work_all_intervals() {
+        let intervals: Vec<Value> = vec![serde_json::json!({"average_speed": 10.0})];
+        // < 3 data points -> fallback to all intervals
+        assert_eq!(count_work_intervals(&intervals), 1);
+    }
+
+    // ── build_interval_analysis_rows: no matching output kind ─────────
+
+    #[test]
+    fn build_interval_analysis_rows_no_match() {
+        let intervals: Vec<Value> =
+            vec![serde_json::json!({"moving_time": 300, "average_watts": 250.0})];
+        let rows = build_interval_analysis_rows(&intervals, None, IntervalOutputKind::Pace);
+        // 1 interval but output_kind is Pace while interval has Power -> n/a
+        // Still included in the output
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0][3], "n/a");
+    }
+
+    // ── build_requested_single_metric_rows: pace with no movement ─────
+
+    #[test]
+    fn build_requested_single_metric_rows_pace_no_distance() {
+        let detail = serde_json::json!({});
+        let obj = detail.as_object();
+        let rows = build_requested_single_metric_rows(obj, &["pace".to_string()]);
+        assert_eq!(rows[0][1], "n/a");
+        assert_eq!(rows[0][2], "unavailable");
     }
 }

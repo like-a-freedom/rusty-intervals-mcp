@@ -192,6 +192,62 @@ mod tests {
     }
 
     #[test]
+    fn carb_demand_moderate_no_if() {
+        let demand = compute_carb_demand(2.5, None);
+        assert!((demand - 8.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn carb_demand_moderate_exact_boundaries() {
+        let at_moderate_upper = compute_carb_demand(3.0, None);
+        assert!((at_moderate_upper - 8.0).abs() < 0.01);
+        let at_moderate_lower = compute_carb_demand(2.0, None);
+        assert!((at_moderate_lower - 6.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn carb_demand_if_in_range() {
+        let demand = compute_carb_demand(2.5, Some(0.75));
+        assert!((demand - 8.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn carb_demand_if_high_boundary_no_adjust() {
+        let demand = compute_carb_demand(2.5, Some(0.85));
+        assert!((demand - 8.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn carb_demand_if_low_boundary_no_adjust() {
+        let demand = compute_carb_demand(2.5, Some(0.65));
+        assert!((demand - 8.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn nutrition_balance_severely_underfuelled() {
+        let state = compute_nutrition_balance(Some(3.0), 8.0, Some(1.0), 1.6);
+        assert_eq!(state, "severely_underfuelled");
+    }
+
+    #[test]
+    fn nutrition_balance_overfuelled() {
+        let state = compute_nutrition_balance(Some(10.0), 8.0, None, 1.6);
+        assert_eq!(state, "overfuelled");
+    }
+
+    #[test]
+    fn nutrition_balance_unknown() {
+        let state = compute_nutrition_balance(None, 8.0, None, 1.6);
+        assert_eq!(state, "unknown");
+    }
+
+    #[test]
+    fn nutrition_balance_protein_underfuelled() {
+        let state = compute_nutrition_balance(None, 8.0, Some(1.0), 1.6);
+        assert_eq!(state, "underfuelled");
+    }
+
+    #[test]
     fn nutrition_balance_unsupported() {
         let nd = NutritionDemand::unsupported("no nutrition tracking data");
         assert!(!nd.supported);
