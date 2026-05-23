@@ -453,7 +453,7 @@ pub(crate) mod mock {
         }
 
         async fn get_wellness(&self, _days_back: Option<i32>) -> Result<Value, IntervalsError> {
-            Ok(json!([]))
+            Ok(self.wellness.clone().unwrap_or_else(|| json!([])))
         }
 
         async fn update_wellness(
@@ -704,5 +704,1089 @@ pub(crate) mod mock {
         ) -> Result<Value, IntervalsError> {
             Ok(json!({}))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::mock::MockIntervalsClient;
+    use super::*;
+    use intervals_icu_client::{
+        ActivityMessage, ActivitySummary, ApiError, AthleteProfile, ConfigError, Event,
+        EventCategory, IntervalsClient, IntervalsError, ValidationError,
+    };
+    use serde_json::json;
+
+    #[test]
+    fn test_snapshot_env_captures_vars() {
+        let keys: &[&str] = &["PATH", "HOME"];
+        let snap = snapshot_env(keys);
+        assert!(snap.contains_key("PATH"));
+        assert!(snap.contains_key("HOME"));
+        assert!(snap.get("PATH").unwrap().is_some());
+    }
+
+    #[test]
+    fn test_snapshot_env_unset_var() {
+        let snap = snapshot_env(&["_UNLIKELY_ENV_VAR_THAT_DOES_NOT_EXIST_XYZ_"]);
+        assert!(snap.contains_key("_UNLIKELY_ENV_VAR_THAT_DOES_NOT_EXIST_XYZ_"));
+        assert!(
+            snap.get("_UNLIKELY_ENV_VAR_THAT_DOES_NOT_EXIST_XYZ_")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn test_snapshot_env_multiple_keys() {
+        let snap = snapshot_env(&["PATH", "_MISSING_ENV_VAR_123_"]);
+        assert_eq!(snap.len(), 2);
+        assert!(snap.get("PATH").unwrap().is_some());
+        assert!(snap.get("_MISSING_ENV_VAR_123_").unwrap().is_none());
+    }
+
+    #[test]
+    fn test_env_var_guard_acquire_and_restore() {
+        let _guard = EnvVarGuard::acquire_blocking(DYNAMIC_RUNTIME_ENV_VARS);
+    }
+
+    #[test]
+    fn test_env_var_guard_restores_original() {
+        const KEY: &str = "INTERVALS_ICU_BASE_URL";
+        let original = std::env::var(KEY).ok();
+
+        unsafe {
+            std::env::set_var(KEY, "http://test-env-guard.local");
+        }
+
+        {
+            let _guard = EnvVarGuard::acquire_blocking(DYNAMIC_RUNTIME_ENV_VARS);
+            unsafe {
+                std::env::set_var(KEY, "http://modified.local");
+            }
+        }
+
+        let after = std::env::var(KEY).unwrap();
+        assert_eq!(
+            after, "http://test-env-guard.local",
+            "EnvVarGuard should restore the env var to value at acquire time"
+        );
+
+        match original {
+            Some(v) => unsafe {
+                std::env::set_var(KEY, &v);
+            },
+            None => unsafe {
+                std::env::remove_var(KEY);
+            },
+        }
+    }
+
+    #[test]
+    fn test_env_var_guard_restores_removed_var() {
+        let original = std::env::var("_TEST_ENV_GUARD_REMOVED_").ok();
+
+        unsafe {
+            std::env::remove_var("_TEST_ENV_GUARD_REMOVED_");
+        }
+
+        {
+            let guard = EnvVarGuard::acquire_blocking(&["_TEST_ENV_GUARD_REMOVED_"]);
+            unsafe {
+                std::env::set_var("_TEST_ENV_GUARD_REMOVED_", "temporary");
+            }
+            drop(guard);
+        }
+
+        assert!(
+            std::env::var("_TEST_ENV_GUARD_REMOVED_").is_err(),
+            "EnvVarGuard should remove vars that were missing at acquire time"
+        );
+
+        if let Some(v) = original {
+            unsafe {
+                std::env::set_var("_TEST_ENV_GUARD_REMOVED_", &v);
+            }
+        }
+    }
+
+    #[test]
+    fn test_env_var_guard_acquire_with_custom_keys() {
+        unsafe {
+            std::env::set_var("_CUSTOM_TEST_KEY_1_", "val1");
+        }
+        unsafe {
+            std::env::remove_var("_CUSTOM_TEST_KEY_2_");
+        }
+
+        let guard = EnvVarGuard::acquire_blocking(&["_CUSTOM_TEST_KEY_1_", "_CUSTOM_TEST_KEY_2_"]);
+        assert_eq!(
+            guard.saved.get("_CUSTOM_TEST_KEY_1_").unwrap(),
+            &Some("val1".into())
+        );
+        assert_eq!(guard.saved.get("_CUSTOM_TEST_KEY_2_").unwrap(), &None);
+
+        unsafe {
+            std::env::remove_var("_CUSTOM_TEST_KEY_1_");
+        }
+        unsafe {
+            std::env::remove_var("_CUSTOM_TEST_KEY_2_");
+        }
+    }
+
+    #[test]
+    fn test_mock_with_activity() {
+        let client = MockIntervalsClient::with_activity("act-1", "2026-03-21", "Morning Run");
+        assert_eq!(client.activities.len(), 1);
+        assert_eq!(client.activities[0].id, "act-1");
+        assert_eq!(client.activities[0].name.as_deref(), Some("Morning Run"));
+        assert_eq!(client.activities[0].start_date_local, "2026-03-21");
+    }
+
+    #[test]
+    fn test_mock_with_activities() {
+        let a1 = ActivitySummary {
+            id: "1".into(),
+            ..Default::default()
+        };
+        let a2 = ActivitySummary {
+            id: "2".into(),
+            ..Default::default()
+        };
+        let client = MockIntervalsClient::builder().with_activities(vec![a1, a2]);
+        assert_eq!(client.activities.len(), 2);
+    }
+
+    #[test]
+    fn test_mock_with_events() {
+        let e = Event {
+            id: Some("evt-1".into()),
+            start_date_local: "2026-03-21".into(),
+            name: "Test".into(),
+            category: EventCategory::Workout,
+            description: None,
+            r#type: None,
+        };
+        let client = MockIntervalsClient::builder().with_events(vec![e]);
+        assert_eq!(client.events.len(), 1);
+    }
+
+    #[test]
+    fn test_mock_with_fitness_summary() {
+        let client = MockIntervalsClient::builder().with_fitness_summary(json!({"ctl": 100}));
+        assert_eq!(client.fitness_summary, Some(json!({"ctl": 100})));
+    }
+
+    #[test]
+    fn test_mock_with_workout_detail() {
+        let client = MockIntervalsClient::builder().with_workout_detail(json!({"id": "w1"}));
+        assert_eq!(client.workout_detail, Some(json!({"id": "w1"})));
+    }
+
+    #[test]
+    fn test_mock_with_streams() {
+        let client = MockIntervalsClient::builder().with_streams(json!({"watts": [1, 2, 3]}));
+        assert_eq!(client.streams, Some(json!({"watts": [1, 2, 3]})));
+    }
+
+    #[test]
+    fn test_mock_with_intervals() {
+        let client = MockIntervalsClient::builder().with_intervals(json!([{"start": 0}]));
+        assert_eq!(client.intervals, Some(json!([{"start": 0}])));
+    }
+
+    #[test]
+    fn test_mock_with_best_efforts() {
+        let client = MockIntervalsClient::builder().with_best_efforts(json!([{"distance": 5000}]));
+        assert_eq!(client.best_efforts, Some(json!([{"distance": 5000}])));
+    }
+
+    #[test]
+    fn test_mock_with_hr_histogram() {
+        let client = MockIntervalsClient::builder().with_hr_histogram(json!({"zones": []}));
+        assert_eq!(client.hr_histogram, Some(json!({"zones": []})));
+    }
+
+    #[test]
+    fn test_mock_with_power_histogram() {
+        let client = MockIntervalsClient::builder().with_power_histogram(json!({"zones": []}));
+        assert_eq!(client.power_histogram, Some(json!({"zones": []})));
+    }
+
+    #[test]
+    fn test_mock_with_pace_histogram() {
+        let client = MockIntervalsClient::builder().with_pace_histogram(json!({"zones": []}));
+        assert_eq!(client.pace_histogram, Some(json!({"zones": []})));
+    }
+
+    #[test]
+    fn test_mock_with_activity_messages() {
+        let msg = ActivityMessage {
+            id: 1,
+            athlete_id: None,
+            name: Some("Test".into()),
+            created: None,
+            message_type: None,
+            content: None,
+            activity_id: None,
+            start_index: None,
+            end_index: None,
+            attachment_url: None,
+            attachment_mime_type: None,
+            deleted: None,
+        };
+        let client = MockIntervalsClient::builder().with_activity_messages(vec![msg]);
+        assert_eq!(client.activity_messages.len(), 1);
+    }
+
+    #[test]
+    fn test_mock_with_wellness() {
+        let client = MockIntervalsClient::builder().with_wellness(json!({"mood": 3}));
+        assert_eq!(client.wellness, Some(json!({"mood": 3})));
+    }
+
+    #[test]
+    fn test_mock_with_activity_detail() {
+        let client =
+            MockIntervalsClient::builder().with_activity_detail("act-1", json!({"hr": 150}));
+        assert_eq!(
+            client.activity_details.get("act-1"),
+            Some(&json!({"hr": 150}))
+        );
+    }
+
+    #[test]
+    fn test_mock_with_athlete_profile() {
+        let profile = AthleteProfile {
+            id: "athlete-1".into(),
+            name: Some("Test Athlete".into()),
+        };
+        let client = MockIntervalsClient::builder().with_athlete_profile(profile);
+        assert!(client.athlete_profile.is_some());
+    }
+
+    #[test]
+    fn test_mock_with_sport_settings() {
+        let client =
+            MockIntervalsClient::builder().with_sport_settings(json!([{"sport": "cycling"}]));
+        assert_eq!(client.sport_settings, Some(json!([{"sport": "cycling"}])));
+    }
+
+    #[test]
+    fn test_mock_with_gear_list() {
+        let client = MockIntervalsClient::builder().with_gear_list(json!([{"name": "Bike"}]));
+        assert_eq!(client.gear_list, Some(json!([{"name": "Bike"}])));
+    }
+
+    #[test]
+    fn test_mock_with_upcoming_workouts() {
+        let client =
+            MockIntervalsClient::builder().with_upcoming_workouts(json!([{"name": "Workout"}]));
+        assert!(client.upcoming_workouts.is_some());
+    }
+
+    #[test]
+    fn test_mock_with_update_error() {
+        let client = MockIntervalsClient::builder().with_update_error("something went wrong");
+        assert_eq!(client.update_error, Some("something went wrong".into()));
+    }
+
+    #[test]
+    fn test_mock_with_upcoming_workouts_error() {
+        let err = IntervalsError::from_status(500, "server error");
+        let client = MockIntervalsClient::builder().with_upcoming_workouts_error(err);
+        assert!(client.upcoming_workouts_error.is_some());
+    }
+
+    #[test]
+    fn test_mock_with_upcoming_workouts_and_call_count() {
+        let client =
+            MockIntervalsClient::builder().with_upcoming_workouts(json!([{"name": "Test"}]));
+        assert_eq!(client.upcoming_workouts_call_count(), 0);
+    }
+
+    #[test]
+    fn test_mock_default_empty() {
+        let client = MockIntervalsClient::default();
+        assert!(client.activities.is_empty());
+        assert!(client.events.is_empty());
+        assert!(client.fitness_summary.is_none());
+        assert!(client.upcoming_workouts.is_none());
+        assert_eq!(client.upcoming_workouts_call_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_mock_get_recent_activities() {
+        let client = MockIntervalsClient::with_activity("a1", "2026-03-21", "Run");
+        let result = client.get_recent_activities(None, None).await.unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].id, "a1");
+    }
+
+    #[tokio::test]
+    async fn test_mock_get_recent_activities_empty() {
+        let client = MockIntervalsClient::default();
+        let result = client.get_recent_activities(None, None).await.unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_mock_get_fitness_summary_some() {
+        let client = MockIntervalsClient::builder().with_fitness_summary(json!({"ctl": 80}));
+        let result = client.get_fitness_summary().await.unwrap();
+        assert_eq!(result, json!({"ctl": 80}));
+    }
+
+    #[tokio::test]
+    async fn test_mock_get_fitness_summary_none() {
+        let client = MockIntervalsClient::default();
+        let err = client.get_fitness_summary().await.unwrap_err();
+        assert!(matches!(err, IntervalsError::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn test_mock_get_activity_details_from_map() {
+        let client =
+            MockIntervalsClient::builder().with_activity_detail("act-1", json!({"key": "value"}));
+        let result = client.get_activity_details("act-1").await.unwrap();
+        assert_eq!(result, json!({"key": "value"}));
+    }
+
+    #[tokio::test]
+    async fn test_mock_get_activity_details_from_workout_detail() {
+        let client = MockIntervalsClient::builder().with_workout_detail(json!({"fallback": true}));
+        let result = client.get_activity_details("unknown").await.unwrap();
+        assert_eq!(result, json!({"fallback": true}));
+    }
+
+    #[tokio::test]
+    async fn test_mock_get_activity_details_empty() {
+        let client = MockIntervalsClient::default();
+        let result = client.get_activity_details("any").await.unwrap();
+        assert_eq!(result, json!({}));
+    }
+
+    #[tokio::test]
+    async fn test_mock_get_events() {
+        let e = Event {
+            id: Some("evt-1".into()),
+            start_date_local: "2026-03-21".into(),
+            name: "Test".into(),
+            category: EventCategory::Workout,
+            description: None,
+            r#type: None,
+        };
+        let client = MockIntervalsClient::builder().with_events(vec![e]);
+        let result = client.get_events(None, None).await.unwrap();
+        assert_eq!(result.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_mock_get_events_empty() {
+        let client = MockIntervalsClient::default();
+        let result = client.get_events(None, None).await.unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_mock_get_wellness_for_date_some() {
+        let client = MockIntervalsClient::builder().with_wellness(json!({"sleep": 8}));
+        let result = client.get_wellness_for_date("2026-03-21").await.unwrap();
+        assert_eq!(result, json!({"sleep": 8}));
+    }
+
+    #[tokio::test]
+    async fn test_mock_get_wellness_for_date_none() {
+        let client = MockIntervalsClient::default();
+        let err = client
+            .get_wellness_for_date("2026-03-21")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, IntervalsError::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn test_mock_get_gear_list_some() {
+        let client = MockIntervalsClient::builder().with_gear_list(json!([{"name": "Bike"}]));
+        let result = client.get_gear_list().await.unwrap();
+        assert_eq!(result, json!([{"name": "Bike"}]));
+    }
+
+    #[tokio::test]
+    async fn test_mock_get_gear_list_none() {
+        let client = MockIntervalsClient::default();
+        let result = client.get_gear_list().await.unwrap();
+        assert_eq!(result, json!([]));
+    }
+
+    #[tokio::test]
+    async fn test_mock_get_sport_settings_some() {
+        let client = MockIntervalsClient::builder().with_sport_settings(json!([{"sport": "run"}]));
+        let result = client.get_sport_settings().await.unwrap();
+        assert_eq!(result, json!([{"sport": "run"}]));
+    }
+
+    #[tokio::test]
+    async fn test_mock_get_sport_settings_none() {
+        let client = MockIntervalsClient::default();
+        let result = client.get_sport_settings().await.unwrap();
+        assert_eq!(result, json!([]));
+    }
+
+    #[tokio::test]
+    async fn test_mock_update_event_success() {
+        let client = MockIntervalsClient::default();
+        let result = client
+            .update_event("evt-1", &json!({"name": "New"}))
+            .await
+            .unwrap();
+        assert_eq!(result, json!({"updated": true}));
+    }
+
+    #[tokio::test]
+    async fn test_mock_update_event_error() {
+        let client = MockIntervalsClient::builder().with_update_error("update failed");
+        let err = client.update_event("evt-1", &json!({})).await.unwrap_err();
+        assert!(err.to_string().contains("update failed"));
+    }
+
+    #[tokio::test]
+    async fn test_mock_create_event() {
+        let client = MockIntervalsClient::default();
+        let e = Event {
+            id: None,
+            start_date_local: "2026-03-21".into(),
+            name: "New".into(),
+            category: EventCategory::Workout,
+            description: None,
+            r#type: None,
+        };
+        let result = client.create_event(e).await.unwrap();
+        assert_eq!(result.id, Some("test".into()));
+    }
+
+    #[tokio::test]
+    async fn test_mock_get_event_not_found() {
+        let client = MockIntervalsClient::default();
+        let err = client.get_event("evt-1").await.unwrap_err();
+        assert!(matches!(err, IntervalsError::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn test_mock_delete_event() {
+        let client = MockIntervalsClient::default();
+        client.delete_event("evt-1").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_mock_bulk_create_events() {
+        let client = MockIntervalsClient::default();
+        let result = client.bulk_create_events(vec![]).await.unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_mock_get_athlete_profile_default() {
+        let client = MockIntervalsClient::default();
+        let profile = client.get_athlete_profile().await.unwrap();
+        assert_eq!(profile.id, "test_athlete");
+        assert_eq!(profile.name, Some("Test Athlete".into()));
+    }
+
+    #[tokio::test]
+    async fn test_mock_get_athlete_profile_custom() {
+        let profile = AthleteProfile {
+            id: "custom".into(),
+            name: Some("Custom".into()),
+        };
+        let client = MockIntervalsClient::builder().with_athlete_profile(profile);
+        let result = client.get_athlete_profile().await.unwrap();
+        assert_eq!(result.id, "custom");
+    }
+
+    #[tokio::test]
+    async fn test_mock_upcoming_workouts_success() {
+        let client = MockIntervalsClient::builder().with_upcoming_workouts(json!([{"name": "W1"}]));
+        let result = client
+            .get_upcoming_workouts(None, None, None)
+            .await
+            .unwrap();
+        assert_eq!(result, json!([{"name": "W1"}]));
+        assert_eq!(client.upcoming_workouts_call_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_mock_upcoming_workouts_success_default() {
+        let client = MockIntervalsClient::default();
+        let result = client
+            .get_upcoming_workouts(None, None, None)
+            .await
+            .unwrap();
+        assert_eq!(result, json!([]));
+    }
+
+    #[tokio::test]
+    async fn test_mock_upcoming_workouts_error_config_missing_env() {
+        let err = IntervalsError::Config(ConfigError::MissingEnvVar("KEY".into()));
+        let client = MockIntervalsClient::builder().with_upcoming_workouts_error(err);
+        assert!(
+            client
+                .get_upcoming_workouts(None, None, None)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_mock_upcoming_workouts_error_config_invalid_value() {
+        let err = IntervalsError::Config(ConfigError::InvalidValue {
+            key: "KEY".into(),
+            message: "bad value".into(),
+        });
+        let client = MockIntervalsClient::builder().with_upcoming_workouts_error(err);
+        assert!(
+            client
+                .get_upcoming_workouts(None, None, None)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_mock_upcoming_workouts_error_config_other() {
+        let err = IntervalsError::Config(ConfigError::Other("config error".into()));
+        let client = MockIntervalsClient::builder().with_upcoming_workouts_error(err);
+        assert!(
+            client
+                .get_upcoming_workouts(None, None, None)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_mock_upcoming_workouts_error_api() {
+        let err = IntervalsError::Api(ApiError::new(500, "server error", "body"));
+        let client = MockIntervalsClient::builder().with_upcoming_workouts_error(err);
+        assert!(
+            client
+                .get_upcoming_workouts(None, None, None)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_mock_upcoming_workouts_error_json_decode() {
+        let json_err = serde_json::from_str::<()>("invalid").unwrap_err();
+        let err = IntervalsError::JsonDecode(json_err);
+        let client = MockIntervalsClient::builder().with_upcoming_workouts_error(err);
+        assert!(
+            client
+                .get_upcoming_workouts(None, None, None)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_mock_upcoming_workouts_error_validation_empty_field() {
+        let err = IntervalsError::Validation(ValidationError::EmptyField {
+            field: "name".into(),
+        });
+        let client = MockIntervalsClient::builder().with_upcoming_workouts_error(err);
+        assert!(
+            client
+                .get_upcoming_workouts(None, None, None)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_mock_upcoming_workouts_error_validation_invalid_format() {
+        let err = IntervalsError::Validation(ValidationError::InvalidFormat {
+            field: "date".into(),
+            value: "bad".into(),
+        });
+        let client = MockIntervalsClient::builder().with_upcoming_workouts_error(err);
+        assert!(
+            client
+                .get_upcoming_workouts(None, None, None)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_mock_upcoming_workouts_error_validation_unknown_variant() {
+        let err = IntervalsError::Validation(ValidationError::UnknownVariant {
+            field: "type".into(),
+            value: "weird".into(),
+        });
+        let client = MockIntervalsClient::builder().with_upcoming_workouts_error(err);
+        assert!(
+            client
+                .get_upcoming_workouts(None, None, None)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_mock_upcoming_workouts_error_validation_missing_param() {
+        let err =
+            IntervalsError::Validation(ValidationError::MissingParameter("target_date".into()));
+        let client = MockIntervalsClient::builder().with_upcoming_workouts_error(err);
+        assert!(
+            client
+                .get_upcoming_workouts(None, None, None)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_mock_upcoming_workouts_error_validation_invalid_param_comb() {
+        let err = IntervalsError::Validation(ValidationError::InvalidParameterCombination(
+            "cannot combine x and y".into(),
+        ));
+        let client = MockIntervalsClient::builder().with_upcoming_workouts_error(err);
+        assert!(
+            client
+                .get_upcoming_workouts(None, None, None)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_mock_upcoming_workouts_error_not_found() {
+        let err = IntervalsError::NotFound("resource not found".into());
+        let client = MockIntervalsClient::builder().with_upcoming_workouts_error(err);
+        assert!(
+            client
+                .get_upcoming_workouts(None, None, None)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_mock_upcoming_workouts_error_auth() {
+        let err = IntervalsError::Auth("unauthorized".into());
+        let client = MockIntervalsClient::builder().with_upcoming_workouts_error(err);
+        assert!(
+            client
+                .get_upcoming_workouts(None, None, None)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_mock_search_activities() {
+        let client = MockIntervalsClient::default();
+        let result = client.search_activities("test", None).await.unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_mock_search_activities_full() {
+        let client = MockIntervalsClient::default();
+        let result = client.search_activities_full("test", None).await.unwrap();
+        assert_eq!(result, json!([]));
+    }
+
+    #[tokio::test]
+    async fn test_mock_get_activities_csv() {
+        let client = MockIntervalsClient::default();
+        let result = client.get_activities_csv().await.unwrap();
+        assert_eq!(result, "id,name\n1,Test");
+    }
+
+    #[tokio::test]
+    async fn test_mock_download_activity_file() {
+        let client = MockIntervalsClient::default();
+        let result = client.download_activity_file("a1", None).await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_mock_download_activity_file_with_progress() {
+        let client = MockIntervalsClient::default();
+        let (tx, _rx) = tokio::sync::mpsc::channel(10);
+        let (_cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+        let result = client
+            .download_activity_file_with_progress("a1", None, tx, cancel_rx)
+            .await
+            .unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_mock_download_fit_file() {
+        let client = MockIntervalsClient::default();
+        let result = client.download_fit_file("a1", None).await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_mock_download_gpx_file() {
+        let client = MockIntervalsClient::default();
+        let result = client.download_gpx_file("a1", None).await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_mock_get_power_curves() {
+        let client = MockIntervalsClient::default();
+        let result = client.get_power_curves(None, "cycling").await.unwrap();
+        assert_eq!(result, json!([]));
+    }
+
+    #[tokio::test]
+    async fn test_mock_get_gap_histogram() {
+        let client = MockIntervalsClient::default();
+        let result = client.get_gap_histogram("a1").await.unwrap();
+        assert_eq!(result, json!([]));
+    }
+
+    #[tokio::test]
+    async fn test_mock_delete_activity() {
+        let client = MockIntervalsClient::default();
+        client.delete_activity("a1").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_mock_get_activities_around() {
+        let client = MockIntervalsClient::default();
+        let result = client
+            .get_activities_around("a1", None, None)
+            .await
+            .unwrap();
+        assert_eq!(result, json!([]));
+    }
+
+    #[tokio::test]
+    async fn test_mock_search_intervals() {
+        let client = MockIntervalsClient::default();
+        let result = client
+            .search_intervals(0, 300, 80, 100, None, None, None, None)
+            .await
+            .unwrap();
+        assert_eq!(result, json!([]));
+    }
+
+    #[tokio::test]
+    async fn test_mock_get_wellness() {
+        let client = MockIntervalsClient::default();
+        let result = client.get_wellness(None).await.unwrap();
+        assert_eq!(result, json!([]));
+    }
+
+    #[tokio::test]
+    async fn test_mock_update_wellness() {
+        let client = MockIntervalsClient::default();
+        let result = client
+            .update_wellness("2026-03-21", &json!({}))
+            .await
+            .unwrap();
+        assert_eq!(result, json!({}));
+    }
+
+    #[tokio::test]
+    async fn test_mock_get_hr_curves() {
+        let client = MockIntervalsClient::default();
+        let result = client.get_hr_curves(None, "running").await.unwrap();
+        assert_eq!(result, json!([]));
+    }
+
+    #[tokio::test]
+    async fn test_mock_get_pace_curves() {
+        let client = MockIntervalsClient::default();
+        let result = client.get_pace_curves(None, "running").await.unwrap();
+        assert_eq!(result, json!([]));
+    }
+
+    #[tokio::test]
+    async fn test_mock_get_workout_library() {
+        let client = MockIntervalsClient::default();
+        let result = client.get_workout_library().await.unwrap();
+        assert_eq!(result, json!([]));
+    }
+
+    #[tokio::test]
+    async fn test_mock_get_workouts_in_folder() {
+        let client = MockIntervalsClient::default();
+        let result = client.get_workouts_in_folder("folder-1").await.unwrap();
+        assert_eq!(result, json!([]));
+    }
+
+    #[tokio::test]
+    async fn test_mock_create_folder() {
+        let client = MockIntervalsClient::default();
+        let result = client.create_folder(&json!({})).await.unwrap();
+        assert_eq!(result, json!({}));
+    }
+
+    #[tokio::test]
+    async fn test_mock_update_folder() {
+        let client = MockIntervalsClient::default();
+        let result = client.update_folder("folder-1", &json!({})).await.unwrap();
+        assert_eq!(result, json!({}));
+    }
+
+    #[tokio::test]
+    async fn test_mock_delete_folder() {
+        let client = MockIntervalsClient::default();
+        client.delete_folder("folder-1").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_mock_create_gear() {
+        let client = MockIntervalsClient::default();
+        let result = client
+            .create_gear(&json!({"name": "New Bike"}))
+            .await
+            .unwrap();
+        assert_eq!(result, json!({"id": "new_gear_id", "name": "New Gear"}));
+    }
+
+    #[tokio::test]
+    async fn test_mock_update_gear() {
+        let client = MockIntervalsClient::default();
+        let result = client.update_gear("gear-1", &json!({})).await.unwrap();
+        assert_eq!(result, json!({"updated": true}));
+    }
+
+    #[tokio::test]
+    async fn test_mock_delete_gear() {
+        let client = MockIntervalsClient::default();
+        client.delete_gear("gear-1").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_mock_create_gear_reminder() {
+        let client = MockIntervalsClient::default();
+        let result = client
+            .create_gear_reminder("gear-1", &json!({}))
+            .await
+            .unwrap();
+        assert_eq!(result, json!({}));
+    }
+
+    #[tokio::test]
+    async fn test_mock_update_gear_reminder() {
+        let client = MockIntervalsClient::default();
+        let result = client
+            .update_gear_reminder("gear-1", "rem-1", true, 7, &json!({}))
+            .await
+            .unwrap();
+        assert_eq!(result, json!({}));
+    }
+
+    #[tokio::test]
+    async fn test_mock_update_sport_settings() {
+        let client = MockIntervalsClient::default();
+        let result = client
+            .update_sport_settings("cycling", true, &json!({}))
+            .await
+            .unwrap();
+        assert_eq!(result, json!({"updated": true}));
+    }
+
+    #[tokio::test]
+    async fn test_mock_apply_sport_settings() {
+        let client = MockIntervalsClient::default();
+        let result = client.apply_sport_settings("running").await.unwrap();
+        assert_eq!(result, json!({"applied": true}));
+    }
+
+    #[tokio::test]
+    async fn test_mock_create_sport_settings() {
+        let client = MockIntervalsClient::default();
+        let result = client.create_sport_settings(&json!({})).await.unwrap();
+        assert_eq!(result, json!({}));
+    }
+
+    #[tokio::test]
+    async fn test_mock_delete_sport_settings() {
+        let client = MockIntervalsClient::default();
+        client.delete_sport_settings("cycling").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_mock_update_wellness_bulk() {
+        let client = MockIntervalsClient::default();
+        client.update_wellness_bulk(&[]).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_mock_get_weather_config() {
+        let client = MockIntervalsClient::default();
+        let result = client.get_weather_config().await.unwrap();
+        assert_eq!(result, json!({}));
+    }
+
+    #[tokio::test]
+    async fn test_mock_update_weather_config() {
+        let client = MockIntervalsClient::default();
+        let result = client.update_weather_config(&json!({})).await.unwrap();
+        assert_eq!(result, json!({}));
+    }
+
+    #[tokio::test]
+    async fn test_mock_list_routes() {
+        let client = MockIntervalsClient::default();
+        let result = client.list_routes().await.unwrap();
+        assert_eq!(result, json!([]));
+    }
+
+    #[tokio::test]
+    async fn test_mock_get_route() {
+        let client = MockIntervalsClient::default();
+        let result = client.get_route(1, false).await.unwrap();
+        assert_eq!(result, json!({}));
+    }
+
+    #[tokio::test]
+    async fn test_mock_update_route() {
+        let client = MockIntervalsClient::default();
+        let result = client.update_route(1, &json!({})).await.unwrap();
+        assert_eq!(result, json!({}));
+    }
+
+    #[tokio::test]
+    async fn test_mock_get_route_similarity() {
+        let client = MockIntervalsClient::default();
+        let result = client.get_route_similarity(1, 2).await.unwrap();
+        assert_eq!(result, json!({}));
+    }
+
+    #[tokio::test]
+    async fn test_mock_bulk_delete_events() {
+        let client = MockIntervalsClient::default();
+        client
+            .bulk_delete_events(vec!["evt-1".into()])
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_mock_duplicate_event() {
+        let client = MockIntervalsClient::default();
+        let result = client
+            .duplicate_event("evt-1", Some(3), Some(1))
+            .await
+            .unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_mock_get_activity_streams_some() {
+        let client = MockIntervalsClient::builder().with_streams(json!({"watts": [100, 200, 300]}));
+        let result = client.get_activity_streams("a1", None).await.unwrap();
+        assert_eq!(result, json!({"watts": [100, 200, 300]}));
+    }
+
+    #[tokio::test]
+    async fn test_mock_get_activity_streams_none() {
+        let client = MockIntervalsClient::default();
+        let result = client.get_activity_streams("a1", None).await.unwrap();
+        assert_eq!(result, json!({}));
+    }
+
+    #[tokio::test]
+    async fn test_mock_get_activity_intervals_some() {
+        let client = MockIntervalsClient::builder().with_intervals(json!([{"start": 0}]));
+        let result = client.get_activity_intervals("a1").await.unwrap();
+        assert_eq!(result, json!([{"start": 0}]));
+    }
+
+    #[tokio::test]
+    async fn test_mock_get_activity_intervals_none() {
+        let client = MockIntervalsClient::default();
+        let result = client.get_activity_intervals("a1").await.unwrap();
+        assert_eq!(result, json!({}));
+    }
+
+    #[tokio::test]
+    async fn test_mock_get_best_efforts_some() {
+        let client = MockIntervalsClient::builder().with_best_efforts(json!([{"distance": 5000}]));
+        let result = client.get_best_efforts("a1", None).await.unwrap();
+        assert_eq!(result, json!([{"distance": 5000}]));
+    }
+
+    #[tokio::test]
+    async fn test_mock_get_best_efforts_none() {
+        let client = MockIntervalsClient::default();
+        let result = client.get_best_efforts("a1", None).await.unwrap();
+        assert_eq!(result, json!({}));
+    }
+
+    #[tokio::test]
+    async fn test_mock_get_hr_histogram_some() {
+        let client = MockIntervalsClient::builder().with_hr_histogram(json!({"zones": [1, 2]}));
+        let result = client.get_hr_histogram("a1").await.unwrap();
+        assert_eq!(result, json!({"zones": [1, 2]}));
+    }
+
+    #[tokio::test]
+    async fn test_mock_get_hr_histogram_none() {
+        let client = MockIntervalsClient::default();
+        let result = client.get_hr_histogram("a1").await.unwrap();
+        assert_eq!(result, json!({}));
+    }
+
+    #[tokio::test]
+    async fn test_mock_get_power_histogram_some() {
+        let client =
+            MockIntervalsClient::builder().with_power_histogram(json!({"zones": [100, 200]}));
+        let result = client.get_power_histogram("a1").await.unwrap();
+        assert_eq!(result, json!({"zones": [100, 200]}));
+    }
+
+    #[tokio::test]
+    async fn test_mock_get_power_histogram_none() {
+        let client = MockIntervalsClient::default();
+        let result = client.get_power_histogram("a1").await.unwrap();
+        assert_eq!(result, json!({}));
+    }
+
+    #[tokio::test]
+    async fn test_mock_get_pace_histogram_some() {
+        let client =
+            MockIntervalsClient::builder().with_pace_histogram(json!({"zones": [4.0, 5.0]}));
+        let result = client.get_pace_histogram("a1").await.unwrap();
+        assert_eq!(result, json!({"zones": [4.0, 5.0]}));
+    }
+
+    #[tokio::test]
+    async fn test_mock_get_pace_histogram_none() {
+        let client = MockIntervalsClient::default();
+        let result = client.get_pace_histogram("a1").await.unwrap();
+        assert_eq!(result, json!({}));
+    }
+
+    #[tokio::test]
+    async fn test_mock_get_activity_messages() {
+        let msg = ActivityMessage {
+            id: 1,
+            athlete_id: None,
+            name: Some("Msg".into()),
+            created: None,
+            message_type: None,
+            content: None,
+            activity_id: None,
+            start_index: None,
+            end_index: None,
+            attachment_url: None,
+            attachment_mime_type: None,
+            deleted: None,
+        };
+        let client = MockIntervalsClient::builder().with_activity_messages(vec![msg]);
+        let result = client.get_activity_messages("a1").await.unwrap();
+        assert_eq!(result.len(), 1);
     }
 }

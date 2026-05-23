@@ -883,6 +883,10 @@ impl Default for PlanTrainingHandler {
 mod tests {
     use super::*;
     use chrono::NaiveDate;
+    use intervals_icu_client::{ActivitySummary, Event, EventCategory};
+    use std::sync::Arc;
+
+    use crate::test_support::mock::MockIntervalsClient;
 
     // ========================================================================
     // Constructor Tests
@@ -1496,5 +1500,417 @@ mod tests {
             result.is_err(),
             "Unknown category should be rejected by validation"
         );
+    }
+
+    // ========================================================================
+    // Execute() Integration Tests (via MockIntervalsClient)
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_execute_start_date_after_end_date() {
+        let handler = PlanTrainingHandler::new();
+        let client = Arc::new(MockIntervalsClient::builder());
+        let input = json!({
+            "period_start": "2026-03-31",
+            "period_end": "2026-03-01",
+            "idempotency_token": "test-token"
+        });
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Start date must be before end date"),
+            "Expected start-after-end error, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_adaptive_false() {
+        let handler = PlanTrainingHandler::new();
+        let client = Arc::new(MockIntervalsClient::builder());
+        let input = json!({
+            "period_start": "2026-03-01",
+            "period_end": "2026-03-28",
+            "idempotency_token": "test-token",
+            "adaptive": false
+        });
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("Training Plan"));
+        assert!(content_str.contains("AEROBIC BASE"));
+        assert_eq!(output.metadata.events_created, Some(12));
+    }
+
+    #[tokio::test]
+    async fn test_execute_basic_success() {
+        let handler = PlanTrainingHandler::new();
+        let client = Arc::new(MockIntervalsClient::builder());
+        let input = json!({
+            "period_start": "2026-03-01",
+            "period_end": "2026-03-28",
+            "idempotency_token": "test-token"
+        });
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("Training Plan"));
+        assert!(content_str.contains("Test Athlete"));
+        assert_eq!(output.metadata.events_created, Some(12));
+    }
+
+    #[tokio::test]
+    async fn test_execute_with_existing_conflicts() {
+        let handler = PlanTrainingHandler::new();
+        let client = Arc::new(MockIntervalsClient::builder().with_events(vec![Event {
+            id: None,
+            start_date_local: "2026-03-15".into(),
+            name: "Existing Workout".into(),
+            category: EventCategory::Workout,
+            description: None,
+            r#type: None,
+        }]));
+        let input = json!({
+            "period_start": "2026-03-01",
+            "period_end": "2026-03-31",
+            "idempotency_token": "test-token"
+        });
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("Conflict Detected"));
+        assert!(content_str.contains("Existing Workout"));
+        assert_eq!(output.metadata.events_created, Some(0));
+    }
+
+    #[tokio::test]
+    async fn test_execute_with_upcoming_conflicts_only() {
+        let handler = PlanTrainingHandler::new();
+        let client = Arc::new(
+            MockIntervalsClient::builder().with_upcoming_workouts(json!([
+                {"start_date_local": "2026-03-15", "name": "Planned Workout"}
+            ])),
+        );
+        let input = json!({
+            "period_start": "2026-03-01",
+            "period_end": "2026-03-31",
+            "idempotency_token": "test-token"
+        });
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("Existing Plan Detected"));
+        assert!(content_str.contains("1 workouts"));
+        assert_eq!(output.metadata.events_created, Some(0));
+    }
+
+    #[tokio::test]
+    async fn test_execute_with_both_conflicts() {
+        let handler = PlanTrainingHandler::new();
+        let client = Arc::new(
+            MockIntervalsClient::builder()
+                .with_events(vec![Event {
+                    id: None,
+                    start_date_local: "2026-03-15".into(),
+                    name: "Existing Event".into(),
+                    category: EventCategory::Workout,
+                    description: None,
+                    r#type: None,
+                }])
+                .with_upcoming_workouts(json!([
+                    {"start_date_local": "2026-03-20", "name": "Upcoming Workout"}
+                ])),
+        );
+        let input = json!({
+            "period_start": "2026-03-01",
+            "period_end": "2026-03-31",
+            "idempotency_token": "test-token"
+        });
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("Conflict Detected"));
+        assert!(content_str.contains("Existing Event"));
+        assert!(content_str.contains("Existing Plan Detected"));
+        assert_eq!(output.metadata.events_created, Some(0));
+    }
+
+    #[tokio::test]
+    async fn test_execute_with_race_anchors() {
+        let handler = PlanTrainingHandler::new();
+        let client = Arc::new(MockIntervalsClient::builder().with_events(vec![Event {
+            id: None,
+            start_date_local: "2026-03-15".into(),
+            name: "Big Race".into(),
+            category: EventCategory::RaceA,
+            description: None,
+            r#type: None,
+        }]));
+        let input = json!({
+            "period_start": "2026-03-01",
+            "period_end": "2026-03-31",
+            "idempotency_token": "test-token"
+        });
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("Race Anchors"));
+        assert!(content_str.contains("Big Race"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_with_sport_settings() {
+        let handler = PlanTrainingHandler::new();
+        let client = Arc::new(MockIntervalsClient::builder().with_sport_settings(json!({
+            "sports": [{"name": "Running", "ftp": 280.0, "lthr": 172.0}]
+        })));
+        let input = json!({
+            "period_start": "2026-03-01",
+            "period_end": "2026-03-28",
+            "idempotency_token": "test-token"
+        });
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("Running"));
+        assert!(content_str.contains("FTP"));
+        assert!(content_str.contains("LTHR"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_with_tsb_fresh_and_good_wellness() {
+        let handler = PlanTrainingHandler::new();
+        let client = Arc::new(
+            MockIntervalsClient::builder()
+                .with_fitness_summary(json!({"tsb": 15.0}))
+                .with_wellness(json!([{"readiness": 7.5, "hrv": 70.0, "sleep": 8.0}])),
+        );
+        let input = json!({
+            "period_start": "2026-03-01",
+            "period_end": "2026-03-14",
+            "idempotency_token": "test-token"
+        });
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("Fresh"));
+        assert!(content_str.contains("Good"));
+        assert!(
+            output
+                .suggestions
+                .iter()
+                .any(|s| s.contains("TSB positive"))
+        );
+        assert!(output.suggestions.iter().any(|s| s.contains("Readiness")));
+        assert!(!output.suggestions.iter().any(|s| s.contains("HRV")));
+        assert!(!output.suggestions.iter().any(|s| s.contains("Sleep")));
+    }
+
+    #[tokio::test]
+    async fn test_execute_with_tsb_fatigued() {
+        let handler = PlanTrainingHandler::new();
+        let client =
+            Arc::new(MockIntervalsClient::builder().with_fitness_summary(json!({"tsb": -15.0})));
+        let input = json!({
+            "period_start": "2026-03-01",
+            "period_end": "2026-03-07",
+            "idempotency_token": "test-token"
+        });
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("Fatigued"));
+        assert!(
+            output
+                .suggestions
+                .iter()
+                .any(|s| s.contains("TSB negative"))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_with_tsb_neutral() {
+        let handler = PlanTrainingHandler::new();
+        let client =
+            Arc::new(MockIntervalsClient::builder().with_fitness_summary(json!({"tsb": 5.0})));
+        let input = json!({
+            "period_start": "2026-03-01",
+            "period_end": "2026-03-07",
+            "idempotency_token": "test-token"
+        });
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("Neutral"));
+        assert!(!output.suggestions.iter().any(|s| s.contains("TSB")));
+    }
+
+    #[tokio::test]
+    async fn test_execute_with_wellness_fair() {
+        let handler = PlanTrainingHandler::new();
+        let client =
+            Arc::new(MockIntervalsClient::builder().with_wellness(json!([{"readiness": 6.0}])));
+        let input = json!({
+            "period_start": "2026-03-01",
+            "period_end": "2026-03-07",
+            "idempotency_token": "test-token"
+        });
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("Fair"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_with_all_suggestions_and_volume_overshoot() {
+        let handler = PlanTrainingHandler::new();
+        let client = Arc::new(
+            MockIntervalsClient::builder()
+                .with_activities(vec![
+                    ActivitySummary {
+                        id: "1".into(),
+                        name: Some("Run 1".into()),
+                        start_date_local: "2026-02-01".into(),
+                        moving_time: Some(3600),
+                        elapsed_time: Some(4500),
+                        ..Default::default()
+                    },
+                    ActivitySummary {
+                        id: "2".into(),
+                        name: Some("Run 2".into()),
+                        start_date_local: "2026-02-08".into(),
+                        moving_time: Some(5400),
+                        elapsed_time: Some(7200),
+                        ..Default::default()
+                    },
+                ])
+                .with_fitness_summary(json!({"tsb": -15.0}))
+                .with_wellness(json!([{"readiness": 3.0, "hrv": 35.0, "sleep": 6.0}])),
+        );
+        let input = json!({
+            "period_start": "2026-03-01",
+            "period_end": "2026-03-07",
+            "idempotency_token": "test-token",
+            "max_hours_per_week": 8.0
+        });
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("Low"));
+        assert!(content_str.contains("Fatigued"));
+        assert!(
+            output
+                .suggestions
+                .iter()
+                .any(|s| s.contains("Low readiness"))
+        );
+        assert!(output.suggestions.iter().any(|s| s.contains("HRV")));
+        assert!(output.suggestions.iter().any(|s| s.contains("Sleep")));
+        assert!(
+            output
+                .suggestions
+                .iter()
+                .any(|s| s.contains("TSB negative"))
+        );
+        assert!(output.suggestions.iter().any(|s| s.contains("exceeds")));
+    }
+
+    #[tokio::test]
+    async fn test_execute_with_historical_activities_no_overshoot() {
+        let handler = PlanTrainingHandler::new();
+        let client = Arc::new(MockIntervalsClient::builder().with_activities(vec![
+            ActivitySummary {
+                id: "1".into(),
+                name: Some("Run 1".into()),
+                start_date_local: "2026-02-01".into(),
+                moving_time: Some(3600),
+                elapsed_time: Some(4500),
+                ..Default::default()
+            },
+            ActivitySummary {
+                id: "2".into(),
+                name: Some("Run 2".into()),
+                start_date_local: "2026-02-08".into(),
+                moving_time: Some(3600),
+                elapsed_time: Some(4500),
+                ..Default::default()
+            },
+        ]));
+        let input = json!({
+            "period_start": "2026-03-01",
+            "period_end": "2026-03-07",
+            "idempotency_token": "test-token",
+            "max_hours_per_week": 1.0
+        });
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("Historical Avg"));
+        assert!(!output.suggestions.iter().any(|s| s.contains("exceeds")));
+    }
+
+    #[tokio::test]
+    async fn test_execute_with_target_race() {
+        let handler = PlanTrainingHandler::new();
+        let client = Arc::new(MockIntervalsClient::builder());
+        let input = json!({
+            "period_start": "2026-03-01",
+            "period_end": "2026-03-28",
+            "idempotency_token": "test-token",
+            "target_race": "Boston Marathon"
+        });
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("Boston Marathon"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_with_intensity_focus() {
+        let handler = PlanTrainingHandler::new();
+        let client = Arc::new(MockIntervalsClient::builder());
+        let input = json!({
+            "period_start": "2026-03-01",
+            "period_end": "2026-03-28",
+            "idempotency_token": "test-token",
+            "focus": "intensity"
+        });
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("INTENSITY"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_with_specific_focus() {
+        let handler = PlanTrainingHandler::new();
+        let client = Arc::new(MockIntervalsClient::builder());
+        let input = json!({
+            "period_start": "2026-03-01",
+            "period_end": "2026-03-28",
+            "idempotency_token": "test-token",
+            "focus": "specific"
+        });
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("SPECIFIC"));
     }
 }
