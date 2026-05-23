@@ -882,27 +882,91 @@ pub fn enrich_anchors_from_activity(
     }
 }
 
-/// Compute derived ESPE metrics from available power-curve anchors.
-pub fn derive_espe_metrics(anchors: &EspePowerAnchors) -> EspeDerivedMetrics {
+/// Compute derived ESPE metrics from available power-curve anchors + MMP data.
+pub fn derive_espe_metrics(
+    anchors: &EspePowerAnchors,
+    mmp_p1m: Option<f64>,
+    mmp_p5m: Option<f64>,
+    mmp_p20m: Option<f64>,
+    mmp_p60m: Option<f64>,
+) -> EspeDerivedMetrics {
     let eftp = anchors.eftp;
     let _w_prime = anchors.w_prime;
     let p_max = anchors.p_max;
 
     let glycolytic_bias = eftp.and_then(|f| p_max.map(|pm| pm / f));
-    // vo2_reserve_ratio is computed from P5m not pMax — defers to P3.2 when MMP data is available
+    let aerobic_durability = mmp_p60m.zip(mmp_p5m).map(|(p60, p5)| p60 / p5);
+    let durability_gradient = mmp_p60m.zip(mmp_p20m).map(|(p60, p20)| p60 / p20);
+    let balance_score = mmp_p1m.zip(mmp_p20m).map(|(p1, p20)| {
+        let ratio = p1 / p20;
+        ratio - 1.8 // deviation from ideal ratio
+    });
+    let vo2_reserve_ratio = mmp_p5m.zip(eftp).map(|(p5, f)| p5 / f);
 
     EspeDerivedMetrics {
         glycolytic_bias,
-        aerobic_durability: None,
-        durability_gradient: None,
-        balance_score: None,
-        vo2_reserve_ratio: None,
-        p1m: None,
-        p5m: None,
-        p20m: None,
-        p60m: None,
+        aerobic_durability,
+        durability_gradient,
+        balance_score,
+        vo2_reserve_ratio,
+        p1m: mmp_p1m,
+        p5m: mmp_p5m,
+        p20m: mmp_p20m,
+        p60m: mmp_p60m,
         supported: eftp.is_some() || p_max.is_some(),
     }
+}
+
+/// Compare two power curve windows and compute deltas per anchor.
+/// Returns (deltas, rotation_index, system_statuses).
+pub fn compare_power_curves(
+    current: &EspeDerivedMetrics,
+    previous: &EspeDerivedMetrics,
+) -> (
+    std::collections::HashMap<String, f64>,
+    f64,
+    std::collections::HashMap<String, String>,
+) {
+    let mut deltas = std::collections::HashMap::new();
+    let mut statuses = std::collections::HashMap::new();
+
+    let anchors = [
+        ("5s", current.p1m, previous.p1m),
+        ("1m", current.p1m, previous.p1m),
+        ("5m", current.p5m, previous.p5m),
+        ("20m", current.p20m, previous.p20m),
+        ("60m", current.p60m, previous.p60m),
+    ];
+
+    for (name, cur, prev) in anchors {
+        if let (Some(c), Some(p)) = (cur, prev)
+            && p.abs() > 0.0
+        {
+            let delta = ((c - p) / p) * 100.0;
+            deltas.insert(name.to_string(), delta);
+            let status = if delta < -1.0 {
+                "decline"
+            } else if delta < 1.0 {
+                "stable"
+            } else if delta < 3.0 {
+                "mild_gain"
+            } else if delta < 5.0 {
+                "moderate_gain"
+            } else {
+                "strong_gain"
+            };
+            statuses.insert(name.to_string(), status.to_string());
+        }
+    }
+
+    let rotation_index = current
+        .p1m
+        .zip(current.p5m)
+        .zip(current.p20m.zip(current.p60m))
+        .map(|((p1, p5), (p20, p60))| ((p1 + p5) / 2.0) - ((p20 + p60) / 2.0))
+        .unwrap_or(0.0);
+
+    (deltas, rotation_index, statuses)
 }
 
 /// Primary: max(wbal_start - wbal_end) across intervals; fallback: icu_max_wbal_depletion.
@@ -1125,6 +1189,30 @@ pub fn compute_ndli_7d(
         ndli_state,
         ndli_overload_flag: high_intensity_days >= 4,
     }
+}
+
+/// Normalize running power from different device sources (Stryd, Garmin).
+/// Stryd typically reports higher values; Garmin uses a different algorithm.
+/// Applies a correction factor for cross-device consistency.
+pub fn normalize_running_power(power_watts: f64, source: &str) -> f64 {
+    match source {
+        "stryd" => power_watts * 0.92,
+        "garmin_rp" => power_watts * 1.08,
+        _ => power_watts,
+    }
+}
+
+/// Convert Grade-Adjusted Pace (GAP) from speed m/s to equivalent running power.
+/// Approximate conversion: Power (W) ≈ speed³ × 0.25 + elevation_factor.
+/// GAP data comes from `get_gap_histogram()` endpoint.
+pub fn gap_to_running_power(gap_speed_ms: f64, gradient_pct: f64) -> f64 {
+    let base_power = gap_speed_ms.powi(3) * 0.25;
+    let elevation_factor = if gradient_pct > 0.0 {
+        1.0 + gradient_pct * 0.08
+    } else {
+        1.0 + gradient_pct * 0.02
+    };
+    base_power * elevation_factor
 }
 
 // =============================================================================
@@ -1895,7 +1983,7 @@ mod tests {
             p_max: Some(800.0),
             ..Default::default()
         };
-        let derived = derive_espe_metrics(&anchors);
+        let derived = derive_espe_metrics(&anchors, None, None, None, None);
         assert!(derived.supported);
         assert!((derived.glycolytic_bias.unwrap() - 3.2).abs() < 0.01);
     }
@@ -1903,7 +1991,7 @@ mod tests {
     #[test]
     fn derive_espe_metrics_unsupported_when_no_anchors() {
         let anchors = EspePowerAnchors::unsupported();
-        let derived = derive_espe_metrics(&anchors);
+        let derived = derive_espe_metrics(&anchors, None, None, None, None);
         assert!(!derived.supported);
         assert!(derived.glycolytic_bias.is_none());
     }

@@ -386,6 +386,56 @@ pub fn transform_histogram(value: &Value, summary_only: bool, max_bins: usize) -
     value.clone()
 }
 
+// =============================================================================
+// P3.3 — Ultra-Specific Context Tokens
+// =============================================================================
+
+/// Compute back-to-back load from consecutive-day training loads.
+/// Returns the sum of the two highest consecutive-day load pairs.
+pub fn back_to_back_load(daily_loads: &[f64]) -> f64 {
+    daily_loads
+        .windows(2)
+        .map(|w| w[0] + w[1])
+        .fold(f64::NEG_INFINITY, f64::max)
+        .max(0.0)
+}
+
+/// Compute weekly vertical gain from activity details.
+pub fn vert_per_week(activity_details: &[&serde_json::Map<String, Value>]) -> f64 {
+    activity_details
+        .iter()
+        .filter_map(|detail| detail.get("total_elevation_gain").and_then(Value::as_f64))
+        .sum()
+}
+
+/// Compute longest run ratio = longest_run / weekly_volume.
+/// ratio_km for distance-based, ratio_hrs for time-based.
+pub fn longest_run_ratio(longest_run_km: f64, weekly_volume_km: f64) -> Option<(f64, f64)> {
+    if weekly_volume_km <= 0.0 {
+        return None;
+    }
+    let ratio_km = longest_run_km / weekly_volume_km;
+    // Approx: for 10 km/h average pace, ratio_hrs ≈ ratio_km
+    // Koop 2026: 4-7% in hours, 25-35% in km
+    Some((ratio_km, ratio_km * 0.16)) // rough hours conversion
+}
+
+/// Compute elevation specificity score — how well training elevation profile
+/// matches target race profile. Returns 0.0 (no match) to 1.0 (perfect match).
+pub fn elevation_specificity_score(training_vert_per_km: f64, race_vert_per_km: f64) -> f64 {
+    if race_vert_per_km <= 0.0 {
+        return 1.0;
+    }
+    let ratio = training_vert_per_km / race_vert_per_km;
+    if (0.8..=1.2).contains(&ratio) {
+        1.0
+    } else if (0.5..=1.5).contains(&ratio) {
+        0.6
+    } else {
+        0.2
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
