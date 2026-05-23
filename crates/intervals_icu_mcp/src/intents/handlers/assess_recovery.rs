@@ -835,10 +835,7 @@ mod tests {
                 hrv_trend_state: Some("suppressed".into()),
                 recovery_index: Some(0.73),
                 wellness_days_count: 7,
-                avg_mood: None,
-                avg_stress: None,
-                avg_fatigue: None,
-                readiness_score: None,
+                ..Default::default()
             },
             &FitnessMetrics {
                 tsb: Some(3.0),

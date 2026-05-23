@@ -3197,3 +3197,85 @@ async fn plan_training_focus_modes_do_not_collapse() {
     assert_ne!(intensity_md, specific_md);
     assert_ne!(specific_md, recovery_md);
 }
+
+fn with_p0_performance_intelligence_client() -> MockCoachClient {
+    MockCoachClient {
+        activities: vec![ActivitySummary {
+            id: "p0-activity-1".to_string(),
+            name: Some("P0 Test Workout".to_string()),
+            start_date_local: "2026-05-01".to_string(),
+            ..Default::default()
+        }],
+        events: vec![],
+        fitness: json!([{ "fitness": 55.0, "fatigue": 47.0, "form": 8.0 }]),
+        wellness: json!([
+            {"type": "Ride", "eftp": 260.0, "wPrime": 20000.0, "pMax": 850.0}
+        ]),
+        wellness_for_date: json!({}),
+        upcoming_workouts: json!([]),
+        activity_details: json!({
+            "distance": 32000.0,
+            "moving_time": 5400,
+            "average_heartrate": 148.0,
+            "average_watts": 235.0,
+            "total_elevation_gain": 320.0,
+            "icu_efficiency_factor": 1.59,
+            "icu_pm_ftp": 260.0,
+            "icu_pm_w_prime": 20000.0,
+            "icu_pm_p_max": 850.0,
+            "icu_max_wbal_depletion": 6000.0,
+            "icu_joules_above_ftp": 35000.0
+        }),
+        intervals: json!([
+            {"wbal_start": 20000.0, "wbal_end": 14000.0, "joules_above_ftp": 35000.0},
+            {"wbal_start": 14000.0, "wbal_end": 9000.0, "joules_above_ftp": 28000.0}
+        ]),
+        streams: json!({
+            "heartrate": [140.0, 142.0, 144.0, 146.0, 148.0, 150.0, 152.0, 154.0],
+            "watts": [235.0, 235.0, 234.0, 234.0, 233.0, 233.0, 232.0, 232.0]
+        }),
+        best_efforts: json!([]),
+        sport_settings: json!([]),
+        hr_histogram: json!({}),
+        power_histogram: json!({}),
+        pace_histogram: json!({}),
+    }
+}
+
+#[tokio::test]
+async fn p0_performance_intelligence_full_pipeline() {
+    let client = Arc::new(with_p0_performance_intelligence_client());
+    let handler = AnalyzeTrainingHandler::new();
+
+    let output = handler
+        .execute(
+            json!({
+                "target_type": "single",
+                "date": "2026-05-01",
+                "analysis_type": "detailed"
+            }),
+            client,
+            None,
+        )
+        .await
+        .unwrap();
+
+    let markdown = markdown_text(&output);
+
+    // P0.1 — ESPE anchors extracted from sportInfo
+    assert!(markdown.contains("Power-Duration Anchors"));
+    assert!(markdown.contains("eFTP: 260 W"));
+    assert!(markdown.contains("W′: 20000 J"));
+    assert!(markdown.contains("pMax: 850 W"));
+
+    // P0.2 — WDRM from wbal_start/end
+    assert!(markdown.contains("W′ Depletion (WDRM)"));
+    assert!(markdown.contains("Max W′ Depletion: 6000 J"));
+    assert!(markdown.contains("Depletion: 30%"));
+    assert!(markdown.contains("Joules Above FTP: 35000"));
+
+    // P0.3 — Signed decoupling from streams (HR↗ power→ = drifting)
+    assert!(markdown.contains("Aerobic Decoupling (ISDM)"));
+    assert!(markdown.contains("Signed Decoupling"));
+    assert!(markdown.contains("Durability State"));
+}

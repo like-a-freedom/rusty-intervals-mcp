@@ -291,6 +291,140 @@ pub fn build_alerts(metrics: &CoachMetrics) -> Vec<CoachAlert> {
         });
     }
 
+    // NDLI — neural overload alert
+    if let Some(ndli) = &metrics.ndli
+        && ndli.supported
+        && ndli.ndli_overload_flag
+    {
+        alerts.push(CoachAlert {
+            severity: CoachAlertSeverity::Priority,
+            code: "ndli_overload".to_string(),
+            title: "Neural density overload".to_string(),
+            evidence: vec![format!(
+                "{} high-intensity days in the last 7 — NDLI state: red",
+                ndli.high_intensity_days_7d
+            )],
+            section: "ndli".to_string(),
+        });
+    }
+
+    // NDLI — elevated alert (amber)
+    if let Some(ndli) = &metrics.ndli
+        && ndli.supported
+        && ndli.ndli_state == "amber"
+    {
+        alerts.push(CoachAlert {
+            severity: CoachAlertSeverity::Caution,
+            code: "ndli_elevated".to_string(),
+            title: "Elevated neural density".to_string(),
+            evidence: vec![format!(
+                "{} high-intensity days in the last 7 — NDLI state: amber",
+                ndli.high_intensity_days_7d
+            )],
+            section: "ndli".to_string(),
+        });
+    }
+
+    // Heat — stress elevated alert
+    if let Some(heat) = &metrics.heat
+        && heat.supported
+        && heat.heat_state == "high"
+    {
+        alerts.push(CoachAlert {
+            severity: CoachAlertSeverity::Caution,
+            code: "heat_stress_elevated".to_string(),
+            title: "Heat stress elevated".to_string(),
+            evidence: vec![format!(
+                "Heat index {:.2} — high heat exposure over the last 7 days",
+                heat.heat_index_7d.unwrap_or(0.0)
+            )],
+            section: "heat".to_string(),
+        });
+    }
+
+    // Heat — moderate alert
+    if let Some(heat) = &metrics.heat
+        && heat.supported
+        && heat.heat_state == "moderate"
+    {
+        alerts.push(CoachAlert {
+            severity: CoachAlertSeverity::Info,
+            code: "heat_stress_moderate".to_string(),
+            title: "Moderate heat exposure".to_string(),
+            evidence: vec![format!(
+                "Heat index {:.2} — moderate heat over the last 7 days",
+                heat.heat_index_7d.unwrap_or(0.0)
+            )],
+            section: "heat".to_string(),
+        });
+    }
+
+    // WDRM — high W′ depletion alert
+    if let Some(wdrm) = &metrics.wdrm
+        && wdrm.supported
+        && let Some(depletion_pct) = wdrm.depletion_pct
+        && depletion_pct >= 0.60
+    {
+        alerts.push(CoachAlert {
+            severity: CoachAlertSeverity::Caution,
+            code: "high_wbal_depletion".to_string(),
+            title: "High W′ depletion".to_string(),
+            evidence: vec![format!(
+                "W′ depletion at {:.0}% — anaerobic reserves significantly drained",
+                depletion_pct * 100.0
+            )],
+            section: "wdrm".to_string(),
+        });
+    }
+
+    // ISDM — durability drifting alert
+    if let Some(workout) = &metrics.workout
+        && let Some(decoupling) = &workout.aerobic_decoupling
+        && decoupling.durability_state == "drifting"
+    {
+        alerts.push(CoachAlert {
+            severity: CoachAlertSeverity::Caution,
+            code: "durability_drifting".to_string(),
+            title: "Durability drift detected".to_string(),
+            evidence: vec![format!(
+                "Signed decoupling {:.1}% — power/HR ratio shifting across the session",
+                decoupling.signed_decoupling_pct
+            )],
+            section: "decoupling".to_string(),
+        });
+    }
+
+    // ISDM — durability improving info
+    if let Some(workout) = &metrics.workout
+        && let Some(decoupling) = &workout.aerobic_decoupling
+        && decoupling.durability_state == "improving"
+    {
+        alerts.push(CoachAlert {
+            severity: CoachAlertSeverity::Info,
+            code: "durability_improving".to_string(),
+            title: "Durability improvement".to_string(),
+            evidence: vec![format!(
+                "Signed decoupling {:.1}% — negative drift indicates improving aerobic durability",
+                decoupling.signed_decoupling_pct
+            )],
+            section: "decoupling".to_string(),
+        });
+    }
+
+    // Polarized confirmation alert
+    if let Some(polarisation) = &metrics.polarisation
+        && let Some(state) = polarisation.state.as_deref()
+        && state == "polarised"
+    {
+        alerts.push(CoachAlert {
+            severity: CoachAlertSeverity::Info,
+            code: "polarized_confirmation".to_string(),
+            title: "Polarized training distribution".to_string(),
+            evidence: vec!["Training distribution follows the 80/20 polarised model — appropriate for most endurance phases.".to_string()],
+            section: "distribution".to_string(),
+        });
+    }
+
     // Low consistency alert
     if let Some(consistency) = &metrics.consistency
         && let Some(state) = consistency.state.as_deref()
@@ -462,6 +596,61 @@ pub fn build_guidance(metrics: &CoachMetrics, alerts: &[CoachAlert]) -> CoachGui
             .push("Review schedule constraints or adjust the training plan.".to_string());
     }
 
+    // NDLI guidance
+    if has_alert_code(alerts, "ndli_overload") {
+        guidance
+            .findings
+            .push("High neural density detected — ≥4 high-intensity sessions in 7 days increases CNS fatigue risk.".to_string());
+        guidance
+            .suggestions
+            .push("Schedule a low-intensity or rest day to allow neural recovery.".to_string());
+    }
+
+    if has_alert_code(alerts, "ndli_elevated") {
+        guidance.findings.push(
+            "3 high-intensity days in the last 7 — neural load is elevated but not yet critical."
+                .to_string(),
+        );
+        guidance.suggestions.push(
+            "Monitor next session intensity; avoid a 4th high-intensity day this week.".to_string(),
+        );
+    }
+
+    // ISDM guidance
+    if has_alert_code(alerts, "durability_drifting") {
+        guidance.findings.push(
+            "Positive decoupling indicates the athlete is drifting — power output drops faster than \
+             heart rate rises across the session."
+                .to_string(),
+        );
+        guidance.suggestions.push(
+            "Consider reducing session intensity or adding aerobic volume to stabilize durability."
+                .to_string(),
+        );
+    }
+
+    if has_alert_code(alerts, "durability_improving") {
+        guidance.findings.push(
+            "Negative decoupling trend — athlete is improving aerobic durability.".to_string(),
+        );
+        guidance.suggestions.push(
+            "Continue current training approach; durability development is on track.".to_string(),
+        );
+    }
+
+    // WDRM guidance
+    if has_alert_code(alerts, "high_wbal_depletion") {
+        guidance.findings.push(
+            "W′ reserves were significantly depleted during the session — anaerobic contribution \
+             exceeded sustainable capacity."
+                .to_string(),
+        );
+        guidance.suggestions.push(
+            "Allow sufficient recovery before the next high-intensity session to restore W′ capacity."
+                .to_string(),
+        );
+    }
+
     // Workout-specific guidance
     if let Some(workout) = &metrics.workout
         && let Some(count) = workout.interval_count
@@ -581,10 +770,7 @@ mod tests {
                 hrv_trend_state: Some("suppressed".into()),
                 recovery_index: Some(0.73),
                 wellness_days_count: 7,
-                avg_mood: None,
-                avg_stress: None,
-                avg_fatigue: None,
-                readiness_score: None,
+                ..Default::default()
             }),
             ..Default::default()
         };
@@ -606,10 +792,7 @@ mod tests {
                 hrv_trend_state: Some("within_range".into()),
                 recovery_index: Some(1.02),
                 wellness_days_count: 7,
-                avg_mood: None,
-                avg_stress: None,
-                avg_fatigue: None,
-                readiness_score: None,
+                ..Default::default()
             }),
             ..Default::default()
         };
@@ -907,6 +1090,7 @@ mod tests {
                 z3_pct: Some(0.05),
                 ratio: Some(0.61),
                 state: Some("threshold_biased".into()),
+                ..Default::default()
             }),
             ..Default::default()
         };
@@ -931,6 +1115,7 @@ mod tests {
                 z3_pct: Some(0.15),
                 ratio: Some(0.93),
                 state: Some("polarised".into()),
+                ..Default::default()
             }),
             ..Default::default()
         };
