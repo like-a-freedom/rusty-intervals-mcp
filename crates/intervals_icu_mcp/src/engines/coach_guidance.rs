@@ -9,6 +9,10 @@ use crate::domains::coach::{CoachAlert, CoachAlertSeverity, CoachGuidance, Coach
 // Wellness Thresholds
 // =============================================================================
 
+/// WDRM: High W' depletion threshold (60% of W′).
+/// Source: Montis.icu WDRM validation, same as WDRM_HIGH_DEPLETION_PCT in coach_metrics.
+const WDRM_HIGH_DEPLETION_THRESHOLD: f64 = 0.60;
+
 /// Sleep: good threshold (≥ this value)
 pub const SLEEP_GOOD_HOURS: f64 = 7.0;
 /// Sleep: fair minimum threshold (6.0–7.0)
@@ -50,9 +54,12 @@ pub const WEEKLY_AVG_LOW_HOURS: f64 = 5.0;
 /// Weekly average hours: high volume threshold (> this value)
 pub const WEEKLY_AVG_HIGH_HOURS: f64 = 15.0;
 
-/// ACWR: watch threshold (> this value)
-const ACWR_WATCH_RATIO: f64 = 1.3;
-/// ACWR: overload threshold (> this value)
+/// ACWR: safe zone upper bound — values above this trigger an alert.
+/// Maps to `coach_metrics::ACWR_SAFE_UPPER` (1.3).
+/// NOT the same as `coach_metrics::ACWR_WATCH_RATIO` (1.5 — overreaching threshold).
+const ACWR_ALERT_RATIO: f64 = 1.3;
+/// ACWR: overreaching threshold — values above this are critical.
+/// Maps to `coach_metrics::ACWR_WATCH_RATIO`.
 const ACWR_OVERREACH_RATIO: f64 = 1.5;
 /// Monotony: repetitive-stress threshold (Foster 1998 recommends ≤ 2.0; Seiler uses 2.5).
 /// Values above this indicate insufficient training variety → elevated injury/overtraining risk.
@@ -191,14 +198,14 @@ pub fn build_alerts(metrics: &CoachMetrics) -> Vec<CoachAlert> {
                 )],
                 section: "load_management".to_string(),
             });
-        } else if acwr.ratio > ACWR_WATCH_RATIO {
+        } else if acwr.ratio > ACWR_ALERT_RATIO {
             alerts.push(CoachAlert {
                 severity: CoachAlertSeverity::Caution,
                 code: "acwr_watch".to_string(),
                 title: "Load ramp watch".to_string(),
                 evidence: vec![format!(
                     "ACWR {:.2} exceeds {:.1}",
-                    acwr.ratio, ACWR_WATCH_RATIO
+                    acwr.ratio, ACWR_ALERT_RATIO
                 )],
                 section: "load_management".to_string(),
             });
@@ -287,6 +294,140 @@ pub fn build_alerts(metrics: &CoachMetrics) -> Vec<CoachAlert> {
                 polarisation.ratio.unwrap_or(0.0),
                 z2_pct * 100.0
             )],
+            section: "distribution".to_string(),
+        });
+    }
+
+    // NDLI — neural overload alert
+    if let Some(ndli) = &metrics.ndli
+        && ndli.supported
+        && ndli.ndli_overload_flag
+    {
+        alerts.push(CoachAlert {
+            severity: CoachAlertSeverity::Priority,
+            code: "ndli_overload".to_string(),
+            title: "Neural density overload".to_string(),
+            evidence: vec![format!(
+                "{} high-intensity days in the last 7 — NDLI state: red",
+                ndli.high_intensity_days_7d
+            )],
+            section: "ndli".to_string(),
+        });
+    }
+
+    // NDLI — elevated alert (amber)
+    if let Some(ndli) = &metrics.ndli
+        && ndli.supported
+        && ndli.ndli_state == "amber"
+    {
+        alerts.push(CoachAlert {
+            severity: CoachAlertSeverity::Caution,
+            code: "ndli_elevated".to_string(),
+            title: "Elevated neural density".to_string(),
+            evidence: vec![format!(
+                "{} high-intensity days in the last 7 — NDLI state: amber",
+                ndli.high_intensity_days_7d
+            )],
+            section: "ndli".to_string(),
+        });
+    }
+
+    // Heat — stress elevated alert
+    if let Some(heat) = &metrics.heat
+        && heat.supported
+        && heat.heat_state == "high"
+    {
+        alerts.push(CoachAlert {
+            severity: CoachAlertSeverity::Caution,
+            code: "heat_stress_elevated".to_string(),
+            title: "Heat stress elevated".to_string(),
+            evidence: vec![format!(
+                "Heat index {:.2} — high heat exposure over the last 7 days",
+                heat.heat_index_7d.unwrap_or(0.0)
+            )],
+            section: "heat".to_string(),
+        });
+    }
+
+    // Heat — moderate alert
+    if let Some(heat) = &metrics.heat
+        && heat.supported
+        && heat.heat_state == "moderate"
+    {
+        alerts.push(CoachAlert {
+            severity: CoachAlertSeverity::Info,
+            code: "heat_stress_moderate".to_string(),
+            title: "Moderate heat exposure".to_string(),
+            evidence: vec![format!(
+                "Heat index {:.2} — moderate heat over the last 7 days",
+                heat.heat_index_7d.unwrap_or(0.0)
+            )],
+            section: "heat".to_string(),
+        });
+    }
+
+    // WDRM — high W′ depletion alert
+    if let Some(wdrm) = &metrics.wdrm
+        && wdrm.supported
+        && let Some(depletion_pct) = wdrm.depletion_pct
+        && depletion_pct >= WDRM_HIGH_DEPLETION_THRESHOLD
+    {
+        alerts.push(CoachAlert {
+            severity: CoachAlertSeverity::Caution,
+            code: "high_wbal_depletion".to_string(),
+            title: "High W′ depletion".to_string(),
+            evidence: vec![format!(
+                "W′ depletion at {:.0}% — anaerobic reserves significantly drained",
+                depletion_pct * 100.0
+            )],
+            section: "wdrm".to_string(),
+        });
+    }
+
+    // ISDM — durability drifting alert
+    if let Some(workout) = &metrics.workout
+        && let Some(decoupling) = &workout.aerobic_decoupling
+        && decoupling.durability_state == "drifting"
+    {
+        alerts.push(CoachAlert {
+            severity: CoachAlertSeverity::Caution,
+            code: "durability_drifting".to_string(),
+            title: "Durability drift detected".to_string(),
+            evidence: vec![format!(
+                "Signed decoupling {:.1}% — power/HR ratio shifting across the session",
+                decoupling.signed_decoupling_pct
+            )],
+            section: "decoupling".to_string(),
+        });
+    }
+
+    // ISDM — durability improving info
+    if let Some(workout) = &metrics.workout
+        && let Some(decoupling) = &workout.aerobic_decoupling
+        && decoupling.durability_state == "improving"
+    {
+        alerts.push(CoachAlert {
+            severity: CoachAlertSeverity::Info,
+            code: "durability_improving".to_string(),
+            title: "Durability improvement".to_string(),
+            evidence: vec![format!(
+                "Signed decoupling {:.1}% — negative drift indicates improving aerobic durability",
+                decoupling.signed_decoupling_pct
+            )],
+            section: "decoupling".to_string(),
+        });
+    }
+
+    // Polarized confirmation alert
+    if let Some(polarisation) = &metrics.polarisation
+        && let Some(state) = polarisation.state.as_deref()
+        && state == "polarised"
+    {
+        alerts.push(CoachAlert {
+            severity: CoachAlertSeverity::Info,
+            code: "polarized_confirmation".to_string(),
+            title: "Polarized training distribution".to_string(),
+            evidence: vec!["Training distribution follows the 80/20 polarised model — appropriate for most endurance phases.".to_string()],
             section: "distribution".to_string(),
         });
     }
@@ -462,6 +603,61 @@ pub fn build_guidance(metrics: &CoachMetrics, alerts: &[CoachAlert]) -> CoachGui
             .push("Review schedule constraints or adjust the training plan.".to_string());
     }
 
+    // NDLI guidance
+    if has_alert_code(alerts, "ndli_overload") {
+        guidance
+            .findings
+            .push("High neural density detected — ≥4 high-intensity sessions in 7 days increases CNS fatigue risk.".to_string());
+        guidance
+            .suggestions
+            .push("Schedule a low-intensity or rest day to allow neural recovery.".to_string());
+    }
+
+    if has_alert_code(alerts, "ndli_elevated") {
+        guidance.findings.push(
+            "3 high-intensity days in the last 7 — neural load is elevated but not yet critical."
+                .to_string(),
+        );
+        guidance.suggestions.push(
+            "Monitor next session intensity; avoid a 4th high-intensity day this week.".to_string(),
+        );
+    }
+
+    // ISDM guidance
+    if has_alert_code(alerts, "durability_drifting") {
+        guidance.findings.push(
+            "Positive decoupling indicates the athlete is drifting — power output drops faster than \
+             heart rate rises across the session."
+                .to_string(),
+        );
+        guidance.suggestions.push(
+            "Consider reducing session intensity or adding aerobic volume to stabilize durability."
+                .to_string(),
+        );
+    }
+
+    if has_alert_code(alerts, "durability_improving") {
+        guidance.findings.push(
+            "Negative decoupling trend — athlete is improving aerobic durability.".to_string(),
+        );
+        guidance.suggestions.push(
+            "Continue current training approach; durability development is on track.".to_string(),
+        );
+    }
+
+    // WDRM guidance
+    if has_alert_code(alerts, "high_wbal_depletion") {
+        guidance.findings.push(
+            "W′ reserves were significantly depleted during the session — anaerobic contribution \
+             exceeded sustainable capacity."
+                .to_string(),
+        );
+        guidance.suggestions.push(
+            "Allow sufficient recovery before the next high-intensity session to restore W′ capacity."
+                .to_string(),
+        );
+    }
+
     // Workout-specific guidance
     if let Some(workout) = &metrics.workout
         && let Some(count) = workout.interval_count
@@ -494,8 +690,9 @@ pub fn build_guidance(metrics: &CoachMetrics, alerts: &[CoachAlert]) -> CoachGui
 mod tests {
     use super::*;
     use crate::domains::coach::{
-        AcwrMetrics, CoachMetrics, ConsistencyMetrics, FitnessMetrics, LoadManagementMetrics,
-        PolarisationMetrics, VolumeMetrics, WellnessMetrics,
+        AcwrMetrics, CoachMetrics, ConsistencyMetrics, DecouplingMetrics, FitnessMetrics,
+        HeatMetrics, LoadManagementMetrics, NdliMetrics, PolarisationMetrics, VolumeMetrics,
+        WdrMetrics, WellnessMetrics, WorkoutMetricsContext,
     };
 
     #[test]
@@ -581,10 +778,7 @@ mod tests {
                 hrv_trend_state: Some("suppressed".into()),
                 recovery_index: Some(0.73),
                 wellness_days_count: 7,
-                avg_mood: None,
-                avg_stress: None,
-                avg_fatigue: None,
-                readiness_score: None,
+                ..Default::default()
             }),
             ..Default::default()
         };
@@ -606,10 +800,7 @@ mod tests {
                 hrv_trend_state: Some("within_range".into()),
                 recovery_index: Some(1.02),
                 wellness_days_count: 7,
-                avg_mood: None,
-                avg_stress: None,
-                avg_fatigue: None,
-                readiness_score: None,
+                ..Default::default()
             }),
             ..Default::default()
         };
@@ -907,6 +1098,7 @@ mod tests {
                 z3_pct: Some(0.05),
                 ratio: Some(0.61),
                 state: Some("threshold_biased".into()),
+                ..Default::default()
             }),
             ..Default::default()
         };
@@ -931,6 +1123,7 @@ mod tests {
                 z3_pct: Some(0.15),
                 ratio: Some(0.93),
                 state: Some("polarised".into()),
+                ..Default::default()
             }),
             ..Default::default()
         };
@@ -1060,5 +1253,516 @@ mod tests {
 
         let alerts = build_alerts(&metrics);
         assert!(!alerts.iter().any(|a| a.code == "low_durability_index"));
+    }
+
+    #[test]
+    fn hrv_below_range_triggers_alert() {
+        let metrics = CoachMetrics {
+            wellness: Some(WellnessMetrics {
+                avg_sleep_hours: Some(7.2),
+                avg_resting_hr: Some(54.0),
+                avg_hrv: Some(40.0),
+                hrv_baseline: Some(52.0),
+                hrv_deviation_pct: Some(-23.1),
+                hrv_trend_state: Some("below_range".into()),
+                wellness_days_count: 5,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let alerts = build_alerts(&metrics);
+        assert!(alerts.iter().any(|a| a.code == "low_hrv"));
+    }
+
+    #[test]
+    fn hrv_alert_falls_back_when_deviation_missing() {
+        let metrics = CoachMetrics {
+            wellness: Some(WellnessMetrics {
+                avg_sleep_hours: Some(7.2),
+                avg_resting_hr: Some(54.0),
+                avg_hrv: Some(40.0),
+                hrv_trend_state: Some("suppressed".into()),
+                hrv_baseline: None,
+                hrv_deviation_pct: None,
+                wellness_days_count: 5,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let alerts = build_alerts(&metrics);
+        assert!(alerts.iter().any(|a| a.code == "low_hrv"));
+        let alert = alerts.iter().find(|a| a.code == "low_hrv").unwrap();
+        assert_eq!(
+            alert.evidence[0],
+            "HRV is below the athlete's recent personal range"
+        );
+    }
+
+    #[test]
+    fn acwr_watch_creates_watch_alert() {
+        let metrics = CoachMetrics {
+            load_management: Some(LoadManagementMetrics {
+                acwr: Some(AcwrMetrics {
+                    acute_load: 370.0,
+                    chronic_load: 270.0,
+                    ratio: 1.37,
+                    state: "watch".into(),
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let alerts = build_alerts(&metrics);
+        assert!(alerts.iter().any(|a| a.code == "acwr_watch"));
+        assert!(!alerts.iter().any(|a| a.code == "acwr_overreaching"));
+    }
+
+    #[test]
+    fn ndli_overload_creates_priority_alert() {
+        let metrics = CoachMetrics {
+            ndli: Some(NdliMetrics {
+                supported: true,
+                high_intensity_days_7d: 5,
+                ndli_overload_flag: true,
+                ndli_state: "red".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let alerts = build_alerts(&metrics);
+        assert!(alerts.iter().any(|a| a.code == "ndli_overload"));
+        assert!(!alerts.iter().any(|a| a.code == "ndli_elevated"));
+    }
+
+    #[test]
+    fn ndli_elevated_creates_caution_alert() {
+        let metrics = CoachMetrics {
+            ndli: Some(NdliMetrics {
+                supported: true,
+                high_intensity_days_7d: 3,
+                ndli_overload_flag: false,
+                ndli_state: "amber".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let alerts = build_alerts(&metrics);
+        assert!(alerts.iter().any(|a| a.code == "ndli_elevated"));
+        assert!(!alerts.iter().any(|a| a.code == "ndli_overload"));
+    }
+
+    #[test]
+    fn heat_high_creates_alert() {
+        let metrics = CoachMetrics {
+            heat: Some(HeatMetrics {
+                supported: true,
+                heat_index_7d: Some(1.8),
+                heat_state: "high".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let alerts = build_alerts(&metrics);
+        assert!(alerts.iter().any(|a| a.code == "heat_stress_elevated"));
+        assert!(!alerts.iter().any(|a| a.code == "heat_stress_moderate"));
+    }
+
+    #[test]
+    fn heat_moderate_creates_info_alert() {
+        let metrics = CoachMetrics {
+            heat: Some(HeatMetrics {
+                supported: true,
+                heat_index_7d: Some(1.2),
+                heat_state: "moderate".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let alerts = build_alerts(&metrics);
+        assert!(alerts.iter().any(|a| a.code == "heat_stress_moderate"));
+        assert!(!alerts.iter().any(|a| a.code == "heat_stress_elevated"));
+    }
+
+    #[test]
+    fn wdrm_high_depletion_creates_alert() {
+        let metrics = CoachMetrics {
+            wdrm: Some(WdrMetrics {
+                supported: true,
+                depletion_pct: Some(0.72),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let alerts = build_alerts(&metrics);
+        assert!(alerts.iter().any(|a| a.code == "high_wbal_depletion"));
+    }
+
+    #[test]
+    fn durability_drifting_creates_alert() {
+        let metrics = CoachMetrics {
+            workout: Some(WorkoutMetricsContext {
+                aerobic_decoupling: Some(DecouplingMetrics {
+                    signed_decoupling_pct: 5.2,
+                    durability_state: "drifting".into(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let alerts = build_alerts(&metrics);
+        assert!(alerts.iter().any(|a| a.code == "durability_drifting"));
+        assert!(!alerts.iter().any(|a| a.code == "durability_improving"));
+    }
+
+    #[test]
+    fn durability_improving_creates_info_alert() {
+        let metrics = CoachMetrics {
+            workout: Some(WorkoutMetricsContext {
+                aerobic_decoupling: Some(DecouplingMetrics {
+                    signed_decoupling_pct: -3.1,
+                    durability_state: "improving".into(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let alerts = build_alerts(&metrics);
+        assert!(alerts.iter().any(|a| a.code == "durability_improving"));
+        assert!(!alerts.iter().any(|a| a.code == "durability_drifting"));
+    }
+
+    #[test]
+    fn polarised_state_creates_confirmation_alert() {
+        let metrics = CoachMetrics {
+            polarisation: Some(PolarisationMetrics {
+                z1_pct: Some(0.55),
+                z2_pct: Some(0.30),
+                z3_pct: Some(0.15),
+                ratio: Some(1.17),
+                state: Some("polarised".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let alerts = build_alerts(&metrics);
+        assert!(alerts.iter().any(|a| a.code == "polarized_confirmation"));
+        assert!(
+            !alerts
+                .iter()
+                .any(|a| a.code == "threshold_biased_polarisation")
+        );
+    }
+
+    #[test]
+    fn no_alerts_when_all_metrics_normal() {
+        let metrics = CoachMetrics {
+            fitness: Some(FitnessMetrics {
+                tsb: Some(5.0),
+                ..Default::default()
+            }),
+            wellness: Some(WellnessMetrics {
+                avg_sleep_hours: Some(7.5),
+                avg_resting_hr: Some(52.0),
+                avg_hrv: Some(62.0),
+                hrv_trend_state: Some("within_range".into()),
+                wellness_days_count: 5,
+                ..Default::default()
+            }),
+            volume: Some(VolumeMetrics {
+                weekly_avg_hours: 10.0,
+                ..Default::default()
+            }),
+            load_management: Some(LoadManagementMetrics {
+                acwr: Some(AcwrMetrics {
+                    acute_load: 280.0,
+                    chronic_load: 260.0,
+                    ratio: 1.08,
+                    state: "productive".into(),
+                }),
+                monotony: Some(1.8),
+                fatigue_index: Some(1.5),
+                durability_index: Some(0.95),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let alerts = build_alerts(&metrics);
+        assert!(alerts.is_empty());
+    }
+
+    #[test]
+    fn fresh_tsb_without_wellness_provides_incomplete_finding() {
+        let metrics = CoachMetrics {
+            fitness: Some(FitnessMetrics {
+                tsb: Some(14.0),
+                ..Default::default()
+            }),
+            wellness: None,
+            ..Default::default()
+        };
+
+        let guidance = build_guidance(&metrics, &[]);
+        assert!(
+            guidance
+                .findings
+                .iter()
+                .any(|f| f.contains("wellness support is incomplete"))
+        );
+    }
+
+    #[test]
+    fn neutral_tsb_does_not_add_fitness_guidance() {
+        let metrics = CoachMetrics {
+            fitness: Some(FitnessMetrics {
+                tsb: Some(3.0),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let guidance = build_guidance(&metrics, &[]);
+        assert!(!guidance.suggestions.iter().any(|s| s.contains("recovery")));
+        assert!(!guidance.suggestions.iter().any(|s| s.contains("ready")));
+    }
+
+    #[test]
+    fn low_volume_adds_suggestion() {
+        let metrics = CoachMetrics {
+            volume: Some(VolumeMetrics {
+                weekly_avg_hours: 3.5,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let guidance = build_guidance(&metrics, &[]);
+        assert!(
+            guidance
+                .suggestions
+                .iter()
+                .any(|s| s.contains("low-volume"))
+        );
+    }
+
+    #[test]
+    fn acwr_watch_guidance_suggests_monitoring() {
+        let metrics = CoachMetrics {
+            load_management: Some(LoadManagementMetrics {
+                acwr: Some(AcwrMetrics {
+                    acute_load: 370.0,
+                    chronic_load: 270.0,
+                    ratio: 1.37,
+                    state: "watch".into(),
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let alerts = build_alerts(&metrics);
+        let guidance = build_guidance(&metrics, &alerts);
+        assert!(alerts.iter().any(|a| a.code == "acwr_watch"));
+        assert!(
+            guidance
+                .suggestions
+                .iter()
+                .any(|s| s.contains("monitor recovery"))
+        );
+    }
+
+    #[test]
+    fn ndli_overload_guidance() {
+        let metrics = CoachMetrics {
+            ndli: Some(NdliMetrics {
+                supported: true,
+                high_intensity_days_7d: 5,
+                ndli_overload_flag: true,
+                ndli_state: "red".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let alerts = build_alerts(&metrics);
+        let guidance = build_guidance(&metrics, &alerts);
+        assert!(guidance.findings.iter().any(|f| f.contains("neural")));
+        assert!(guidance.suggestions.iter().any(|s| s.contains("neural")));
+    }
+
+    #[test]
+    fn ndli_elevated_guidance() {
+        let metrics = CoachMetrics {
+            ndli: Some(NdliMetrics {
+                supported: true,
+                high_intensity_days_7d: 3,
+                ndli_overload_flag: false,
+                ndli_state: "amber".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let alerts = build_alerts(&metrics);
+        let guidance = build_guidance(&metrics, &alerts);
+        assert!(
+            guidance
+                .findings
+                .iter()
+                .any(|f| f.contains("high-intensity"))
+        );
+        assert!(
+            guidance
+                .suggestions
+                .iter()
+                .any(|s| s.contains("high-intensity"))
+        );
+    }
+
+    #[test]
+    fn durability_drifting_guidance() {
+        let metrics = CoachMetrics {
+            workout: Some(WorkoutMetricsContext {
+                aerobic_decoupling: Some(DecouplingMetrics {
+                    signed_decoupling_pct: 5.2,
+                    durability_state: "drifting".into(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let alerts = build_alerts(&metrics);
+        let guidance = build_guidance(&metrics, &alerts);
+        assert!(guidance.findings.iter().any(|f| f.contains("decoupling")));
+        assert!(
+            guidance
+                .suggestions
+                .iter()
+                .any(|s| s.contains("durability"))
+        );
+    }
+
+    #[test]
+    fn durability_improving_guidance() {
+        let metrics = CoachMetrics {
+            workout: Some(WorkoutMetricsContext {
+                aerobic_decoupling: Some(DecouplingMetrics {
+                    signed_decoupling_pct: -3.1,
+                    durability_state: "improving".into(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let alerts = build_alerts(&metrics);
+        let guidance = build_guidance(&metrics, &alerts);
+        assert!(guidance.findings.iter().any(|f| f.contains("improving")));
+        assert!(
+            guidance
+                .suggestions
+                .iter()
+                .any(|s| s.contains("training approach"))
+        );
+    }
+
+    #[test]
+    fn wdrm_high_depletion_guidance() {
+        let metrics = CoachMetrics {
+            wdrm: Some(WdrMetrics {
+                supported: true,
+                depletion_pct: Some(0.72),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let alerts = build_alerts(&metrics);
+        let guidance = build_guidance(&metrics, &alerts);
+        assert!(guidance.findings.iter().any(|f| f.contains("W′ reserves")));
+        assert!(
+            guidance
+                .suggestions
+                .iter()
+                .any(|s| s.contains("W′ capacity"))
+        );
+    }
+
+    #[test]
+    fn workout_with_intervals_adds_suggestion() {
+        let metrics = CoachMetrics {
+            workout: Some(WorkoutMetricsContext {
+                interval_count: Some(6),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let guidance = build_guidance(&metrics, &[]);
+        assert!(guidance.suggestions.iter().any(|s| s.contains("intervals")));
+    }
+
+    #[test]
+    fn deep_fatigue_adds_next_action() {
+        let metrics = CoachMetrics {
+            fitness: Some(FitnessMetrics {
+                tsb: Some(-25.0),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let alerts = build_alerts(&metrics);
+        let guidance = build_guidance(&metrics, &alerts);
+        assert!(
+            guidance
+                .next_actions
+                .iter()
+                .any(|a| a.contains("recovery-focused"))
+        );
+    }
+
+    #[test]
+    fn default_next_action_when_none_specified() {
+        let metrics = CoachMetrics::default();
+        let guidance = build_guidance(&metrics, &[]);
+        assert!(
+            guidance
+                .next_actions
+                .iter()
+                .any(|a| a.contains("follow-up"))
+        );
+    }
+
+    #[test]
+    fn tier_one_recovery_adds_fallback_suggestion_when_no_other_suggestions() {
+        let metrics = CoachMetrics {
+            wellness: Some(WellnessMetrics {
+                avg_sleep_hours: Some(5.8),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let alerts = build_alerts(&metrics);
+        let guidance = build_guidance(&metrics, &alerts);
+        assert!(alerts.iter().any(|a| a.code == "low_sleep"));
+        assert!(guidance.suggestions.iter().any(|s| s.contains("recovery")));
     }
 }

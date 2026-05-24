@@ -1,6 +1,7 @@
 use crate::domains::coach::{
-    AcwrMetrics, DecouplingMetrics, FitnessMetrics, LoadManagementMetrics, TrendMetrics,
-    VolumeMetrics, WellnessMetrics, WorkoutMetricsContext,
+    AcwrMetrics, DecouplingMetrics, EspeDerivedMetrics, EspePowerAnchors, FitnessMetrics,
+    HeatMetrics, LoadManagementMetrics, NdliMetrics, TrendMetrics, VolumeMetrics, WellnessMetrics,
+    WorkoutMetricsContext,
 };
 use intervals_icu_client::ActivitySummary;
 use serde_json::Value;
@@ -28,6 +29,226 @@ const HR_STREAM_KEYS: &[&str] = &["heartrate", "heart_rate", "hr"];
 const OUTPUT_STREAM_KEYS: &[&str] = &["watts", "velocity_smooth", "pace"];
 const MONOTONY_STDDEV_FLOOR_RATIO: f64 = 0.1;
 const MONOTONY_CAP: f64 = 10.0;
+
+// =============================================================================
+// P0 — Performance Intelligence Constants
+// =============================================================================
+
+/// NDLI: Joules above FTP threshold for high-intensity day classification (cycling).
+/// Source: Montis.icu Coach V5 validation (20 kJ ≈ 2×3min VO2max effort at 400W).
+const NDLI_HIGH_INTENSITY_JOULES_THRESHOLD: f64 = 20000.0;
+
+/// NDLI: Running fallback — TSS/day proxy for high-intensity when joules_above_ftp is null.
+/// Scaled relative to typical CTL: 80 TSS ≈ ~1.2× CTL for moderate athletes.
+const NDLI_RUNNING_TSS_PROXY_THRESHOLD: f64 = 80.0;
+
+/// NDLI: IF normalization threshold — values > 2.0 are assumed to be % not decimal.
+const NDLI_IF_NORMALIZATION_THRESHOLD: f64 = 2.0;
+
+/// NDLI: Days threshold for "red" (overload) state.
+const NDLI_RED_DAYS: usize = 4;
+
+/// NDLI: Days threshold for "amber" (watch) state.
+const NDLI_AMBER_DAYS: usize = 3;
+
+/// WDRM: High depletion session threshold (60% of W′).
+const WDRM_HIGH_DEPLETION_PCT: f64 = 0.60;
+
+/// WDRM: Maximum depletion percentage clip (150% of W′).
+const WDRM_MAX_DEPLETION_PCT: f64 = 1.5;
+
+/// WDRM: Minimum Z2 points for HR variance computation.
+const Z2_MIN_POINTS: usize = 10;
+
+// =============================================================================
+// P1 — Coaching Intelligence Constants
+// =============================================================================
+
+/// HRV: Suppression threshold (ratio < 0.88 × baseline).
+/// Source: Front. Physiol. 2025, Nature Sci Reports 2025 — RMSSD clinical reliability.
+const HRV_SUPPRESSION_RATIO: f64 = 0.88;
+
+/// HRV: Recovery threshold (ratio > 1.15 × baseline).
+const HRV_RECOVERY_RATIO: f64 = 1.15;
+
+/// HRV: Minimum trend values for slope computation.
+const HRV_TREND_MIN_VALUES: usize = 3;
+
+/// HRV: Ideal sleep hours for recovery quality normalization.
+const IDEAL_SLEEP_HOURS: f64 = 8.0;
+
+/// HRV: Recovery quality component weights (HRV × 0.4 + RHR × 0.3 + sleep × 0.3).
+const RECOVERY_QUALITY_HRV_WEIGHT: f64 = 0.4;
+const RECOVERY_QUALITY_RHR_WEIGHT: f64 = 0.3;
+const RECOVERY_QUALITY_SLEEP_WEIGHT: f64 = 0.3;
+
+/// HRV: RHR component clamp bounds.
+const RHR_COMPONENT_MIN: f64 = 0.5;
+const RHR_COMPONENT_MAX: f64 = 1.5;
+
+/// HRV: Sleep component clamp bounds.
+const SLEEP_COMPONENT_MIN: f64 = 0.5;
+const SLEEP_COMPONENT_MAX: f64 = 1.5;
+
+/// Volume: seconds per hour for duration conversion.
+const SECONDS_PER_HOUR: f64 = 3600.0;
+
+/// Volume: days per week for workload normalization.
+const DAYS_PER_WEEK: f64 = 7.0;
+
+/// ACWR: Acute EWMA lambda = 2 / (N + 1) with N = 7.
+const ACWR_ACUTE_LAMBDA: f64 = 2.0 / 8.0;
+
+/// ACWR: Chronic EWMA lambda = 2 / (N + 1) with N = 28.
+const ACWR_CHRONIC_LAMBDA: f64 = 2.0 / 29.0;
+
+/// ACWR: ACWR "watch" threshold (ratio ≤ 1.5).
+/// Above ACWR safe upper (1.3) up to 1.5 = watch zone.
+const ACWR_WATCH_RATIO: f64 = 1.5;
+
+/// ACWR: safe zone lower bound (ratio ≥ 0.8 = underload risk).
+const ACWR_SAFE_LOWER: f64 = 0.8;
+
+/// ACWR: safe zone upper bound (ratio ≤ 1.3 = overreach risk).
+const ACWR_SAFE_UPPER: f64 = 1.3;
+
+/// Decoupling: minimum data points for valid split-half analysis.
+const DECOUPLING_MIN_POINTS: usize = 4;
+
+/// Decoupling: durability drift — absolute % threshold.
+const DECOUPLING_DRIFT_ABS_THRESHOLD: f64 = 8.0;
+
+/// Decoupling: durability drift — signed % threshold.
+const DECOUPLING_DRIFT_SIGNED_THRESHOLD: f64 = 5.0;
+
+/// Decoupling: durability improving — signed % below this = improving.
+const DECOUPLING_IMPROVING_THRESHOLD: f64 = -2.0;
+
+/// Decoupling: durability stable — signed % within this = stable.
+const DECOUPLING_STABLE_THRESHOLD: f64 = 3.0;
+
+/// Decoupling: acceptable decoupling threshold (%).
+const DECOUPLING_ACCEPTABLE_PCT: f64 = 5.0;
+
+/// Decoupling: watch decoupling threshold (%).
+const DECOUPLING_WATCH_PCT: f64 = 10.0;
+
+/// Consistency: excellent Pearson R threshold.
+const CONSISTENCY_EXCELLENT_THRESHOLD: f64 = 0.9;
+
+/// Consistency: good Pearson R threshold.
+const CONSISTENCY_GOOD_THRESHOLD: f64 = 0.7;
+
+/// Consistency: moderate Pearson R threshold.
+const CONSISTENCY_MODERATE_THRESHOLD: f64 = 0.5;
+
+/// Polarisation: threshold biased index threshold.
+const POLARISATION_BIASED_THRESHOLD: f64 = 0.75;
+
+/// Wellness: sleep seconds heuristic threshold (if value > 24h, assume seconds not hours).
+const WELLNESS_SLEEP_HEURISTIC_THRESHOLD: f64 = 24.0;
+
+/// Wellness: default sleep hours when no sleep data available.
+const WELLNESS_DEFAULT_SLEEP_HOURS: f64 = 7.0;
+
+/// Rounding: decimal precision factor (10 → 1 decimal).
+const ROUNDING_DECIMAL_FACTOR: f64 = 10.0;
+
+/// Readiness: mood weight in composite score.
+const READINESS_MOOD_WEIGHT: f64 = 0.3;
+
+/// Readiness: sleep weight in composite score.
+const READINESS_SLEEP_WEIGHT: f64 = 0.3;
+
+/// Readiness: stress weight in composite score.
+const READINESS_STRESS_WEIGHT: f64 = 0.2;
+
+/// Readiness: fatigue weight in composite score.
+const READINESS_FATIGUE_WEIGHT: f64 = 0.2;
+
+/// Readiness: sleep hours clamp upper bound.
+const READINESS_SLEEP_CLAMP_MAX: f64 = 10.0;
+
+// =============================================================================
+// P2 — Ultra-Sport Constants
+// =============================================================================
+
+/// Heat: baseline temperature (°C) below which heat stress is zero.
+/// Source: Cheuvront & Kenefick — 18°C threshold for uncompensable heat stress.
+const HEAT_BASELINE_TEMP_C: f64 = 18.0;
+
+/// Heat: temperature range for normalization (18°C to 23°C = 5°C span).
+const HEAT_NORMALIZATION_RANGE_C: f64 = 5.0;
+
+/// Heat: high stress threshold (heat_index > 1.0).
+const HEAT_HIGH_THRESHOLD: f64 = 1.0;
+
+/// Heat: moderate stress threshold (heat_index ≥ 0.5).
+const HEAT_MODERATE_THRESHOLD: f64 = 0.5;
+
+/// Heat: index clamp maximum (capped at 2.0 for safety).
+const HEAT_INDEX_CLAMP_MAX: f64 = 2.0;
+
+/// Running power: Stryd device correction factor (Stryd reports ~8% higher than reference).
+const STRYD_POWER_CORRECTION: f64 = 0.92;
+
+/// Running power: Garmin Running Power correction factor.
+const GARMIN_RP_POWER_CORRECTION: f64 = 1.08;
+
+/// GAP to running power: cubic speed coefficient (W = speed³ × k).
+/// Approximation based on air resistance + metabolic cost model.
+const GAP_POWER_COEFFICIENT: f64 = 0.25;
+
+/// GAP to running power: uphill elevation multiplier per % gradient.
+const GAP_UPHILL_GRADIENT_FACTOR: f64 = 0.08;
+
+/// GAP to running power: downhill elevation multiplier per % gradient.
+const GAP_DOWNHILL_GRADIENT_FACTOR: f64 = 0.02;
+
+/// Ideal P1m/P20m ratio for well-rounded cyclists.
+/// Source: Power profiling literature (Vilela et al., JSCR 2023).
+const IDEAL_P1M_P20M_RATIO: f64 = 1.8;
+
+/// Power curve comparison: mild gain threshold (%).
+const POWER_CURVE_MILD_GAIN_PCT: f64 = 3.0;
+
+/// Power curve comparison: moderate gain threshold (%).
+const POWER_CURVE_MODERATE_GAIN_PCT: f64 = 5.0;
+
+/// Forecast: TSB load pressure threshold (also used in interpret_fitness_metrics).
+const TSB_LOAD_PRESSURE_THRESHOLD: f64 = -10.0;
+
+/// Forecast: TSB balanced upper (also used in interpret_fitness_metrics).
+const TSB_BALANCED_UPPER: f64 = 10.0;
+
+// =============================================================================
+// Bare-literal extractions (previously inline magic numbers)
+// =============================================================================
+
+/// Minimum weeks floor guard for volume calculations.
+const WEEKS_FLOOR_MIN: f64 = 1.0;
+/// Minimum lookback days for ACWR computation (28 = 4 weeks).
+const ACWR_MIN_LOOKBACK_DAYS: usize = 28;
+/// Minimum lookback days for monotony computation (7 = 1 week).
+const MONOTONY_MIN_LOOKBACK_DAYS: usize = 7;
+/// Rolling window days for load management metrics.
+const LOAD_MGMT_WINDOW_DAYS: usize = 7;
+/// Divisor for stress_tolerance scaling to meaningful units.
+const STRESS_TOLERANCE_DIVISOR: f64 = 100.0;
+/// Sleep hours lower clamp for readiness score.
+const SLEEP_CLAMP_MIN: f64 = 0.0;
+/// Percentage scaling factor for delta calculations.
+const PCT_SCALING_FACTOR: f64 = 100.0;
+/// Seiler polarisation model denominator factor (z1+z3)/(2*z2).
+const POLARISATION_DENOMINATOR_FACTOR: f64 = 2.0;
+/// Power curve decline threshold (< this % = decline).
+const POWER_CURVE_DECLINE_THRESHOLD: f64 = -1.0;
+/// Power curve stable upper threshold (< this % = stable).
+const POWER_CURVE_STABLE_THRESHOLD: f64 = 1.0;
+/// Power curve rotation index averaging factor.
+const POWER_CURVE_ROTATION_AVERAGE: f64 = 2.0;
+/// Running power gap model: speed exponent (cubic = 3).
+const GAP_SPEED_EXPONENT: i32 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TrendSnapshot {
@@ -77,8 +298,8 @@ pub fn derive_volume_metrics(
     total_elevation_gain_m: f64,
     activity_count: usize,
 ) -> VolumeMetrics {
-    let weeks = (window_days as f64 / 7.0).max(1.0);
-    let total_moving_time_hours = total_moving_time_secs as f64 / 3600.0;
+    let weeks = (window_days as f64 / DAYS_PER_WEEK).max(WEEKS_FLOOR_MIN);
+    let total_moving_time_hours = total_moving_time_secs as f64 / SECONDS_PER_HOUR;
 
     VolumeMetrics {
         activity_count,
@@ -102,9 +323,9 @@ pub fn interpret_fitness_metrics(
     tsb: Option<f64>,
 ) -> FitnessMetrics {
     let load_state = tsb.map(|value| {
-        if value > 10.0 {
+        if value > TSB_BALANCED_UPPER {
             "fresh".to_string()
-        } else if value < -10.0 {
+        } else if value < TSB_LOAD_PRESSURE_THRESHOLD {
             "fatigued".to_string()
         } else {
             "neutral".to_string()
@@ -121,12 +342,12 @@ pub fn interpret_fitness_metrics(
 
 #[must_use]
 pub fn compute_acwr(loads: &[f64]) -> Option<AcwrMetrics> {
-    if loads.len() < 28 {
+    if loads.len() < ACWR_MIN_LOOKBACK_DAYS {
         return None;
     }
 
-    let acute_lambda = 2.0 / 8.0;
-    let chronic_lambda = 2.0 / 29.0;
+    let acute_lambda = ACWR_ACUTE_LAMBDA;
+    let chronic_lambda = ACWR_CHRONIC_LAMBDA;
 
     let mut acute_load = *loads.first()?;
     let mut chronic_load = acute_load;
@@ -165,11 +386,11 @@ fn build_acwr_metrics(acute_load: f64, chronic_load: f64) -> Option<AcwrMetrics>
 }
 
 fn classify_acwr_ratio(ratio: f64) -> &'static str {
-    if ratio < 0.8 {
+    if ratio < ACWR_SAFE_LOWER {
         "underloaded"
-    } else if ratio <= 1.3 {
+    } else if ratio <= ACWR_SAFE_UPPER {
         "productive"
-    } else if ratio <= 1.5 {
+    } else if ratio <= ACWR_WATCH_RATIO {
         "watch"
     } else {
         "overreaching"
@@ -178,7 +399,7 @@ fn classify_acwr_ratio(ratio: f64) -> &'static str {
 
 #[must_use]
 pub fn compute_monotony(loads_7d: &[f64]) -> Option<f64> {
-    if loads_7d.len() < 7 {
+    if loads_7d.len() < MONOTONY_MIN_LOOKBACK_DAYS {
         return None;
     }
 
@@ -205,6 +426,71 @@ pub fn compute_monotony(loads_7d: &[f64]) -> Option<f64> {
 #[must_use]
 pub fn compute_strain(loads_7d: &[f64], monotony: f64) -> f64 {
     loads_7d.iter().sum::<f64>() * monotony
+}
+
+/// HRV ratio = current RMSSD / rolling 7-day baseline RMSSD.
+pub fn compute_hrv_ratio(current_rmssd: f64, baseline_rmssd: f64) -> Option<f64> {
+    if baseline_rmssd <= 0.0 {
+        None
+    } else {
+        Some(current_rmssd / baseline_rmssd)
+    }
+}
+
+/// Classify HRV state from RMSSD ratio.
+/// suppressed: ratio < 0.88, recovering: ratio > 1.15, normal: else.
+/// Source: Front. Physiol. 2025 — RMSSD clinical reliability thresholds.
+pub fn classify_hrv_state(ratio: f64) -> (bool, bool) {
+    let suppressed = ratio < HRV_SUPPRESSION_RATIO;
+    let recovering = ratio > HRV_RECOVERY_RATIO;
+    (suppressed, recovering)
+}
+
+/// Compute HRV trend slope using simple linear regression over last 7 days.
+/// Returns slope (change in RMSSD per day).
+pub fn compute_hrv_trend_slope(hrv_values: &[f64]) -> Option<f64> {
+    if hrv_values.len() < HRV_TREND_MIN_VALUES {
+        return None;
+    }
+    let n = hrv_values.len() as f64;
+    let sum_x: f64 = (0..hrv_values.len()).map(|i| i as f64).sum();
+    let sum_y: f64 = hrv_values.iter().sum();
+    let sum_xy: f64 = (0..hrv_values.len())
+        .map(|i| i as f64 * hrv_values[i])
+        .sum();
+    let sum_x2: f64 = (0..hrv_values.len()).map(|i| (i as f64) * (i as f64)).sum();
+
+    let denominator = n * sum_x2 - sum_x * sum_x;
+    if denominator.abs() < f64::EPSILON {
+        return None;
+    }
+
+    Some((n * sum_xy - sum_x * sum_y) / denominator)
+}
+
+/// Composite recovery quality index: HRV ratio × 0.4 + RHR_baseline/current × 0.3 + sleep_quality × 0.3.
+/// Source: Front. Physiol. 2025 — multi-domain recovery assessment.
+pub fn compute_recovery_quality_index(
+    hrv_ratio: f64,
+    rhr_baseline: f64,
+    rhr_current: f64,
+    sleep_hours: f64,
+) -> Option<f64> {
+    if rhr_current <= 0.0 {
+        return None;
+    }
+    let rhr_component = if rhr_current > 0.0 {
+        (rhr_baseline / rhr_current).clamp(RHR_COMPONENT_MIN, RHR_COMPONENT_MAX)
+    } else {
+        1.0
+    };
+    let sleep_component =
+        (sleep_hours / IDEAL_SLEEP_HOURS).clamp(SLEEP_COMPONENT_MIN, SLEEP_COMPONENT_MAX);
+    Some(
+        hrv_ratio * RECOVERY_QUALITY_HRV_WEIGHT
+            + rhr_component * RECOVERY_QUALITY_RHR_WEIGHT
+            + sleep_component * RECOVERY_QUALITY_SLEEP_WEIGHT,
+    )
 }
 
 pub fn compute_recovery_index(
@@ -241,7 +527,7 @@ pub fn compute_stress_tolerance(strain: f64, monotony: f64) -> Option<f64> {
     if monotony.abs() < f64::EPSILON {
         None
     } else {
-        Some((strain / monotony) / 100.0)
+        Some((strain / monotony) / STRESS_TOLERANCE_DIVISOR)
     }
 }
 
@@ -266,8 +552,11 @@ pub fn compute_readiness_score(
     let sleep_hours = sleep_hours?;
     let stress = stress?;
     let fatigue = fatigue?;
-    let normalized_sleep = sleep_hours.clamp(0.0, 10.0);
-    let weighted_sum = mood * 0.3 + normalized_sleep * 0.3 + stress * 0.2 + fatigue * 0.2;
+    let normalized_sleep = sleep_hours.clamp(SLEEP_CLAMP_MIN, READINESS_SLEEP_CLAMP_MAX);
+    let weighted_sum = mood * READINESS_MOOD_WEIGHT
+        + normalized_sleep * READINESS_SLEEP_WEIGHT
+        + stress * READINESS_STRESS_WEIGHT
+        + fatigue * READINESS_FATIGUE_WEIGHT;
     Some(weighted_sum)
 }
 
@@ -281,7 +570,7 @@ pub fn compute_load_management_metrics(
 
     let acwr = compute_acwr(loads);
     let last_seven = if loads.len() >= 7 {
-        &loads[loads.len() - 7..]
+        &loads[loads.len() - LOAD_MGMT_WINDOW_DAYS..]
     } else {
         return Some(LoadManagementMetrics {
             acwr,
@@ -325,7 +614,7 @@ pub fn compute_efficiency_factor(hr: &[f64], output: &[f64]) -> Option<f64> {
 }
 
 pub fn compute_aerobic_decoupling(hr: &[f64], output: &[f64]) -> Option<DecouplingMetrics> {
-    if hr.len() != output.len() || hr.len() < 4 {
+    if hr.len() != output.len() || hr.len() < DECOUPLING_MIN_POINTS {
         return None;
     }
 
@@ -340,21 +629,38 @@ pub fn compute_aerobic_decoupling(hr: &[f64], output: &[f64]) -> Option<Decoupli
         return None;
     }
 
-    let decoupling_pct = ((first_half - second_half) / first_half).abs() * 100.0;
+    let raw_pct = ((first_half - second_half) / first_half) * PCT_SCALING_FACTOR;
+    let decoupling_pct = raw_pct.abs();
     let state = classify_decoupling_state(decoupling_pct);
+    let durability_state = classify_durability_state(raw_pct, decoupling_pct);
 
     Some(DecouplingMetrics {
         efficiency_factor_first_half: Some(first_half),
         efficiency_factor_second_half: Some(second_half),
         decoupling_pct,
         state,
+        signed_decoupling_pct: raw_pct,
+        durability_state,
+        z2_hr_variance: None,
     })
 }
 
+pub fn classify_durability_state(signed_pct: f64, abs_pct: f64) -> String {
+    if abs_pct > DECOUPLING_DRIFT_ABS_THRESHOLD || signed_pct > DECOUPLING_DRIFT_SIGNED_THRESHOLD {
+        "drifting".to_string()
+    } else if signed_pct < DECOUPLING_IMPROVING_THRESHOLD {
+        "improving".to_string()
+    } else if signed_pct.abs() <= DECOUPLING_STABLE_THRESHOLD {
+        "stable".to_string()
+    } else {
+        "watch".to_string()
+    }
+}
+
 fn classify_decoupling_state(decoupling_pct: f64) -> String {
-    if decoupling_pct <= 5.0 {
+    if decoupling_pct <= DECOUPLING_ACCEPTABLE_PCT {
         "acceptable".to_string()
-    } else if decoupling_pct <= 10.0 {
+    } else if decoupling_pct <= DECOUPLING_WATCH_PCT {
         "watch".to_string()
     } else {
         "high".to_string()
@@ -375,6 +681,9 @@ fn parse_aerobic_decoupling(detail: Option<&Value>) -> Option<DecouplingMetrics>
         efficiency_factor_second_half: None,
         decoupling_pct,
         state: classify_decoupling_state(decoupling_pct),
+        signed_decoupling_pct: decoupling_pct,
+        durability_state: "unknown".into(),
+        z2_hr_variance: None,
     })
 }
 
@@ -464,7 +773,13 @@ pub fn parse_wellness_metrics(payload: Option<&Value>) -> Option<WellnessMetrics
 
     let sleep_values = collect_numbers(recent_entries, SLEEP_KEYS)
         .into_iter()
-        .map(|value| if value > 24.0 { value / 3600.0 } else { value })
+        .map(|value| {
+            if value > WELLNESS_SLEEP_HEURISTIC_THRESHOLD {
+                value / SECONDS_PER_HOUR
+            } else {
+                value
+            }
+        })
         .collect::<Vec<_>>();
     let rhr_values = collect_numbers(recent_entries, RESTING_HR_KEYS);
     let hrv_values = collect_numbers(recent_entries, HRV_KEYS);
@@ -474,7 +789,8 @@ pub fn parse_wellness_metrics(payload: Option<&Value>) -> Option<WellnessMetrics
     let avg_hrv = average(&hrv_values);
     let hrv_baseline = average(&baseline_hrv_values);
     let hrv_deviation_pct = hrv_baseline.zip(avg_hrv).and_then(|(baseline, current)| {
-        percent_delta(baseline, current).map(|delta| (delta * 10.0).round() / 10.0)
+        percent_delta(baseline, current)
+            .map(|delta| (delta * ROUNDING_DECIMAL_FACTOR).round() / ROUNDING_DECIMAL_FACTOR)
     });
 
     let avg_sleep_hours = average(&sleep_values);
@@ -496,6 +812,25 @@ pub fn parse_wellness_metrics(payload: Option<&Value>) -> Option<WellnessMetrics
     let readiness_score = api_readiness
         .or_else(|| compute_readiness_score(avg_mood, avg_sleep_hours, avg_stress, avg_fatigue));
 
+    let hrv_ratio = avg_hrv
+        .zip(hrv_baseline)
+        .and_then(|(current, baseline)| compute_hrv_ratio(current, baseline));
+    let (hrv_suppression_flag, hrv_recovery_flag) =
+        hrv_ratio.map(classify_hrv_state).unwrap_or((false, false));
+    let hrv_trend_slope = if hrv_values.len() >= HRV_TREND_MIN_VALUES {
+        compute_hrv_trend_slope(&hrv_values)
+    } else {
+        None
+    };
+    let recovery_quality_index = hrv_ratio.zip(avg_resting_hr).and_then(|(ratio, rhr)| {
+        compute_recovery_quality_index(
+            ratio,
+            resting_hr_baseline.unwrap_or(rhr),
+            rhr,
+            avg_sleep_hours.unwrap_or(WELLNESS_DEFAULT_SLEEP_HOURS),
+        )
+    });
+
     Some(WellnessMetrics {
         avg_sleep_hours,
         avg_resting_hr,
@@ -510,6 +845,11 @@ pub fn parse_wellness_metrics(payload: Option<&Value>) -> Option<WellnessMetrics
         avg_stress,
         avg_fatigue,
         readiness_score,
+        hrv_ratio,
+        hrv_suppression_flag,
+        hrv_recovery_flag,
+        hrv_trend_slope,
+        recovery_quality_index,
     })
 }
 
@@ -544,7 +884,7 @@ fn percent_delta(previous: f64, current: f64) -> Option<f64> {
     if previous.abs() < f64::EPSILON {
         None
     } else {
-        Some(((current - previous) / previous) * 100.0)
+        Some(((current - previous) / previous) * PCT_SCALING_FACTOR)
     }
 }
 
@@ -599,11 +939,11 @@ pub fn compute_polarisation(
     let ratio = if z2_pct.abs() < f64::EPSILON {
         None
     } else {
-        Some((z1_pct + z3_pct) / (2.0 * z2_pct))
+        Some((z1_pct + z3_pct) / (POLARISATION_DENOMINATOR_FACTOR * z2_pct))
     };
 
     let state = ratio.map(|r| {
-        if r < 0.75 {
+        if r < POLARISATION_BIASED_THRESHOLD {
             "threshold_biased".to_string()
         } else if r <= 1.0 {
             "polarised".to_string()
@@ -618,6 +958,8 @@ pub fn compute_polarisation(
         z3_pct: Some(z3_pct),
         ratio,
         state,
+        polarization_index: None,
+        tid_model: None,
     })
 }
 
@@ -631,7 +973,7 @@ pub fn parse_polarisation_from_api(
     if let Some(detail) = activity_detail.and_then(|v| v.as_object())
         && let Some(index) = get_number(detail, &["polarization_index"])
     {
-        let state = if index < 0.75 {
+        let state = if index < POLARISATION_BIASED_THRESHOLD {
             Some("threshold_biased".to_string())
         } else if index <= 1.0 {
             Some("polarised".to_string())
@@ -644,6 +986,8 @@ pub fn parse_polarisation_from_api(
             z3_pct: None,
             ratio: Some(index),
             state,
+            polarization_index: Some(index),
+            tid_model: None,
         });
     }
 
@@ -688,11 +1032,11 @@ pub fn compute_consistency_index(
     };
 
     let state = ratio.map(|r| {
-        if r >= 0.9 {
+        if r >= CONSISTENCY_EXCELLENT_THRESHOLD {
             "excellent".to_string()
-        } else if r >= 0.7 {
+        } else if r >= CONSISTENCY_GOOD_THRESHOLD {
             "good".to_string()
-        } else if r >= 0.5 {
+        } else if r >= CONSISTENCY_MODERATE_THRESHOLD {
             "moderate".to_string()
         } else {
             "low".to_string()
@@ -705,6 +1049,524 @@ pub fn compute_consistency_index(
         ratio,
         state,
     }
+}
+
+/// Extract eFTP / W′ / pMax from wellness `sportInfo[]` entries.
+/// Multi-sport aware: iterates all entries, first-non-null-wins per field.
+pub fn extract_sportinfo_anchors(wellness_payload: Option<&Value>) -> EspePowerAnchors {
+    let Some(entries) = wellness_payload.and_then(|v| v.as_array()) else {
+        return EspePowerAnchors::unsupported();
+    };
+
+    let mut eftp: Option<f64> = None;
+    let mut w_prime: Option<f64> = None;
+    let mut p_max: Option<f64> = None;
+    let source = String::from("sportinfo");
+
+    for entry in entries {
+        if let Some(obj) = entry.as_object() {
+            if eftp.is_none() {
+                eftp = get_number(obj, &["eftp"]);
+            }
+            if w_prime.is_none() {
+                w_prime = get_number(obj, &["wPrime", "w_prime"]);
+            }
+            if p_max.is_none() {
+                p_max = get_number(obj, &["pMax", "p_max"]);
+            }
+        }
+    }
+
+    if eftp.is_none() && w_prime.is_none() && p_max.is_none() {
+        return EspePowerAnchors::unsupported();
+    }
+
+    EspePowerAnchors {
+        eftp,
+        w_prime,
+        p_max,
+        source,
+        supported: true,
+    }
+}
+
+/// Fallback anchor extraction from activity detail fields.
+/// Priority: pm_ > icu_rolling_ > ss_
+pub fn enrich_anchors_from_activity(
+    anchors: &mut EspePowerAnchors,
+    activity_detail: Option<&Value>,
+) {
+    let Some(obj) = activity_detail.and_then(|v| v.as_object()) else {
+        return;
+    };
+
+    if anchors.eftp.is_none() {
+        anchors.eftp = get_number(obj, &["icu_pm_ftp", "icu_rolling_ftp", "ss_ftp"]);
+    }
+    if anchors.w_prime.is_none() {
+        anchors.w_prime = get_number(
+            obj,
+            &["icu_pm_w_prime", "icu_rolling_w_prime", "ss_w_prime"],
+        );
+    }
+    if anchors.p_max.is_none() {
+        anchors.p_max = get_number(obj, &["icu_pm_p_max", "icu_rolling_p_max", "ss_p_max"]);
+    }
+
+    if anchors.eftp.is_some() || anchors.w_prime.is_some() || anchors.p_max.is_some() {
+        anchors.supported = true;
+        anchors.source = String::from("activity");
+    }
+}
+
+/// Compute derived ESPE metrics from available power-curve anchors + MMP data.
+pub fn derive_espe_metrics(
+    anchors: &EspePowerAnchors,
+    mmp_p1m: Option<f64>,
+    mmp_p5m: Option<f64>,
+    mmp_p20m: Option<f64>,
+    mmp_p60m: Option<f64>,
+) -> EspeDerivedMetrics {
+    let eftp = anchors.eftp;
+    let _w_prime = anchors.w_prime;
+    let _p_max = anchors.p_max;
+
+    // glycolytic_bias_ratio = P1m / P20m (plan spec: P0.1)
+    let glycolytic_bias = mmp_p1m.zip(mmp_p20m).map(|(p1, p20)| p1 / p20);
+    // aerobic_durability_ratio = P60m / P5m
+    let aerobic_durability = mmp_p60m.zip(mmp_p5m).map(|(p60, p5)| p60 / p5);
+    // durability_gradient = P60m / P20m
+    let durability_gradient = mmp_p60m.zip(mmp_p20m).map(|(p60, p20)| p60 / p20);
+    // balance_score: deviation from ideal P1m/P20m ratio
+    // Source: power profiling literature (Vilela et al., JSCR 2023)
+    let balance_score = mmp_p1m.zip(mmp_p20m).map(|(p1, p20)| {
+        let ratio = p1 / p20;
+        ratio - IDEAL_P1M_P20M_RATIO
+    });
+    // vo2_reserve_ratio = P5m / eFTP
+    let vo2_reserve_ratio = mmp_p5m.zip(eftp).map(|(p5, f)| p5 / f);
+
+    EspeDerivedMetrics {
+        glycolytic_bias,
+        aerobic_durability,
+        durability_gradient,
+        balance_score,
+        vo2_reserve_ratio,
+        p1m: mmp_p1m,
+        p5m: mmp_p5m,
+        p20m: mmp_p20m,
+        p60m: mmp_p60m,
+        supported: eftp.is_some() || anchors.p_max.is_some(),
+    }
+}
+
+/// Compare two power curve windows and compute deltas per anchor.
+/// Returns (deltas, rotation_index, system_statuses).
+pub fn compare_power_curves(
+    current: &EspeDerivedMetrics,
+    previous: &EspeDerivedMetrics,
+) -> (
+    std::collections::HashMap<String, f64>,
+    f64,
+    std::collections::HashMap<String, String>,
+) {
+    let mut deltas = std::collections::HashMap::new();
+    let mut statuses = std::collections::HashMap::new();
+
+    let anchors = [
+        ("1m", current.p1m, previous.p1m),
+        ("5m", current.p5m, previous.p5m),
+        ("20m", current.p20m, previous.p20m),
+        ("60m", current.p60m, previous.p60m),
+    ];
+
+    for (name, cur, prev) in anchors {
+        if let (Some(c), Some(p)) = (cur, prev)
+            && p.abs() > 0.0
+        {
+            let delta = ((c - p) / p) * PCT_SCALING_FACTOR;
+            deltas.insert(name.to_string(), delta);
+            let status = if delta < POWER_CURVE_DECLINE_THRESHOLD {
+                "decline"
+            } else if delta < POWER_CURVE_STABLE_THRESHOLD {
+                "stable"
+            } else if delta < POWER_CURVE_MILD_GAIN_PCT {
+                "mild_gain"
+            } else if delta < POWER_CURVE_MODERATE_GAIN_PCT {
+                "moderate_gain"
+            } else {
+                "strong_gain"
+            };
+            statuses.insert(name.to_string(), status.to_string());
+        }
+    }
+
+    let rotation_index = current
+        .p1m
+        .zip(current.p5m)
+        .zip(current.p20m.zip(current.p60m))
+        .map(|((p1, p5), (p20, p60))| {
+            ((p1 + p5) / POWER_CURVE_ROTATION_AVERAGE)
+                - ((p20 + p60) / POWER_CURVE_ROTATION_AVERAGE)
+        })
+        .unwrap_or(0.0);
+
+    (deltas, rotation_index, statuses)
+}
+
+/// Primary: max(wbal_start - wbal_end) across intervals; fallback: icu_max_wbal_depletion.
+#[allow(clippy::needless_pass_by_value)]
+pub fn compute_wdr_metrics(
+    intervals: Option<&Value>,
+    activity_detail: Option<&Value>,
+    w_prime: Option<f64>,
+) -> crate::domains::coach::WdrMetrics {
+    use crate::domains::coach::WdrMetrics;
+
+    let intervals_arr = match intervals.and_then(Value::as_array) {
+        Some(arr) if !arr.is_empty() => arr,
+        _ => {
+            // Fallback: use icu_max_wbal_depletion from activity detail
+            let detail_obj = match activity_detail.and_then(Value::as_object) {
+                Some(obj) => obj,
+                None => return WdrMetrics::unsupported(),
+            };
+            let max_depletion = match get_number(
+                detail_obj,
+                &["icu_max_wbal_depletion", "max_wbal_depletion"],
+            ) {
+                Some(v) => v,
+                None => return WdrMetrics::unsupported(),
+            };
+            let depletion_pct = w_prime
+                .filter(|w| *w > 0.0)
+                .map(|w| (max_depletion / w).clamp(0.0, WDRM_MAX_DEPLETION_PCT));
+            let joules_above_ftp =
+                get_number(detail_obj, &["icu_joules_above_ftp", "joules_above_ftp"]);
+            return WdrMetrics {
+                supported: true,
+                max_wbal_depletion: Some(max_depletion),
+                joules_above_ftp,
+                depletion_pct,
+                ..Default::default()
+            };
+        }
+    };
+
+    // Primary: wbal_start - wbal_end across intervals
+    let mut max_depletion: f64 = 0.0;
+    let mut joules_above_ftp: f64 = 0.0;
+    let mut found_any = false;
+
+    for interval in intervals_arr.iter().filter_map(Value::as_object) {
+        if let Some(start) = get_number(interval, &["wbal_start"])
+            && let Some(end) = get_number(interval, &["wbal_end"])
+        {
+            let depletion = start - end;
+            if depletion > 0.0 {
+                max_depletion = max_depletion.max(depletion);
+                found_any = true;
+            }
+        }
+        if let Some(joules) = get_number(interval, &["joules_above_ftp"]) {
+            joules_above_ftp = joules_above_ftp.max(joules);
+            found_any = true;
+        }
+    }
+
+    // Also check top-level activity detail for joules_above_ftp
+    if let Some(detail_obj) = activity_detail.and_then(Value::as_object)
+        && let Some(joules) = get_number(detail_obj, &["icu_joules_above_ftp", "joules_above_ftp"])
+    {
+        joules_above_ftp = joules_above_ftp.max(joules);
+        found_any = true;
+    }
+
+    if !found_any {
+        return WdrMetrics::unsupported();
+    }
+
+    let depletion_pct = w_prime
+        .filter(|w| *w > 0.0)
+        .map(|w| (max_depletion / w).clamp(0.0, WDRM_MAX_DEPLETION_PCT));
+
+    let joules = if joules_above_ftp > 0.0 {
+        Some(joules_above_ftp)
+    } else {
+        None
+    };
+
+    WdrMetrics {
+        supported: true,
+        max_wbal_depletion: Some(max_depletion),
+        joules_above_ftp: joules,
+        depletion_pct,
+        ..Default::default()
+    }
+}
+
+/// Aggregate WDRM metrics across a 7-day window of activities.
+pub fn aggregate_wdr_metrics_7d(
+    activity_details: &std::collections::HashMap<String, Value>,
+    intervals_map: &std::collections::HashMap<String, Value>,
+    w_prime: Option<f64>,
+    activity_ids: &[String],
+) -> crate::domains::coach::WdrMetrics {
+    use crate::domains::coach::WdrMetrics;
+
+    let mut depletion_values: Vec<f64> = Vec::new();
+    let mut high_count: usize = 0;
+    let mut total_with_data: usize = 0;
+
+    for id in activity_ids {
+        let detail = activity_details.get(id);
+        let intervals = intervals_map.get(id);
+        let single = compute_wdr_metrics(intervals, detail, w_prime);
+        if single.supported {
+            total_with_data += 1;
+            if let Some(dp) = single.depletion_pct {
+                depletion_values.push(dp);
+                if dp >= WDRM_HIGH_DEPLETION_PCT {
+                    high_count += 1;
+                }
+            }
+        }
+    }
+
+    if depletion_values.is_empty() {
+        return WdrMetrics::unsupported();
+    }
+
+    let mean_depletion = Some(depletion_values.iter().sum::<f64>() / depletion_values.len() as f64);
+
+    WdrMetrics {
+        supported: true,
+        mean_depletion_pct_7d: mean_depletion,
+        high_depletion_sessions_7d: high_count,
+        sessions_with_data_7d: total_with_data,
+        ..Default::default()
+    }
+}
+
+/// Compute NDLI from a 7-day window of activities.
+/// Classification: Green ≤2, Amber =3, Red ≥4 high-intensity days.
+pub fn compute_ndli_7d(
+    activity_details: &std::collections::HashMap<String, Value>,
+    activity_ids: &[String],
+) -> NdliMetrics {
+    let mut high_intensity_days: usize = 0;
+    let mut if_values: Vec<f64> = Vec::new();
+    let mut ef_values: Vec<f64> = Vec::new();
+    let mut vi_values: Vec<f64> = Vec::new();
+    let mut days_with_data: usize = 0;
+
+    for id in activity_ids {
+        let Some(detail) = activity_details.get(id).and_then(Value::as_object) else {
+            continue;
+        };
+        days_with_data += 1;
+
+        // Primary: icu_joules_above_ftp > 20000 → high-intensity day
+        let joules = get_number(detail, &["icu_joules_above_ftp", "joules_above_ftp"]);
+        let is_high = if let Some(j) = joules {
+            j > NDLI_HIGH_INTENSITY_JOULES_THRESHOLD
+        } else {
+            // Fallback for running: icu_training_load > 80 TSS/day
+            // Scaled relative to typical CTL: 80 TSS ≈ ~1.2× CTL for moderate athletes.
+            get_number(detail, &["icu_training_load", "training_load", "tss"])
+                .map(|load| load > NDLI_RUNNING_TSS_PROXY_THRESHOLD)
+                .unwrap_or(false)
+        };
+
+        if is_high {
+            high_intensity_days += 1;
+        }
+
+        // Collect mean IF, EF, VI
+        if let Some(if_val) = get_number(detail, &["icu_intensity_factor", "intensity_factor"]) {
+            let normalized = if if_val > NDLI_IF_NORMALIZATION_THRESHOLD {
+                if_val / PCT_SCALING_FACTOR
+            } else {
+                if_val
+            };
+            if_values.push(normalized);
+        }
+        if let Some(ef) = get_number(detail, &["icu_efficiency_factor", "efficiency_factor"]) {
+            ef_values.push(ef);
+        }
+        if let Some(vi) = get_number(detail, &["icu_variability_index", "variability_index"]) {
+            vi_values.push(vi);
+        }
+    }
+
+    if days_with_data == 0 {
+        return NdliMetrics {
+            supported: false,
+            ..Default::default()
+        };
+    }
+
+    let mean_if = if if_values.is_empty() {
+        None
+    } else {
+        Some(if_values.iter().sum::<f64>() / if_values.len() as f64)
+    };
+    let mean_ef = if ef_values.is_empty() {
+        None
+    } else {
+        Some(ef_values.iter().sum::<f64>() / ef_values.len() as f64)
+    };
+    let mean_vi = if vi_values.is_empty() {
+        None
+    } else {
+        Some(vi_values.iter().sum::<f64>() / vi_values.len() as f64)
+    };
+
+    let ndli_state = if high_intensity_days >= NDLI_RED_DAYS {
+        "red".to_string()
+    } else if high_intensity_days == NDLI_AMBER_DAYS {
+        "amber".to_string()
+    } else {
+        "green".to_string()
+    };
+
+    NdliMetrics {
+        supported: true,
+        high_intensity_days_7d: high_intensity_days,
+        mean_intensity_factor_7d: mean_if,
+        mean_efficiency_factor_7d: mean_ef,
+        mean_variability_index_7d: mean_vi,
+        ndli_state,
+        ndli_overload_flag: high_intensity_days >= NDLI_RED_DAYS,
+    }
+}
+
+/// Normalize running power from different device sources (Stryd, Garmin).
+/// Stryd typically reports ~8% higher than reference; Garmin Running Power differs by algorithm.
+/// Applies a correction factor for cross-device consistency.
+pub fn normalize_running_power(power_watts: f64, source: &str) -> f64 {
+    match source {
+        "stryd" => power_watts * STRYD_POWER_CORRECTION,
+        "garmin_rp" => power_watts * GARMIN_RP_POWER_CORRECTION,
+        _ => power_watts,
+    }
+}
+
+/// Convert Grade-Adjusted Pace (GAP) from speed m/s to equivalent running power.
+/// Approximate conversion: Power (W) ≈ speed³ × 0.25 + elevation_factor.
+/// GAP data comes from `get_gap_histogram()` endpoint.
+pub fn gap_to_running_power(gap_speed_ms: f64, gradient_pct: f64) -> f64 {
+    let base_power = gap_speed_ms.powi(GAP_SPEED_EXPONENT) * GAP_POWER_COEFFICIENT;
+    let elevation_factor = if gradient_pct > 0.0 {
+        1.0 + gradient_pct * GAP_UPHILL_GRADIENT_FACTOR
+    } else {
+        1.0 + gradient_pct * GAP_DOWNHILL_GRADIENT_FACTOR
+    };
+    base_power * elevation_factor
+}
+
+// =============================================================================
+// P2.2 — Heat Stress Metrics
+// =============================================================================
+
+/// Compute heat metrics from 7-day activity window.
+/// Fallback chain: average_temp → average_weather_temp → average_feels_like.
+pub fn compute_heat_metrics_7d(
+    activity_details: &std::collections::HashMap<String, Value>,
+    activity_ids: &[String],
+) -> HeatMetrics {
+    let mut temps: Vec<f64> = Vec::new();
+
+    for id in activity_ids {
+        let Some(detail) = activity_details.get(id).and_then(Value::as_object) else {
+            continue;
+        };
+        let temp = get_number(detail, &["average_temp"])
+            .or_else(|| get_number(detail, &["average_weather_temp"]))
+            .or_else(|| get_number(detail, &["average_feels_like"]));
+        if let Some(t) = temp {
+            temps.push(t);
+        }
+    }
+
+    if temps.is_empty() {
+        return HeatMetrics::default();
+    }
+
+    let mean_temp = temps.iter().sum::<f64>() / temps.len() as f64;
+    let max_temp = temps.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+
+    // Source: Cheuvront & Kenefick — 18°C baseline, 23°C = moderate heat stress.
+    let heat_index = ((mean_temp - HEAT_BASELINE_TEMP_C) / HEAT_NORMALIZATION_RANGE_C)
+        .clamp(0.0, HEAT_INDEX_CLAMP_MAX);
+    let heat_state = if heat_index > HEAT_HIGH_THRESHOLD {
+        "high".to_string()
+    } else if heat_index >= HEAT_MODERATE_THRESHOLD {
+        "moderate".to_string()
+    } else {
+        "low".to_string()
+    };
+
+    HeatMetrics {
+        supported: true,
+        heat_index_7d: Some(heat_index),
+        heat_max_7d: Some(max_temp),
+        heat_state,
+    }
+}
+
+// =============================================================================
+// P2.4 — TID Classifier
+// =============================================================================
+
+/// Classify TID model from zone percentages.
+/// pyramidal: z1 > z2 > z3, threshold: z2 dominant, polarized: z1 + z3 dominant.
+pub fn classify_tid_model(z1_pct: f64, z2_pct: f64, z3_pct: f64) -> (String, Option<f64>) {
+    let polarization_index = if z2_pct > 0.0 {
+        Some(z3_pct / z2_pct)
+    } else {
+        None
+    };
+
+    let tid_model = if z2_pct > z1_pct && z2_pct > z3_pct {
+        "threshold".to_string()
+    } else if z1_pct > z2_pct && z1_pct > z3_pct && z2_pct > z3_pct {
+        "pyramidal".to_string()
+    } else {
+        "polarized".to_string()
+    };
+
+    (tid_model, polarization_index)
+}
+
+// =============================================================================
+// P0.3a — Z2 HR Stability
+// =============================================================================
+
+/// Compute HR variance within Z2 bounds from stream data.
+/// Returns None if fewer than 10 Z2 points are available.
+pub fn compute_z2_hr_variance(hr_stream: &[f64], z2_lower: f64, z2_upper: f64) -> Option<f64> {
+    let z2_points: Vec<f64> = hr_stream
+        .iter()
+        .copied()
+        .filter(|hr| *hr >= z2_lower && *hr <= z2_upper)
+        .collect();
+
+    if z2_points.len() < Z2_MIN_POINTS {
+        return None;
+    }
+
+    let mean = z2_points.iter().sum::<f64>() / z2_points.len() as f64;
+    let variance = z2_points
+        .iter()
+        .map(|hr| {
+            let diff = hr - mean;
+            diff * diff
+        })
+        .sum::<f64>()
+        / z2_points.len() as f64;
+
+    Some(variance)
 }
 
 #[cfg(test)]
@@ -1292,5 +2154,294 @@ mod tests {
     fn durability_index_handles_zero_current() {
         let di = compute_durability_index(0.0, 310.0).unwrap();
         assert!((di - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn extract_sportinfo_anchors_from_wellness_array() {
+        let payload = json!([
+            {"type": "Ride", "eftp": 250.0, "wPrime": 20000.0, "pMax": 800.0},
+            {"type": "Run", "eftp": null, "wPrime": null, "pMax": null}
+        ]);
+        let anchors = extract_sportinfo_anchors(Some(&payload));
+        assert!(anchors.supported);
+        assert_eq!(anchors.eftp, Some(250.0));
+        assert_eq!(anchors.w_prime, Some(20000.0));
+        assert_eq!(anchors.p_max, Some(800.0));
+        assert_eq!(anchors.source, "sportinfo");
+    }
+
+    #[test]
+    fn extract_sportinfo_anchors_unsupported_when_empty() {
+        let payload = json!([]);
+        let anchors = extract_sportinfo_anchors(Some(&payload));
+        assert!(!anchors.supported);
+        assert_eq!(anchors.source, "none");
+    }
+
+    #[test]
+    fn extract_sportinfo_anchors_unsupported_when_null() {
+        let anchors = extract_sportinfo_anchors(None);
+        assert!(!anchors.supported);
+    }
+
+    #[test]
+    fn extract_sportinfo_anchors_multi_sport_first_non_null_wins() {
+        let payload = json!([
+            {"type": "Ride", "eftp": null, "wPrime": 18000.0, "pMax": null},
+            {"type": "Run", "eftp": 280.0, "wPrime": null, "pMax": 900.0}
+        ]);
+        let anchors = extract_sportinfo_anchors(Some(&payload));
+        assert!(anchors.supported);
+        assert_eq!(anchors.eftp, Some(280.0));
+        assert_eq!(anchors.w_prime, Some(18000.0));
+        assert_eq!(anchors.p_max, Some(900.0));
+    }
+
+    #[test]
+    fn enrich_anchors_from_activity_pm_fallback() {
+        let mut anchors = EspePowerAnchors::unsupported();
+        let detail = json!({
+            "icu_pm_ftp": 265.0,
+            "icu_pm_w_prime": 22000.0,
+            "icu_pm_p_max": 850.0
+        });
+        enrich_anchors_from_activity(&mut anchors, Some(&detail));
+        assert!(anchors.supported);
+        assert_eq!(anchors.eftp, Some(265.0));
+        assert_eq!(anchors.w_prime, Some(22000.0));
+        assert_eq!(anchors.p_max, Some(850.0));
+        assert_eq!(anchors.source, "activity");
+    }
+
+    #[test]
+    fn enrich_anchors_does_not_overwrite_existing_values() {
+        let mut anchors = EspePowerAnchors {
+            eftp: Some(250.0),
+            w_prime: None,
+            p_max: None,
+            source: "sportinfo".into(),
+            supported: true,
+        };
+        let detail = json!({"icu_pm_ftp": 999.0, "icu_pm_w_prime": 99999.0});
+        enrich_anchors_from_activity(&mut anchors, Some(&detail));
+        assert_eq!(anchors.eftp, Some(250.0));
+        assert_eq!(anchors.w_prime, Some(99999.0));
+    }
+
+    #[test]
+    fn derive_espe_metrics_computes_glycolytic_bias() {
+        let anchors = EspePowerAnchors {
+            eftp: Some(250.0),
+            p_max: Some(800.0),
+            ..Default::default()
+        };
+        let derived = derive_espe_metrics(&anchors, Some(600.0), None, Some(300.0), None);
+        assert!(derived.supported);
+        assert!((derived.glycolytic_bias.unwrap() - 2.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn derive_espe_metrics_unsupported_when_no_anchors() {
+        let anchors = EspePowerAnchors::unsupported();
+        let derived = derive_espe_metrics(&anchors, None, None, None, None);
+        assert!(!derived.supported);
+        assert!(derived.glycolytic_bias.is_none());
+    }
+
+    #[test]
+    fn compute_wdr_metrics_from_wbal_intervals() {
+        let intervals = json!([
+            {"wbal_start": 20000.0, "wbal_end": 15000.0},
+            {"wbal_start": 15000.0, "wbal_end": 8000.0}
+        ]);
+        let wdrm = compute_wdr_metrics(Some(&intervals), None, Some(20000.0));
+        assert!(wdrm.supported);
+        assert_eq!(wdrm.max_wbal_depletion, Some(7000.0));
+        assert!((wdrm.depletion_pct.unwrap() - 0.35).abs() < 0.01);
+    }
+
+    #[test]
+    fn compute_wdr_metrics_unsupported_for_null_wbal() {
+        let intervals = json!([
+            {"moving_time": 300, "average_heartrate": 140.0}
+        ]);
+        let wdrm = compute_wdr_metrics(Some(&intervals), None, None);
+        assert!(!wdrm.supported);
+    }
+
+    #[test]
+    fn compute_wdr_metrics_fallback_to_icu_max_wbal_depletion() {
+        let detail = json!({
+            "icu_max_wbal_depletion": 12000.0,
+            "icu_joules_above_ftp": 45000.0
+        });
+        let wdrm = compute_wdr_metrics(None, Some(&detail), Some(20000.0));
+        assert!(wdrm.supported);
+        assert_eq!(wdrm.max_wbal_depletion, Some(12000.0));
+        assert!((wdrm.depletion_pct.unwrap() - 0.60).abs() < 0.01);
+        assert_eq!(wdrm.joules_above_ftp, Some(45000.0));
+    }
+
+    #[test]
+    fn compute_wdr_metrics_clips_depletion_at_150_pct() {
+        let detail = json!({"icu_max_wbal_depletion": 30000.0});
+        let wdrm = compute_wdr_metrics(None, Some(&detail), Some(10000.0));
+        assert!(wdrm.supported);
+        assert!((wdrm.depletion_pct.unwrap() - 1.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn aggregate_wdr_metrics_7d_counts_high_depletion_sessions() {
+        let mut details = std::collections::HashMap::new();
+        let mut intervals = std::collections::HashMap::new();
+        for i in 1..=5 {
+            let detail = json!({"icu_max_wbal_depletion": (i as f64) * 5000.0});
+            details.insert(format!("act-{i}"), detail);
+            intervals.insert(format!("act-{i}"), json!([]));
+        }
+        let ids = vec![
+            "act-1".into(),
+            "act-2".into(),
+            "act-3".into(),
+            "act-4".into(),
+            "act-5".into(),
+        ];
+        let wdrm = aggregate_wdr_metrics_7d(&details, &intervals, Some(10000.0), &ids);
+        assert!(wdrm.supported);
+        // activity depletion pct: 0.5, 1.0, 1.5, 1.5, 1.5 → mean ≈ 1.2
+        assert!(wdrm.mean_depletion_pct_7d.unwrap() > 0.5);
+        // activities with depletion >= 60%: 3-5 (pct: 1.0, 1.5, 1.5, 1.5) = 4
+        assert_eq!(wdrm.high_depletion_sessions_7d, 4);
+        assert_eq!(wdrm.sessions_with_data_7d, 5);
+    }
+
+    // ========================================================================
+    // P0.3 — ISDM: Signed Decoupling + Durability State
+    // ========================================================================
+
+    #[test]
+    fn classify_durability_state_stable() {
+        assert_eq!(classify_durability_state(1.0, 1.0), "stable");
+        assert_eq!(classify_durability_state(-1.0, 1.0), "stable");
+        assert_eq!(classify_durability_state(3.0, 3.0), "stable");
+    }
+
+    #[test]
+    fn classify_durability_state_improving() {
+        assert_eq!(classify_durability_state(-5.0, 5.0), "improving");
+        assert_eq!(classify_durability_state(-3.5, 3.5), "improving");
+    }
+
+    #[test]
+    fn classify_durability_state_drifting() {
+        assert_eq!(classify_durability_state(6.0, 6.0), "drifting");
+        assert_eq!(classify_durability_state(4.0, 9.0), "drifting");
+        assert_eq!(classify_durability_state(2.0, 10.0), "drifting");
+    }
+
+    #[test]
+    fn classify_durability_state_watch() {
+        assert_eq!(classify_durability_state(4.0, 4.0), "watch");
+        assert_eq!(classify_durability_state(3.5, 3.5), "watch");
+    }
+
+    #[test]
+    fn signed_decoupling_positive_is_drifting() {
+        let hr = [140.0, 141.0, 142.0, 150.0, 151.0, 152.0];
+        let output = [220.0, 220.0, 220.0, 220.0, 220.0, 220.0];
+        let metrics = compute_aerobic_decoupling(&hr, &output).unwrap();
+        assert!(metrics.signed_decoupling_pct > 0.0);
+        assert_eq!(metrics.durability_state, "drifting");
+    }
+
+    #[test]
+    fn signed_decoupling_negative_is_improving() {
+        let hr = [150.0, 151.0, 152.0, 140.0, 141.0, 142.0];
+        let output = [220.0, 220.0, 220.0, 220.0, 220.0, 220.0];
+        let metrics = compute_aerobic_decoupling(&hr, &output).unwrap();
+        assert!(metrics.signed_decoupling_pct < 0.0);
+        assert_eq!(metrics.durability_state, "improving");
+    }
+
+    // ========================================================================
+    // P0.3a — Z2 HR Stability
+    // ========================================================================
+
+    #[test]
+    fn compute_z2_hr_variance_returns_some() {
+        let hr = vec![
+            120.0, 122.0, 124.0, 126.0, 128.0, 130.0, 132.0, 134.0, 136.0, 138.0,
+        ];
+        let variance = compute_z2_hr_variance(&hr, 120.0, 140.0);
+        assert!(variance.is_some());
+        assert!(variance.unwrap() > 0.0);
+    }
+
+    #[test]
+    fn compute_z2_hr_variance_returns_none_for_too_few_points() {
+        let hr = vec![120.0, 122.0, 124.0];
+        let variance = compute_z2_hr_variance(&hr, 120.0, 140.0);
+        assert!(variance.is_none());
+    }
+
+    #[test]
+    fn compute_z2_hr_variance_returns_none_when_no_points_in_z2() {
+        let hr = vec![150.0; 20];
+        let variance = compute_z2_hr_variance(&hr, 120.0, 140.0);
+        assert!(variance.is_none());
+    }
+
+    #[test]
+    fn compute_consistency_index_perfect() {
+        let m = compute_consistency_index(5, 5);
+        assert_eq!(m.ratio, Some(1.0));
+        assert_eq!(m.state.as_deref(), Some("excellent"));
+    }
+
+    #[test]
+    fn compute_consistency_index_zero_planned() {
+        let m = compute_consistency_index(0, 0);
+        assert_eq!(m.ratio, None);
+        assert_eq!(m.state, None);
+    }
+
+    #[test]
+    fn compute_consistency_index_above_100() {
+        let m = compute_consistency_index(6, 5);
+        assert_eq!(m.ratio, Some(1.2));
+        assert_eq!(m.state.as_deref(), Some("excellent"));
+    }
+
+    #[test]
+    fn compute_load_management_empty() {
+        let metrics = compute_load_management_metrics(&[], None);
+        assert!(metrics.is_none());
+    }
+
+    #[test]
+    fn compute_ndli_7d_empty_returns_not_supported() {
+        let metrics = compute_ndli_7d(&HashMap::new(), &[]);
+        assert!(!metrics.supported);
+    }
+
+    #[test]
+    fn compute_heat_metrics_7d_empty_returns_default() {
+        let metrics = compute_heat_metrics_7d(&HashMap::new(), &[]);
+        assert!(!metrics.supported);
+    }
+
+    #[test]
+    fn compute_acwr_empty_returns_none() {
+        assert!(compute_acwr(&[]).is_none());
+    }
+
+    #[test]
+    fn compute_monotony_empty_returns_none() {
+        assert!(compute_monotony(&[]).is_none());
+    }
+
+    #[test]
+    fn compute_monotony_constant_load() {
+        assert_eq!(compute_monotony(&[100.0; 7]), Some(10.0));
     }
 }

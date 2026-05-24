@@ -77,7 +77,17 @@ Responses are designed for LLMs:
 
 ### 4. Deterministic coaching analytics
 
-Read-only coaching intents use a deterministic pipeline to compute metrics such as readiness, ACWR context, monotony, strain, fatigue index, stress tolerance, durability index, recovery interpretation, and stream-derived execution signals.
+Read-only coaching intents use a deterministic pipeline to compute metrics from a growing library of engines:
+
+**Performance Intelligence:** eFTP/W′/pMax extraction (ESPE), W′ depletion (WDRM), signed aerobic decoupling (ISDM) with durability state, Z2 HR stability.
+
+**Coaching Intelligence:** Neural Density Load Index (NDLI) with green/amber/red thresholds, adaptation state & curve profile classification, HRV multi-domain (ratio, trend slope, recovery quality index), race readiness scoring (5-factor model).
+
+**Ultra-Sport Extensions:** Heat stress context, terrain context (terrain index, VAM), nutrition demand model (carb/protein), training intensity distribution (TID) classifier.
+
+**Strategic Capabilities:** Banister TSB forecast with fatigue class projection, power curve 2-window comparison (delta per anchor, rotation index, system status), ultra-specific context tokens (back-to-back load, vert/week, longest-run ratio, elevation specificity), adaptive decision engine (ADE) with operational state and risk level.
+
+**Load management:** ACWR context, monotony, strain, fatigue index, stress tolerance, durability index, recovery interpretation, stream-derived execution signals.
 
 ### 5. Safer mutation flows
 
@@ -414,21 +424,24 @@ Fetch → Audit → Compute → Interpret → Render
 
 #### `analyze_training`
 
-- single-workout deep dives
-- interval-aware and stream-aware analysis modes
+- single-workout deep dives: ESPE anchors (eFTP, W′, pMax), WDRM, ISDM with durability state, Z2 HR stability, terrain context (index, VAM), nutrition demand (carb/protein), curve profile classification (endurance/punchy/speed)
+- period analysis: heat stress context, TID model (pyramidal/threshold/polarized), NDLI (green/amber/red), power curve comparison (2-window deltas with rotation index), ultra-specific tokens (back-to-back load, vert/week), load management (ACWR, monotony, strain)
+- interval-aware, stream-aware, and histogram analysis modes
 - planned workout and calendar event visibility in period windows
 - explicit data-availability reporting
 
 #### `assess_recovery`
 
-- readiness framing
-- personal-baseline-aware HRV interpretation
+- readiness framing with activity-specific verdict (easy/intensity/long/race)
+- ADE system state assessment (LoadAccepting/RecoveryPriority with risk level and active flags: maladaptation risk, functional overreach, load pressure, loaded taper)
+- personal-baseline-aware HRV multi-domain interpretation (ratio, trend slope, recovery quality index)
 - recovery-first guidance and red-flag detection
 
 #### `analyze_race`
 
-- post-race execution review
-- recovery-forward follow-up guidance
+- post-race execution review with efficiency factor and aerobic decoupling
+- 5-factor race readiness scoring (score/100 with tier: ready/monitor/caution/not_ready)
+- performance, strategy, and recovery analysis modes
 - comparison-to-plan behavior when a matching calendar event exists
 
 ### Why deterministic matters
