@@ -13,6 +13,7 @@ use crate::engines::analysis_audit::build_data_audit;
 use crate::engines::analysis_fetch::{RaceFetchRequest, fetch_race_data};
 use crate::engines::coach_guidance::{build_alerts, build_guidance};
 use crate::engines::coach_metrics::{parse_fitness_metrics, parse_wellness_metrics};
+use crate::engines::race_readiness::compute_race_readiness;
 use crate::intents::utils::{data_availability_block, filter_activities_by_description};
 
 pub struct AnalyzeRaceHandler;
@@ -87,8 +88,18 @@ impl IntentHandler for AnalyzeRaceHandler {
     }
 
     fn description(&self) -> &'static str {
-        "Post-race analysis: results, strategy, comparison to plan. \
-         Use for race debriefs, strategy evaluation, and identifying areas for improvement."
+        "Post-race analysis: results, execution pattern, comparison to plan, \
+         and race readiness scoring. Returns race metrics (distance, time, avg HR), \
+         efficiency factor, aerobic decoupling, interval/segment detection, \
+         post-race load context, and a 5-factor Race Readiness score (score/100 \
+         with tier: ready/monitor/caution/not_ready). Three modes: performance \
+         (race execution), strategy (pacing, fueling, terrain), recovery (post-race \
+         recovery outlook).
+         
+         Use this tool when: you need a post-race debrief, evaluate race execution \
+         vs plan, check recovery needs, or assess readiness for a next race. \
+         Do NOT use when: you need ongoing training analysis (use analyze_training) \
+         or general recovery assessment (use assess_recovery)."
     }
 
     fn input_schema(&self) -> Value {
@@ -249,6 +260,28 @@ impl IntentHandler for AnalyzeRaceHandler {
                         format!("Post-race load looks manageable (TSB {:.1}); resume structure gradually.", tsb)
                     }
                 });
+            let durability_drifting = aerobic_decoupling
+                .as_ref()
+                .map(|d| d.state == "drifting")
+                .unwrap_or(false);
+            let system_mismatch = race_context
+                .metrics
+                .fitness
+                .as_ref()
+                .map(|f| {
+                    let ctl_positive = f.ctl.map(|c| c > 0.0).unwrap_or(false);
+                    let atl_zero = f.atl.map(|a| a <= 0.0).unwrap_or(true);
+                    ctl_positive && atl_zero
+                })
+                .unwrap_or(false);
+            let race_readiness = compute_race_readiness(
+                race_context.metrics.fitness.as_ref().and_then(|f| f.tsb),
+                durability_drifting,
+                false,
+                system_mismatch,
+                race_context.metrics.fitness.as_ref().and_then(|f| f.ctl),
+            );
+
             race_context.metrics.race = Some(RaceMetrics {
                 race_duration_secs,
                 race_distance_m,
@@ -357,6 +390,21 @@ impl IntentHandler for AnalyzeRaceHandler {
                     )));
                 }
             }
+
+            // Race Readiness
+            let tier = if race_readiness.score >= 80 {
+                "ready"
+            } else if race_readiness.score >= 60 {
+                "monitor"
+            } else if race_readiness.score >= 40 {
+                "caution"
+            } else {
+                "not_ready"
+            };
+            content.push(ContentBlock::markdown(format!(
+                "Race Readiness\n  Score: {}/100\n  Tier: {}",
+                race_readiness.score, tier
+            )));
 
             if analysis_mode == RaceAnalysisMode::Strategy {
                 content.push(ContentBlock::markdown(

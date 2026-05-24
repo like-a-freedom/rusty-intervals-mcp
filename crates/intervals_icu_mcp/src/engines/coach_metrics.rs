@@ -1205,7 +1205,10 @@ pub fn compare_power_curves(
         .p1m
         .zip(current.p5m)
         .zip(current.p20m.zip(current.p60m))
-        .map(|((p1, p5), (p20, p60))| ((p1 + p5) / POWER_CURVE_ROTATION_AVERAGE) - ((p20 + p60) / POWER_CURVE_ROTATION_AVERAGE))
+        .map(|((p1, p5), (p20, p60))| {
+            ((p1 + p5) / POWER_CURVE_ROTATION_AVERAGE)
+                - ((p20 + p60) / POWER_CURVE_ROTATION_AVERAGE)
+        })
         .unwrap_or(0.0);
 
     (deltas, rotation_index, statuses)
