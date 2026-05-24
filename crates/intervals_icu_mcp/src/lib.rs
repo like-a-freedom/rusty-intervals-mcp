@@ -538,10 +538,23 @@ pub async fn run_http_server(
     let session = std::sync::Arc::new(
         rmcp::transport::streamable_http_server::session::local::LocalSessionManager::default(),
     );
+
+    // Build rmcp server config — read allowed hosts from env for reverse-proxy deployments.
+    let allowed_hosts_env = std::env::var("MCP_ALLOWED_HOSTS").unwrap_or_default();
+    let mcp_rmcp_config = if allowed_hosts_env.is_empty() {
+        rmcp::transport::streamable_http_server::tower::StreamableHttpServerConfig::default()
+    } else {
+        rmcp::transport::streamable_http_server::tower::StreamableHttpServerConfig::default()
+            .with_allowed_hosts(
+                allowed_hosts_env
+                    .split(',')
+                    .map(|s| s.trim().to_string()),
+            )
+    };
     let mcp_service = rmcp::transport::streamable_http_server::tower::StreamableHttpService::new(
         move || Ok(handler.clone()),
         session,
-        rmcp::transport::streamable_http_server::tower::StreamableHttpServerConfig::default(),
+        mcp_rmcp_config,
     );
 
     let mcp_config = tower_governor::governor::GovernorConfigBuilder::default()
