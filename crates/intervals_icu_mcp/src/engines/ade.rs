@@ -1,5 +1,3 @@
-#![allow(clippy::collapsible_if)]
-
 //! Adaptive Decision Engine (ADE v1).
 //! Synthesizes multiple signals into an operational state directive.
 //! Source: Montis ADE v1 — 2-state model.
@@ -96,10 +94,10 @@ pub fn compute_ade(
     }
 
     // rampRate > threshold → load_pressure
-    if let Some(rr) = ramp_rate {
-        if rr > RAMP_RATE_THRESHOLD {
-            load_pressure = true;
-        }
+    if let Some(rr) = ramp_rate
+        && rr > RAMP_RATE_THRESHOLD
+    {
+        load_pressure = true;
     }
 
     // Heat escalation: productive_load → adaptation_pressure
@@ -114,38 +112,37 @@ pub fn compute_ade(
 
     // HRV + load_pressure → maladaptation_risk (when no TSB)
     // Must run after ramp rate and heat blocks so load_pressure is populated.
-    if tsb.is_none() {
-        if let Some(hrv_r) = hrv_ratio {
-            if hrv_r < HRV_MALADAPTATION_RATIO {
-                if load_pressure {
-                    maladaptation_risk = true;
-                } else {
-                    load_pressure = true;
-                }
-            }
+    if tsb.is_none()
+        && let Some(hrv_r) = hrv_ratio
+        && hrv_r < HRV_MALADAPTATION_RATIO
+    {
+        if load_pressure {
+            maladaptation_risk = true;
+        } else {
+            load_pressure = true;
         }
     }
 
     // ACWR validation gate: safe zone + durable → reduce severity
-    if let Some(acwr) = acwr_ratio {
-        if (ACWR_SAFE_LOWER..=ACWR_SAFE_UPPER).contains(&acwr) && !durability_drifting {
-            if maladaptation_risk {
-                maladaptation_risk = false;
-                functional_overreach = true;
-            } else if functional_overreach {
-                functional_overreach = false;
-                load_pressure = true;
-            }
+    if let Some(acwr) = acwr_ratio
+        && (ACWR_SAFE_LOWER..=ACWR_SAFE_UPPER).contains(&acwr)
+        && !durability_drifting
+    {
+        if maladaptation_risk {
+            maladaptation_risk = false;
+            functional_overreach = true;
+        } else if functional_overreach {
+            functional_overreach = false;
+            load_pressure = true;
         }
     }
 
     // NDLI red + TSB > 0 → loaded_taper warning
-    if ndli_high >= NDLI_LOADED_TAPER_DAYS {
-        if let Some(tsb_val) = tsb_value {
-            if tsb_val > 0.0 {
-                loaded_taper = true;
-            }
-        }
+    if ndli_high >= NDLI_LOADED_TAPER_DAYS
+        && let Some(tsb_val) = tsb_value
+        && tsb_val > 0.0
+    {
+        loaded_taper = true;
     }
 
     let operational_state = if maladaptation_risk {

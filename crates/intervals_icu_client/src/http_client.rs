@@ -21,24 +21,13 @@ use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
 
 /// Client for the Intervals.icu API using reqwest.
+#[derive(Clone)]
 pub struct ReqwestIntervalsClient {
     base_url: String,
     athlete_id: String,
     api_key: SecretString,
     client: reqwest::Client,
     circuit_breaker: Arc<CircuitBreaker>,
-}
-
-impl Clone for ReqwestIntervalsClient {
-    fn clone(&self) -> Self {
-        Self {
-            base_url: self.base_url.clone(),
-            athlete_id: self.athlete_id.clone(),
-            api_key: self.api_key.clone(),
-            client: self.client.clone(),
-            circuit_breaker: self.circuit_breaker.clone(),
-        }
-    }
 }
 
 impl std::fmt::Debug for ReqwestIntervalsClient {
