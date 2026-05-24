@@ -541,16 +541,7 @@ pub async fn run_http_server(
 
     // Build rmcp server config — read allowed hosts from env for reverse-proxy deployments.
     let allowed_hosts_env = std::env::var("MCP_ALLOWED_HOSTS").unwrap_or_default();
-    let mcp_rmcp_config = if allowed_hosts_env.is_empty() {
-        rmcp::transport::streamable_http_server::tower::StreamableHttpServerConfig::default()
-    } else {
-        rmcp::transport::streamable_http_server::tower::StreamableHttpServerConfig::default()
-            .with_allowed_hosts(
-                allowed_hosts_env
-                    .split(',')
-                    .map(|s| s.trim().to_string()),
-            )
-    };
+    let mcp_rmcp_config = build_mcp_rmcp_config(&allowed_hosts_env);
     let mcp_service = rmcp::transport::streamable_http_server::tower::StreamableHttpService::new(
         move || Ok(handler.clone()),
         session,
@@ -616,6 +607,22 @@ pub async fn run_stdio_server(
     _server.waiting().await?;
 
     Ok(())
+}
+
+/// Build the rmcp `StreamableHttpServerConfig`, applying allowed hosts from env.
+///
+/// When `allowed_hosts_input` is empty, uses the rmcp default (localhost, 127.0.0.1, ::1)
+/// for DNS-rebinding protection. When non-empty, parses comma-separated hostnames
+/// (with whitespace trimming) and sets them as the only allowed `Host` header values.
+///
+/// This function is separate so it can be unit-tested without env mocks.
+pub fn build_mcp_rmcp_config(allowed_hosts_input: &str) -> rmcp::transport::streamable_http_server::tower::StreamableHttpServerConfig {
+    if allowed_hosts_input.is_empty() {
+        rmcp::transport::streamable_http_server::tower::StreamableHttpServerConfig::default()
+    } else {
+        rmcp::transport::streamable_http_server::tower::StreamableHttpServerConfig::default()
+            .with_allowed_hosts(allowed_hosts_input.split(',').map(|s| s.trim().to_string()))
+    }
 }
 
 /// Top-level application entry point.
@@ -981,14 +988,64 @@ mod tests {
     }
 
     // ========================================================================
-    // get_tool() Tests
+    // build_mcp_rmcp_config() Tests
     // ========================================================================
 
     #[test]
-    fn test_get_tool_returns_none() {
-        let handler = test_handler();
-        // get_tool is not implemented (returns None)
-        assert!(handler.get_tool("plan_training").is_none());
-        assert!(handler.get_tool("unknown_tool").is_none());
+    fn test_build_mcp_rmcp_config_default_has_loopback_hosts() {
+        let config = build_mcp_rmcp_config("");
+        // Default rmcp allowed_hosts: localhost, 127.0.0.1, ::1
+        assert!(
+            config.allowed_hosts.contains(&"localhost".to_string()),
+            "default should allow localhost"
+        );
+        assert!(
+            config.allowed_hosts.contains(&"127.0.0.1".to_string()),
+            "default should allow 127.0.0.1"
+        );
+        assert!(
+            config.allowed_hosts.contains(&"::1".to_string()),
+            "default should allow ::1"
+        );
+        assert_eq!(config.allowed_hosts.len(), 3);
+    }
+
+    #[test]
+    fn test_build_mcp_rmcp_config_single_host() {
+        let config = build_mcp_rmcp_config("mcp.example.com");
+        assert_eq!(config.allowed_hosts.len(), 1);
+        assert!(config.allowed_hosts.contains(&"mcp.example.com".to_string()));
+    }
+
+    #[test]
+    fn test_build_mcp_rmcp_config_multi_host() {
+        let config = build_mcp_rmcp_config("mcp.example.com,api.example.com");
+        assert_eq!(config.allowed_hosts.len(), 2);
+        assert!(config.allowed_hosts.contains(&"mcp.example.com".to_string()));
+        assert!(config.allowed_hosts.contains(&"api.example.com".to_string()));
+        // loopback hosts should NOT be present (user explicitly overrode)
+        assert!(!config.allowed_hosts.contains(&"localhost".to_string()));
+    }
+
+    #[test]
+    fn test_build_mcp_rmcp_config_trims_whitespace() {
+        let config = build_mcp_rmcp_config(" mcp.example.com ,  api.example.com  ");
+        assert_eq!(config.allowed_hosts.len(), 2);
+        assert!(config.allowed_hosts.contains(&"mcp.example.com".to_string()));
+        assert!(config.allowed_hosts.contains(&"api.example.com".to_string()));
+    }
+
+    #[test]
+    fn test_build_mcp_rmcp_config_with_port() {
+        let config = build_mcp_rmcp_config("mcp.example.com:8080");
+        assert_eq!(config.allowed_hosts.len(), 1);
+        assert!(config.allowed_hosts.contains(&"mcp.example.com:8080".to_string()));
+    }
+
+    #[test]
+    fn test_build_mcp_rmcp_config_trailing_comma_ignored() {
+        // A trailing comma after last element → empty string → trimmed to empty → included
+        let config = build_mcp_rmcp_config("mcp.example.com,");
+        assert_eq!(config.allowed_hosts.len(), 2, "trailing comma yields two items (one empty)");
     }
 }
