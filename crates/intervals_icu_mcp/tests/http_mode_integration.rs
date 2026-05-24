@@ -923,3 +923,130 @@ async fn test_mcp_route_requires_bearer_token_and_accepts_valid_jwt() {
 
     assert_ne!(authorized.status(), reqwest::StatusCode::UNAUTHORIZED);
 }
+
+// ============================================================================
+// MCP_ALLOWED_HOSTS (DNS Rebinding Protection) Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_mcp_rejects_disallowed_host_header() {
+    // Build a minimal app with allowed_hosts = ["mcp.example.com"] only
+    let client: Arc<dyn IntervalsClient> = Arc::new(HttpTestMockClient);
+    let handler = intervals_icu_mcp::IntervalsMcpHandler::new(client.clone());
+
+    let session = Arc::new(
+        rmcp::transport::streamable_http_server::session::local::LocalSessionManager::default(),
+    );
+
+    let rmcp_config =
+        rmcp::transport::streamable_http_server::tower::StreamableHttpServerConfig::default()
+            .with_allowed_hosts(["mcp.example.com"]);
+
+    let mcp_service = rmcp::transport::streamable_http_server::tower::StreamableHttpService::new(
+        move || -> Result<_, std::io::Error> { Ok(handler.clone()) },
+        session,
+        rmcp_config,
+    );
+
+    let app = axum::Router::new().nest_service("/mcp", mcp_service);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = axum::serve(listener, app.into_make_service());
+    let _server_handle = tokio::spawn(async move {
+        server.await.ok();
+    });
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let http_client = Client::builder()
+        .no_proxy()
+        .build()
+        .expect("Client with no proxy");
+
+    // 1. Request with disallowed Host header → 403 Forbidden
+    let disallowed = http_client
+        .post(format!("http://{}/mcp", addr))
+        .header("Host", "evil.com")
+        .header("Content-Type", "application/json")
+        .body(r#"{"jsonrpc":"2.0","method":"ping","id":1}"#)
+        .send()
+        .await
+        .expect("disallowed host request should complete");
+
+    assert_eq!(
+        disallowed.status(),
+        reqwest::StatusCode::FORBIDDEN,
+        "rmcp should reject disallowed Host header with 403"
+    );
+}
+
+#[tokio::test]
+async fn test_mcp_accepts_allowed_host_header() {
+    // Build a minimal app with allowed_hosts = ["mcp.example.com"]
+    let client: Arc<dyn IntervalsClient> = Arc::new(HttpTestMockClient);
+    let handler = intervals_icu_mcp::IntervalsMcpHandler::new(client.clone());
+
+    let session = Arc::new(
+        rmcp::transport::streamable_http_server::session::local::LocalSessionManager::default(),
+    );
+
+    let rmcp_config =
+        rmcp::transport::streamable_http_server::tower::StreamableHttpServerConfig::default()
+            .with_allowed_hosts(["mcp.example.com"]);
+
+    let mcp_service = rmcp::transport::streamable_http_server::tower::StreamableHttpService::new(
+        move || -> Result<_, std::io::Error> { Ok(handler.clone()) },
+        session,
+        rmcp_config,
+    );
+
+    let app = axum::Router::new().nest_service("/mcp", mcp_service);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = axum::serve(listener, app.into_make_service());
+    let _server_handle = tokio::spawn(async move {
+        server.await.ok();
+    });
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let http_client = Client::builder()
+        .no_proxy()
+        .build()
+        .expect("Client with no proxy");
+
+    // Request with matching Host header → should NOT be rejected by rmcp
+    let allowed = http_client
+        .post(format!("http://{}/mcp", addr))
+        .header("Host", "mcp.example.com")
+        .header("Content-Type", "application/json")
+        .body(r#"{"jsonrpc":"2.0","method":"ping","id":1}"#)
+        .send()
+        .await
+        .expect("allowed host request should complete");
+
+    assert_ne!(
+        allowed.status(),
+        reqwest::StatusCode::FORBIDDEN,
+        "rmcp should accept matching Host header"
+    );
+}
+
+#[tokio::test]
+async fn test_build_mcp_rmcp_config_function() {
+    // Integration-level smoke test for the public helper function.
+    // Verifies the function exists and returns correct types.
+
+    // Default (empty input)
+    let config_default = intervals_icu_mcp::build_mcp_rmcp_config("");
+    assert!(config_default.allowed_hosts.contains(&"localhost".to_string()));
+    assert_eq!(config_default.allowed_hosts.len(), 3);
+
+    // Custom hosts
+    let config_custom = intervals_icu_mcp::build_mcp_rmcp_config("api.test.com,app.test.com");
+    assert_eq!(config_custom.allowed_hosts.len(), 2);
+    assert!(config_custom.allowed_hosts.contains(&"api.test.com".to_string()));
+    assert!(config_custom.allowed_hosts.contains(&"app.test.com".to_string()));
+}
