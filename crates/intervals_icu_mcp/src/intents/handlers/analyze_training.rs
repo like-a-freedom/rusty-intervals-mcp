@@ -24,6 +24,7 @@ use crate::engines::coach_metrics::{
     derive_volume_metrics, derive_workout_metrics_context, enrich_anchors_from_activity,
     extract_sportinfo_anchors, parse_api_load_snapshot, parse_fitness_metrics,
 };
+use crate::engines::cp_regression::{fit_cp, validate_cp};
 use crate::engines::trail_execution::compute_terrain_context;
 
 use crate::domains::activity_analysis::{back_to_back_load, vert_per_week};
@@ -1061,6 +1062,16 @@ impl AnalyzeTrainingHandler {
         let ndli = compute_ndli_7d(&fetched.activity_details, &period_ids);
         period_context.metrics.ndli = Some(ndli);
 
+        let mut espe_anchors = extract_sportinfo_anchors(fetched.wellness.as_ref());
+        if let Some(last_activity_id) = period_ids.last()
+            && let Some(last_detail) = fetched.activity_details.get(last_activity_id)
+        {
+            enrich_anchors_from_activity(&mut espe_anchors, Some(last_detail));
+        }
+        let espe_derived = derive_espe_metrics(&espe_anchors, None, None, None, None);
+        period_context.metrics.espe_anchors = Some(espe_anchors);
+        period_context.metrics.espe_derived = Some(espe_derived);
+
         period_context.alerts = build_alerts(&period_context.metrics);
         period_context.guidance = build_guidance(&period_context.metrics, &period_context.alerts);
 
@@ -1245,6 +1256,50 @@ impl AnalyzeTrainingHandler {
                         pc_lines.push(format!("  Rotation Index: {:.3}", rotation));
                         content.push(ContentBlock::markdown(pc_lines.join("\n")));
                     }
+                }
+            }
+
+            // CP Regression — validate API eFTP/W' against MMP-derived curve
+            if let Some(espe) = &period_context.metrics.espe_derived {
+                let mut cp_data: Vec<(f64, f64)> = Vec::new();
+                if let Some(p1) = espe.p1m {
+                    cp_data.push((60.0, p1));
+                }
+                if let Some(p5) = espe.p5m {
+                    cp_data.push((300.0, p5));
+                }
+                if let Some(p20) = espe.p20m {
+                    cp_data.push((1200.0, p20));
+                }
+                if let Some(p60) = espe.p60m {
+                    cp_data.push((3600.0, p60));
+                }
+                if cp_data.len() >= 3
+                    && let Some(cp_result) = fit_cp(&cp_data)
+                {
+                    let mut cp_lines = vec!["CP Model Validation".to_string()];
+                    cp_lines.push(format!(
+                        "  Fitted CP: {:.0} W | W': {:.0} J | R²: {:.3}",
+                        cp_result.cp, cp_result.w_prime, cp_result.r_squared
+                    ));
+                    if let Some(anchors) = &period_context.metrics.espe_anchors
+                        && let (Some(api_ftp), Some(api_wp)) = (anchors.eftp, anchors.w_prime)
+                    {
+                        let (cp_diff, wp_diff) = validate_cp(&cp_result, api_ftp, api_wp);
+                        cp_lines.push(format!(
+                            "  vs API eFTP: CP Δ{:.1}%, W′ Δ{:.1}%",
+                            cp_diff, wp_diff
+                        ));
+                    }
+                    cp_lines.push(format!(
+                        "  Fit quality: {}",
+                        if cp_result.valid {
+                            "good"
+                        } else {
+                            "poor — model may not reflect true CP"
+                        }
+                    ));
+                    content.push(ContentBlock::markdown(cp_lines.join("\n")));
                 }
             }
 
