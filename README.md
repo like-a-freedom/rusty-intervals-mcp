@@ -543,6 +543,7 @@ See `.env.example` for the standard environment layout.
 | `IDLE_TIMEOUT_SECONDS` | `60` | Idle connection timeout in HTTP mode |
 | `JWT_MASTER_KEY` | unset | 64-byte hex key (128 hex chars) required for JWT in HTTP mode |
 | `JWT_TTL_SECONDS` | `7776000` | JWT lifetime in seconds (default 90 days) |
+| `MCP_ALLOWED_HOSTS` | `localhost,127.0.0.1,::1` | Allowed Host headers (anti-DNS-rebinding); set to public hostname(s) when behind a reverse proxy |
 
 ### OpenAPI runtime behavior
 
