@@ -10,7 +10,10 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 
 use super::render::analysis::*;
+use crate::domains::activity_analysis::{back_to_back_load, vert_per_week};
 use crate::domains::coach::{AnalysisKind, AnalysisWindow, CoachContext};
+use crate::domains::nutrition::{compute_carb_demand, compute_protein_demand};
+use crate::engines::adaptation::classify_curve_profile;
 use crate::engines::analysis_audit::build_data_audit;
 use crate::engines::analysis_fetch::{
     PeriodFetchRequest, SingleWorkoutFetchRequest, build_daily_load_series, build_previous_window,
@@ -18,11 +21,13 @@ use crate::engines::analysis_fetch::{
 };
 use crate::engines::coach_guidance::{build_alerts, build_guidance};
 use crate::engines::coach_metrics::{
-    build_trend_snapshot, compute_load_management_metrics, compute_ndli_7d, compute_wdr_metrics,
+    build_trend_snapshot, classify_tid_model, compare_power_curves, compute_heat_metrics_7d,
+    compute_load_management_metrics, compute_ndli_7d, compute_wdr_metrics, compute_z2_hr_variance,
     derive_espe_metrics, derive_trend_metrics, derive_volume_metrics,
     derive_workout_metrics_context, enrich_anchors_from_activity, extract_sportinfo_anchors,
-    parse_api_load_snapshot, parse_fitness_metrics,
+    parse_api_load_snapshot, parse_fitness_metrics, parse_polarisation_from_api,
 };
+use crate::engines::trail_execution::compute_terrain_context;
 use crate::intents::utils::{
     data_availability_block, filter_activities_by_date, filter_activities_by_range,
     filter_events_by_range, parse_date,
@@ -683,6 +688,106 @@ impl AnalyzeTrainingHandler {
             }
         }
 
+        // Z2 HR Stability — requires HR stream + zone bounds from detail
+        if analysis_mode.include_streams()
+            && let Some(streams) = fetched.streams.as_ref()
+            && let Some(hr_values) = streams.get("heartrate").and_then(Value::as_array)
+        {
+            let hr_vec: Vec<f64> = hr_values.iter().filter_map(|v| v.as_f64()).collect();
+            if !hr_vec.is_empty()
+                && let Some(detail_obj) = workout_detail.and_then(Value::as_object)
+            {
+                let z2_lower = detail_obj.get("hr_z1").and_then(Value::as_f64);
+                let z2_upper = detail_obj.get("hr_z2").and_then(Value::as_f64);
+                if let (Some(lower), Some(upper)) = (z2_lower, z2_upper) {
+                    let variance = compute_z2_hr_variance(&hr_vec, lower, upper);
+                    if let Some(z2_text) = render_z2_stability_section(lower, upper, variance) {
+                        content.push(ContentBlock::markdown(z2_text));
+                    }
+                }
+            }
+        }
+
+        // Terrain Context — elevation, distance, moving_time from detail
+        if let Some(detail_obj) = workout_detail.and_then(Value::as_object) {
+            let elevation = detail_obj
+                .get("total_elevation_gain")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0);
+            let distance = detail_obj
+                .get("distance")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0);
+            let moving_time = detail_obj
+                .get("moving_time")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            if distance > 0.0 {
+                let efficiency_drift = workout_context
+                    .metrics
+                    .workout
+                    .as_ref()
+                    .and_then(|w| w.aerobic_decoupling.as_ref())
+                    .map(|d| d.signed_decoupling_pct);
+                let terrain =
+                    compute_terrain_context(elevation, distance, moving_time, efficiency_drift);
+                let mut lines = vec!["Terrain Context".to_string()];
+                if let Some(ti) = terrain.terrain_index {
+                    lines.push(format!("  Terrain Index: {:.1} m/km", ti));
+                }
+                if let Some(vam) = terrain.vam {
+                    lines.push(format!("  VAM: {:.0} m/h", vam));
+                }
+                if lines.len() > 1 {
+                    content.push(ContentBlock::markdown(lines.join("\n")));
+                }
+            }
+        }
+
+        // Nutrition Context — carb/protein demand based on duration
+        if let Some(detail_obj) = workout_detail.and_then(Value::as_object) {
+            let duration_secs = detail_obj
+                .get("moving_time")
+                .and_then(Value::as_i64)
+                .or_else(|| detail_obj.get("elapsed_time").and_then(Value::as_i64))
+                .unwrap_or(0);
+            if duration_secs > 0 {
+                let duration_hours = duration_secs as f64 / 3600.0;
+                let intensity_factor = detail_obj
+                    .get("icu_intensity_factor")
+                    .and_then(Value::as_f64)
+                    .or_else(|| detail_obj.get("intensity_factor").and_then(Value::as_f64));
+                let carb = compute_carb_demand(duration_hours, intensity_factor);
+                let protein = compute_protein_demand(false);
+                content.push(ContentBlock::markdown(format!(
+                    "Nutrition Context\n  Carbs: {:.1} g/kg\n  Protein: {:.1} g/kg",
+                    carb, protein
+                )));
+            }
+        }
+
+        // Power/Running Curve Profile
+        if let Some(derived) = &workout_context.metrics.espe_derived
+            && derived.supported
+        {
+            let is_running = workout_detail
+                .and_then(Value::as_object)
+                .map(|obj| !obj.contains_key("average_watts") || obj.contains_key("pace"))
+                .unwrap_or(false);
+            let profile = classify_curve_profile(
+                None,
+                derived.p1m,
+                derived.p5m,
+                derived.p20m,
+                derived.p60m,
+                is_running,
+            );
+            content.push(ContentBlock::markdown(format!(
+                "Power/Running Profile\n  Profile: {:?}",
+                profile
+            )));
+        }
+
         if analysis_mode.show_data_availability()
             && let Some(block) = data_availability_block(
                 &workout_context.audit.degraded_mode_reasons,
@@ -905,7 +1010,7 @@ impl AnalyzeTrainingHandler {
                     .and_then(|detail| parse_api_load_snapshot(Some(detail)))
             });
 
-        if load_history_sufficient {
+        let load_values: Option<Vec<f64>> = if load_history_sufficient {
             let load_activities = fetched
                 .activities
                 .iter()
@@ -917,7 +1022,7 @@ impl AnalyzeTrainingHandler {
                 .collect::<Vec<_>>();
             let daily_loads =
                 build_daily_load_series(&load_activities, &fetched.activity_details, &load_window);
-            let load_values = daily_loads
+            let lv = daily_loads
                 .iter()
                 .map(|(_, load)| *load)
                 .collect::<Vec<_>>();
@@ -927,8 +1032,11 @@ impl AnalyzeTrainingHandler {
                 .as_ref()
                 .and_then(|w| w.recovery_index);
             period_context.metrics.load_management =
-                compute_load_management_metrics(&load_values, recovery_index);
-        }
+                compute_load_management_metrics(&lv, recovery_index);
+            Some(lv)
+        } else {
+            None
+        };
 
         if let Some(api_acwr) = api_load_snapshot {
             period_context
@@ -1085,6 +1193,111 @@ impl AnalyzeTrainingHandler {
                 content.push(ContentBlock::markdown(ndli_text));
             }
 
+            // Heat Metrics
+            let heat = compute_heat_metrics_7d(&fetched.activity_details, &period_ids);
+            if let Some(heat_text) = render_heat_section(&Some(heat)) {
+                content.push(ContentBlock::markdown(heat_text));
+            }
+
+            // TID Model — aggregate zone percentages across period
+            {
+                let mut z1_sum = 0.0;
+                let mut z2_sum = 0.0;
+                let mut z3_sum = 0.0;
+                let mut tid_count = 0;
+                for id in &period_ids {
+                    if let Some(detail) = fetched.activity_details.get(id) {
+                        let zone_times = detail.get("icu_zone_times");
+                        if let Some(pol) = parse_polarisation_from_api(Some(detail), zone_times) {
+                            z1_sum += pol.z1_pct.unwrap_or(0.0);
+                            z2_sum += pol.z2_pct.unwrap_or(0.0);
+                            z3_sum += pol.z3_pct.unwrap_or(0.0);
+                            tid_count += 1;
+                        }
+                    }
+                }
+                if tid_count > 0 {
+                    let z1 = z1_sum / tid_count as f64;
+                    let z2 = z2_sum / tid_count as f64;
+                    let z3 = z3_sum / tid_count as f64;
+                    let (tid, pi) = classify_tid_model(z1, z2, z3);
+                    let mut tid_lines = vec![format!(
+                        "Training Intensity Distribution\n  TID Model: {}",
+                        tid
+                    )];
+                    tid_lines.push(format!(
+                        "  Z1: {:.1}% | Z2: {:.1}% | Z3: {:.1}%",
+                        z1 * 100.0,
+                        z2 * 100.0,
+                        z3 * 100.0
+                    ));
+                    if let Some(p) = pi {
+                        tid_lines.push(format!("  Polarization Index: {:.2}", p));
+                    }
+                    content.push(ContentBlock::markdown(tid_lines.join("\n")));
+                }
+            }
+
+            // Power Curve Comparison
+            {
+                let cur_mmp = extract_period_mmp(&period, &fetched.activity_details);
+                let prev_mmp = extract_period_mmp(&previous_period, &fetched.activity_details);
+                if let (Some(cur), Some(prev)) = (cur_mmp, prev_mmp) {
+                    let anchors = extract_sportinfo_anchors(fetched.wellness.as_ref());
+                    let cur_espe = derive_espe_metrics(&anchors, cur.0, cur.1, cur.2, cur.3);
+                    let prev_espe = derive_espe_metrics(&anchors, prev.0, prev.1, prev.2, prev.3);
+                    if cur_espe.supported && prev_espe.supported {
+                        let (deltas, _, statuses) = compare_power_curves(&cur_espe, &prev_espe);
+                        if !deltas.is_empty() {
+                            let mut rows = Vec::new();
+                            let mut durations: Vec<&String> = deltas.keys().collect();
+                            durations.sort();
+                            for duration in durations {
+                                let delta = deltas[duration];
+                                let status =
+                                    statuses.get(duration).map(String::as_str).unwrap_or("n/a");
+                                rows.push(vec![
+                                    duration.clone(),
+                                    format!("{:+.1}%", delta),
+                                    status.to_string(),
+                                ]);
+                            }
+                            content
+                                .push(ContentBlock::markdown("Power Curve Comparison".to_string()));
+                            content.push(ContentBlock::table(
+                                vec!["Duration".into(), "Delta".into(), "Status".into()],
+                                rows,
+                            ));
+                        }
+                    }
+                }
+            }
+
+            // Ultra-specific tokens
+            if let Some(ref load_vals) = load_values {
+                let b2b = back_to_back_load(load_vals);
+                if b2b > 0.0 {
+                    content.push(ContentBlock::markdown(format!(
+                        "Load Patterns\n  Back-to-Back Peak Load: {:.1}",
+                        b2b
+                    )));
+                }
+            }
+            {
+                let period_detail_refs: Vec<&serde_json::Map<String, Value>> = period
+                    .iter()
+                    .filter_map(|act| fetched.activity_details.get(&act.id))
+                    .filter_map(Value::as_object)
+                    .collect();
+                let vert = vert_per_week(&period_detail_refs);
+                if vert > 0.0 {
+                    content.push(ContentBlock::markdown(format!(
+                        "Terrain Specificity\n  Weekly Vert: {:.0} m",
+                        vert
+                    )));
+                }
+            }
+
             if let Some(block) = data_availability_block(
                 &period_context.audit.degraded_mode_reasons,
                 period_context.audit.all_available(),
@@ -1181,6 +1394,51 @@ fn format_pct(value: Option<f64>) -> String {
     value
         .map(|delta| format!("{:+.1}%", delta))
         .unwrap_or_else(|| "n/a".into())
+}
+
+#[allow(clippy::type_complexity)]
+fn extract_period_mmp(
+    activities: &[&intervals_icu_client::ActivitySummary],
+    details: &std::collections::HashMap<String, Value>,
+) -> Option<(Option<f64>, Option<f64>, Option<f64>, Option<f64>)> {
+    let mut p1m = None;
+    let mut p5m = None;
+    let mut p20m = None;
+    let mut p60m = None;
+    for act in activities {
+        let Some(obj) = details.get(&act.id).and_then(Value::as_object) else {
+            continue;
+        };
+        if p1m.is_none() {
+            p1m = obj
+                .get("p1m")
+                .and_then(Value::as_f64)
+                .or_else(|| obj.get("best_power_60").and_then(Value::as_f64));
+        }
+        if p5m.is_none() {
+            p5m = obj
+                .get("p5m")
+                .and_then(Value::as_f64)
+                .or_else(|| obj.get("best_power_300").and_then(Value::as_f64));
+        }
+        if p20m.is_none() {
+            p20m = obj
+                .get("p20m")
+                .and_then(Value::as_f64)
+                .or_else(|| obj.get("best_power_1200").and_then(Value::as_f64));
+        }
+        if p60m.is_none() {
+            p60m = obj
+                .get("p60m")
+                .and_then(Value::as_f64)
+                .or_else(|| obj.get("best_power_3600").and_then(Value::as_f64));
+        }
+    }
+    if p1m.is_some() || p5m.is_some() || p20m.is_some() || p60m.is_some() {
+        Some((p1m, p5m, p20m, p60m))
+    } else {
+        None
+    }
 }
 
 impl Default for AnalyzeTrainingHandler {
