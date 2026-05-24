@@ -17,7 +17,6 @@ const TERRAIN_STEEP_THRESHOLD: f64 = 20.0;
 
 /// Efficiency drift threshold for terrain-induced fatigue (%).
 /// Drift >5% drop = terrain-induced efficiency loss.
-/// Source: Montis.icu Coach V5 — efficiency drift below -5% indicates terrain-specific fatigue.
 const EFFICIENCY_DRIFT_THRESHOLD: f64 = -5.0;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
