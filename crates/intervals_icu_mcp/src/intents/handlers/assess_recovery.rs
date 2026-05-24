@@ -22,6 +22,7 @@ const READINESS_RECOVERY_INDEX_RACE: f64 = 1.1;
 #[cfg(test)]
 use crate::domains::coach::CoachMetrics;
 use crate::domains::coach::{AnalysisKind, AnalysisWindow, CoachContext, WellnessMetrics};
+use crate::engines::ade::compute_ade;
 use crate::engines::analysis_audit::build_data_audit;
 use crate::engines::analysis_fetch::{RecoveryFetchRequest, fetch_recovery_data};
 use crate::engines::coach_guidance::{build_alerts, build_guidance};
@@ -371,6 +372,30 @@ impl IntentHandler for AssessRecoveryHandler {
             planned_activity.as_str()
         )));
 
+        let ade_result = compute_ade(
+            recovery_context
+                .metrics
+                .fitness
+                .as_ref()
+                .and_then(|f| f.tsb),
+            recovery_context
+                .metrics
+                .wellness
+                .as_ref()
+                .and_then(|w| w.hrv_ratio),
+            false,
+            false,
+            false,
+            None,
+            None,
+            0,
+            recovery_context
+                .metrics
+                .fitness
+                .as_ref()
+                .and_then(|f| f.tsb),
+        );
+
         let wellness = recovery_context
             .metrics
             .wellness
@@ -391,6 +416,30 @@ impl IntentHandler for AssessRecoveryHandler {
                         .to_string(),
                 ));
         }
+
+        // ADE system state assessment
+        let mut state_md = String::from("System State Assessment\n");
+        state_md.push_str(&format!("  State: {:?}\n", ade_result.operational_state));
+        state_md.push_str(&format!("  Risk: {:?}\n", ade_result.risk_level));
+        let mut active_flags: Vec<&str> = Vec::new();
+        if ade_result.maladaptation_risk {
+            active_flags.push("Maladaptation Risk");
+        }
+        if ade_result.functional_overreach {
+            active_flags.push("Functional Overreach");
+        }
+        if ade_result.load_pressure {
+            active_flags.push("Load Pressure");
+        }
+        if ade_result.loaded_taper {
+            active_flags.push("Loaded Taper");
+        }
+        if active_flags.is_empty() {
+            state_md.push_str("  Flags: None");
+        } else {
+            state_md.push_str(&format!("  Flags: {}", active_flags.join(", ")));
+        }
+        content.push(ContentBlock::markdown(state_md));
 
         // Calculate red flags first
         let red_flags = if include_red_flags {
