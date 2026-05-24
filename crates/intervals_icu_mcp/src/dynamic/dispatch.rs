@@ -466,6 +466,104 @@ mod tests {
         assert_eq!(value, "");
     }
 
+    // ========================================================================
+    // resolve_path_argument() Tests
+    // ========================================================================
+
+    #[test]
+    fn test_resolve_path_param_missing() {
+        let args = serde_json::from_value::<JsonObject>(json!({
+            "other_key": "some_value"
+        }))
+        .unwrap();
+
+        let param = crate::dynamic::types::ParamSpec {
+            name: "missing_param".to_string(),
+            location: crate::dynamic::types::ParamLocation::Path,
+            auto_injected: false,
+        };
+
+        let result = resolve_path_argument(&args, &param);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_resolve_path_param_unstringifiable() {
+        let args = serde_json::from_value::<JsonObject>(json!({
+            "obj_param": {"nested": "value"},
+            "arr_param": [1, 2, 3],
+            "num_param": 42,
+        }))
+        .unwrap();
+
+        let param_obj = crate::dynamic::types::ParamSpec {
+            name: "obj_param".to_string(),
+            location: crate::dynamic::types::ParamLocation::Path,
+            auto_injected: false,
+        };
+        let result_obj = resolve_path_argument(&args, &param_obj);
+        assert!(result_obj.is_none());
+
+        let param_arr = crate::dynamic::types::ParamSpec {
+            name: "arr_param".to_string(),
+            location: crate::dynamic::types::ParamLocation::Path,
+            auto_injected: false,
+        };
+        let result_arr = resolve_path_argument(&args, &param_arr);
+        assert!(result_arr.is_none());
+    }
+
+    // ========================================================================
+    // collect_query_pairs() Tests
+    // ========================================================================
+
+    #[test]
+    fn test_collect_query_pairs_empty() {
+        let args = JsonObject::new();
+        let params = vec![];
+
+        let pairs = collect_query_pairs(&args, &params);
+        assert!(pairs.is_empty());
+    }
+
+    #[test]
+    fn test_collect_query_pairs_non_query_skipped() {
+        let args = serde_json::from_value::<JsonObject>(json!({
+            "path_id": "abc"
+        }))
+        .unwrap();
+
+        let params = vec![crate::dynamic::types::ParamSpec {
+            name: "path_id".to_string(),
+            location: crate::dynamic::types::ParamLocation::Path,
+            auto_injected: false,
+        }];
+
+        let pairs = collect_query_pairs(&args, &params);
+        assert!(pairs.is_empty());
+    }
+
+    #[test]
+    fn test_collect_query_pairs_missing_arg_skipped() {
+        let args = serde_json::from_value::<JsonObject>(json!({
+            "present_key": "present_value"
+        }))
+        .unwrap();
+
+        let params = vec![crate::dynamic::types::ParamSpec {
+            name: "missing_key".to_string(),
+            location: crate::dynamic::types::ParamLocation::Query,
+            auto_injected: false,
+        }];
+
+        let pairs = collect_query_pairs(&args, &params);
+        assert!(pairs.is_empty());
+    }
+
+    // ========================================================================
+    // Integration-style Tests
+    // ========================================================================
+
     #[test]
     fn test_collect_query_pairs_expands_arrays() {
         let args = serde_json::from_value::<JsonObject>(json!({

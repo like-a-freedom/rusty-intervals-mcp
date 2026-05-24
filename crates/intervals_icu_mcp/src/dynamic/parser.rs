@@ -1263,4 +1263,53 @@ mod tests {
             .any(|n| n.contains("workout") || n.contains("event"));
         assert!(has_workout_or_event, "Should have workout/event endpoints");
     }
+
+    #[test]
+    fn test_contains_multipart() {
+        use serde_json::Map;
+        use serde_json::json;
+        // No requestBody -> false
+        let op = Map::new();
+        assert!(!contains_multipart(&op));
+
+        // Non-multipart content type -> false
+        let mut op2 = Map::new();
+        op2.insert(
+            "requestBody".into(),
+            json!({"content": {"application/json": {}}}),
+        );
+        assert!(!contains_multipart(&op2));
+
+        // multipart/form-data -> true
+        let mut op3 = Map::new();
+        op3.insert(
+            "requestBody".into(),
+            json!({"content": {"multipart/form-data": {}}}),
+        );
+        assert!(contains_multipart(&op3));
+    }
+
+    #[test]
+    fn test_preferred_success_response() {
+        use serde_json::Map;
+        use serde_json::json;
+        // No 2xx responses -> None
+        let r = Map::new();
+        assert!(preferred_success_response(&r).is_none());
+
+        // Has 200 response -> Some
+        let mut r2 = Map::new();
+        r2.insert("200".into(), json!({"description": "OK"}));
+        assert!(preferred_success_response(&r2).is_some());
+    }
+
+    #[test]
+    fn test_preferred_json_media_type_none() {
+        use serde_json::Map;
+        use serde_json::json;
+        // No JSON-like content type -> None
+        let mut c = Map::new();
+        c.insert("text/plain".into(), json!({}));
+        assert!(preferred_json_media_type(&c).is_none());
+    }
 }

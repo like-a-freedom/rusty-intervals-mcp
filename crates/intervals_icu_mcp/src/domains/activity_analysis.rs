@@ -617,4 +617,382 @@ mod tests {
         let out = transform_curves(&input, false, None);
         assert_eq!(out, input);
     }
+
+    // ========================================================================
+    // transform_streams() Tests
+    // ========================================================================
+
+    #[test]
+    fn transform_streams_passes_non_object() {
+        let v = Value::String("hello".into());
+        let out = transform_streams(v.clone(), None, false, None);
+        assert_eq!(out, v);
+    }
+
+    #[test]
+    fn transform_streams_filter_streams_keeps_matching() {
+        let v = serde_json::json!({"power": [100, 200], "hr": [60, 70]});
+        let out = transform_streams(v, None, false, Some(vec!["power".into()]));
+        assert!(out.as_object().unwrap().contains_key("power"));
+        assert!(!out.as_object().unwrap().contains_key("hr"));
+    }
+
+    #[test]
+    fn transform_streams_filter_streams_case_insensitive() {
+        let v = serde_json::json!({"Power": [100]});
+        let out = transform_streams(v, None, false, Some(vec!["power".into()]));
+        assert!(out.as_object().unwrap().contains_key("Power"));
+    }
+
+    #[test]
+    fn transform_streams_non_array_value_passthrough() {
+        let v = serde_json::json!({"name": "test", "power": [100]});
+        let out = transform_streams(v, None, false, None);
+        assert_eq!(out["name"], "test");
+        assert!(out["power"].is_array());
+    }
+
+    #[test]
+    fn transform_streams_summary_only() {
+        let v = serde_json::json!({"power": [100, 200, 300]});
+        let out = transform_streams(v, None, true, None);
+        let stats = &out["power"];
+        assert_eq!(stats["count"], 3);
+        assert_eq!(stats["min"], 100.0);
+        assert_eq!(stats["max"], 300.0);
+    }
+
+    #[test]
+    fn transform_streams_with_max_points() {
+        let v = serde_json::json!({"power": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]});
+        let out = transform_streams(v, Some(4), false, None);
+        let arr = out["power"].as_array().unwrap();
+        assert_eq!(arr.len(), 4);
+        assert_eq!(arr[0], 0);
+        assert_eq!(arr[3], 9);
+    }
+
+    #[test]
+    fn transform_streams_no_max_points_or_summary() {
+        let v = serde_json::json!({"power": [100, 200]});
+        let out = transform_streams(v.clone(), None, false, None);
+        assert_eq!(out, v);
+    }
+
+    // ========================================================================
+    // transform_intervals() Tests
+    // ========================================================================
+
+    #[test]
+    fn transform_intervals_passes_non_array() {
+        let v = serde_json::json!({"key": "value"});
+        let out = transform_intervals(&v, false, 10, None);
+        assert_eq!(out, v);
+    }
+
+    #[test]
+    fn transform_intervals_summary_with_typed_items() {
+        let v = serde_json::json!([
+            {"type": "warmup", "duration": 300, "distance": 1000},
+            {"type": "warmup", "duration": 120, "distance": 400},
+            {"type": "interval", "duration": 60, "distance": 300},
+        ]);
+        let out = transform_intervals(&v, true, 10, None);
+        assert_eq!(out["total_intervals"], 3);
+        assert_eq!(out["types"]["warmup"], 2);
+        assert_eq!(out["types"]["interval"], 1);
+        assert!((out["total_duration_secs"].as_f64().unwrap() - 480.0).abs() < 0.01);
+        assert!((out["total_distance_m"].as_f64().unwrap() - 1700.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn transform_intervals_summary_empty() {
+        let v = serde_json::json!([]);
+        let out = transform_intervals(&v, true, 10, None);
+        assert_eq!(out["total_intervals"], 0);
+    }
+
+    #[test]
+    fn transform_intervals_summary_missing_fields() {
+        let v = serde_json::json!([{"type": "cooldown"}, {"type": "interval", "duration": 60}]);
+        let out = transform_intervals(&v, true, 10, None);
+        assert_eq!(out["total_intervals"], 2);
+        // Second item has no distance, should be fine
+        assert!(out["total_distance_m"].as_f64().unwrap().abs() < 0.01);
+    }
+
+    #[test]
+    fn transform_intervals_with_custom_fields() {
+        let v = serde_json::json!([
+            {"type": "interval", "start_index": 10, "end_index": 100, "duration": 60, "distance": 400, "intensity": 0.9, "extra": "ignored"}
+        ]);
+        let custom = vec!["type".to_string(), "intensity".to_string()];
+        let out = transform_intervals(&v, false, 10, Some(&custom));
+        let item = out.as_array().unwrap()[0].as_object().unwrap();
+        assert!(item.contains_key("type"));
+        assert!(item.contains_key("intensity"));
+        assert!(!item.contains_key("duration"));
+        assert!(!item.contains_key("extra"));
+    }
+
+    #[test]
+    fn transform_intervals_respects_max_intervals() {
+        let v = serde_json::json!([
+            {"type": "a"}, {"type": "b"}, {"type": "c"}, {"type": "d"}
+        ]);
+        let out = transform_intervals(&v, false, 2, None);
+        assert_eq!(out.as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn transform_intervals_skips_non_object_items() {
+        let v = serde_json::json!(["string", {"type": "a"}, 42]);
+        let out = transform_intervals(&v, false, 10, None);
+        let items = out.as_array().unwrap();
+        // Non-object items pass through
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[1]["type"], "a");
+    }
+
+    // ========================================================================
+    // compact_intervals() Tests
+    // ========================================================================
+
+    #[test]
+    fn compact_intervals_passes_non_array() {
+        let v = serde_json::json!({"x": 1});
+        let out = compact_intervals(&v, None);
+        assert_eq!(out, v);
+    }
+
+    #[test]
+    fn compact_intervals_uses_default_fields() {
+        let v = serde_json::json!([
+            {"type": "interval", "start": 0, "end": 60, "duration": 60, "intensity": 0.9, "activity_id": "abc", "extra": "x"}
+        ]);
+        let out = compact_intervals(&v, None);
+        let item = out.as_array().unwrap()[0].as_object().unwrap();
+        assert!(item.contains_key("type"));
+        assert!(item.contains_key("duration"));
+        assert!(!item.contains_key("extra"));
+    }
+
+    #[test]
+    fn compact_intervals_with_custom_fields() {
+        let v = serde_json::json!([
+            {"type": "a", "start": 0, "end": 60, "duration": 60, "intensity": 0.8, "activity_id": "x", "foo": "bar"}
+        ]);
+        let custom = vec!["foo".to_string()];
+        let out = compact_intervals(&v, Some(&custom));
+        let item = out.as_array().unwrap()[0].as_object().unwrap();
+        assert_eq!(item["foo"], "bar");
+        assert!(!item.contains_key("type"));
+    }
+
+    #[test]
+    fn compact_intervals_skips_non_object_items() {
+        let v = serde_json::json!([true, {"type": "a"}]);
+        let out = compact_intervals(&v, None);
+        let items = out.as_array().unwrap();
+        assert_eq!(items[0], true);
+    }
+
+    // ========================================================================
+    // transform_histogram() Tests
+    // ========================================================================
+
+    #[test]
+    fn transform_histogram_summary_with_data() {
+        let v = serde_json::json!([
+            {"value": 100, "count": 10},
+            {"value": 200, "count": 5},
+            {"value": 300, "count": 0},
+        ]);
+        let out = transform_histogram(&v, true, 100);
+        assert_eq!(out["total_samples"], 15);
+        assert!((out["weighted_avg"].as_f64().unwrap() - 133.33).abs() < 0.1);
+        assert_eq!(out["min"], 100.0);
+        assert_eq!(out["max"], 200.0);
+        assert_eq!(out["bins_available"], 3);
+    }
+
+    #[test]
+    fn transform_histogram_summary_empty_array() {
+        let v = serde_json::json!([]);
+        let out = transform_histogram(&v, true, 100);
+        assert_eq!(out["total_samples"], 0);
+        assert_eq!(out["weighted_avg"], 0.0);
+    }
+
+    #[test]
+    fn transform_histogram_summary_non_array() {
+        let v = serde_json::json!({"not": "array"});
+        let out = transform_histogram(&v, true, 100);
+        assert_eq!(out, v);
+    }
+
+    #[test]
+    fn transform_histogram_downsample_when_too_large() {
+        let v = serde_json::json!(
+            (0..20)
+                .map(|i| serde_json::json!({"value": i, "count": 1}))
+                .collect::<Vec<_>>()
+        );
+        let out = transform_histogram(&v, false, 5);
+        let arr = out.as_array().unwrap();
+        assert!(arr.len() <= 5);
+        assert_eq!(arr[0]["value"], 0);
+        assert!(arr.last().unwrap()["value"].as_i64().unwrap() > 0);
+    }
+
+    #[test]
+    fn transform_histogram_no_downsample_when_small() {
+        let v = serde_json::json!([{"value": 1, "count": 1}]);
+        let out = transform_histogram(&v, false, 100);
+        assert_eq!(out, v);
+    }
+
+    // ========================================================================
+    // back_to_back_load() Tests
+    // ========================================================================
+
+    #[test]
+    fn back_to_back_load_returns_max_consecutive_sum() {
+        let loads = vec![100.0, 200.0, 300.0, 50.0];
+        let result = back_to_back_load(&loads);
+        assert!((result - 500.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn back_to_back_load_empty_returns_zero() {
+        let loads = vec![];
+        let result = back_to_back_load(&loads);
+        assert!(result.abs() < 0.01);
+    }
+
+    #[test]
+    fn back_to_back_load_single_element() {
+        let loads = vec![100.0];
+        // windows(2) yields nothing → fold NEG_INFINITY → max(0) = 0
+        let result = back_to_back_load(&loads);
+        assert!(result.abs() < 0.01);
+    }
+
+    // ========================================================================
+    // vert_per_week() Tests
+    // ========================================================================
+
+    #[test]
+    fn vert_per_week_sums_elevation_gain() {
+        let a = serde_json::json!({"total_elevation_gain": 100.0});
+        let b = serde_json::json!({"total_elevation_gain": 200.5});
+        let c = serde_json::json!({"other": "data"});
+        let details = vec![
+            a.as_object().unwrap(),
+            b.as_object().unwrap(),
+            c.as_object().unwrap(),
+        ];
+        let result = vert_per_week(&details);
+        assert!((result - 300.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn vert_per_week_empty() {
+        let result = vert_per_week(&[]);
+        assert!(result.abs() < 0.01);
+    }
+
+    // ========================================================================
+    // longest_run_ratio() Tests
+    // ========================================================================
+
+    #[test]
+    fn longest_run_ratio_returns_none_when_volume_zero() {
+        assert!(longest_run_ratio(10.0, 0.0).is_none());
+    }
+
+    #[test]
+    fn longest_run_ratio_computes_correctly() {
+        let (ratio_km, ratio_hrs) = longest_run_ratio(10.0, 50.0).unwrap();
+        assert!((ratio_km - 0.2).abs() < 0.01);
+        assert!((ratio_hrs - 0.032).abs() < 0.01);
+    }
+
+    // ========================================================================
+    // elevation_specificity_score() Tests
+    // ========================================================================
+
+    #[test]
+    fn elevation_specificity_perfect_match_returns_one() {
+        let score = elevation_specificity_score(100.0, 100.0);
+        assert!((score - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn elevation_specificity_zero_race_returns_one() {
+        let score = elevation_specificity_score(50.0, 0.0);
+        assert!((score - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn elevation_specificity_partial_match_returns_six_tenths() {
+        let score = elevation_specificity_score(60.0, 100.0);
+        assert!((score - 0.6).abs() < 0.01);
+    }
+
+    #[test]
+    fn elevation_specificity_no_match_returns_two_tenths() {
+        let score = elevation_specificity_score(200.0, 100.0);
+        assert!((score - 0.2).abs() < 0.01);
+    }
+
+    // ========================================================================
+    // transform_curves() scalar-secs mode Tests
+    // ========================================================================
+
+    #[test]
+    fn transform_curves_non_object_returns_clone() {
+        let v = Value::Array(vec![]);
+        let out = transform_curves(&v, false, None);
+        assert_eq!(out, v);
+    }
+
+    #[test]
+    fn transform_curves_non_array_value_passthrough() {
+        let v = serde_json::json!({"name": "test"});
+        let out = transform_curves(&v, false, None);
+        assert_eq!(out, v);
+        // Same for summary mode with no durations
+        let out2 = transform_curves(&v, true, None);
+        assert_eq!(out2, v);
+    }
+
+    #[test]
+    fn transform_curves_scalar_secs_format() {
+        let v = serde_json::json!({
+            "list": [
+                {"secs": 5, "watts": 350},
+                {"secs": 30, "watts": 300},
+                {"secs": 60, "watts": 270},
+                {"secs": 999, "watts": 100},
+            ]
+        });
+        let out = transform_curves(&v, false, Some(&[5, 30, 60]));
+        let list = out["list"].as_array().unwrap();
+        assert_eq!(list.len(), 3);
+        assert_eq!(list[0]["secs"], 5);
+        assert_eq!(list[2]["secs"], 60);
+    }
+
+    #[test]
+    fn transform_curves_scalar_secs_no_match_excluded() {
+        let v = serde_json::json!({
+            "list": [
+                {"secs": 10, "watts": 400},
+            ]
+        });
+        let out = transform_curves(&v, false, Some(&[5]));
+        let list = out["list"].as_array().unwrap();
+        assert!(list.is_empty());
+    }
 }
