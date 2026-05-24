@@ -1041,12 +1041,24 @@ async fn test_build_mcp_rmcp_config_function() {
 
     // Default (empty input)
     let config_default = intervals_icu_mcp::build_mcp_rmcp_config("");
-    assert!(config_default.allowed_hosts.contains(&"localhost".to_string()));
+    assert!(
+        config_default
+            .allowed_hosts
+            .contains(&"localhost".to_string())
+    );
     assert_eq!(config_default.allowed_hosts.len(), 3);
 
     // Custom hosts
     let config_custom = intervals_icu_mcp::build_mcp_rmcp_config("api.test.com,app.test.com");
     assert_eq!(config_custom.allowed_hosts.len(), 2);
-    assert!(config_custom.allowed_hosts.contains(&"api.test.com".to_string()));
-    assert!(config_custom.allowed_hosts.contains(&"app.test.com".to_string()));
+    assert!(
+        config_custom
+            .allowed_hosts
+            .contains(&"api.test.com".to_string())
+    );
+    assert!(
+        config_custom
+            .allowed_hosts
+            .contains(&"app.test.com".to_string())
+    );
 }

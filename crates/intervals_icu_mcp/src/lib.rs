@@ -616,7 +616,9 @@ pub async fn run_stdio_server(
 /// (with whitespace trimming) and sets them as the only allowed `Host` header values.
 ///
 /// This function is separate so it can be unit-tested without env mocks.
-pub fn build_mcp_rmcp_config(allowed_hosts_input: &str) -> rmcp::transport::streamable_http_server::tower::StreamableHttpServerConfig {
+pub fn build_mcp_rmcp_config(
+    allowed_hosts_input: &str,
+) -> rmcp::transport::streamable_http_server::tower::StreamableHttpServerConfig {
     if allowed_hosts_input.is_empty() {
         rmcp::transport::streamable_http_server::tower::StreamableHttpServerConfig::default()
     } else {
@@ -1014,15 +1016,27 @@ mod tests {
     fn test_build_mcp_rmcp_config_single_host() {
         let config = build_mcp_rmcp_config("mcp.example.com");
         assert_eq!(config.allowed_hosts.len(), 1);
-        assert!(config.allowed_hosts.contains(&"mcp.example.com".to_string()));
+        assert!(
+            config
+                .allowed_hosts
+                .contains(&"mcp.example.com".to_string())
+        );
     }
 
     #[test]
     fn test_build_mcp_rmcp_config_multi_host() {
         let config = build_mcp_rmcp_config("mcp.example.com,api.example.com");
         assert_eq!(config.allowed_hosts.len(), 2);
-        assert!(config.allowed_hosts.contains(&"mcp.example.com".to_string()));
-        assert!(config.allowed_hosts.contains(&"api.example.com".to_string()));
+        assert!(
+            config
+                .allowed_hosts
+                .contains(&"mcp.example.com".to_string())
+        );
+        assert!(
+            config
+                .allowed_hosts
+                .contains(&"api.example.com".to_string())
+        );
         // loopback hosts should NOT be present (user explicitly overrode)
         assert!(!config.allowed_hosts.contains(&"localhost".to_string()));
     }
@@ -1031,21 +1045,37 @@ mod tests {
     fn test_build_mcp_rmcp_config_trims_whitespace() {
         let config = build_mcp_rmcp_config(" mcp.example.com ,  api.example.com  ");
         assert_eq!(config.allowed_hosts.len(), 2);
-        assert!(config.allowed_hosts.contains(&"mcp.example.com".to_string()));
-        assert!(config.allowed_hosts.contains(&"api.example.com".to_string()));
+        assert!(
+            config
+                .allowed_hosts
+                .contains(&"mcp.example.com".to_string())
+        );
+        assert!(
+            config
+                .allowed_hosts
+                .contains(&"api.example.com".to_string())
+        );
     }
 
     #[test]
     fn test_build_mcp_rmcp_config_with_port() {
         let config = build_mcp_rmcp_config("mcp.example.com:8080");
         assert_eq!(config.allowed_hosts.len(), 1);
-        assert!(config.allowed_hosts.contains(&"mcp.example.com:8080".to_string()));
+        assert!(
+            config
+                .allowed_hosts
+                .contains(&"mcp.example.com:8080".to_string())
+        );
     }
 
     #[test]
     fn test_build_mcp_rmcp_config_trailing_comma_ignored() {
         // A trailing comma after last element → empty string → trimmed to empty → included
         let config = build_mcp_rmcp_config("mcp.example.com,");
-        assert_eq!(config.allowed_hosts.len(), 2, "trailing comma yields two items (one empty)");
+        assert_eq!(
+            config.allowed_hosts.len(),
+            2,
+            "trailing comma yields two items (one empty)"
+        );
     }
 }
