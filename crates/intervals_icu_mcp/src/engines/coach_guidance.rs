@@ -5,45 +5,17 @@
 
 use crate::domains::coach::{CoachAlert, CoachAlertSeverity, CoachGuidance, CoachMetrics};
 
+use crate::engines::constants::{
+    ACWR_OVERREACH_RATIO, ACWR_SAFE_UPPER, RHR_ELEVATED_MAX_BPM, SLEEP_ALERT_HOURS,
+    TSB_DEEP_FATIGUE, TSB_FATIGUED, TSB_FRESH, WDRM_HIGH_DEPLETION_PCT,
+};
+
 // =============================================================================
 // Wellness Thresholds
 // =============================================================================
 
-/// WDRM: High W' depletion threshold (60% of W′).
-/// Source: Montis.icu WDRM validation, same as WDRM_HIGH_DEPLETION_PCT in coach_metrics.
-const WDRM_HIGH_DEPLETION_THRESHOLD: f64 = 0.60;
-
-/// Sleep: good threshold (≥ this value)
-pub const SLEEP_GOOD_HOURS: f64 = 7.0;
-/// Sleep: fair minimum threshold (6.0–7.0)
-pub const SLEEP_FAIR_MIN_HOURS: f64 = 6.0;
-/// Sleep: alert threshold (< this value)
-const SLEEP_ALERT_HOURS: f64 = 6.5;
-
-/// RHR: normal threshold (≤ this value)
-pub const RHR_NORMAL_BPM: f64 = 55.0;
-/// RHR: elevated threshold (56–60)
-pub const RHR_ELEVATED_MAX_BPM: f64 = 60.0;
-/// RHR: alert threshold (> this value)
-const RHR_ALERT_BPM: f64 = 60.0;
-
-/// HRV: stable threshold (≥ this value)
-pub const HRV_STABLE_MS: f64 = 60.0;
-/// HRV: low threshold (40–60)
-pub const HRV_LOW_MIN_MS: f64 = 40.0;
 /// Recovery index: alert threshold (< this value)
 const RECOVERY_INDEX_ALERT: f64 = 0.6;
-
-// =============================================================================
-// Fitness/Load Thresholds
-// =============================================================================
-
-/// TSB: fresh threshold (> this value)
-pub const TSB_FRESH: f64 = 10.0;
-/// TSB: fatigued threshold (< this value)
-pub const TSB_FATIGUED: f64 = -10.0;
-/// TSB: deep fatigue alert threshold (< this value)
-const TSB_DEEP_FATIGUE: f64 = -20.0;
 
 // =============================================================================
 // Volume Thresholds
@@ -53,11 +25,6 @@ const TSB_DEEP_FATIGUE: f64 = -20.0;
 pub const WEEKLY_AVG_LOW_HOURS: f64 = 5.0;
 /// Weekly average hours: high volume threshold (> this value)
 pub const WEEKLY_AVG_HIGH_HOURS: f64 = 15.0;
-
-/// ACWR: watch threshold (> this value)
-const ACWR_WATCH_RATIO: f64 = 1.3;
-/// ACWR: overload threshold (> this value)
-const ACWR_OVERREACH_RATIO: f64 = 1.5;
 /// Monotony: repetitive-stress threshold (Foster 1998 recommends ≤ 2.0; Seiler uses 2.5).
 /// Values above this indicate insufficient training variety → elevated injury/overtraining risk.
 const MONOTONY_ALERT: f64 = 2.5;
@@ -121,7 +88,7 @@ pub fn build_alerts(metrics: &CoachMetrics) -> Vec<CoachAlert> {
     // Elevated RHR alert
     if let Some(wellness) = &metrics.wellness
         && let Some(rhr) = wellness.avg_resting_hr
-        && rhr > RHR_ALERT_BPM
+        && rhr > RHR_ELEVATED_MAX_BPM
     {
         alerts.push(CoachAlert {
             severity: CoachAlertSeverity::Caution,
@@ -129,7 +96,7 @@ pub fn build_alerts(metrics: &CoachMetrics) -> Vec<CoachAlert> {
             title: "Elevated RHR signal".to_string(),
             evidence: vec![format!(
                 "RHR above {:.0} bpm ({:.0} bpm)",
-                RHR_ALERT_BPM, rhr
+                RHR_ELEVATED_MAX_BPM, rhr
             )],
             section: "wellness".to_string(),
         });
@@ -195,14 +162,14 @@ pub fn build_alerts(metrics: &CoachMetrics) -> Vec<CoachAlert> {
                 )],
                 section: "load_management".to_string(),
             });
-        } else if acwr.ratio > ACWR_WATCH_RATIO {
+        } else if acwr.ratio > ACWR_SAFE_UPPER {
             alerts.push(CoachAlert {
                 severity: CoachAlertSeverity::Caution,
                 code: "acwr_watch".to_string(),
                 title: "Load ramp watch".to_string(),
                 evidence: vec![format!(
                     "ACWR {:.2} exceeds {:.1}",
-                    acwr.ratio, ACWR_WATCH_RATIO
+                    acwr.ratio, ACWR_SAFE_UPPER
                 )],
                 section: "load_management".to_string(),
             });
@@ -367,7 +334,7 @@ pub fn build_alerts(metrics: &CoachMetrics) -> Vec<CoachAlert> {
     if let Some(wdrm) = &metrics.wdrm
         && wdrm.supported
         && let Some(depletion_pct) = wdrm.depletion_pct
-        && depletion_pct >= WDRM_HIGH_DEPLETION_THRESHOLD
+        && depletion_pct >= WDRM_HIGH_DEPLETION_PCT
     {
         alerts.push(CoachAlert {
             severity: CoachAlertSeverity::Caution,

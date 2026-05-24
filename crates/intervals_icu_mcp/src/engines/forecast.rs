@@ -5,18 +5,14 @@
 // Forecast Constants
 // =============================================================================
 
+use crate::engines::constants::{TSB_FRESH, TSB_FRESH_UPPER, TSB_LOAD_PRESSURE, TSB_OVERREACHED};
+
 /// CTL time constant (42 days = 6 weeks half-life).
 /// Source: Banister model — standard endurance sports value.
 const CTL_TIME_CONSTANT: f64 = 42.0;
 
 /// ATL time constant (7 days = 1 week half-life).
 const ATL_TIME_CONSTANT: f64 = 7.0;
-
-/// TSB fatigue classification thresholds.
-const TSB_OVERREACHED: f64 = -30.0;
-const TSB_LOAD_PRESSURE: f64 = -10.0;
-const TSB_BALANCED_UPPER: f64 = 10.0;
-const TSB_FRESH_UPPER: f64 = 25.0;
 
 /// Default TSS values by training intensity.
 /// These are rough defaults; personalized values should scale from athlete's CTL.
@@ -58,7 +54,7 @@ pub fn project_tsb(current_ctl: f64, current_atl: f64, daily_loads: &[f64]) -> V
             "overreached"
         } else if tsb < TSB_LOAD_PRESSURE {
             "load_pressure"
-        } else if tsb < TSB_BALANCED_UPPER {
+        } else if tsb < TSB_FRESH {
             "balanced"
         } else if tsb < TSB_FRESH_UPPER {
             "fresh"

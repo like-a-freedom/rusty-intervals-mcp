@@ -170,17 +170,17 @@ impl AssessRecoveryHandler {
         let hrv = wellness.avg_hrv.unwrap_or(0.0);
         let tsb = fitness.tsb.unwrap_or(0.0);
 
-        let sleep_status = if avg_sleep >= crate::engines::coach_guidance::SLEEP_GOOD_HOURS {
+        let sleep_status = if avg_sleep >= crate::engines::constants::SLEEP_GOOD_HOURS {
             "✅ Good"
-        } else if avg_sleep >= crate::engines::coach_guidance::SLEEP_FAIR_MIN_HOURS {
+        } else if avg_sleep >= crate::engines::constants::SLEEP_FAIR_MIN_HOURS {
             "⚠️ Fair"
         } else {
             "❌ Poor"
         };
 
-        let rhr_status = if resting_hr <= crate::engines::coach_guidance::RHR_NORMAL_BPM {
+        let rhr_status = if resting_hr <= crate::engines::constants::RHR_NORMAL_BPM {
             "✅ Normal"
-        } else if resting_hr <= crate::engines::coach_guidance::RHR_ELEVATED_MAX_BPM {
+        } else if resting_hr <= crate::engines::constants::RHR_ELEVATED_MAX_BPM {
             "⚠️ Elevated"
         } else {
             "❌ High"
@@ -194,9 +194,9 @@ impl AssessRecoveryHandler {
             _ => "n/a",
         };
 
-        let tsb_status = if tsb > crate::engines::coach_guidance::TSB_FRESH {
+        let tsb_status = if tsb > crate::engines::constants::TSB_FRESH {
             "✅ Fresh"
-        } else if tsb > crate::engines::coach_guidance::TSB_FATIGUED {
+        } else if tsb > crate::engines::constants::TSB_FATIGUED {
             "⚠️ Neutral"
         } else {
             "❌ Fatigued"
@@ -700,7 +700,7 @@ mod tests {
 
     #[test]
     fn test_sleep_status_thresholds() {
-        use crate::engines::coach_guidance::{SLEEP_FAIR_MIN_HOURS, SLEEP_GOOD_HOURS};
+        use crate::engines::constants::{SLEEP_FAIR_MIN_HOURS, SLEEP_GOOD_HOURS};
 
         // Good sleep
         let avg_sleep = 7.5;
@@ -738,7 +738,7 @@ mod tests {
 
     #[test]
     fn test_tsb_status_thresholds() {
-        use crate::engines::coach_guidance::{TSB_FATIGUED, TSB_FRESH};
+        use crate::engines::constants::{TSB_FATIGUED, TSB_FRESH};
 
         // Fresh
         let tsb = 15.0;
