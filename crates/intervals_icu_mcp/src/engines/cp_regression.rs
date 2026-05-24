@@ -7,6 +7,7 @@
 // =============================================================================
 
 /// Minimum number of data points required for valid CP regression.
+/// Source: Montis.icu Coach V5 — minimum 3 data points for reliable CP regression.
 const MIN_CP_DATA_POINTS: usize = 3;
 
 /// Minimum R² threshold for valid CP model fit.
