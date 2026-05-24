@@ -22,6 +22,7 @@ const READINESS_RECOVERY_INDEX_RACE: f64 = 1.1;
 #[cfg(test)]
 use crate::domains::coach::CoachMetrics;
 use crate::domains::coach::{AnalysisKind, AnalysisWindow, CoachContext, WellnessMetrics};
+use crate::engines::ade::compute_ade;
 use crate::engines::analysis_audit::build_data_audit;
 use crate::engines::analysis_fetch::{RecoveryFetchRequest, fetch_recovery_data};
 use crate::engines::coach_guidance::{build_alerts, build_guidance};
@@ -295,8 +296,16 @@ impl IntentHandler for AssessRecoveryHandler {
 
     fn description(&self) -> &'static str {
         "Assesses recovery status, readiness to train, and detects red flags. \
-         Use for checking readiness for key workouts, evaluating post-race recovery, \
-         and identifying overtraining signs."
+         Returns multi-domain HRV analysis (ratio, trend slope, recovery quality \
+         index), wellness metrics (sleep, RHR, HRV, recovery index, readiness), \
+         fitness metrics (TSB, CTL, ATL), and ADE system state assessment \
+         (LoadAccepting/RecoveryPriority with risk level and active flags). \
+         Activity-specific readiness verdict for easy/intensity/long/race sessions.
+         
+         Use this tool when: you need to check if today is safe for a key workout, \
+         evaluate post-race recovery status, or detect overtraining signs. \
+         Do NOT use when: you need to analyze a specific workout (use analyze_training) \
+         or perform post-race debrief (use analyze_race)."
     }
 
     fn input_schema(&self) -> Value {
@@ -390,6 +399,65 @@ impl IntentHandler for AssessRecoveryHandler {
                     "Recovery Index\nRecovery Index unavailable because either HRV or resting HR is missing."
                         .to_string(),
                 ));
+        }
+
+        // ADE — System State Assessment
+        let ade_result = compute_ade(
+            recovery_context
+                .metrics
+                .fitness
+                .as_ref()
+                .and_then(|f| f.tsb),
+            recovery_context
+                .metrics
+                .wellness
+                .as_ref()
+                .and_then(|w| w.hrv_ratio),
+            false,
+            false,
+            false,
+            None,
+            None,
+            0,
+            recovery_context
+                .metrics
+                .fitness
+                .as_ref()
+                .and_then(|f| f.tsb),
+        );
+        {
+            let state_label = match ade_result.operational_state {
+                crate::engines::ade::OperationalState::LoadAccepting => "Load Accepting",
+                crate::engines::ade::OperationalState::RecoveryPriority => "Recovery Priority",
+            };
+            let risk_label = match ade_result.risk_level {
+                crate::engines::ade::RiskLevel::Low => "Low",
+                crate::engines::ade::RiskLevel::Moderate => "Moderate",
+                crate::engines::ade::RiskLevel::High => "High",
+                crate::engines::ade::RiskLevel::Critical => "Critical",
+            };
+            let mut flags = Vec::new();
+            if ade_result.maladaptation_risk {
+                flags.push("Maladaptation Risk");
+            }
+            if ade_result.functional_overreach {
+                flags.push("Functional Overreach");
+            }
+            if ade_result.load_pressure {
+                flags.push("Load Pressure");
+            }
+            if ade_result.loaded_taper {
+                flags.push("Loaded Taper");
+            }
+            let flags_line = if flags.is_empty() {
+                "  Flags: None".to_string()
+            } else {
+                format!("  Flags: {}", flags.join(", "))
+            };
+            content.push(ContentBlock::markdown(format!(
+                "System State Assessment\n  State: {}\n  Risk: {}\n{}",
+                state_label, risk_label, flags_line
+            )));
         }
 
         // Calculate red flags first

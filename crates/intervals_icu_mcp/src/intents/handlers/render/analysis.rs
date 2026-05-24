@@ -1170,7 +1170,6 @@ pub(crate) fn render_ndli_section(ndli: &Option<NdliMetrics>) -> Option<String> 
     Some(lines.join("\n"))
 }
 
-#[cfg_attr(not(test), expect(dead_code))]
 pub(crate) fn render_heat_section(heat: &Option<HeatMetrics>) -> Option<String> {
     let heat = heat.as_ref()?;
     if !heat.supported {
@@ -1187,7 +1186,6 @@ pub(crate) fn render_heat_section(heat: &Option<HeatMetrics>) -> Option<String> 
     Some(lines.join("\n"))
 }
 
-#[cfg_attr(not(test), expect(dead_code))]
 pub(crate) fn render_z2_stability_section(
     z2_lower: f64,
     z2_upper: f64,
