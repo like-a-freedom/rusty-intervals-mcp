@@ -513,6 +513,9 @@ impl Default for AssessRecoveryHandler {
 mod tests {
     use super::*;
     use crate::domains::coach::FitnessMetrics;
+    use crate::test_support::mock::MockIntervalsClient;
+    use intervals_icu_client::{ActivitySummary, IntervalsError};
+    use std::sync::Arc;
 
     #[test]
     fn test_new_handler() {
@@ -987,5 +990,781 @@ mod tests {
         assert!(!rows.iter().any(|row| row[0] == "Mood"));
         assert!(!rows.iter().any(|row| row[0] == "Stress"));
         assert!(!rows.iter().any(|row| row[0] == "Fatigue"));
+    }
+
+    // ========================================================================
+    // PlannedActivity::parse
+    // ========================================================================
+
+    #[test]
+    fn planned_activity_parse_none_defaults_to_easy() {
+        assert_eq!(PlannedActivity::parse(None), PlannedActivity::Easy);
+    }
+
+    #[test]
+    fn planned_activity_parse_easy() {
+        assert_eq!(PlannedActivity::parse(Some("easy")), PlannedActivity::Easy);
+    }
+
+    #[test]
+    fn planned_activity_parse_intensity() {
+        assert_eq!(
+            PlannedActivity::parse(Some("intensity")),
+            PlannedActivity::Intensity
+        );
+    }
+
+    #[test]
+    fn planned_activity_parse_long() {
+        assert_eq!(PlannedActivity::parse(Some("long")), PlannedActivity::Long);
+    }
+
+    #[test]
+    fn planned_activity_parse_race() {
+        assert_eq!(PlannedActivity::parse(Some("race")), PlannedActivity::Race);
+    }
+
+    #[test]
+    fn planned_activity_parse_fallback_to_easy() {
+        assert_eq!(
+            PlannedActivity::parse(Some("unknown")),
+            PlannedActivity::Easy
+        );
+    }
+
+    // ========================================================================
+    // PlannedActivity::as_str
+    // ========================================================================
+
+    #[test]
+    fn planned_activity_as_str_easy() {
+        assert_eq!(PlannedActivity::Easy.as_str(), "easy");
+    }
+
+    #[test]
+    fn planned_activity_as_str_intensity() {
+        assert_eq!(PlannedActivity::Intensity.as_str(), "intensity");
+    }
+
+    #[test]
+    fn planned_activity_as_str_long() {
+        assert_eq!(PlannedActivity::Long.as_str(), "long");
+    }
+
+    #[test]
+    fn planned_activity_as_str_race() {
+        assert_eq!(PlannedActivity::Race.as_str(), "race");
+    }
+
+    // ========================================================================
+    // PlannedActivity::readiness_copy
+    // ========================================================================
+
+    #[test]
+    fn readiness_copy_easy_green_light() {
+        let wellness = WellnessMetrics {
+            avg_sleep_hours: Some(7.0),
+            ..Default::default()
+        };
+        let fitness = FitnessMetrics::default();
+        let (status, note) = PlannedActivity::Easy.readiness_copy(&wellness, &fitness, &[]);
+        assert_eq!(status, "Green light");
+        assert!(note.contains("conversational"));
+    }
+
+    #[test]
+    fn readiness_copy_easy_caution() {
+        let wellness = WellnessMetrics {
+            avg_sleep_hours: Some(5.5),
+            ..Default::default()
+        };
+        let fitness = FitnessMetrics::default();
+        let (status, note) =
+            PlannedActivity::Easy.readiness_copy(&wellness, &fitness, &["Low sleep".to_string()]);
+        assert_eq!(status, "Caution");
+        assert!(note.contains("gentle"));
+    }
+
+    #[test]
+    fn readiness_copy_intensity_ready() {
+        let wellness = WellnessMetrics {
+            avg_sleep_hours: Some(8.0),
+            recovery_index: Some(1.2),
+            wellness_days_count: 5,
+            ..Default::default()
+        };
+        let fitness = FitnessMetrics {
+            tsb: Some(0.0),
+            ..Default::default()
+        };
+        let (status, _note) = PlannedActivity::Intensity.readiness_copy(&wellness, &fitness, &[]);
+        assert_eq!(status, "Ready for quality");
+    }
+
+    #[test]
+    fn readiness_copy_intensity_hold() {
+        let wellness = WellnessMetrics {
+            avg_sleep_hours: Some(6.5),
+            recovery_index: Some(1.2),
+            wellness_days_count: 5,
+            ..Default::default()
+        };
+        let fitness = FitnessMetrics {
+            tsb: Some(0.0),
+            ..Default::default()
+        };
+        let (status, _note) = PlannedActivity::Intensity.readiness_copy(&wellness, &fitness, &[]);
+        assert_eq!(status, "Hold intensity");
+    }
+
+    #[test]
+    fn readiness_copy_long_ready() {
+        let wellness = WellnessMetrics {
+            avg_sleep_hours: Some(7.0),
+            recovery_index: Some(1.0),
+            wellness_days_count: 5,
+            ..Default::default()
+        };
+        let fitness = FitnessMetrics {
+            tsb: Some(0.0),
+            ..Default::default()
+        };
+        let (status, _note) = PlannedActivity::Long.readiness_copy(&wellness, &fitness, &[]);
+        assert_eq!(status, "Long run acceptable");
+    }
+
+    #[test]
+    fn readiness_copy_long_trim() {
+        let wellness = WellnessMetrics {
+            avg_sleep_hours: Some(8.0),
+            recovery_index: Some(1.0),
+            wellness_days_count: 5,
+            ..Default::default()
+        };
+        let fitness = FitnessMetrics {
+            tsb: Some(-25.0),
+            ..Default::default()
+        };
+        let (status, _note) = PlannedActivity::Long.readiness_copy(&wellness, &fitness, &[]);
+        assert_eq!(status, "Trim the long day");
+    }
+
+    #[test]
+    fn readiness_copy_race_ready() {
+        let wellness = WellnessMetrics {
+            avg_sleep_hours: Some(8.0),
+            recovery_index: Some(1.2),
+            wellness_days_count: 5,
+            ..Default::default()
+        };
+        let fitness = FitnessMetrics {
+            tsb: Some(10.0),
+            ..Default::default()
+        };
+        let (status, _note) = PlannedActivity::Race.readiness_copy(&wellness, &fitness, &[]);
+        assert_eq!(status, "Race-ready");
+    }
+
+    #[test]
+    fn readiness_copy_race_not_ready() {
+        let wellness = WellnessMetrics {
+            avg_sleep_hours: Some(8.0),
+            recovery_index: Some(1.2),
+            wellness_days_count: 5,
+            ..Default::default()
+        };
+        let fitness = FitnessMetrics {
+            tsb: Some(0.0),
+            ..Default::default()
+        };
+        let (status, _note) = PlannedActivity::Race.readiness_copy(&wellness, &fitness, &[]);
+        assert_eq!(status, "Not race-ready");
+    }
+
+    // ========================================================================
+    // build_recovery_metric_rows — additional threshold coverage
+    // ========================================================================
+
+    #[test]
+    fn recovery_rows_rhr_elevated() {
+        let rows = AssessRecoveryHandler::build_recovery_metric_rows(
+            &WellnessMetrics {
+                avg_sleep_hours: Some(7.5),
+                avg_resting_hr: Some(58.0),
+                avg_hrv: Some(65.0),
+                wellness_days_count: 5,
+                ..Default::default()
+            },
+            &FitnessMetrics {
+                tsb: Some(5.0),
+                ..Default::default()
+            },
+        );
+        let rhr_row = rows.iter().find(|r| r[0] == "Resting HR").expect("RHR row");
+        assert!(rhr_row[2].contains("Elevated"));
+    }
+
+    #[test]
+    fn recovery_rows_rhr_high() {
+        let rows = AssessRecoveryHandler::build_recovery_metric_rows(
+            &WellnessMetrics {
+                avg_sleep_hours: Some(7.5),
+                avg_resting_hr: Some(65.0),
+                avg_hrv: Some(65.0),
+                wellness_days_count: 5,
+                ..Default::default()
+            },
+            &FitnessMetrics {
+                tsb: Some(5.0),
+                ..Default::default()
+            },
+        );
+        let rhr_row = rows.iter().find(|r| r[0] == "Resting HR").expect("RHR row");
+        assert!(rhr_row[2].contains("High"));
+    }
+
+    #[test]
+    fn recovery_rows_sleep_fair() {
+        let rows = AssessRecoveryHandler::build_recovery_metric_rows(
+            &WellnessMetrics {
+                avg_sleep_hours: Some(6.5),
+                avg_resting_hr: Some(50.0),
+                avg_hrv: Some(65.0),
+                wellness_days_count: 5,
+                ..Default::default()
+            },
+            &FitnessMetrics {
+                tsb: Some(5.0),
+                ..Default::default()
+            },
+        );
+        let sleep_row = rows
+            .iter()
+            .find(|r| r[0] == "Avg Sleep")
+            .expect("Sleep row");
+        assert!(sleep_row[2].contains("Fair"));
+    }
+
+    #[test]
+    fn recovery_rows_sleep_poor() {
+        let rows = AssessRecoveryHandler::build_recovery_metric_rows(
+            &WellnessMetrics {
+                avg_sleep_hours: Some(5.5),
+                avg_resting_hr: Some(50.0),
+                avg_hrv: Some(65.0),
+                wellness_days_count: 5,
+                ..Default::default()
+            },
+            &FitnessMetrics {
+                tsb: Some(5.0),
+                ..Default::default()
+            },
+        );
+        let sleep_row = rows
+            .iter()
+            .find(|r| r[0] == "Avg Sleep")
+            .expect("Sleep row");
+        assert!(sleep_row[2].contains("Poor"));
+    }
+
+    #[test]
+    fn recovery_rows_tsb_fresh() {
+        let rows = AssessRecoveryHandler::build_recovery_metric_rows(
+            &WellnessMetrics {
+                avg_sleep_hours: Some(7.5),
+                avg_resting_hr: Some(50.0),
+                avg_hrv: Some(65.0),
+                wellness_days_count: 5,
+                ..Default::default()
+            },
+            &FitnessMetrics {
+                tsb: Some(15.0),
+                ..Default::default()
+            },
+        );
+        let tsb_row = rows.iter().find(|r| r[0] == "TSB").expect("TSB row");
+        assert!(tsb_row[2].contains("Fresh"));
+    }
+
+    #[test]
+    fn recovery_rows_tsb_neutral() {
+        let rows = AssessRecoveryHandler::build_recovery_metric_rows(
+            &WellnessMetrics {
+                avg_sleep_hours: Some(7.5),
+                avg_resting_hr: Some(50.0),
+                avg_hrv: Some(65.0),
+                wellness_days_count: 5,
+                ..Default::default()
+            },
+            &FitnessMetrics {
+                tsb: Some(0.0),
+                ..Default::default()
+            },
+        );
+        let tsb_row = rows.iter().find(|r| r[0] == "TSB").expect("TSB row");
+        assert!(tsb_row[2].contains("Neutral"));
+    }
+
+    #[test]
+    fn recovery_rows_tsb_fatigued() {
+        let rows = AssessRecoveryHandler::build_recovery_metric_rows(
+            &WellnessMetrics {
+                avg_sleep_hours: Some(7.5),
+                avg_resting_hr: Some(50.0),
+                avg_hrv: Some(65.0),
+                wellness_days_count: 5,
+                ..Default::default()
+            },
+            &FitnessMetrics {
+                tsb: Some(-15.0),
+                ..Default::default()
+            },
+        );
+        let tsb_row = rows.iter().find(|r| r[0] == "TSB").expect("TSB row");
+        assert!(tsb_row[2].contains("Fatigued"));
+    }
+
+    #[test]
+    fn recovery_rows_recovery_index_watch() {
+        let rows = AssessRecoveryHandler::build_recovery_metric_rows(
+            &WellnessMetrics {
+                avg_sleep_hours: Some(7.5),
+                avg_resting_hr: Some(50.0),
+                avg_hrv: Some(65.0),
+                recovery_index: Some(1.0),
+                wellness_days_count: 5,
+                ..Default::default()
+            },
+            &FitnessMetrics {
+                tsb: Some(5.0),
+                ..Default::default()
+            },
+        );
+        let ri_row = rows
+            .iter()
+            .find(|r| r[0] == "Recovery Index")
+            .expect("Recovery Index row");
+        assert!(ri_row[2].contains("Watch"));
+    }
+
+    #[test]
+    fn recovery_rows_recovery_index_low() {
+        let rows = AssessRecoveryHandler::build_recovery_metric_rows(
+            &WellnessMetrics {
+                avg_sleep_hours: Some(7.5),
+                avg_resting_hr: Some(50.0),
+                avg_hrv: Some(65.0),
+                recovery_index: Some(0.8),
+                wellness_days_count: 5,
+                ..Default::default()
+            },
+            &FitnessMetrics {
+                tsb: Some(5.0),
+                ..Default::default()
+            },
+        );
+        let ri_row = rows
+            .iter()
+            .find(|r| r[0] == "Recovery Index")
+            .expect("Recovery Index row");
+        assert!(ri_row[2].contains("Low"));
+    }
+
+    #[test]
+    fn recovery_rows_hrv_within_range() {
+        let rows = AssessRecoveryHandler::build_recovery_metric_rows(
+            &WellnessMetrics {
+                avg_sleep_hours: Some(7.5),
+                avg_resting_hr: Some(50.0),
+                avg_hrv: Some(65.0),
+                hrv_trend_state: Some("within_range".into()),
+                wellness_days_count: 5,
+                ..Default::default()
+            },
+            &FitnessMetrics {
+                tsb: Some(5.0),
+                ..Default::default()
+            },
+        );
+        let hrv_row = rows.iter().find(|r| r[0] == "HRV").expect("HRV row");
+        assert!(hrv_row[2].contains("Within personal range"));
+    }
+
+    #[test]
+    fn recovery_rows_hrv_no_trend() {
+        let rows = AssessRecoveryHandler::build_recovery_metric_rows(
+            &WellnessMetrics {
+                avg_sleep_hours: Some(7.5),
+                avg_resting_hr: Some(50.0),
+                avg_hrv: Some(65.0),
+                hrv_trend_state: None,
+                wellness_days_count: 5,
+                ..Default::default()
+            },
+            &FitnessMetrics {
+                tsb: Some(5.0),
+                ..Default::default()
+            },
+        );
+        let hrv_row = rows.iter().find(|r| r[0] == "HRV").expect("HRV row");
+        assert!(hrv_row[2].contains("Build personal baseline"));
+    }
+
+    // ========================================================================
+    // execute() — integration tests with MockIntervalsClient
+    // ========================================================================
+
+    fn make_good_client() -> MockIntervalsClient {
+        MockIntervalsClient::builder()
+            .with_wellness(json!([
+                {"sleep_hours": 8.0, "resting_hr": 50.0, "hrv": 70.0}
+            ]))
+            .with_fitness_summary(json!({"form": 15.0}))
+            .with_activities(vec![ActivitySummary {
+                id: "act-1".into(),
+                name: Some("Test Workout".into()),
+                start_date_local: "2026-05-20".into(),
+                ..Default::default()
+            }])
+    }
+
+    #[tokio::test]
+    async fn test_execute_basic_defaults() {
+        let handler = AssessRecoveryHandler::new();
+        let client = Arc::new(make_good_client());
+        let input = json!({});
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("Recovery Assessment"));
+        assert!(content_str.contains("Easy"));
+        assert!(content_str.contains("Green light"));
+        assert!(content_str.contains("None detected"));
+        assert!(!output.next_actions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_execute_with_red_flags() {
+        let handler = AssessRecoveryHandler::new();
+        let client = Arc::new(
+            MockIntervalsClient::builder()
+                .with_wellness(json!([
+                    {"sleep_hours": 5.0, "resting_hr": 65.0, "hrv": 35.0}
+                ]))
+                .with_fitness_summary(json!({"form": -25.0}))
+                .with_activities(vec![ActivitySummary {
+                    id: "act-1".into(),
+                    name: Some("Test".into()),
+                    start_date_local: "2026-05-20".into(),
+                    ..Default::default()
+                }]),
+        );
+        let input = json!({});
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("Red Flags Detected"));
+        assert!(
+            output.next_actions.iter().any(|a| a.contains("rest day")),
+            "Expected 'rest day' next action but got: {:?}",
+            output.next_actions
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_red_flags_disabled() {
+        let handler = AssessRecoveryHandler::new();
+        let client = Arc::new(
+            MockIntervalsClient::builder()
+                .with_wellness(json!([
+                    {"sleep_hours": 5.0, "resting_hr": 65.0, "hrv": 35.0}
+                ]))
+                .with_fitness_summary(json!({"form": -25.0}))
+                .with_activities(vec![ActivitySummary {
+                    id: "act-1".into(),
+                    name: Some("Test".into()),
+                    start_date_local: "2026-05-20".into(),
+                    ..Default::default()
+                }]),
+        );
+        let input = json!({"include_red_flags": false});
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(
+            !content_str.contains("Red Flags"),
+            "Expected no red flags in content when disabled"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_for_activity_intensity() {
+        let handler = AssessRecoveryHandler::new();
+        let client = Arc::new(make_good_client());
+        let input = json!({"for_activity": "intensity"});
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("Ready for quality"));
+        assert!(
+            output
+                .next_actions
+                .iter()
+                .any(|a| a.contains("quality session")),
+            "Expected intensity next action but got: {:?}",
+            output.next_actions
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_for_activity_long() {
+        let handler = AssessRecoveryHandler::new();
+        let client = Arc::new(make_good_client());
+        let input = json!({"for_activity": "long"});
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("Long run acceptable"));
+        assert!(
+            output.next_actions.iter().any(|a| a.contains("Fuel early")),
+            "Expected long next action but got: {:?}",
+            output.next_actions
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_for_activity_race() {
+        let handler = AssessRecoveryHandler::new();
+        let client = Arc::new(make_good_client());
+        let input = json!({"for_activity": "race"});
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("Race-ready"));
+        assert!(
+            output.next_actions.iter().any(|a| a.contains("Recheck")),
+            "Expected race next action but got: {:?}",
+            output.next_actions
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_intensity_not_ready() {
+        let handler = AssessRecoveryHandler::new();
+        let client = Arc::new(
+            MockIntervalsClient::builder()
+                .with_wellness(json!([
+                    {"sleep_hours": 6.0, "resting_hr": 50.0, "hrv": 70.0}
+                ]))
+                .with_fitness_summary(json!({"form": 0.0}))
+                .with_activities(vec![ActivitySummary {
+                    id: "act-1".into(),
+                    name: Some("Test".into()),
+                    start_date_local: "2026-05-20".into(),
+                    ..Default::default()
+                }]),
+        );
+        let input = json!({"for_activity": "intensity"});
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("Hold intensity"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_long_not_ready() {
+        let handler = AssessRecoveryHandler::new();
+        let client = Arc::new(
+            MockIntervalsClient::builder()
+                .with_wellness(json!([
+                    {"sleep_hours": 6.0, "resting_hr": 50.0, "hrv": 70.0}
+                ]))
+                .with_fitness_summary(json!({"form": -25.0}))
+                .with_activities(vec![ActivitySummary {
+                    id: "act-1".into(),
+                    name: Some("Test".into()),
+                    start_date_local: "2026-05-20".into(),
+                    ..Default::default()
+                }]),
+        );
+        let input = json!({"for_activity": "long"});
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("Trim the long day"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_race_not_ready() {
+        let handler = AssessRecoveryHandler::new();
+        let client = Arc::new(
+            MockIntervalsClient::builder()
+                .with_wellness(json!([
+                    {"sleep_hours": 8.0, "resting_hr": 50.0, "hrv": 70.0}
+                ]))
+                .with_fitness_summary(json!({"form": 0.0}))
+                .with_activities(vec![ActivitySummary {
+                    id: "act-1".into(),
+                    name: Some("Test".into()),
+                    start_date_local: "2026-05-20".into(),
+                    ..Default::default()
+                }]),
+        );
+        let input = json!({"for_activity": "race"});
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("Not race-ready"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_with_key_workout_upcoming() {
+        let handler = AssessRecoveryHandler::new();
+        let client = Arc::new(make_good_client().with_upcoming_workouts(json!([
+            {"name": "Race: 10k TT", "start_date_local": "2026-05-25"}
+        ])));
+        let input = json!({});
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        assert!(
+            output.suggestions.iter().any(|s| s.contains("Key workout")),
+            "Expected key workout suggestion but got: {:?}",
+            output.suggestions
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_with_non_key_upcoming() {
+        let handler = AssessRecoveryHandler::new();
+        let client = Arc::new(make_good_client().with_upcoming_workouts(json!([
+            {"name": "Easy Recovery Run", "start_date_local": "2026-05-25"}
+        ])));
+        let input = json!({});
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        assert!(
+            !output.suggestions.iter().any(|s| s.contains("Key workout")),
+            "Expected no key workout suggestion for non-key workout"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_recovery_index_unavailable() {
+        let handler = AssessRecoveryHandler::new();
+        let client = Arc::new(
+            MockIntervalsClient::builder()
+                .with_wellness(json!([
+                    {"sleep_hours": 8.0, "resting_hr": 50.0}
+                ]))
+                .with_fitness_summary(json!({"form": 15.0}))
+                .with_activities(vec![ActivitySummary {
+                    id: "act-1".into(),
+                    name: Some("Test".into()),
+                    start_date_local: "2026-05-20".into(),
+                    ..Default::default()
+                }]),
+        );
+        let input = json!({});
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(
+            content_str.contains("Recovery Index unavailable"),
+            "Expected recovery index note but got: {}",
+            content_str
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_include_wellness_false() {
+        let handler = AssessRecoveryHandler::new();
+        // Even without wellness data, the mock needs a valid response for
+        // get_wellness. When include_wellness is false, fetch_recovery_data
+        // skips the wellness call, so any value works (won't be fetched).
+        let client = Arc::new(
+            MockIntervalsClient::builder()
+                .with_fitness_summary(json!({"form": 15.0}))
+                .with_activities(vec![ActivitySummary {
+                    id: "act-1".into(),
+                    name: Some("Test".into()),
+                    start_date_local: "2026-05-20".into(),
+                    ..Default::default()
+                }]),
+        );
+        let input = json!({"include_wellness": false});
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        // With wellness disabled, recovery metrics will use default zeros
+        assert!(content_str.contains("Recovery Assessment"));
+        assert!(!content_str.contains("Recovery Index"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_no_upcoming_workouts() {
+        let handler = AssessRecoveryHandler::new();
+        // Default mock returns json!([]) for upcoming workouts (empty array)
+        let client = Arc::new(make_good_client());
+        let input = json!({});
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        assert!(
+            !output.suggestions.iter().any(|s| s.contains("Key workout")),
+            "Expected no key workout suggestion with empty upcoming"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_period_days_explicit() {
+        let handler = AssessRecoveryHandler::new();
+        let client = Arc::new(make_good_client());
+        let input = json!({"period_days": 14});
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_execute_upcoming_workouts_error() {
+        let handler = AssessRecoveryHandler::new();
+        let client = Arc::new(
+            make_good_client()
+                .with_upcoming_workouts_error(IntervalsError::from_status(500, "server error")),
+        );
+        let input = json!({});
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        // upcoming is None (error swallowed by .ok()), so no key workout suggestion
+        assert!(
+            !output.suggestions.iter().any(|s| s.contains("Key workout")),
+            "Expected no key workout suggestion when upcoming errors"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_red_flags_with_empty_flags_shows_none_detected() {
+        let handler = AssessRecoveryHandler::new();
+        let client = Arc::new(make_good_client());
+        let input = json!({});
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("None detected"));
+        assert!(!content_str.contains("Red Flags Detected"));
     }
 }

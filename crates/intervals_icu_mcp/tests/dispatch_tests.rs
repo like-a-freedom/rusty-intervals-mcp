@@ -683,3 +683,289 @@ async fn test_dispatch_curve_422_returns_upstream_error_without_local_augmentati
     assert!(!content.contains("likely_wrong_tool_or_params"));
     assert!(!content.contains("do_not_retry_same_arguments"));
 }
+
+#[tokio::test]
+async fn test_dispatch_compact_array_with_fields() {
+    let mock_server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/v1/athlete/test_athlete/activities"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            {"id": "1", "name": "Run", "description": "Morning run", "distance": 5000},
+            {"id": "2", "name": "Ride", "description": "Evening ride", "distance": 20000}
+        ])))
+        .mount(&mock_server)
+        .await;
+
+    let operation = with_path_param(
+        create_test_operation(
+            "listActivities",
+            reqwest::Method::GET,
+            "/api/v1/athlete/{id}/activities",
+        ),
+        "id",
+        true,
+    );
+
+    let args = Some(
+        json!({
+            "compact": true,
+            "fields": ["id", "name"]
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+    );
+
+    let result = intervals_icu_mcp::dynamic::dispatch_operation(
+        &reqwest::Client::new(),
+        &mock_server.uri(),
+        "test_athlete",
+        "test_api_key",
+        &operation,
+        args.as_ref(),
+    )
+    .await;
+
+    assert!(result.is_ok());
+    let response = result.unwrap();
+    let content = serde_json::to_string(&response.content).unwrap();
+
+    assert!(content.contains("1"), "id value 1 should be present");
+    assert!(content.contains("Run"), "name Run should be present");
+    assert!(!content.contains("Morning run"), "description filtered out");
+    assert!(!content.contains("20000"), "distance filtered out");
+}
+
+#[tokio::test]
+async fn test_dispatch_compact_array_without_fields() {
+    let mock_server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/v1/athlete/test_athlete/activities"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            {"id": "1", "name": "Run", "distance": 5000},
+            {"id": "2", "name": "Ride", "distance": 20000}
+        ])))
+        .mount(&mock_server)
+        .await;
+
+    let operation = with_path_param(
+        create_test_operation(
+            "listActivities",
+            reqwest::Method::GET,
+            "/api/v1/athlete/{id}/activities",
+        ),
+        "id",
+        true,
+    );
+
+    let args = Some(
+        json!({
+            "compact": true
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+    );
+
+    let result = intervals_icu_mcp::dynamic::dispatch_operation(
+        &reqwest::Client::new(),
+        &mock_server.uri(),
+        "test_athlete",
+        "test_api_key",
+        &operation,
+        args.as_ref(),
+    )
+    .await;
+
+    assert!(result.is_ok());
+    let response = result.unwrap();
+    let content = serde_json::to_string(&response.content).unwrap();
+
+    // Without fields filter, all values pass through
+    assert!(content.contains("1"));
+    assert!(content.contains("Run"));
+    assert!(content.contains("5000"));
+}
+
+#[tokio::test]
+async fn test_dispatch_compact_scalar_body() {
+    let mock_server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/v1/athlete/test_athlete/status"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!("healthy")))
+        .mount(&mock_server)
+        .await;
+
+    let operation = with_path_param(
+        create_test_operation(
+            "getStatus",
+            reqwest::Method::GET,
+            "/api/v1/athlete/{id}/status",
+        ),
+        "id",
+        true,
+    );
+
+    let args = Some(
+        json!({
+            "compact": true
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+    );
+
+    let result = intervals_icu_mcp::dynamic::dispatch_operation(
+        &reqwest::Client::new(),
+        &mock_server.uri(),
+        "test_athlete",
+        "test_api_key",
+        &operation,
+        args.as_ref(),
+    )
+    .await;
+
+    assert!(result.is_ok());
+    let response = result.unwrap();
+    let content = serde_json::to_string(&response.content).unwrap();
+
+    assert!(content.contains("healthy"));
+}
+
+#[tokio::test]
+async fn test_dispatch_body_only_false_with_200() {
+    let mock_server = MockServer::start().await;
+
+    let expected_body = json!({
+        "id": "test_athlete",
+        "name": "Test User"
+    });
+
+    Mock::given(method("GET"))
+        .and(path("/api/v1/athlete/test_athlete/profile"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&expected_body))
+        .mount(&mock_server)
+        .await;
+
+    let operation = with_path_param(
+        create_test_operation(
+            "getProfile",
+            reqwest::Method::GET,
+            "/api/v1/athlete/{id}/profile",
+        ),
+        "id",
+        false,
+    );
+
+    let args = Some(
+        json!({
+            "id": "test_athlete",
+            "body_only": false
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+    );
+
+    let result = intervals_icu_mcp::dynamic::dispatch_operation(
+        &reqwest::Client::new(),
+        &mock_server.uri(),
+        "test_athlete",
+        "test_api_key",
+        &operation,
+        args.as_ref(),
+    )
+    .await;
+
+    assert!(result.is_ok());
+    let response = result.unwrap();
+    let content = serde_json::to_string(&response.content).unwrap();
+
+    assert!(content.contains("Test User"), "user name should appear");
+    // Status code 200 appears as a number in the response
+    assert!(content.contains("200"), "status code 200 should appear");
+}
+
+#[tokio::test]
+async fn test_dispatch_plain_text_response() {
+    let mock_server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/v1/athlete/test_athlete/report"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string("raw text response")
+                .insert_header("content-type", "text/plain"),
+        )
+        .mount(&mock_server)
+        .await;
+
+    let operation = with_path_param(
+        create_test_operation(
+            "getReport",
+            reqwest::Method::GET,
+            "/api/v1/athlete/{id}/report",
+        ),
+        "id",
+        true,
+    );
+
+    let args = Some(json!({}).as_object().unwrap().clone());
+
+    let result = intervals_icu_mcp::dynamic::dispatch_operation(
+        &reqwest::Client::new(),
+        &mock_server.uri(),
+        "test_athlete",
+        "test_api_key",
+        &operation,
+        args.as_ref(),
+    )
+    .await;
+
+    assert!(result.is_ok());
+    let response = result.unwrap();
+    let content = serde_json::to_string(&response.content).unwrap();
+
+    assert!(content.contains("raw text response"));
+}
+
+#[tokio::test]
+async fn test_dispatch_ext_path_param_default() {
+    let mock_server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/v1/athlete/test_athlete/zones"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "zone": "endurance"
+        })))
+        .mount(&mock_server)
+        .await;
+
+    let mut operation = with_path_param(
+        create_test_operation(
+            "getZones",
+            reqwest::Method::GET,
+            "/api/v1/athlete/{id}/zones{ext}",
+        ),
+        "id",
+        true,
+    );
+    operation = with_path_param(operation, "ext", false);
+
+    let args = Some(json!({}).as_object().unwrap().clone());
+
+    let result = intervals_icu_mcp::dynamic::dispatch_operation(
+        &reqwest::Client::new(),
+        &mock_server.uri(),
+        "test_athlete",
+        "test_api_key",
+        &operation,
+        args.as_ref(),
+    )
+    .await;
+
+    assert!(result.is_ok());
+}

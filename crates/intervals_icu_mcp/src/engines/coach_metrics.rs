@@ -2358,4 +2358,58 @@ mod tests {
         let variance = compute_z2_hr_variance(&hr, 120.0, 140.0);
         assert!(variance.is_none());
     }
+
+    #[test]
+    fn compute_consistency_index_perfect() {
+        let m = compute_consistency_index(5, 5);
+        assert_eq!(m.ratio, Some(1.0));
+        assert_eq!(m.state.as_deref(), Some("excellent"));
+    }
+
+    #[test]
+    fn compute_consistency_index_zero_planned() {
+        let m = compute_consistency_index(0, 0);
+        assert_eq!(m.ratio, None);
+        assert_eq!(m.state, None);
+    }
+
+    #[test]
+    fn compute_consistency_index_above_100() {
+        let m = compute_consistency_index(6, 5);
+        assert_eq!(m.ratio, Some(1.2));
+        assert_eq!(m.state.as_deref(), Some("excellent"));
+    }
+
+    #[test]
+    fn compute_load_management_empty() {
+        let metrics = compute_load_management_metrics(&[], None);
+        assert!(metrics.is_none());
+    }
+
+    #[test]
+    fn compute_ndli_7d_empty_returns_not_supported() {
+        let metrics = compute_ndli_7d(&HashMap::new(), &[]);
+        assert!(!metrics.supported);
+    }
+
+    #[test]
+    fn compute_heat_metrics_7d_empty_returns_default() {
+        let metrics = compute_heat_metrics_7d(&HashMap::new(), &[]);
+        assert!(!metrics.supported);
+    }
+
+    #[test]
+    fn compute_acwr_empty_returns_none() {
+        assert!(compute_acwr(&[]).is_none());
+    }
+
+    #[test]
+    fn compute_monotony_empty_returns_none() {
+        assert!(compute_monotony(&[]).is_none());
+    }
+
+    #[test]
+    fn compute_monotony_constant_load() {
+        assert_eq!(compute_monotony(&[100.0; 7]), Some(10.0));
+    }
 }

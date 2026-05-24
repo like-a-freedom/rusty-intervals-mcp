@@ -166,7 +166,10 @@ impl DynamicRuntime {
 
     /// Ensure the registry is loaded, refreshing if necessary.
     pub async fn ensure_registry(&self) -> Result<Arc<DynamicRegistry>, ErrorData> {
-        if let Some(existing) = self.registry.read().await.clone() {
+        // Clone the registry outside the if-let to drop the read lock before
+        // attempting a write lock in the refresh path below.
+        let maybe_registry = self.registry.read().await.clone();
+        if let Some(existing) = maybe_registry {
             if !self.should_attempt_refresh().await {
                 tracing::debug!(
                     refresh_interval_secs = self.config.refresh_interval.as_secs(),
@@ -307,6 +310,7 @@ async fn load_spec_from_source(
 mod tests {
     use super::*;
     use crate::test_support::{DYNAMIC_RUNTIME_ENV_VARS, EnvVarGuard};
+    use std::sync::atomic::Ordering;
     use uuid::Uuid;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -462,8 +466,6 @@ mod tests {
 
     #[test]
     fn test_runtime_cached_tool_count() {
-        use std::sync::atomic::Ordering;
-
         let config = DynamicRuntimeConfig::builder().build();
         let runtime = DynamicRuntime::new(config);
 
@@ -679,5 +681,288 @@ mod tests {
     fn test_constants() {
         assert_eq!(OPENAPI_DEFAULT_PATH, "/api/v1/docs");
         assert_eq!(OPENAPI_FETCH_TIMEOUT_SECS, 10);
+    }
+
+    // ========================================================================
+    // from_env with all env vars
+    // ========================================================================
+
+    #[test]
+    fn test_config_from_env_all_vars() {
+        let _guard = EnvVarGuard::acquire_blocking(DYNAMIC_RUNTIME_ENV_VARS);
+
+        unsafe {
+            std::env::set_var("INTERVALS_ICU_BASE_URL", "https://custom.example.com");
+            std::env::set_var("INTERVALS_ICU_ATHLETE_ID", "athlete-42");
+            std::env::set_var("INTERVALS_ICU_API_KEY", "secret-key");
+            std::env::set_var(
+                "INTERVALS_ICU_OPENAPI_SPEC",
+                "https://spec.example.com/openapi.json",
+            );
+            std::env::set_var("INTERVALS_ICU_SPEC_REFRESH_SECS", "120");
+        }
+
+        let config = DynamicRuntimeConfig::from_env();
+        assert_eq!(config.base_url, "https://custom.example.com");
+        assert_eq!(config.athlete_id, "athlete-42");
+        assert_eq!(config.api_key, "secret-key");
+        assert_eq!(
+            config.spec_source,
+            Some("https://spec.example.com/openapi.json".to_string())
+        );
+        assert_eq!(config.refresh_interval, Duration::from_secs(120));
+    }
+
+    #[test]
+    fn test_config_from_env_invalid_refresh_secs() {
+        let _guard = EnvVarGuard::acquire_blocking(DYNAMIC_RUNTIME_ENV_VARS);
+
+        unsafe {
+            std::env::set_var("INTERVALS_ICU_SPEC_REFRESH_SECS", "not-a-number");
+        }
+
+        let config = DynamicRuntimeConfig::from_env();
+        assert_eq!(config.refresh_interval, Duration::from_secs(300));
+    }
+
+    // ========================================================================
+    // ensure_registry — cache miss, default remote path (no spec_source)
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_ensure_registry_cache_miss_remote_success() {
+        let mock_server = start_mock_openapi_server().await;
+        let config = DynamicRuntimeConfig::builder()
+            .base_url(mock_server.uri().trim_end_matches('/').to_string())
+            .build();
+
+        let runtime = DynamicRuntime::new(config);
+
+        let registry = runtime
+            .ensure_registry()
+            .await
+            .expect("remote spec through base_url should succeed");
+        assert!(!registry.is_empty());
+    }
+
+    // ========================================================================
+    // ensure_registry — cache hit, no refresh needed
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_ensure_registry_cache_hit_no_refresh() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/api/v1/docs"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(minimal_openapi_spec()))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let config = DynamicRuntimeConfig::builder()
+            .spec_source(format!("{}/api/v1/docs", mock_server.uri()))
+            .refresh_interval(Duration::from_secs(3600))
+            .build();
+        let runtime = DynamicRuntime::new(config);
+
+        let first = runtime
+            .ensure_registry()
+            .await
+            .expect("first call should succeed");
+
+        let second = runtime
+            .ensure_registry()
+            .await
+            .expect("second call should succeed");
+        assert!(!second.is_empty());
+        assert!(Arc::ptr_eq(&first, &second));
+    }
+
+    // ========================================================================
+    // ensure_registry — cache hit + refresh succeeds (file-based)
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_ensure_registry_cache_hit_refresh_success() {
+        // Use zero refresh interval to force refresh without manually aging timestamp
+        let spec_path = write_temp_openapi_spec().await;
+        let config = DynamicRuntimeConfig::builder()
+            .spec_source(spec_path.to_string_lossy())
+            .refresh_interval(Duration::from_secs(0))
+            .build();
+        let runtime = DynamicRuntime::new(config);
+
+        let first = runtime
+            .ensure_registry()
+            .await
+            .expect("first call should succeed");
+
+        let second = runtime
+            .ensure_registry()
+            .await
+            .expect("second call should succeed");
+        assert!(!second.is_empty());
+        assert!(
+            !Arc::ptr_eq(&first, &second),
+            "refresh should allocate a new Arc"
+        );
+
+        tokio::fs::remove_file(&spec_path)
+            .await
+            .expect("should clean up temp spec file");
+    }
+
+    // ========================================================================
+    // ensure_registry — cache hit + refresh fails, falls back to cached
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_ensure_registry_cache_hit_refresh_fails_fallback() {
+        let spec_path = write_temp_openapi_spec().await;
+        let config = DynamicRuntimeConfig::builder()
+            .spec_source(spec_path.to_string_lossy())
+            .refresh_interval(Duration::from_secs(1))
+            .build();
+        let runtime = DynamicRuntime::new(config);
+
+        let first = runtime
+            .ensure_registry()
+            .await
+            .expect("first call should succeed");
+        assert!(!first.is_empty());
+
+        tokio::fs::remove_file(&spec_path)
+            .await
+            .expect("should remove temp spec file");
+
+        {
+            let mut guard = runtime.last_refresh_attempt.lock().await;
+            *guard = Some(Instant::now() - Duration::from_secs(3600));
+        }
+
+        let second = runtime
+            .ensure_registry()
+            .await
+            .expect("should fall back to cached registry");
+        assert!(!second.is_empty());
+        assert!(Arc::ptr_eq(&first, &second));
+    }
+
+    // ========================================================================
+    // load_spec_from_source — HTTP error status
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_load_spec_from_source_http_error_status() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/api/v1/docs"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&mock_server)
+            .await;
+
+        let http = reqwest::Client::new();
+        let result =
+            load_spec_from_source(&http, &format!("{}/api/v1/docs", mock_server.uri())).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("unexpected status"));
+    }
+
+    // ========================================================================
+    // load_spec_from_source — local file parse error
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_load_spec_from_source_file_parse_error() {
+        let http = reqwest::Client::new();
+        let path = std::env::temp_dir().join(format!("invalid_spec_{}.json", Uuid::new_v4()));
+        tokio::fs::write(&path, b"not valid json")
+            .await
+            .expect("should write invalid json");
+
+        let result = load_spec_from_source(&http, &path.to_string_lossy()).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("json parse error"));
+
+        let _ = tokio::fs::remove_file(&path).await;
+    }
+
+    // ========================================================================
+    // should_attempt_refresh — direct tests
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_should_attempt_refresh_zero_interval() {
+        let config = DynamicRuntimeConfig::builder()
+            .refresh_interval(Duration::from_secs(0))
+            .build();
+        let runtime = DynamicRuntime::new(config);
+
+        assert!(runtime.should_attempt_refresh().await);
+        assert!(runtime.should_attempt_refresh().await);
+    }
+
+    #[tokio::test]
+    async fn test_should_attempt_refresh_recent_refresh() {
+        let config = DynamicRuntimeConfig::builder()
+            .refresh_interval(Duration::from_secs(300))
+            .build();
+        let runtime = DynamicRuntime::new(config);
+
+        {
+            let mut guard = runtime.last_refresh_attempt.lock().await;
+            *guard = Some(Instant::now());
+        }
+
+        assert!(!runtime.should_attempt_refresh().await);
+    }
+
+    #[tokio::test]
+    async fn test_should_attempt_refresh_no_prior() {
+        let config = DynamicRuntimeConfig::builder()
+            .refresh_interval(Duration::from_secs(300))
+            .build();
+        let runtime = DynamicRuntime::new(config);
+
+        assert!(runtime.should_attempt_refresh().await);
+    }
+
+    #[tokio::test]
+    async fn test_should_attempt_refresh_update_on_old_timestamp() {
+        let config = DynamicRuntimeConfig::builder()
+            .refresh_interval(Duration::from_secs(1))
+            .build();
+        let runtime = DynamicRuntime::new(config);
+
+        {
+            let mut guard = runtime.last_refresh_attempt.lock().await;
+            *guard = Some(Instant::now() - Duration::from_secs(3600));
+        }
+
+        assert!(runtime.should_attempt_refresh().await);
+
+        let guard = runtime.last_refresh_attempt.lock().await;
+        assert!(guard.is_some());
+    }
+
+    // ========================================================================
+    // ensure_registry — cached tool count updated on refresh
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_ensure_registry_cached_tool_count_updated() {
+        let mock_server = start_mock_openapi_server().await;
+        let config = DynamicRuntimeConfig::builder()
+            .spec_source(format!("{}/api/v1/docs", mock_server.uri()))
+            .build();
+        let runtime = DynamicRuntime::new(config);
+
+        assert_eq!(runtime.cached_tool_count(), 0);
+
+        let _registry = runtime.ensure_registry().await.unwrap();
+        assert!(runtime.cached_tool_count() > 0);
+        assert!(runtime.cached_tool_count.load(Ordering::Relaxed) > 0);
     }
 }
