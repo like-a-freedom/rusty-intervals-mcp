@@ -14,6 +14,7 @@ use crate::engines::constants::{
 };
 
 /// CTL ramp rate threshold for load pressure (>8 CTL/week = rapid ramp).
+/// Source: Montis.icu Coach V5 — CTL ramp > 8 / week indicates rapid overload (ADE v1).
 const RAMP_RATE_THRESHOLD: f64 = 8.0;
 
 #[derive(Debug, Clone, Copy, PartialEq)]

@@ -126,10 +126,10 @@ pub struct MetricComparison {
 pub struct TrendWindows;
 
 impl TrendWindows {
-    pub const SHORT: i32 = 7; // 7 days
-    pub const MEDIUM: i32 = 30; // 30 days
-    pub const LONG: i32 = 90; // 90 days
-    pub const YEAR: i32 = 365; // 365 days
+    pub const SHORT: i32 = 7; // 7 days // Source: Standard 7-day rolling window for short-term training trends.
+    pub const MEDIUM: i32 = 30; // 30 days // Source: Standard 30-day rolling window for medium-term fitness trends.
+    pub const LONG: i32 = 90; // 90 days // Source: Standard 90-day rolling window for long-term periodization trends.
+    pub const YEAR: i32 = 365; // 365 days // Source: 365-day annual window for year-over-year comparisons.
 }
 
 /// Analysis Engine

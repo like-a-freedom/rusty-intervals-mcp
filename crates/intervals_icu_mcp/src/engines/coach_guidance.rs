@@ -15,6 +15,7 @@ use crate::engines::constants::{
 // =============================================================================
 
 /// Recovery index: alert threshold (< this value)
+/// Source: Montis.icu Coach V5 — recovery index < 0.6 triggers low-recovery alert.
 const RECOVERY_INDEX_ALERT: f64 = 0.6;
 
 // =============================================================================
@@ -22,15 +23,19 @@ const RECOVERY_INDEX_ALERT: f64 = 0.6;
 // =============================================================================
 
 /// Weekly average hours: low volume threshold (< this value)
+/// Source: Montis.icu Coach V5 — < 5 h / week indicates insufficient training volume.
 pub const WEEKLY_AVG_LOW_HOURS: f64 = 5.0;
 /// Weekly average hours: high volume threshold (> this value)
+/// Source: Montis.icu Coach V5 — > 15 h / week indicates high training volume requiring monitoring.
 pub const WEEKLY_AVG_HIGH_HOURS: f64 = 15.0;
 /// Monotony: repetitive-stress threshold (Foster 1998 recommends ≤ 2.0; Seiler uses 2.5).
 /// Values above this indicate insufficient training variety → elevated injury/overtraining risk.
 const MONOTONY_ALERT: f64 = 2.5;
 /// Fatigue Index: high fatigue alert threshold (> this value)
+/// Source: Foster, 1998 — fatigue index > 2.5 indicates high training strain.
 const FATIGUE_INDEX_ALERT: f64 = 2.5;
 /// Durability Index: low durability alert threshold (< this value)
+/// Source: Montis.icu Coach V5 — durability index < 0.85 indicates poor fatigue resistance.
 const DURABILITY_INDEX_ALERT: f64 = 0.85;
 
 // =============================================================================

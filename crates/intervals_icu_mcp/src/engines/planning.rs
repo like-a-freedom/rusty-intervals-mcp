@@ -105,17 +105,24 @@ pub struct PeriodBlock {
 pub struct PeriodizationRules;
 
 impl PeriodizationRules {
-    /// Maximum weekly volume progression (7-10%)
+    /// Maximum weekly volume progression (7-10%).
+    /// Source: 10% rule (ACSM, Bompa) — standard weekly training volume progression.
     pub const MAX_WEEKLY_PROGRESSION: f32 = 0.10;
 
-    /// Recovery week volume reduction (40-60%)
+    /// Recovery week volume reduction (40-60%).
+    /// Source: Empirical recovery week range — 40-60% reduction.
     pub const RECOVERY_WEEK_REDUCTION: f32 = 0.50;
 
-    /// Recovery week frequency (every 3-4 weeks)
+    /// Recovery week frequency (every 3-4 weeks).
+    /// Source: Every 3-4 weeks (Bompa periodization model).
     pub const RECOVERY_WEEK_FREQUENCY: u8 = 4;
 
-    /// Base period zone distribution (85-95% Z1-Z2)
+    /// Base period Z1-Z2 lower bound (85%).
+    /// Source: 85-95% Z1-Z2 in base period per Seiler polarised model.
     pub const BASE_PERIOD_Z1Z2_MIN: f32 = 0.85;
+
+    /// Base period Z1-Z2 upper bound (95%).
+    /// Source: 85-95% Z1-Z2 in base period per Seiler polarised model.
     pub const BASE_PERIOD_Z1Z2_MAX: f32 = 0.95;
 
     /// Taper protocols by distance

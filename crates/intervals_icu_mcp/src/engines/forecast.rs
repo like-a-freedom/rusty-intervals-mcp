@@ -14,19 +14,19 @@ const CTL_TIME_CONSTANT: f64 = 42.0;
 /// ATL time constant (7 days = 1 week half-life).
 const ATL_TIME_CONSTANT: f64 = 7.0;
 
-/// Default TSS values by training intensity.
-/// These are rough defaults; personalized values should scale from athlete's CTL.
-const DEFAULT_TSS_EASY: f64 = 50.0;
-const DEFAULT_TSS_TEMPO: f64 = 100.0;
-const DEFAULT_TSS_HARD: f64 = 150.0;
-const DEFAULT_TSS_RACE: f64 = 250.0;
+/// CTL-based load multipliers for personalized TSS estimation.
+/// Source: Montis.icu Coach V5 — easy ~0.5×CTL, tempo ~1.0×CTL, hard ~1.5×CTL, race ~2.5×CTL.
+const LOAD_MULTIPLIER_EASY: f64 = 0.5;
+const LOAD_MULTIPLIER_TEMPO: f64 = 1.0;
+const LOAD_MULTIPLIER_HARD: f64 = 1.5;
+const LOAD_MULTIPLIER_RACE: f64 = 2.5;
+const LOAD_MULTIPLIER_FALLBACK: f64 = 0.75;
 
 /// Taper efficiency clamp bounds.
+/// Source: Banister taper model — minimum efficiency floor (no supercompensation).
 const TAPER_EFFICIENCY_MIN: f64 = 0.0;
+/// Source: Banister taper model — max efficiency ceiling (empirical 2× baseline).
 const TAPER_EFFICIENCY_MAX: f64 = 2.0;
-
-/// Fallback intensity multiplier for unrecognized labels.
-const FALLBACK_INTENSITY_MULTIPLIER: f64 = 1.5;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TsbProjection {
@@ -74,16 +74,17 @@ pub fn project_tsb(current_ctl: f64, current_atl: f64, daily_loads: &[f64]) -> V
     results
 }
 
-/// Parameterized load values by intensity.
-/// Note: these are rough defaults. For personalized forecasting,
-/// scale from athlete's CTL (e.g., easy = 0.5×CTL, hard = 1.5×CTL).
-pub fn parameterized_load(intensity: &str) -> f64 {
+/// Parameterized load values by intensity, scaled from athlete's CTL.
+/// Multipliers: easy = 0.5×CTL, tempo = 1.0×CTL, hard = 1.5×CTL, race = 2.5×CTL.
+/// CTL floor at 1.0 to avoid degenerate zero loads.
+pub fn parameterized_load(intensity: &str, ctl: f64) -> f64 {
+    let ctl = ctl.max(1.0);
     match intensity {
-        "easy" => DEFAULT_TSS_EASY,
-        "tempo" => DEFAULT_TSS_TEMPO,
-        "hard" => DEFAULT_TSS_HARD,
-        "race" => DEFAULT_TSS_RACE,
-        _ => DEFAULT_TSS_EASY * FALLBACK_INTENSITY_MULTIPLIER,
+        "easy" => ctl * LOAD_MULTIPLIER_EASY,
+        "tempo" => ctl * LOAD_MULTIPLIER_TEMPO,
+        "hard" => ctl * LOAD_MULTIPLIER_HARD,
+        "race" => ctl * LOAD_MULTIPLIER_RACE,
+        _ => ctl * LOAD_MULTIPLIER_FALLBACK,
     }
 }
 
@@ -143,11 +144,28 @@ mod tests {
     }
 
     #[test]
-    fn parameterized_load_values() {
-        assert!((parameterized_load("easy") - 50.0).abs() < 0.01);
-        assert!((parameterized_load("tempo") - 100.0).abs() < 0.01);
-        assert!((parameterized_load("hard") - 150.0).abs() < 0.01);
-        assert!((parameterized_load("race") - 250.0).abs() < 0.01);
+    fn parameterized_load_values_at_ctl_100() {
+        assert!((parameterized_load("easy", 100.0) - 50.0).abs() < 0.01);
+        assert!((parameterized_load("tempo", 100.0) - 100.0).abs() < 0.01);
+        assert!((parameterized_load("hard", 100.0) - 150.0).abs() < 0.01);
+        assert!((parameterized_load("race", 100.0) - 250.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn parameterized_load_scales_with_ctl() {
+        assert!((parameterized_load("easy", 50.0) - 25.0).abs() < 0.01);
+        assert!((parameterized_load("hard", 120.0) - 180.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn parameterized_load_fallback_for_unknown() {
+        let val = parameterized_load("unknown", 100.0);
+        assert!((val - 75.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn parameterized_load_zero_ctl_uses_floor() {
+        assert!((parameterized_load("easy", 0.0) - 0.5).abs() < 0.01);
     }
 
     #[test]
