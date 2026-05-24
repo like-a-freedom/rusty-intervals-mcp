@@ -3,6 +3,12 @@ use crate::domains::coach::{
     HeatMetrics, LoadManagementMetrics, NdliMetrics, TrendMetrics, VolumeMetrics, WellnessMetrics,
     WorkoutMetricsContext,
 };
+use crate::engines::constants::{
+    ACWR_OVERREACH_RATIO, ACWR_SAFE_LOWER, ACWR_SAFE_UPPER, HRV_BASELINE_WINDOW,
+    HRV_RECOVERY_RATIO, HRV_SUPPRESSION_RATIO, HRV_TREND_MIN_VALUES, IDEAL_SLEEP_HOURS,
+    NDLI_AMBER_DAYS, NDLI_RED_DAYS, SLEEP_CLAMP_MAX, TSB_FRESH, TSB_LOAD_PRESSURE,
+    WDRM_HIGH_DEPLETION_PCT, WDRM_MAX_DEPLETION_PCT,
+};
 use intervals_icu_client::ActivitySummary;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -20,7 +26,6 @@ const STRESS_KEYS: &[&str] = &["stress"];
 const FATIGUE_KEYS: &[&str] = &["fatigue"];
 const READINESS_KEYS: &[&str] = &["readiness"];
 const RECENT_WELLNESS_WINDOW: usize = 7;
-const HRV_BASELINE_WINDOW: usize = 28;
 const HRV_WATCH_DROP_PCT: f64 = -6.0;
 const HRV_SUPPRESSED_DROP_PCT: f64 = -12.0;
 const EFFICIENCY_FACTOR_KEYS: &[&str] = &["icu_efficiency_factor", "efficiency_factor"];
@@ -45,37 +50,12 @@ const NDLI_RUNNING_TSS_PROXY_THRESHOLD: f64 = 80.0;
 /// NDLI: IF normalization threshold — values > 2.0 are assumed to be % not decimal.
 const NDLI_IF_NORMALIZATION_THRESHOLD: f64 = 2.0;
 
-/// NDLI: Days threshold for "red" (overload) state.
-const NDLI_RED_DAYS: usize = 4;
-
-/// NDLI: Days threshold for "amber" (watch) state.
-const NDLI_AMBER_DAYS: usize = 3;
-
-/// WDRM: High depletion session threshold (60% of W′).
-const WDRM_HIGH_DEPLETION_PCT: f64 = 0.60;
-
-/// WDRM: Maximum depletion percentage clip (150% of W′).
-const WDRM_MAX_DEPLETION_PCT: f64 = 1.5;
-
 /// WDRM: Minimum Z2 points for HR variance computation.
 const Z2_MIN_POINTS: usize = 10;
 
 // =============================================================================
 // P1 — Coaching Intelligence Constants
 // =============================================================================
-
-/// HRV: Suppression threshold (ratio < 0.88 × baseline).
-/// Source: Front. Physiol. 2025, Nature Sci Reports 2025 — RMSSD clinical reliability.
-const HRV_SUPPRESSION_RATIO: f64 = 0.88;
-
-/// HRV: Recovery threshold (ratio > 1.15 × baseline).
-const HRV_RECOVERY_RATIO: f64 = 1.15;
-
-/// HRV: Minimum trend values for slope computation.
-const HRV_TREND_MIN_VALUES: usize = 3;
-
-/// HRV: Ideal sleep hours for recovery quality normalization.
-const IDEAL_SLEEP_HOURS: f64 = 8.0;
 
 /// HRV: Recovery quality component weights (HRV × 0.4 + RHR × 0.3 + sleep × 0.3).
 const RECOVERY_QUALITY_HRV_WEIGHT: f64 = 0.4;
@@ -101,16 +81,6 @@ const ACWR_ACUTE_LAMBDA: f64 = 2.0 / 8.0;
 
 /// ACWR: Chronic EWMA lambda = 2 / (N + 1) with N = 28.
 const ACWR_CHRONIC_LAMBDA: f64 = 2.0 / 29.0;
-
-/// ACWR: ACWR "watch" threshold (ratio ≤ 1.5).
-/// Above ACWR safe upper (1.3) up to 1.5 = watch zone.
-const ACWR_WATCH_RATIO: f64 = 1.5;
-
-/// ACWR: safe zone lower bound (ratio ≥ 0.8 = underload risk).
-const ACWR_SAFE_LOWER: f64 = 0.8;
-
-/// ACWR: safe zone upper bound (ratio ≤ 1.3 = overreach risk).
-const ACWR_SAFE_UPPER: f64 = 1.3;
 
 /// Decoupling: minimum data points for valid split-half analysis.
 const DECOUPLING_MIN_POINTS: usize = 4;
@@ -166,9 +136,6 @@ const READINESS_STRESS_WEIGHT: f64 = 0.2;
 /// Readiness: fatigue weight in composite score.
 const READINESS_FATIGUE_WEIGHT: f64 = 0.2;
 
-/// Readiness: sleep hours clamp upper bound.
-const READINESS_SLEEP_CLAMP_MAX: f64 = 10.0;
-
 // =============================================================================
 // P2 — Ultra-Sport Constants
 // =============================================================================
@@ -215,11 +182,34 @@ const POWER_CURVE_MILD_GAIN_PCT: f64 = 3.0;
 /// Power curve comparison: moderate gain threshold (%).
 const POWER_CURVE_MODERATE_GAIN_PCT: f64 = 5.0;
 
-/// Forecast: TSB load pressure threshold (also used in interpret_fitness_metrics).
-const TSB_LOAD_PRESSURE_THRESHOLD: f64 = -10.0;
+// =============================================================================
+// Bare-literal extractions (previously inline magic numbers)
+// =============================================================================
 
-/// Forecast: TSB balanced upper (also used in interpret_fitness_metrics).
-const TSB_BALANCED_UPPER: f64 = 10.0;
+/// Minimum weeks floor guard for volume calculations.
+const WEEKS_FLOOR_MIN: f64 = 1.0;
+/// Minimum lookback days for ACWR computation (28 = 4 weeks).
+const ACWR_MIN_LOOKBACK_DAYS: usize = 28;
+/// Minimum lookback days for monotony computation (7 = 1 week).
+const MONOTONY_MIN_LOOKBACK_DAYS: usize = 7;
+/// Rolling window days for load management metrics.
+const LOAD_MGMT_WINDOW_DAYS: usize = 7;
+/// Divisor for stress_tolerance scaling to meaningful units.
+const STRESS_TOLERANCE_DIVISOR: f64 = 100.0;
+/// Sleep hours lower clamp for readiness score.
+const SLEEP_CLAMP_MIN: f64 = 0.0;
+/// Percentage scaling factor for delta calculations.
+const PCT_SCALING_FACTOR: f64 = 100.0;
+/// Seiler polarisation model denominator factor (z1+z3)/(2*z2).
+const POLARISATION_DENOMINATOR_FACTOR: f64 = 2.0;
+/// Power curve decline threshold (< this % = decline).
+const POWER_CURVE_DECLINE_THRESHOLD: f64 = -1.0;
+/// Power curve stable upper threshold (< this % = stable).
+const POWER_CURVE_STABLE_THRESHOLD: f64 = 1.0;
+/// Power curve rotation index averaging factor.
+const POWER_CURVE_ROTATION_AVERAGE: f64 = 2.0;
+/// Running power gap model: speed exponent (cubic = 3).
+const GAP_SPEED_EXPONENT: i32 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TrendSnapshot {
@@ -269,7 +259,7 @@ pub fn derive_volume_metrics(
     total_elevation_gain_m: f64,
     activity_count: usize,
 ) -> VolumeMetrics {
-    let weeks = (window_days as f64 / DAYS_PER_WEEK).max(1.0);
+    let weeks = (window_days as f64 / DAYS_PER_WEEK).max(WEEKS_FLOOR_MIN);
     let total_moving_time_hours = total_moving_time_secs as f64 / SECONDS_PER_HOUR;
 
     VolumeMetrics {
@@ -294,9 +284,9 @@ pub fn interpret_fitness_metrics(
     tsb: Option<f64>,
 ) -> FitnessMetrics {
     let load_state = tsb.map(|value| {
-        if value > TSB_BALANCED_UPPER {
+        if value > TSB_FRESH {
             "fresh".to_string()
-        } else if value < TSB_LOAD_PRESSURE_THRESHOLD {
+        } else if value < TSB_LOAD_PRESSURE {
             "fatigued".to_string()
         } else {
             "neutral".to_string()
@@ -313,7 +303,7 @@ pub fn interpret_fitness_metrics(
 
 #[must_use]
 pub fn compute_acwr(loads: &[f64]) -> Option<AcwrMetrics> {
-    if loads.len() < 28 {
+    if loads.len() < ACWR_MIN_LOOKBACK_DAYS {
         return None;
     }
 
@@ -361,7 +351,7 @@ fn classify_acwr_ratio(ratio: f64) -> &'static str {
         "underloaded"
     } else if ratio <= ACWR_SAFE_UPPER {
         "productive"
-    } else if ratio <= ACWR_WATCH_RATIO {
+    } else if ratio <= ACWR_OVERREACH_RATIO {
         "watch"
     } else {
         "overreaching"
@@ -370,7 +360,7 @@ fn classify_acwr_ratio(ratio: f64) -> &'static str {
 
 #[must_use]
 pub fn compute_monotony(loads_7d: &[f64]) -> Option<f64> {
-    if loads_7d.len() < 7 {
+    if loads_7d.len() < MONOTONY_MIN_LOOKBACK_DAYS {
         return None;
     }
 
@@ -498,7 +488,7 @@ pub fn compute_stress_tolerance(strain: f64, monotony: f64) -> Option<f64> {
     if monotony.abs() < f64::EPSILON {
         None
     } else {
-        Some((strain / monotony) / 100.0)
+        Some((strain / monotony) / STRESS_TOLERANCE_DIVISOR)
     }
 }
 
@@ -523,7 +513,7 @@ pub fn compute_readiness_score(
     let sleep_hours = sleep_hours?;
     let stress = stress?;
     let fatigue = fatigue?;
-    let normalized_sleep = sleep_hours.clamp(0.0, READINESS_SLEEP_CLAMP_MAX);
+    let normalized_sleep = sleep_hours.clamp(SLEEP_CLAMP_MIN, SLEEP_CLAMP_MAX);
     let weighted_sum = mood * READINESS_MOOD_WEIGHT
         + normalized_sleep * READINESS_SLEEP_WEIGHT
         + stress * READINESS_STRESS_WEIGHT
@@ -541,7 +531,7 @@ pub fn compute_load_management_metrics(
 
     let acwr = compute_acwr(loads);
     let last_seven = if loads.len() >= 7 {
-        &loads[loads.len() - 7..]
+        &loads[loads.len() - LOAD_MGMT_WINDOW_DAYS..]
     } else {
         return Some(LoadManagementMetrics {
             acwr,
@@ -600,7 +590,7 @@ pub fn compute_aerobic_decoupling(hr: &[f64], output: &[f64]) -> Option<Decoupli
         return None;
     }
 
-    let raw_pct = ((first_half - second_half) / first_half) * 100.0;
+    let raw_pct = ((first_half - second_half) / first_half) * PCT_SCALING_FACTOR;
     let decoupling_pct = raw_pct.abs();
     let state = classify_decoupling_state(decoupling_pct);
     let durability_state = classify_durability_state(raw_pct, decoupling_pct);
@@ -855,7 +845,7 @@ fn percent_delta(previous: f64, current: f64) -> Option<f64> {
     if previous.abs() < f64::EPSILON {
         None
     } else {
-        Some(((current - previous) / previous) * 100.0)
+        Some(((current - previous) / previous) * PCT_SCALING_FACTOR)
     }
 }
 
@@ -910,7 +900,7 @@ pub fn compute_polarisation(
     let ratio = if z2_pct.abs() < f64::EPSILON {
         None
     } else {
-        Some((z1_pct + z3_pct) / (2.0 * z2_pct))
+        Some((z1_pct + z3_pct) / (POLARISATION_DENOMINATOR_FACTOR * z2_pct))
     };
 
     let state = ratio.map(|r| {
@@ -1155,11 +1145,11 @@ pub fn compare_power_curves(
         if let (Some(c), Some(p)) = (cur, prev)
             && p.abs() > 0.0
         {
-            let delta = ((c - p) / p) * 100.0;
+            let delta = ((c - p) / p) * PCT_SCALING_FACTOR;
             deltas.insert(name.to_string(), delta);
-            let status = if delta < -1.0 {
+            let status = if delta < POWER_CURVE_DECLINE_THRESHOLD {
                 "decline"
-            } else if delta < 1.0 {
+            } else if delta < POWER_CURVE_STABLE_THRESHOLD {
                 "stable"
             } else if delta < POWER_CURVE_MILD_GAIN_PCT {
                 "mild_gain"
@@ -1176,7 +1166,10 @@ pub fn compare_power_curves(
         .p1m
         .zip(current.p5m)
         .zip(current.p20m.zip(current.p60m))
-        .map(|((p1, p5), (p20, p60))| ((p1 + p5) / 2.0) - ((p20 + p60) / 2.0))
+        .map(|((p1, p5), (p20, p60))| {
+            ((p1 + p5) / POWER_CURVE_ROTATION_AVERAGE)
+                - ((p20 + p60) / POWER_CURVE_ROTATION_AVERAGE)
+        })
         .unwrap_or(0.0);
 
     (deltas, rotation_index, statuses)
@@ -1256,7 +1249,7 @@ pub fn compute_wdr_metrics(
 
     let depletion_pct = w_prime
         .filter(|w| *w > 0.0)
-        .map(|w| (max_depletion / w).clamp(0.0, 1.5));
+        .map(|w| (max_depletion / w).clamp(0.0, WDRM_MAX_DEPLETION_PCT));
 
     let joules = if joules_above_ftp > 0.0 {
         Some(joules_above_ftp)
@@ -1353,7 +1346,7 @@ pub fn compute_ndli_7d(
         // Collect mean IF, EF, VI
         if let Some(if_val) = get_number(detail, &["icu_intensity_factor", "intensity_factor"]) {
             let normalized = if if_val > NDLI_IF_NORMALIZATION_THRESHOLD {
-                if_val / 100.0
+                if_val / PCT_SCALING_FACTOR
             } else {
                 if_val
             };
@@ -1424,7 +1417,7 @@ pub fn normalize_running_power(power_watts: f64, source: &str) -> f64 {
 /// Approximate conversion: Power (W) ≈ speed³ × 0.25 + elevation_factor.
 /// GAP data comes from `get_gap_histogram()` endpoint.
 pub fn gap_to_running_power(gap_speed_ms: f64, gradient_pct: f64) -> f64 {
-    let base_power = gap_speed_ms.powi(3) * GAP_POWER_COEFFICIENT;
+    let base_power = gap_speed_ms.powi(GAP_SPEED_EXPONENT) * GAP_POWER_COEFFICIENT;
     let elevation_factor = if gradient_pct > 0.0 {
         1.0 + gradient_pct * GAP_UPHILL_GRADIENT_FACTOR
     } else {
