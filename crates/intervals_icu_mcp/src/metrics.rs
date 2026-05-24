@@ -35,8 +35,11 @@ impl AthleteTracker {
 
     /// Record activity for an athlete by ID.
     fn record_activity(&self, athlete_id: &str) {
+        let Ok(mut athletes) = self.athletes.lock() else {
+            tracing::warn!("athlete tracker mutex poisoned");
+            return;
+        };
         let now = std::time::Instant::now();
-        let mut athletes = self.athletes.lock().unwrap();
 
         // Update last seen time for this athlete
         let old_count = athletes.len();

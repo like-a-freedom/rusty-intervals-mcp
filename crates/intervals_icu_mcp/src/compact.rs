@@ -9,20 +9,6 @@
 
 use serde_json::Value;
 
-/// Macro to simplify the common pattern of resolving fields_to_use from optional custom fields.
-///
-/// Usage: `let fields_to_use = resolve_fields!(default_fields, fields);`
-///
-/// Where `fields` is `Option<&[String]>` and `default_fields` is `&[&str]`
-#[macro_export]
-macro_rules! resolve_fields {
-    ($defaults:expr, $fields:expr) => {
-        $fields
-            .map(|f| f.iter().map(|s| s.as_str()).collect())
-            .unwrap_or_else(|| $defaults.to_vec())
-    };
-}
-
 /// Compact a JSON object to only include specified fields
 ///
 /// # Arguments
@@ -33,13 +19,16 @@ pub fn compact_object(value: &Value, default_fields: &[&str], fields: Option<&[S
     let fields_to_use: Vec<&str> = fields
         .map(|f| f.iter().map(|s| s.as_str()).collect())
         .unwrap_or_else(|| default_fields.to_vec());
+    filter_object(value, &fields_to_use)
+}
 
+fn filter_object(value: &Value, fields: &[&str]) -> Value {
     let Some(obj) = value.as_object() else {
         return value.clone();
     };
 
     let mut result = serde_json::Map::new();
-    for field in &fields_to_use {
+    for field in fields {
         if let Some(val) = obj.get(*field) {
             result.insert(field.to_string(), val.clone());
         }
@@ -89,40 +78,17 @@ pub fn filter_array_fields(value: &Value, fields: &[String]) -> Value {
 
     let fields_ref: Vec<&str> = fields.iter().map(|s| s.as_str()).collect();
 
-    let filtered: Vec<Value> = arr
-        .iter()
-        .map(|item| {
-            let Some(obj) = item.as_object() else {
-                return item.clone();
-            };
-
-            let mut result = serde_json::Map::new();
-            for field in &fields_ref {
-                if let Some(val) = obj.get(*field) {
-                    result.insert(field.to_string(), val.clone());
-                }
-            }
-            Value::Object(result)
-        })
-        .collect();
-
-    Value::Array(filtered)
+    Value::Array(
+        arr.iter()
+            .map(|item| filter_object(item, &fields_ref))
+            .collect(),
+    )
 }
 
 /// Filter a JSON object to only include specified fields
 pub fn filter_fields(value: &Value, fields: &[String]) -> Value {
-    let Some(obj) = value.as_object() else {
-        return value.clone();
-    };
-
-    let mut result = serde_json::Map::new();
-    for field in fields {
-        if let Some(val) = obj.get(field) {
-            result.insert(field.clone(), val.clone());
-        }
-    }
-
-    Value::Object(result)
+    let fields_ref: Vec<&str> = fields.iter().map(|s| s.as_str()).collect();
+    filter_object(value, &fields_ref)
 }
 
 /// Compact a serializable item to a JSON object, applying default or custom fields.
@@ -140,7 +106,10 @@ pub fn compact_item<T: serde::Serialize>(
     default_fields: &[&str],
     fields: Option<&[String]>,
 ) -> Value {
-    let value = serde_json::to_value(item).unwrap_or_default();
+    let value = serde_json::to_value(item).unwrap_or_else(|e| {
+        tracing::warn!("compact_item serialization failed: {e}");
+        Value::Null
+    });
     compact_object(&value, default_fields, fields)
 }
 
@@ -288,17 +257,5 @@ mod tests {
         assert_eq!(result["id"], "1");
         assert_eq!(result["extra"], "included");
         assert!(result.get("name").is_none());
-    }
-
-    #[test]
-    fn test_resolve_fields_macro_uses_defaults_and_custom_values() {
-        let defaults = &["id", "name"];
-        let custom = vec!["id".to_string(), "extra".to_string()];
-
-        let from_defaults: Vec<&str> = resolve_fields!(defaults, None::<&[String]>);
-        let from_custom: Vec<&str> = resolve_fields!(defaults, Some(custom.as_slice()));
-
-        assert_eq!(from_defaults, vec!["id", "name"]);
-        assert_eq!(from_custom, vec!["id", "extra"]);
     }
 }

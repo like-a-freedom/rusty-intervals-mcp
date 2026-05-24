@@ -138,15 +138,17 @@ impl IntervalsError {
     /// - 422 -> `Validation`
     /// - Other -> `Api`
     pub fn from_status(status: u16, body: impl Into<String>) -> Self {
-        let body_str = body.into();
         match status {
-            404 => Self::NotFound(body_str.clone()),
-            401 | 403 => Self::Auth(body_str.clone()),
+            404 => Self::NotFound(body.into()),
+            401 | 403 => Self::Auth(body.into()),
             422 => Self::Validation(ValidationError::InvalidFormat {
                 field: "request".to_string(),
-                value: body_str.clone(),
+                value: body.into(),
             }),
-            _ => Self::Api(ApiError::new(status, body_str.clone(), body_str)),
+            _ => {
+                let body = body.into();
+                Self::Api(ApiError::new(status, body.clone(), body))
+            }
         }
     }
 

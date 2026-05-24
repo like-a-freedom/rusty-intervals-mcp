@@ -1,5 +1,3 @@
-#![allow(clippy::collapsible_match)]
-
 use chrono::NaiveDate;
 use serde_json::Value;
 
@@ -887,12 +885,10 @@ pub(crate) fn format_best_effort_average(
         let stream = best_efforts.get("stream").and_then(Value::as_str);
         match stream {
             Some("watts" | "power") => return Some(format!("{avg:.1} W")),
-            Some("speed" | "velocity" | "pace") => {
+            Some("speed" | "velocity" | "pace") if avg > 0.0 => {
                 // Speed in m/s, convert to pace per km
-                if avg > 0.0 {
-                    let secs_per_km = (1000.0 / avg).round() as i64;
-                    return Some(format!("{}:{:02} /km", secs_per_km / 60, secs_per_km % 60));
-                }
+                let secs_per_km = (1000.0 / avg).round() as i64;
+                return Some(format!("{}:{:02} /km", secs_per_km / 60, secs_per_km % 60));
             }
             _ => {}
         }

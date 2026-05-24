@@ -1,20 +1,6 @@
-//! Domain module for sport settings management.
-//!
-//! This module handles sport settings transformation and filtering.
-//! It uses the `crate::compact` utilities and the `resolve_fields!` macro
-//! for token-efficient JSON responses.
-//!
-//! # GRASP Principles
-//! - **Information Expert**: Sport settings filtering logic is encapsulated here
-//! - **Low Coupling**: Uses centralized compact utilities and macros
-
 use serde_json::Value;
 
-use crate::resolve_fields;
-
 /// Default fields for sport settings in compact responses.
-///
-/// This constant is used by the shared compaction helpers for sport-settings payloads.
 pub const DEFAULT_FIELDS: &[&str] = &["type", "ftp", "fthr", "hrZones", "powerZones"];
 
 /// Compact sport settings to essential fields
@@ -23,8 +9,6 @@ pub fn compact_sport_settings(
     sports_filter: Option<&[String]>,
     fields: Option<&[String]>,
 ) -> Value {
-    let fields_to_use = resolve_fields!(DEFAULT_FIELDS, fields);
-
     let Some(arr) = value.as_array() else {
         return value.clone();
     };
@@ -34,7 +18,6 @@ pub fn compact_sport_settings(
         .filter_map(|item| {
             let obj = item.as_object()?;
 
-            // Apply sport type filter if specified
             if let Some(filter) = sports_filter {
                 let sport_type = obj.get("type").and_then(|v| v.as_str()).unwrap_or("");
                 if !filter.iter().any(|s| s.eq_ignore_ascii_case(sport_type)) {
@@ -42,8 +25,7 @@ pub fn compact_sport_settings(
                 }
             }
 
-            // Apply field filtering
-            Some(crate::compact::compact_object(item, &fields_to_use, None))
+            Some(crate::compact::compact_object(item, DEFAULT_FIELDS, fields))
         })
         .collect();
 

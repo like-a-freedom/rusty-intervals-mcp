@@ -1,5 +1,3 @@
-#![allow(clippy::collapsible_if)]
-
 //! 5-factor Race Readiness Score Engine.
 //! Baseline 90, penalties applied for each risk factor.
 //! Source: Montis.icu Coach V5 — Race Readiness Dashboard design.
@@ -66,10 +64,10 @@ pub fn compute_race_readiness(
     let mut taper_modifier: i32 = 0;
 
     // TSB: Fresh > threshold → bonus
-    if let Some(t) = tsb {
-        if t > TSB_FRESH_THRESHOLD {
-            tsb_modifier = TSB_BONUS;
-        }
+    if let Some(t) = tsb
+        && t > TSB_FRESH_THRESHOLD
+    {
+        tsb_modifier = TSB_BONUS;
     }
 
     // Durability: drifting → penalty
@@ -88,10 +86,10 @@ pub fn compute_race_readiness(
     }
 
     // Taper: detraining penalty → up to max based on CTL drop
-    if let Some(drop) = ctl_drop {
-        if drop > 0.0 {
-            taper_modifier = -(drop as i32).min(-TAPER_MAX_PENALTY);
-        }
+    if let Some(drop) = ctl_drop
+        && drop > 0.0
+    {
+        taper_modifier = -(drop as i32).min(-TAPER_MAX_PENALTY);
     }
 
     score +=
