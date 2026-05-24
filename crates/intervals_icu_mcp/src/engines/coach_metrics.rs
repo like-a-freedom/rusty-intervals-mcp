@@ -3,12 +3,6 @@ use crate::domains::coach::{
     HeatMetrics, LoadManagementMetrics, NdliMetrics, TrendMetrics, VolumeMetrics, WellnessMetrics,
     WorkoutMetricsContext,
 };
-use crate::engines::constants::{
-    ACWR_OVERREACH_RATIO, ACWR_SAFE_LOWER, ACWR_SAFE_UPPER, HRV_BASELINE_WINDOW,
-    HRV_RECOVERY_RATIO, HRV_SUPPRESSION_RATIO, HRV_TREND_MIN_VALUES, IDEAL_SLEEP_HOURS,
-    NDLI_AMBER_DAYS, NDLI_RED_DAYS, SLEEP_CLAMP_MAX, TSB_FRESH, TSB_LOAD_PRESSURE,
-    WDRM_HIGH_DEPLETION_PCT, WDRM_MAX_DEPLETION_PCT,
-};
 use intervals_icu_client::ActivitySummary;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -26,21 +20,14 @@ const STRESS_KEYS: &[&str] = &["stress"];
 const FATIGUE_KEYS: &[&str] = &["fatigue"];
 const READINESS_KEYS: &[&str] = &["readiness"];
 const RECENT_WELLNESS_WINDOW: usize = 7;
-/// HRV: watch drop percentage threshold.
-/// Source: Montis.icu Coach V5 — HRV drop 6-12 % indicates early warning.
+const HRV_BASELINE_WINDOW: usize = 28;
 const HRV_WATCH_DROP_PCT: f64 = -6.0;
-/// HRV: suppressed drop percentage threshold.
-/// Source: Montis.icu Coach V5 — HRV drop > 12 % indicates suppressed state.
 const HRV_SUPPRESSED_DROP_PCT: f64 = -12.0;
 const EFFICIENCY_FACTOR_KEYS: &[&str] = &["icu_efficiency_factor", "efficiency_factor"];
 const AEROBIC_DECOUPLING_KEYS: &[&str] = &["decoupling", "aerobic_decoupling"];
 const HR_STREAM_KEYS: &[&str] = &["heartrate", "heart_rate", "hr"];
 const OUTPUT_STREAM_KEYS: &[&str] = &["watts", "velocity_smooth", "pace"];
-/// Monotony: stddev floor ratio (10 % of mean) to prevent division-by-zero.
-/// Source: Foster 1998 — floor ratio prevents division-by-zero in monotony computation.
 const MONOTONY_STDDEV_FLOOR_RATIO: f64 = 0.1;
-/// Monotony: empirical cap for extreme monotony values.
-/// Source: Empirical cap — monotony values above 10 are extreme and rare.
 const MONOTONY_CAP: f64 = 10.0;
 
 // =============================================================================
@@ -53,39 +40,54 @@ const NDLI_HIGH_INTENSITY_JOULES_THRESHOLD: f64 = 20000.0;
 
 /// NDLI: Running fallback — TSS/day proxy for high-intensity when joules_above_ftp is null.
 /// Scaled relative to typical CTL: 80 TSS ≈ ~1.2× CTL for moderate athletes.
-/// Source: Montis.icu Coach V5 — 80 TSS proxy for running high-intensity day when joules unavailable.
 const NDLI_RUNNING_TSS_PROXY_THRESHOLD: f64 = 80.0;
 
 /// NDLI: IF normalization threshold — values > 2.0 are assumed to be % not decimal.
-/// Source: Values > 2.0 assumed to be percentage (0-100 %) not decimal (0-1.0).
 const NDLI_IF_NORMALIZATION_THRESHOLD: f64 = 2.0;
 
+/// NDLI: Days threshold for "red" (overload) state.
+const NDLI_RED_DAYS: usize = 4;
+
+/// NDLI: Days threshold for "amber" (watch) state.
+const NDLI_AMBER_DAYS: usize = 3;
+
+/// WDRM: High depletion session threshold (60% of W′).
+const WDRM_HIGH_DEPLETION_PCT: f64 = 0.60;
+
+/// WDRM: Maximum depletion percentage clip (150% of W′).
+const WDRM_MAX_DEPLETION_PCT: f64 = 1.5;
+
 /// WDRM: Minimum Z2 points for HR variance computation.
-/// Source: Minimum 10 points for reliable Z2 HR variance computation.
 const Z2_MIN_POINTS: usize = 10;
 
 // =============================================================================
 // P1 — Coaching Intelligence Constants
 // =============================================================================
 
+/// HRV: Suppression threshold (ratio < 0.88 × baseline).
+/// Source: Front. Physiol. 2025, Nature Sci Reports 2025 — RMSSD clinical reliability.
+const HRV_SUPPRESSION_RATIO: f64 = 0.88;
+
+/// HRV: Recovery threshold (ratio > 1.15 × baseline).
+const HRV_RECOVERY_RATIO: f64 = 1.15;
+
+/// HRV: Minimum trend values for slope computation.
+const HRV_TREND_MIN_VALUES: usize = 3;
+
+/// HRV: Ideal sleep hours for recovery quality normalization.
+const IDEAL_SLEEP_HOURS: f64 = 8.0;
+
 /// HRV: Recovery quality component weights (HRV × 0.4 + RHR × 0.3 + sleep × 0.3).
-/// Source: Montis.icu Coach V5 — HRV contributes 40 % to composite recovery score.
 const RECOVERY_QUALITY_HRV_WEIGHT: f64 = 0.4;
-/// Source: Montis.icu Coach V5 — RHR contributes 30 % to composite recovery score.
 const RECOVERY_QUALITY_RHR_WEIGHT: f64 = 0.3;
-/// Source: Montis.icu Coach V5 — sleep contributes 30 % to composite recovery score.
 const RECOVERY_QUALITY_SLEEP_WEIGHT: f64 = 0.3;
 
 /// HRV: RHR component clamp bounds.
-/// Source: Montis.icu Coach V5 — RHR component floor clamp at 50 % of baseline.
 const RHR_COMPONENT_MIN: f64 = 0.5;
-/// Source: Montis.icu Coach V5 — RHR component ceiling clamp at 150 % of baseline.
 const RHR_COMPONENT_MAX: f64 = 1.5;
 
 /// HRV: Sleep component clamp bounds.
-/// Source: Montis.icu Coach V5 — sleep component floor clamp at 50 % of ideal.
 const SLEEP_COMPONENT_MIN: f64 = 0.5;
-/// Source: Montis.icu Coach V5 — sleep component ceiling clamp at 150 % of ideal.
 const SLEEP_COMPONENT_MAX: f64 = 1.5;
 
 /// Volume: seconds per hour for duration conversion.
@@ -95,83 +97,77 @@ const SECONDS_PER_HOUR: f64 = 3600.0;
 const DAYS_PER_WEEK: f64 = 7.0;
 
 /// ACWR: Acute EWMA lambda = 2 / (N + 1) with N = 7.
-/// Source: Standard EWMA λ = 2/(N+1) with N = 7 days (acute window).
 const ACWR_ACUTE_LAMBDA: f64 = 2.0 / 8.0;
 
 /// ACWR: Chronic EWMA lambda = 2 / (N + 1) with N = 28.
-/// Source: Standard EWMA λ = 2/(N+1) with N = 28 days (chronic window).
 const ACWR_CHRONIC_LAMBDA: f64 = 2.0 / 29.0;
 
+/// ACWR: ACWR "watch" threshold (ratio ≤ 1.5).
+/// Above ACWR safe upper (1.3) up to 1.5 = watch zone.
+const ACWR_WATCH_RATIO: f64 = 1.5;
+
+/// ACWR: safe zone lower bound (ratio ≥ 0.8 = underload risk).
+const ACWR_SAFE_LOWER: f64 = 0.8;
+
+/// ACWR: safe zone upper bound (ratio ≤ 1.3 = overreach risk).
+const ACWR_SAFE_UPPER: f64 = 1.3;
+
 /// Decoupling: minimum data points for valid split-half analysis.
-/// Source: TrainingPeaks standard — minimum 4 data points for split-half decoupling.
 const DECOUPLING_MIN_POINTS: usize = 4;
 
 /// Decoupling: durability drift — absolute % threshold.
-/// Source: TrainingPeaks — absolute decoupling > 8 % indicates durability drift.
 const DECOUPLING_DRIFT_ABS_THRESHOLD: f64 = 8.0;
 
 /// Decoupling: durability drift — signed % threshold.
-/// Source: TrainingPeaks — signed decoupling > 5 % indicates aerobic decline.
 const DECOUPLING_DRIFT_SIGNED_THRESHOLD: f64 = 5.0;
 
 /// Decoupling: durability improving — signed % below this = improving.
-/// Source: TrainingPeaks — decoupling < -2 % indicates improving aerobic fitness.
 const DECOUPLING_IMPROVING_THRESHOLD: f64 = -2.0;
 
 /// Decoupling: durability stable — signed % within this = stable.
-/// Source: TrainingPeaks — decoupling within ±3 % is stable.
 const DECOUPLING_STABLE_THRESHOLD: f64 = 3.0;
 
 /// Decoupling: acceptable decoupling threshold (%).
-/// Source: Coggan & Allen — < 5 % decoupling is acceptable.
 const DECOUPLING_ACCEPTABLE_PCT: f64 = 5.0;
 
 /// Decoupling: watch decoupling threshold (%).
-/// Source: Coggan & Allen — > 10 % decoupling requires attention.
 const DECOUPLING_WATCH_PCT: f64 = 10.0;
 
 /// Consistency: excellent Pearson R threshold.
-/// Source: Standard Pearson R — > 0.9 = excellent training consistency.
 const CONSISTENCY_EXCELLENT_THRESHOLD: f64 = 0.9;
 
 /// Consistency: good Pearson R threshold.
-/// Source: Standard Pearson R — > 0.7 = good training consistency.
 const CONSISTENCY_GOOD_THRESHOLD: f64 = 0.7;
 
 /// Consistency: moderate Pearson R threshold.
-/// Source: Standard Pearson R — > 0.5 = moderate training consistency.
 const CONSISTENCY_MODERATE_THRESHOLD: f64 = 0.5;
 
 /// Polarisation: threshold biased index threshold.
-/// Source: Seiler, JAP 2013 — polarisation index > 0.75 indicates biased distribution.
 const POLARISATION_BIASED_THRESHOLD: f64 = 0.75;
 
 /// Wellness: sleep seconds heuristic threshold (if value > 24h, assume seconds not hours).
-/// Source: Values > 24 assumed to be seconds not hours (Intervals.ICU data heuristic).
 const WELLNESS_SLEEP_HEURISTIC_THRESHOLD: f64 = 24.0;
 
 /// Wellness: default sleep hours when no sleep data available.
-/// Source: CDC standard — 7 h default when sleep data unavailable.
 const WELLNESS_DEFAULT_SLEEP_HOURS: f64 = 7.0;
 
 /// Rounding: decimal precision factor (10 → 1 decimal).
 const ROUNDING_DECIMAL_FACTOR: f64 = 10.0;
 
 /// Readiness: mood weight in composite score.
-/// Source: Montis.icu Coach V5 — mood contributes 30 % to readiness.
 const READINESS_MOOD_WEIGHT: f64 = 0.3;
 
 /// Readiness: sleep weight in composite score.
-/// Source: Montis.icu Coach V5 — sleep contributes 30 % to readiness.
 const READINESS_SLEEP_WEIGHT: f64 = 0.3;
 
 /// Readiness: stress weight in composite score.
-/// Source: Montis.icu Coach V5 — stress contributes 20 % to readiness.
 const READINESS_STRESS_WEIGHT: f64 = 0.2;
 
 /// Readiness: fatigue weight in composite score.
-/// Source: Montis.icu Coach V5 — perceived fatigue contributes 20 % to readiness.
 const READINESS_FATIGUE_WEIGHT: f64 = 0.2;
+
+/// Readiness: sleep hours clamp upper bound.
+const READINESS_SLEEP_CLAMP_MAX: f64 = 10.0;
 
 // =============================================================================
 // P2 — Ultra-Sport Constants
@@ -182,40 +178,31 @@ const READINESS_FATIGUE_WEIGHT: f64 = 0.2;
 const HEAT_BASELINE_TEMP_C: f64 = 18.0;
 
 /// Heat: temperature range for normalization (18°C to 23°C = 5°C span).
-/// Source: Cheuvront & Kenefick — 5 °C span (18-23 °C) for heat index normalization.
 const HEAT_NORMALIZATION_RANGE_C: f64 = 5.0;
 
 /// Heat: high stress threshold (heat_index > 1.0).
-/// Source: Montis.icu Coach V5 — heat index > 1.0 = high heat stress.
 const HEAT_HIGH_THRESHOLD: f64 = 1.0;
 
 /// Heat: moderate stress threshold (heat_index ≥ 0.5).
-/// Source: Montis.icu Coach V5 — heat index ≥ 0.5 = moderate heat stress.
 const HEAT_MODERATE_THRESHOLD: f64 = 0.5;
 
 /// Heat: index clamp maximum (capped at 2.0 for safety).
-/// Source: Empirical safety cap — heat index clamped at 2.0 max.
 const HEAT_INDEX_CLAMP_MAX: f64 = 2.0;
 
 /// Running power: Stryd device correction factor (Stryd reports ~8% higher than reference).
-/// Source: Montis.icu calibration — Stryd reads ~8 % high vs. reference power.
 const STRYD_POWER_CORRECTION: f64 = 0.92;
 
 /// Running power: Garmin Running Power correction factor.
-/// Source: Montis.icu calibration — Garmin RP reads ~8 % low vs. reference power.
 const GARMIN_RP_POWER_CORRECTION: f64 = 1.08;
 
 /// GAP to running power: cubic speed coefficient (W = speed³ × k).
 /// Approximation based on air resistance + metabolic cost model.
-/// Source: Di Prampero et al., JAP 1986 — metabolic cost coefficient for grade-adjusted pace.
 const GAP_POWER_COEFFICIENT: f64 = 0.25;
 
 /// GAP to running power: uphill elevation multiplier per % gradient.
-/// Source: Minetti et al., JAP 2002 — uphill energy cost per % gradient.
 const GAP_UPHILL_GRADIENT_FACTOR: f64 = 0.08;
 
 /// GAP to running power: downhill elevation multiplier per % gradient.
-/// Source: Minetti et al., JAP 2002 — downhill energy cost per % gradient (lower due to eccentric braking).
 const GAP_DOWNHILL_GRADIENT_FACTOR: f64 = 0.02;
 
 /// Ideal P1m/P20m ratio for well-rounded cyclists.
@@ -223,12 +210,16 @@ const GAP_DOWNHILL_GRADIENT_FACTOR: f64 = 0.02;
 const IDEAL_P1M_P20M_RATIO: f64 = 1.8;
 
 /// Power curve comparison: mild gain threshold (%).
-/// Source: Montis.icu Coach V5 — 3-5 % gain = mild improvement.
 const POWER_CURVE_MILD_GAIN_PCT: f64 = 3.0;
 
 /// Power curve comparison: moderate gain threshold (%).
-/// Source: Montis.icu Coach V5 — > 5 % gain = moderate-to-large improvement.
 const POWER_CURVE_MODERATE_GAIN_PCT: f64 = 5.0;
+
+/// Forecast: TSB load pressure threshold (also used in interpret_fitness_metrics).
+const TSB_LOAD_PRESSURE_THRESHOLD: f64 = -10.0;
+
+/// Forecast: TSB balanced upper (also used in interpret_fitness_metrics).
+const TSB_BALANCED_UPPER: f64 = 10.0;
 
 // =============================================================================
 // Bare-literal extractions (previously inline magic numbers)
@@ -332,9 +323,9 @@ pub fn interpret_fitness_metrics(
     tsb: Option<f64>,
 ) -> FitnessMetrics {
     let load_state = tsb.map(|value| {
-        if value > TSB_FRESH {
+        if value > TSB_BALANCED_UPPER {
             "fresh".to_string()
-        } else if value < TSB_LOAD_PRESSURE {
+        } else if value < TSB_LOAD_PRESSURE_THRESHOLD {
             "fatigued".to_string()
         } else {
             "neutral".to_string()
@@ -399,7 +390,7 @@ fn classify_acwr_ratio(ratio: f64) -> &'static str {
         "underloaded"
     } else if ratio <= ACWR_SAFE_UPPER {
         "productive"
-    } else if ratio <= ACWR_OVERREACH_RATIO {
+    } else if ratio <= ACWR_WATCH_RATIO {
         "watch"
     } else {
         "overreaching"
@@ -561,7 +552,7 @@ pub fn compute_readiness_score(
     let sleep_hours = sleep_hours?;
     let stress = stress?;
     let fatigue = fatigue?;
-    let normalized_sleep = sleep_hours.clamp(SLEEP_CLAMP_MIN, SLEEP_CLAMP_MAX);
+    let normalized_sleep = sleep_hours.clamp(SLEEP_CLAMP_MIN, READINESS_SLEEP_CLAMP_MAX);
     let weighted_sum = mood * READINESS_MOOD_WEIGHT
         + normalized_sleep * READINESS_SLEEP_WEIGHT
         + stress * READINESS_STRESS_WEIGHT
@@ -1214,10 +1205,7 @@ pub fn compare_power_curves(
         .p1m
         .zip(current.p5m)
         .zip(current.p20m.zip(current.p60m))
-        .map(|((p1, p5), (p20, p60))| {
-            ((p1 + p5) / POWER_CURVE_ROTATION_AVERAGE)
-                - ((p20 + p60) / POWER_CURVE_ROTATION_AVERAGE)
-        })
+        .map(|((p1, p5), (p20, p60))| ((p1 + p5) / POWER_CURVE_ROTATION_AVERAGE) - ((p20 + p60) / POWER_CURVE_ROTATION_AVERAGE))
         .unwrap_or(0.0);
 
     (deltas, rotation_index, statuses)

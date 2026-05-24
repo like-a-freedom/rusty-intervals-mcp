@@ -9,40 +9,30 @@
 // =============================================================================
 
 /// Baseline score before any modifiers.
-/// Source: Montis.icu Coach V5 — baseline 90 / 100 for race readiness scoring.
 const RACE_READINESS_BASELINE: i32 = 90;
 
 /// TSB bonus when fresh (TSB > threshold).
-/// Source: Montis.icu Coach V5 — +5 bonus when TSB indicates fresh state.
 const TSB_BONUS: i32 = 5;
 
 /// TSB threshold for "fresh" classification.
-/// Source: Montis.icu Coach V5 — TSB > 12 required for fresh bonus (conservative vs. general 10).
 const TSB_FRESH_THRESHOLD: f64 = 12.0;
 
 /// Durability drifting penalty.
-/// Source: Montis.icu Coach V5 — -15 penalty when durability indicates aerobic decoupling.
 const DURABILITY_DRIFTING_PENALTY: i32 = -15;
 
 /// Neural overload penalty (NDLI red).
-/// Source: Montis.icu Coach V5 — -15 penalty when NDLI shows neural overload.
 const NEURAL_OVERLOAD_PENALTY: i32 = -15;
 
 /// System alignment mismatch penalty.
-/// Source: Montis.icu Coach V5 — -10 penalty when sport systems misalign.
 const SYSTEM_MISMATCH_PENALTY: i32 = -10;
 
 /// Maximum taper detraining penalty (CTL drop magnitude).
-/// Source: Montis.icu Coach V5 — -60 max penalty for excessive taper detraining.
 const TAPER_MAX_PENALTY: i32 = -60;
 
 /// Score tier boundaries.
 const TIER_READY: i32 = 80;
-/// Source: Montis.icu Coach V5 — score ≥ 80 = ready to race.
 const TIER_MONITOR: i32 = 60;
-/// Source: Montis.icu Coach V5 — score 60–79 = monitor readiness.
 const TIER_CAUTION: i32 = 40;
-/// Source: Montis.icu Coach V5 — score < 40 = caution, not race-ready.
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RaceReadinessScore {

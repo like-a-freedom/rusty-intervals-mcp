@@ -7,7 +7,6 @@ use serde_json::Value;
 use crate::domains::coach::AnalysisWindow;
 use crate::intents::IntentError;
 
-/// Source: Montis.icu analysis — 35-day window extends baseline for seasonal HRV trends.
 const ADAPTIVE_HRV_LOOKBACK_DAYS: i32 = 35;
 
 #[derive(Debug, Clone)]

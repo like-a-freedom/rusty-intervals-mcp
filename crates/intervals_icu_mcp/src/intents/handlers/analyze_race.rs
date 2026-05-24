@@ -8,14 +8,11 @@ use serde_json::{Value, json};
 /// Post-race analysis: results, strategy, comparison to plan.
 use std::sync::Arc;
 
-use crate::domains::coach::{
-    AnalysisKind, AnalysisWindow, CoachContext, RaceMetrics, RaceReadinessMetrics,
-};
+use crate::domains::coach::{AnalysisKind, AnalysisWindow, CoachContext, RaceMetrics};
 use crate::engines::analysis_audit::build_data_audit;
 use crate::engines::analysis_fetch::{RaceFetchRequest, fetch_race_data};
 use crate::engines::coach_guidance::{build_alerts, build_guidance};
 use crate::engines::coach_metrics::{parse_fitness_metrics, parse_wellness_metrics};
-use crate::engines::race_readiness::compute_race_readiness;
 use crate::intents::utils::{data_availability_block, filter_activities_by_description};
 
 pub struct AnalyzeRaceHandler;
@@ -252,10 +249,6 @@ impl IntentHandler for AnalyzeRaceHandler {
                         format!("Post-race load looks manageable (TSB {:.1}); resume structure gradually.", tsb)
                     }
                 });
-            let durability_drifting = aerobic_decoupling
-                .as_ref()
-                .map(|d| d.state == "drifting")
-                .unwrap_or(false);
             race_context.metrics.race = Some(RaceMetrics {
                 race_duration_secs,
                 race_distance_m,
@@ -265,30 +258,6 @@ impl IntentHandler for AnalyzeRaceHandler {
                 post_race_recovery_note,
                 efficiency_factor,
                 aerobic_decoupling,
-            });
-            let readiness = compute_race_readiness(
-                race_context.metrics.fitness.as_ref().and_then(|f| f.tsb),
-                durability_drifting,
-                false,
-                race_context
-                    .metrics
-                    .fitness
-                    .as_ref()
-                    .map(|f| {
-                        f.ctl.map(|c| c > 0.0).unwrap_or(false)
-                            != f.atl.map(|a| a > 0.0).unwrap_or(false)
-                    })
-                    .unwrap_or(false),
-                None,
-            );
-            race_context.metrics.race_readiness = Some(RaceReadinessMetrics {
-                supported: true,
-                readiness_score: Some(readiness.score),
-                tsb_tier: readiness.tsb_modifier.to_string(),
-                durability_tier: readiness.durability_modifier.to_string(),
-                neural_tier: readiness.neural_modifier.to_string(),
-                system_alignment: readiness.system_modifier.to_string(),
-                taper_quality: readiness.taper_modifier.to_string(),
             });
             race_context.alerts = build_alerts(&race_context.metrics);
             race_context.guidance = build_guidance(&race_context.metrics, &race_context.alerts);
@@ -385,24 +354,6 @@ impl IntentHandler for AnalyzeRaceHandler {
                     content.push(ContentBlock::markdown(format!(
                         "Post-Race Load Context\n  {}",
                         recovery_note
-                    )));
-                }
-
-                if let Some(readiness) = &race_context.metrics.race_readiness
-                    && let Some(score) = readiness.readiness_score
-                {
-                    let tier = if score >= 80 {
-                        "ready"
-                    } else if score >= 60 {
-                        "monitor"
-                    } else if score >= 40 {
-                        "caution"
-                    } else {
-                        "not_ready"
-                    };
-                    content.push(ContentBlock::markdown(format!(
-                        "Race Readiness\n  Score: {}/100\n  Tier: {}",
-                        score, tier
                     )));
                 }
             }

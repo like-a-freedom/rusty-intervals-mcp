@@ -11,7 +11,6 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 
 use crate::domains::events::validate_and_prepare_event;
-use crate::engines::forecast::project_tsb;
 use crate::intents::utils::parse_date;
 
 pub struct PlanTrainingHandler;
@@ -467,44 +466,6 @@ impl IntentHandler for PlanTrainingHandler {
 
         content.push(ContentBlock::markdown(format!("Structure\n{}", structure)));
 
-        // --- TSB Forecast ---
-        if let Some(ref f) = fitness
-            && let (Some(current_ctl), Some(current_atl)) = (
-                f.get("ctl").and_then(|v| v.as_f64()),
-                f.get("atl").and_then(|v| v.as_f64()),
-            )
-        {
-            let daily_loads = estimate_daily_loads(max_hours, weeks);
-            let projection = project_tsb(current_ctl, current_atl, &daily_loads);
-
-            let mut forecast_rows = vec![vec![
-                "Day".into(),
-                "CTL".into(),
-                "ATL".into(),
-                "TSB".into(),
-                "Status".into(),
-            ]];
-            for entry in &projection {
-                if entry.day == 1
-                    || entry.day % 7 == 0
-                    || entry.day == projection.last().map(|l| l.day).unwrap_or(0)
-                {
-                    forecast_rows.push(vec![
-                        entry.day.to_string(),
-                        format!("{:.1}", entry.ctl),
-                        format!("{:.1}", entry.atl),
-                        format!("{:.1}", entry.tsb),
-                        entry.fatigue_class.replace('_', " ").to_string(),
-                    ]);
-                }
-            }
-            content.push(ContentBlock::markdown("TSB Forecast".to_string()));
-            content.push(ContentBlock::table(
-                forecast_rows[0].clone(),
-                forecast_rows[1..].to_vec(),
-            ));
-        }
-
         // --- Sample week with HR zones ---
         content.push(ContentBlock::markdown(self.build_sample_week(
             focus,
@@ -776,14 +737,6 @@ fn generate_events(
     }
 
     events
-}
-
-#[must_use]
-fn estimate_daily_loads(weekly_hours: f64, weeks: u32) -> Vec<f64> {
-    let tss_per_hour = 50.0;
-    let weekly_tss = weekly_hours * tss_per_hour;
-    let daily = weekly_tss / 7.0;
-    std::iter::repeat_n(daily, (weeks as usize) * 7).collect()
 }
 
 impl PlanTrainingHandler {

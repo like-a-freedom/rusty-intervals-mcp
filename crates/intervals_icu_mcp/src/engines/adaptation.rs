@@ -3,127 +3,96 @@
 // =============================================================================
 
 /// Adaptation: Plateau threshold — all deltas below this % indicate no meaningful change.
-/// Source: Montis.icu Coach V5 ADE — curve plateau detection threshold.
 const ADAPTATION_PLATEAU_THRESHOLD_PCT: f64 = 1.0;
 
 /// Adaptation: Fatigue state — threshold % decline for threshold power.
-/// Source: Montis.icu Coach V5 ADE — fatigue state threshold power decline threshold.
 const ADAPTATION_FATIGUE_THR_THRESHOLD: f64 = -3.0;
 
 /// Adaptation: Fatigue state — threshold % decline for VO2max power.
-/// Source: Montis.icu Coach V5 ADE — fatigue state VO2max power decline threshold.
 const ADAPTATION_FATIGUE_VO2_THRESHOLD: f64 = -3.0;
 
 /// Adaptation: VO2 expansion — threshold % gain.
-/// Source: Montis.icu Coach V5 ADE — VO2 expansion gain threshold.
 const ADAPTATION_VO2_EXPANSION_THRESHOLD: f64 = 3.0;
 
 /// Adaptation: Aerobic consolidation — threshold % gain for threshold power.
-/// Source: Montis.icu Coach V5 ADE — aerobic consolidation threshold power gain threshold.
 const ADAPTATION_AEROBIC_THR_THRESHOLD: f64 = 1.0;
 
 /// Adaptation: Aerobic consolidation — threshold % gain for endurance power.
-/// Source: Montis.icu Coach V5 ADE — aerobic consolidation endurance power gain threshold.
 const ADAPTATION_AEROBIC_DUR_THRESHOLD: f64 = 2.0;
 
 /// Adaptation: Anaerobic build — threshold % gain for neural/sprint power.
-/// Source: Montis.icu Coach V5 ADE — anaerobic build neural/sprint power gain threshold.
 const ADAPTATION_ANAEROBIC_NEURAL_THRESHOLD: f64 = 5.0;
 
 /// Adaptation: Anaerobic build — threshold % gain for 1-minute power.
-/// Source: Montis.icu Coach V5 ADE — anaerobic build 1-minute power gain threshold.
 const ADAPTATION_ANAEROBIC_1M_THRESHOLD: f64 = 2.0;
 
 /// Adaptation: Mixed adaptation — neural gain threshold.
-/// Source: Montis.icu Coach V5 ADE — mixed adaptation neural gain threshold.
 const ADAPTATION_MIXED_NEURAL_THRESHOLD: f64 = 5.0;
 
 /// Adaptation: Mixed adaptation — endurance decline threshold.
-/// Source: Montis.icu Coach V5 ADE — mixed adaptation endurance decline threshold.
 const ADAPTATION_MIXED_DUR_DECLINE: f64 = -2.0;
 
 /// Adaptation: Mixed adaptation — VO2 gain threshold.
-/// Source: Montis.icu Coach V5 ADE — mixed adaptation VO2 gain threshold.
 const ADAPTATION_MIXED_VO2_THRESHOLD: f64 = 3.0;
 
 /// Adaptation: Mixed adaptation — threshold decline.
-/// Source: Montis.icu Coach V5 ADE — mixed adaptation threshold decline threshold.
 const ADAPTATION_MIXED_THR_DECLINE: f64 = -1.0;
 
 /// Curve Profile: duration span for endurance slope (20m to 60m = 40 min).
-/// Source: Montis.icu Coach V5 ADE — minimum slope span for endurance curve classification.
 const CURVE_ENDURANCE_SLOPE_SPAN_MIN: f64 = 40.0;
 
 /// Curve Profile: duration span for power slope (1m to 5m = 4 min).
-/// Source: Montis.icu Coach V5 ADE — minimum slope span for power curve classification.
 const CURVE_POWER_SLOPE_SPAN_MIN: f64 = 4.0;
 
 /// Curve Profile: Running — endurance slope threshold for flat profile.
-/// Source: Montis.icu Coach V5 ADE — running endurance slope threshold for flat profile classification.
 const RUNNING_ENDURANCE_FLAT_THRESHOLD: f64 = 1.0;
 
 /// Curve Profile: Running — power slope threshold for speed profile.
-/// Source: Montis.icu Coach V5 ADE — running power slope threshold for speed profile classification.
 const RUNNING_POWER_SPEED_THRESHOLD: f64 = 2.0;
 
 /// Curve Profile: Running — punchy runner endurance decline threshold.
-/// Source: Montis.icu Coach V5 ADE — running punchy runner endurance decline threshold.
 const RUNNING_PUNCHY_ENDURANCE_DECLINE: f64 = -2.0;
 
 /// Curve Profile: Running — punchy runner power threshold.
-/// Source: Montis.icu Coach V5 ADE — running punchy runner power threshold.
 const RUNNING_PUNCHY_POWER_THRESHOLD: f64 = 3.0;
 
 /// Curve Profile: Cycling — sprint ratio threshold (P5s/P1m).
-/// Source: Montis.icu Coach V5 ADE — sprint ratio threshold for sprinter profile classification.
 const CYCLING_SPRINT_RATIO_THRESHOLD: f64 = 1.5;
 
 /// Curve Profile: Cycling — anaerobic ratio threshold (P1m/P5m).
-/// Source: Montis.icu Coach V5 ADE — anaerobic ratio threshold for sprinter profile classification.
 const CYCLING_ANAEROBIC_RATIO_THRESHOLD: f64 = 1.3;
 
 /// Curve Profile: Cycling — moderate sprint ratio.
-/// Source: Montis.icu Coach V5 ADE — moderate sprint ratio threshold for anaerobic specialist classification.
 const CYCLING_MODERATE_SPRINT_RATIO: f64 = 1.3;
 
 /// Curve Profile: Cycling — moderate anaerobic ratio.
-/// Source: Montis.icu Coach V5 ADE — moderate anaerobic ratio threshold for anaerobic specialist classification.
 const CYCLING_MODERATE_ANAEROBIC_RATIO: f64 = 1.2;
 
 /// Curve Profile: Cycling — endurance specialist endurance ratio (P20m/P60m).
-/// Source: Montis.icu Coach V5 ADE — endurance ratio threshold for endurance specialist classification.
 const CYCLING_ENDURANCE_RATIO_THRESHOLD: f64 = 1.15;
 
 /// Curve Profile: Cycling — endurance specialist aerobic ratio (P5m/P20m).
-/// Source: Montis.icu Coach V5 ADE — aerobic ratio threshold for endurance specialist classification.
 const CYCLING_ENDURANCE_AEROBIC_RATIO: f64 = 1.1;
 
 /// Curve Profile: Cycling — punchy climber sprint ratio.
-/// Source: Montis.icu Coach V5 ADE — sprint ratio threshold for punchy climber classification.
 const CYCLING_PUNCHY_CLIMBER_SPRINT: f64 = 1.2;
 
 /// Curve Profile: Cycling — punchy climber anaerobic ratio.
-/// Source: Montis.icu Coach V5 ADE — anaerobic ratio threshold for punchy climber classification.
 const CYCLING_PUNCHY_CLIMBER_ANAEROBIC: f64 = 1.1;
 
 /// Curve Profile: Cycling — punchy climber endurance ratio.
-/// Source: Montis.icu Coach V5 ADE — endurance ratio threshold for punchy climber classification.
 const CYCLING_PUNCHY_CLIMBER_ENDURANCE: f64 = 1.05;
 
 /// Curve Profile: Cycling — punchy anaerobic ratio.
-/// Source: Montis.icu Coach V5 ADE — anaerobic ratio threshold for punchy profile classification.
 const CYCLING_PUNCHY_ANAEROBIC: f64 = 1.15;
 
 /// Curve Profile: Cycling — punchy endurance ratio.
-/// Source: Montis.icu Coach V5 ADE — endurance ratio threshold for punchy profile classification.
 const CYCLING_PUNCHY_ENDURANCE: f64 = 1.1;
 
 /// Curve Profile: Cycling — time trialist aerobic ratio.
-/// Source: Montis.icu Coach V5 ADE — aerobic ratio threshold for time trialist classification.
 const CYCLING_TIMETRIALIST_AEROBIC: f64 = 1.2;
 
 /// Curve Profile: Cycling — time trialist endurance ratio.
-/// Source: Montis.icu Coach V5 ADE — endurance ratio threshold for time trialist classification.
 const CYCLING_TIMETRIALIST_ENDURANCE: f64 = 1.1;
 
 #[derive(Debug, Clone, Copy, PartialEq)]

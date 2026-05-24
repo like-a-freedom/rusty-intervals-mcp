@@ -22,7 +22,6 @@ const READINESS_RECOVERY_INDEX_RACE: f64 = 1.1;
 #[cfg(test)]
 use crate::domains::coach::CoachMetrics;
 use crate::domains::coach::{AnalysisKind, AnalysisWindow, CoachContext, WellnessMetrics};
-use crate::engines::ade::compute_ade;
 use crate::engines::analysis_audit::build_data_audit;
 use crate::engines::analysis_fetch::{RecoveryFetchRequest, fetch_recovery_data};
 use crate::engines::coach_guidance::{build_alerts, build_guidance};
@@ -171,17 +170,17 @@ impl AssessRecoveryHandler {
         let hrv = wellness.avg_hrv.unwrap_or(0.0);
         let tsb = fitness.tsb.unwrap_or(0.0);
 
-        let sleep_status = if avg_sleep >= crate::engines::constants::SLEEP_GOOD_HOURS {
+        let sleep_status = if avg_sleep >= crate::engines::coach_guidance::SLEEP_GOOD_HOURS {
             "✅ Good"
-        } else if avg_sleep >= crate::engines::constants::SLEEP_FAIR_MIN_HOURS {
+        } else if avg_sleep >= crate::engines::coach_guidance::SLEEP_FAIR_MIN_HOURS {
             "⚠️ Fair"
         } else {
             "❌ Poor"
         };
 
-        let rhr_status = if resting_hr <= crate::engines::constants::RHR_NORMAL_BPM {
+        let rhr_status = if resting_hr <= crate::engines::coach_guidance::RHR_NORMAL_BPM {
             "✅ Normal"
-        } else if resting_hr <= crate::engines::constants::RHR_ELEVATED_MAX_BPM {
+        } else if resting_hr <= crate::engines::coach_guidance::RHR_ELEVATED_MAX_BPM {
             "⚠️ Elevated"
         } else {
             "❌ High"
@@ -195,9 +194,9 @@ impl AssessRecoveryHandler {
             _ => "n/a",
         };
 
-        let tsb_status = if tsb > crate::engines::constants::TSB_FRESH {
+        let tsb_status = if tsb > crate::engines::coach_guidance::TSB_FRESH {
             "✅ Fresh"
-        } else if tsb > crate::engines::constants::TSB_FATIGUED {
+        } else if tsb > crate::engines::coach_guidance::TSB_FATIGUED {
             "⚠️ Neutral"
         } else {
             "❌ Fatigued"
@@ -372,30 +371,6 @@ impl IntentHandler for AssessRecoveryHandler {
             planned_activity.as_str()
         )));
 
-        let ade_result = compute_ade(
-            recovery_context
-                .metrics
-                .fitness
-                .as_ref()
-                .and_then(|f| f.tsb),
-            recovery_context
-                .metrics
-                .wellness
-                .as_ref()
-                .and_then(|w| w.hrv_ratio),
-            false,
-            false,
-            false,
-            None,
-            None,
-            0,
-            recovery_context
-                .metrics
-                .fitness
-                .as_ref()
-                .and_then(|f| f.tsb),
-        );
-
         let wellness = recovery_context
             .metrics
             .wellness
@@ -416,30 +391,6 @@ impl IntentHandler for AssessRecoveryHandler {
                         .to_string(),
                 ));
         }
-
-        // ADE system state assessment
-        let mut state_md = String::from("System State Assessment\n");
-        state_md.push_str(&format!("  State: {:?}\n", ade_result.operational_state));
-        state_md.push_str(&format!("  Risk: {:?}\n", ade_result.risk_level));
-        let mut active_flags: Vec<&str> = Vec::new();
-        if ade_result.maladaptation_risk {
-            active_flags.push("Maladaptation Risk");
-        }
-        if ade_result.functional_overreach {
-            active_flags.push("Functional Overreach");
-        }
-        if ade_result.load_pressure {
-            active_flags.push("Load Pressure");
-        }
-        if ade_result.loaded_taper {
-            active_flags.push("Loaded Taper");
-        }
-        if active_flags.is_empty() {
-            state_md.push_str("  Flags: None");
-        } else {
-            state_md.push_str(&format!("  Flags: {}", active_flags.join(", ")));
-        }
-        content.push(ContentBlock::markdown(state_md));
 
         // Calculate red flags first
         let red_flags = if include_red_flags {
@@ -749,7 +700,7 @@ mod tests {
 
     #[test]
     fn test_sleep_status_thresholds() {
-        use crate::engines::constants::{SLEEP_FAIR_MIN_HOURS, SLEEP_GOOD_HOURS};
+        use crate::engines::coach_guidance::{SLEEP_FAIR_MIN_HOURS, SLEEP_GOOD_HOURS};
 
         // Good sleep
         let avg_sleep = 7.5;
@@ -787,7 +738,7 @@ mod tests {
 
     #[test]
     fn test_tsb_status_thresholds() {
-        use crate::engines::constants::{TSB_FATIGUED, TSB_FRESH};
+        use crate::engines::coach_guidance::{TSB_FATIGUED, TSB_FRESH};
 
         // Fresh
         let tsb = 15.0;
