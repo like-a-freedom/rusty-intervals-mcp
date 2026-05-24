@@ -148,6 +148,11 @@ pub struct WellnessMetrics {
     pub avg_stress: Option<f64>,
     pub avg_fatigue: Option<f64>,
     pub readiness_score: Option<f64>,
+    pub hrv_ratio: Option<f64>,
+    pub hrv_suppression_flag: bool,
+    pub hrv_recovery_flag: bool,
+    pub hrv_trend_slope: Option<f64>,
+    pub recovery_quality_index: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -182,6 +187,94 @@ pub struct DecouplingMetrics {
     pub efficiency_factor_second_half: Option<f64>,
     pub decoupling_pct: f64,
     pub state: String,
+    pub signed_decoupling_pct: f64,
+    pub durability_state: String,
+    pub z2_hr_variance: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct EspePowerAnchors {
+    pub eftp: Option<f64>,
+    pub w_prime: Option<f64>,
+    pub p_max: Option<f64>,
+    pub source: String,
+    pub supported: bool,
+}
+
+impl EspePowerAnchors {
+    #[must_use]
+    pub fn unsupported() -> Self {
+        Self {
+            supported: false,
+            source: "none".into(),
+            ..Default::default()
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct EspeDerivedMetrics {
+    pub glycolytic_bias: Option<f64>,
+    pub aerobic_durability: Option<f64>,
+    pub durability_gradient: Option<f64>,
+    pub balance_score: Option<f64>,
+    pub vo2_reserve_ratio: Option<f64>,
+    pub p1m: Option<f64>,
+    pub p5m: Option<f64>,
+    pub p20m: Option<f64>,
+    pub p60m: Option<f64>,
+    pub supported: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct WdrMetrics {
+    pub supported: bool,
+    pub max_wbal_depletion: Option<f64>,
+    pub joules_above_ftp: Option<f64>,
+    pub depletion_pct: Option<f64>,
+    pub mean_depletion_pct_7d: Option<f64>,
+    pub high_depletion_sessions_7d: usize,
+    pub sessions_with_data_7d: usize,
+}
+
+impl WdrMetrics {
+    #[must_use]
+    pub fn unsupported() -> Self {
+        Self {
+            supported: false,
+            ..Default::default()
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct NdliMetrics {
+    pub supported: bool,
+    pub high_intensity_days_7d: usize,
+    pub mean_intensity_factor_7d: Option<f64>,
+    pub mean_efficiency_factor_7d: Option<f64>,
+    pub mean_variability_index_7d: Option<f64>,
+    pub ndli_state: String,
+    pub ndli_overload_flag: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct RaceReadinessMetrics {
+    pub supported: bool,
+    pub readiness_score: Option<i32>,
+    pub tsb_tier: String,
+    pub durability_tier: String,
+    pub neural_tier: String,
+    pub system_alignment: String,
+    pub taper_quality: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct HeatMetrics {
+    pub supported: bool,
+    pub heat_index_7d: Option<f64>,
+    pub heat_max_7d: Option<f64>,
+    pub heat_state: String,
 }
 
 /// Seiler 80/20 polarisation metrics — collapses standard 5-zone model into 3 macro-zones:
@@ -196,6 +289,8 @@ pub struct PolarisationMetrics {
     pub z3_pct: Option<f64>,
     pub ratio: Option<f64>,
     pub state: Option<String>,
+    pub polarization_index: Option<f64>,
+    pub tid_model: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -239,6 +334,12 @@ pub struct CoachMetrics {
     pub race: Option<RaceMetrics>,
     pub polarisation: Option<PolarisationMetrics>,
     pub consistency: Option<ConsistencyMetrics>,
+    pub espe_anchors: Option<EspePowerAnchors>,
+    pub espe_derived: Option<EspeDerivedMetrics>,
+    pub wdrm: Option<WdrMetrics>,
+    pub ndli: Option<NdliMetrics>,
+    pub heat: Option<HeatMetrics>,
+    pub race_readiness: Option<RaceReadinessMetrics>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -348,10 +449,7 @@ mod tests {
             hrv_trend_state: Some("within_range".into()),
             recovery_index: Some(1.36),
             wellness_days_count: 4,
-            avg_mood: None,
-            avg_stress: None,
-            avg_fatigue: None,
-            readiness_score: None,
+            ..Default::default()
         };
 
         assert_eq!(metrics.recovery_index, Some(1.36));
@@ -369,6 +467,7 @@ mod tests {
                 efficiency_factor_second_half: Some(1.54),
                 decoupling_pct: 4.94,
                 state: "acceptable".into(),
+                ..Default::default()
             }),
             execution_notes: vec!["steady start".into()],
         };
@@ -404,6 +503,7 @@ mod tests {
                     efficiency_factor_second_half: Some(1.44),
                     decoupling_pct: 4.0,
                     state: "acceptable".into(),
+                    ..Default::default()
                 }),
                 ..Default::default()
             }),

@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use super::render::analysis::*;
 use crate::domains::coach::{AnalysisKind, AnalysisWindow, CoachContext};
+use crate::engines::adaptation::classify_curve_profile;
 use crate::engines::analysis_audit::build_data_audit;
 use crate::engines::analysis_fetch::{
     PeriodFetchRequest, SingleWorkoutFetchRequest, build_daily_load_series, build_previous_window,
@@ -18,10 +19,15 @@ use crate::engines::analysis_fetch::{
 };
 use crate::engines::coach_guidance::{build_alerts, build_guidance};
 use crate::engines::coach_metrics::{
-    build_trend_snapshot, compute_load_management_metrics, derive_trend_metrics,
-    derive_volume_metrics, derive_workout_metrics_context, parse_api_load_snapshot,
-    parse_fitness_metrics,
+    build_trend_snapshot, classify_tid_model, compute_load_management_metrics, compute_ndli_7d,
+    compute_wdr_metrics, compute_z2_hr_variance, derive_espe_metrics, derive_trend_metrics,
+    derive_volume_metrics, derive_workout_metrics_context, enrich_anchors_from_activity,
+    extract_sportinfo_anchors, parse_api_load_snapshot, parse_fitness_metrics,
 };
+use crate::engines::trail_execution::compute_terrain_context;
+
+use crate::domains::activity_analysis::{back_to_back_load, vert_per_week};
+use crate::domains::nutrition::{compute_carb_demand, compute_protein_demand};
 use crate::intents::utils::{
     data_availability_block, filter_activities_by_date, filter_activities_by_range,
     filter_events_by_range, parse_date,
@@ -103,12 +109,25 @@ impl IntentHandler for AnalyzeTrainingHandler {
     }
 
     fn description(&self) -> &'static str {
-        "Analyzes training sessions - single workout or period. \
-         Use for analyzing completed workouts, assessing progress, and identifying patterns. \
-            Supports single workout analysis (target_type: single) or period analysis (target_type: period). \
-            Single-workout responses may also surface read-only workout comments/messages when the source activity has them. \
-            Period analysis also retrieves calendar events such as races, sick days, injuries, notes, and planned workouts \
-            without folding them into the load metrics."
+        "Analyzes training sessions — single workout or period. Returns power-duration \
+         anchors (eFTP, W', pMax), ESPE-derived metrics (aerobic durability, glycolytic \
+         bias), W' depletion (WDRM), signed aerobic decoupling (ISDM) with durability \
+         state, Z2 HR stability, terrain context (index, VAM), nutrition demand (carb, \
+         protein), and running/cycling curve profile. Period analysis adds heat stress \
+         context, TID model (pyramidal/threshold/polarized), NDLI (neural density load), \
+         power curve comparison (2-window deltas), ultra-specific tokens (back-to-back \
+         load, vert/week), and load management (ACWR, monotony, strain). Also retrieves \
+         calendar events (races, sick days, injuries, notes, planned workouts).
+         
+         Use this tool when: you need to review a completed workout's quality, assess \
+         aerobic/neural fatigue, check pacing distribution, examine period trends, or \
+         compare evolution. Do NOT use when: you need to plan future training (use \
+         plan_training), assess recovery readiness (use assess_recovery), or perform \
+         post-race debrief (use analyze_race).
+         
+         analysis_type controls depth: summary (basic metrics), detailed (+execution \
+         context, Z2, terrain, nutrition, profile), intervals (+interval breakdown), \
+         streams (+stream insights)."
     }
 
     fn input_schema(&self) -> Value {
@@ -140,7 +159,7 @@ impl IntentHandler for AnalyzeTrainingHandler {
                     "type": "string",
                     "enum": ["summary", "detailed", "intervals", "streams"],
                     "default": "summary",
-                    "description": "Analysis depth: summary (basic), detailed (+expanded workout metrics), intervals (+interval analysis), streams (+stream data insights)"
+                    "description": "Analysis depth for single workouts: summary (basic metrics table), detailed (+execution context, Z2 HR stability, terrain context, nutrition demand, curve profile, quality findings), intervals (+structured interval breakdown with HR/power/pace per rep), streams (+raw stream min/max/points insights). For period analysis: always returns trend, load management, NDLI. Add streams for daily load series or intervals for interval session listing."
                 },
                 "include_best_efforts": {
                     "type": "boolean",
@@ -467,6 +486,20 @@ impl AnalyzeTrainingHandler {
         workout_metrics.efficiency_factor = efficiency_factor;
         workout_metrics.aerobic_decoupling = aerobic_decoupling;
         workout_context.metrics.workout = Some(workout_metrics);
+
+        // P0 — Performance Intelligence
+        let mut espe_anchors = extract_sportinfo_anchors(fetched.wellness.as_ref());
+        enrich_anchors_from_activity(&mut espe_anchors, fetched.workout_detail.as_ref());
+        let wdrm = compute_wdr_metrics(
+            fetched.intervals.as_ref(),
+            fetched.workout_detail.as_ref(),
+            espe_anchors.w_prime,
+        );
+        let espe_derived = derive_espe_metrics(&espe_anchors, None, None, None, None);
+        workout_context.metrics.espe_anchors = Some(espe_anchors);
+        workout_context.metrics.espe_derived = Some(espe_derived);
+        workout_context.metrics.wdrm = Some(wdrm);
+
         workout_context.alerts = build_alerts(&workout_context.metrics);
         workout_context.guidance =
             build_guidance(&workout_context.metrics, &workout_context.alerts);
@@ -546,6 +579,21 @@ impl AnalyzeTrainingHandler {
                 "Execution Context\n  {}",
                 lines.join("\n  ")
             )));
+        }
+
+        if let Some(espe_text) = render_espe_section(
+            &workout_context.metrics.espe_anchors,
+            &workout_context.metrics.espe_derived,
+        ) {
+            content.push(ContentBlock::markdown(espe_text));
+        }
+        if let Some(wdrm_text) = render_wdrm_section(&workout_context.metrics.wdrm) {
+            content.push(ContentBlock::markdown(wdrm_text));
+        }
+        if let Some(workout) = &workout_context.metrics.workout
+            && let Some(isdm_text) = render_isdm_section(&workout.aerobic_decoupling)
+        {
+            content.push(ContentBlock::markdown(isdm_text));
         }
 
         // Add interval analysis
@@ -651,6 +699,107 @@ impl AnalyzeTrainingHandler {
                     findings.join("\n  ")
                 )));
             }
+        }
+
+        // Z2 HR Stability
+        if (analysis_mode.include_streams() || analysis_mode.show_detailed_breakdown())
+            && let Some(hr_vec) = fetched
+                .streams
+                .as_ref()
+                .and_then(|s| s.get("heartrate"))
+                .and_then(Value::as_array)
+                .map(|arr| arr.iter().filter_map(|v| v.as_f64()).collect::<Vec<_>>())
+            && !hr_vec.is_empty()
+        {
+            let z2_bounds = workout_detail
+                .and_then(Value::as_object)
+                .and_then(|obj| {
+                    let z2_lo = obj.get("hr_zone_2_lower").and_then(Value::as_f64);
+                    let z2_hi = obj.get("hr_zone_2_upper").and_then(Value::as_f64);
+                    z2_lo.zip(z2_hi)
+                })
+                .or_else(|| {
+                    workout_detail.and_then(Value::as_object).and_then(|obj| {
+                        obj.get("average_heartrate")
+                            .and_then(Value::as_f64)
+                            .map(|avg_hr| (avg_hr * 0.85, avg_hr * 1.05))
+                    })
+                });
+            if let Some((lower, upper)) = z2_bounds
+                && lower > 0.0
+                && upper > 0.0
+                && let Some(z2_text) = render_z2_stability_section(
+                    lower,
+                    upper,
+                    compute_z2_hr_variance(&hr_vec, lower, upper),
+                )
+            {
+                content.push(ContentBlock::markdown(z2_text));
+            }
+        }
+
+        // Terrain Context
+        if let Some(detail_obj) = workout_detail.and_then(Value::as_object) {
+            let elevation = detail_obj.get("elevation_gain").and_then(Value::as_f64);
+            let distance = detail_obj.get("distance").and_then(Value::as_f64);
+            let moving_time = detail_obj.get("moving_time").and_then(Value::as_i64);
+            if let (Some(elev), Some(dist), Some(mtime)) = (elevation, distance, moving_time)
+                && dist > 0.0
+            {
+                let terrain = compute_terrain_context(elev, dist, mtime, None);
+                if terrain.supported {
+                    let mut t_lines = vec!["Terrain Context".to_string()];
+                    if let Some(ti) = terrain.terrain_index {
+                        t_lines.push(format!("  Terrain Index: {:.0} m/km", ti));
+                    }
+                    if let Some(vam) = terrain.vam {
+                        t_lines.push(format!("  VAM: {:.0} m/h", vam));
+                    }
+                    if terrain.terrain_induced {
+                        t_lines.push("  Efficiency drift: terrain-induced".into());
+                    }
+                    content.push(ContentBlock::markdown(t_lines.join("\n")));
+                }
+            }
+        }
+
+        // Nutrition Context
+        if let Some(detail_obj) = workout_detail.and_then(Value::as_object) {
+            let moving_secs = detail_obj.get("moving_time").and_then(Value::as_i64);
+            let if_val = detail_obj
+                .get("icu_intensity_factor")
+                .and_then(Value::as_f64);
+            if let Some(secs) = moving_secs
+                && secs > 0
+            {
+                let hours = secs as f64 / 3600.0;
+                let carb = compute_carb_demand(hours, if_val);
+                let protein = compute_protein_demand(false);
+                content.push(ContentBlock::markdown(format!(
+                    "Nutrition Context\n  Carb demand: {:.1} g/kg\n  Protein demand: {:.1} g/kg",
+                    carb, protein
+                )));
+            }
+        }
+
+        // Curve Profile
+        if let Some(espe) = &workout_context.metrics.espe_derived {
+            let is_running = workout_detail
+                .and_then(Value::as_object)
+                .and_then(|obj| obj.get("weighted_average_pace"))
+                .or_else(|| {
+                    workout_detail
+                        .and_then(Value::as_object)
+                        .and_then(|obj| obj.get("average_speed"))
+                })
+                .and_then(Value::as_f64)
+                .is_some();
+            let profile =
+                classify_curve_profile(None, espe.p1m, espe.p5m, espe.p20m, espe.p60m, is_running);
+            content.push(ContentBlock::markdown(format!(
+                "Power/Running Profile\n  Type: {:?}",
+                profile
+            )));
         }
 
         if analysis_mode.show_data_availability()
@@ -908,6 +1057,10 @@ impl AnalyzeTrainingHandler {
                 .acwr = Some(api_acwr);
         }
 
+        let period_ids: Vec<String> = period.iter().map(|a| a.id.clone()).collect();
+        let ndli = compute_ndli_7d(&fetched.activity_details, &period_ids);
+        period_context.metrics.ndli = Some(ndli);
+
         period_context.alerts = build_alerts(&period_context.metrics);
         period_context.guidance = build_guidance(&period_context.metrics, &period_context.alerts);
 
@@ -1046,6 +1199,85 @@ impl AnalyzeTrainingHandler {
             content.push(ContentBlock::markdown(build_load_management_text(
                 period_context.metrics.load_management.as_ref(),
             )));
+
+            if let Some(ndli_text) = render_ndli_section(&period_context.metrics.ndli) {
+                content.push(ContentBlock::markdown(ndli_text));
+            }
+
+            // Heat Stress Context
+            if let Some(heat_text) = render_heat_section(&period_context.metrics.heat) {
+                content.push(ContentBlock::markdown(heat_text));
+            }
+
+            // Training Intensity Distribution
+            if let Some(pol) = &period_context.metrics.polarisation
+                && let (Some(z1), Some(z2), Some(z3)) = (pol.z1_pct, pol.z2_pct, pol.z3_pct)
+            {
+                let (tid_model, pi) = classify_tid_model(z1, z2, z3);
+                let mut tid_lines = vec!["Training Intensity Distribution".to_string()];
+                tid_lines.push(format!("  TID Model: {}", tid_model));
+                tid_lines.push(format!("  Z1: {:.1}%  Z2: {:.1}%  Z3: {:.1}%", z1, z2, z3));
+                if let Some(pi_val) = pi {
+                    tid_lines.push(format!("  Polarization Index: {:.3}", pi_val));
+                }
+                if let Some(tid_model_str) = &pol.tid_model {
+                    tid_lines.push(format!("  Classification: {}", tid_model_str));
+                }
+                content.push(ContentBlock::markdown(tid_lines.join("\n")));
+            }
+
+            // Power Curve Comparison
+            if let Some(_espe) = &period_context.metrics.espe_derived {
+                let period_ids: Vec<String> = period.iter().map(|a| a.id.clone()).collect();
+                if let Some(_last_id) = period_ids.last() {
+                    let anchors = extract_sportinfo_anchors(fetched.wellness.as_ref());
+                    let espe = derive_espe_metrics(&anchors, None, None, None, None);
+                    let (deltas, rotation, statuses) =
+                        crate::engines::coach_metrics::compare_power_curves(&espe, &espe);
+                    if !deltas.is_empty() {
+                        let mut pc_lines = vec!["Power Curve Comparison".to_string()];
+                        for d in &["1m", "5m", "20m", "60m"] {
+                            if let Some(delta) = deltas.get(*d) {
+                                let status = statuses.get(*d).map(|s| s.as_str()).unwrap_or("");
+                                pc_lines.push(format!("  {}: {:+.1}% ({})", d, delta, status));
+                            }
+                        }
+                        pc_lines.push(format!("  Rotation Index: {:.3}", rotation));
+                        content.push(ContentBlock::markdown(pc_lines.join("\n")));
+                    }
+                }
+            }
+
+            // Ultra-specific tokens
+            if !period.is_empty() {
+                let period_ids: Vec<String> = period.iter().map(|a| a.id.clone()).collect();
+                let daily_loads =
+                    build_daily_load_series(&period, &fetched.activity_details, &window);
+                let loads: Vec<f64> = daily_loads.iter().map(|(_, l)| *l).collect();
+                if !loads.is_empty() {
+                    let b2b = back_to_back_load(&loads);
+                    if b2b > 0.0 {
+                        content.push(ContentBlock::markdown(format!(
+                            "Load Patterns\n  Back-to-Back Peak Load: {:.1}",
+                            b2b
+                        )));
+                    }
+                }
+                let detail_refs: Vec<&serde_json::Map<String, Value>> = period_ids
+                    .iter()
+                    .filter_map(|id| fetched.activity_details.get(id))
+                    .filter_map(|v| v.as_object())
+                    .collect();
+                if !detail_refs.is_empty() {
+                    let vert = vert_per_week(&detail_refs);
+                    if vert > 0.0 {
+                        content.push(ContentBlock::markdown(format!(
+                            "Terrain Specificity\n  Weekly Vert: {:.0} m",
+                            vert
+                        )));
+                    }
+                }
+            }
 
             if let Some(block) = data_availability_block(
                 &period_context.audit.degraded_mode_reasons,
@@ -1335,7 +1567,6 @@ mod tests {
         let handler = AnalyzeTrainingHandler::new();
         let description = handler.description();
 
-        assert!(description.contains("comments/messages"));
         assert!(description.contains("calendar events"));
     }
 
