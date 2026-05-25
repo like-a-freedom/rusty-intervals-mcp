@@ -1,6 +1,7 @@
 use crate::domains::events::{
     normalize_event_start, validate_and_prepare_event, validation_error_to_string,
 };
+use crate::domains::workout_validator::{format_duration_short, validate_workout_description};
 use crate::intents::{
     ContentBlock, IdempotencyCache, IntentError, IntentHandler, IntentOutput, OutputMetadata,
 };
@@ -439,6 +440,31 @@ impl ModifyTrainingHandler {
             ));
         }
 
+        // Workout Builder validation: run syntax checks on new_description
+        if let Some(desc) = input.get("new_description").and_then(Value::as_str) {
+            let expected_secs = input
+                .get("new_duration")
+                .and_then(Value::as_str)
+                .and_then(|d| Self::parse_duration_to_seconds(d).ok())
+                .map(|s| s as u32);
+            let validation = validate_workout_description(desc, expected_secs);
+
+            if !validation.warnings.is_empty() {
+                let mut warn_lines = vec!["⚠️ **Workout Builder Warnings:**".to_string()];
+                for w in &validation.warnings {
+                    warn_lines.push(format!("- **{}:** {}", w.category, w.message));
+                }
+                if validation.total_step_seconds > 0 {
+                    warn_lines.push(format!(
+                        "\nSteps: {}, total duration: {}",
+                        validation.step_count,
+                        format_duration_short(validation.total_step_seconds)
+                    ));
+                }
+                content.push(ContentBlock::markdown(warn_lines.join("\n")));
+            }
+        }
+
         if !dry_run {
             for event in &matching {
                 let event_id = event.id.as_deref().ok_or_else(|| {
@@ -551,6 +577,31 @@ impl ModifyTrainingHandler {
             "# Create Training - {}\n\nName: {}\nDate: {}\nDuration: {}",
             mode, new_name, new_date, new_duration
         )));
+
+        // Workout Builder validation: run syntax checks on new_description
+        if let Some(desc) = input.get("new_description").and_then(Value::as_str) {
+            let expected_secs = input
+                .get("new_duration")
+                .and_then(Value::as_str)
+                .and_then(|d| Self::parse_duration_to_seconds(d).ok())
+                .map(|s| s as u32);
+            let validation = validate_workout_description(desc, expected_secs);
+
+            if !validation.warnings.is_empty() {
+                let mut warn_lines = vec!["⚠️ **Workout Builder Warnings:**".to_string()];
+                for w in &validation.warnings {
+                    warn_lines.push(format!("- **{}:** {}", w.category, w.message));
+                }
+                if validation.total_step_seconds > 0 {
+                    warn_lines.push(format!(
+                        "\nSteps: {}, total duration: {}",
+                        validation.step_count,
+                        format_duration_short(validation.total_step_seconds)
+                    ));
+                }
+                content.push(ContentBlock::markdown(warn_lines.join("\n")));
+            }
+        }
 
         let suggestions = if dry_run {
             vec![
@@ -1780,6 +1831,95 @@ mod tests {
 
         let result = handler.execute(input, client, None).await;
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_create_training_dry_run_shows_workout_warnings() {
+        let handler = ModifyTrainingHandler::new();
+        let client = Arc::new(MockIntervalsClient::builder().with_events(vec![]));
+
+        let input = json!({
+            "action": "create",
+            "new_date": "2026-03-15",
+            "new_name": "Bad Workout",
+            "new_description": "- 10min 60%\n- 5m 95-105",
+            "new_duration": "0:15",
+            "dry_run": true,
+            "idempotency_token": "test-token"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(
+            content_str.contains("Workout Builder Warnings"),
+            "expected validation warnings in create response, got: {}",
+            content_str
+        );
+        assert!(
+            content_str.contains("duration_format"),
+            "expected duration_format warning, got: {}",
+            content_str
+        );
+        assert!(
+            content_str.contains("target_format"),
+            "expected target_format warning, got: {}",
+            content_str
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_training_dry_run_clean_description_no_warnings() {
+        let handler = ModifyTrainingHandler::new();
+        let client = Arc::new(MockIntervalsClient::builder().with_events(vec![]));
+
+        let input = json!({
+            "action": "create",
+            "new_date": "2026-03-15",
+            "new_name": "Clean Workout",
+            "new_description": "- 10m 60%\n- 5m 95-105%",
+            "new_duration": "0:15",
+            "dry_run": true,
+            "idempotency_token": "test-token"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(
+            !content_str.contains("Workout Builder Warnings"),
+            "unexpected validation warnings for clean description: {}",
+            content_str
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_training_dry_run_with_duration_mismatch_warning() {
+        let handler = ModifyTrainingHandler::new();
+        let client = Arc::new(MockIntervalsClient::builder().with_events(vec![]));
+
+        // Steps sum to 10m (600s), but new_duration is 1:00 (3600s) → mismatch
+        let input = json!({
+            "action": "create",
+            "new_date": "2026-03-15",
+            "new_name": "Duration Mismatch",
+            "new_description": "- 10m 60%",
+            "new_duration": "1:00",
+            "dry_run": true,
+            "idempotency_token": "test-token"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(
+            content_str.contains("duration_mismatch"),
+            "expected duration_mismatch warning, got: {}",
+            content_str
+        );
     }
 
     // ========================================================================
