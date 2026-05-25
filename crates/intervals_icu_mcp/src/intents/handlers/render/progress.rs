@@ -28,7 +28,7 @@ pub(crate) fn render_progress_report(
     };
 
     sections.push(ContentBlock::markdown(format!(
-        "## Progress Tracking Report\n\n### Plateau Detection\n{}\n\n### Load Context\n- ACWR: {}\n- Monotony: {}\n- Strain: {}\n\n### HRV Context\n- HRV ratio: {}\n- HRV trend: {}\n- HRV suppressed: {}\n\n### lnRMSSD 7-day Rollup\n- Supported: {}\n- Recent mean: {}\n- Recent CV: {}\n\n### TID Drift\n- Supported: {}\n- Drift state: {:?}\n- Dominant zone: {}",
+        "## Progress Tracking Report\n\n### Plateau Detection\n{}\n\n### Load Context\n- ACWR: {}\n- Monotony: {}\n- Strain: {}\n\n### HRV Context\n- HRV ratio: {}\n- HRV trend: {}\n- HRV suppressed: {}\n\n### lnRMSSD 7-day Rollup\n- Supported: {}\n- Recent mean: {}\n- Recent CV: {}\n- Trend slope: {}\n- Sample count: {}\n\n### TID Drift\n- Supported: {}\n- Weekly samples: {}\n- Entropy recent 4w: {}\n- Entropy prior 4w: {}\n- Drift state: {:?}\n- Dominant zone: {}",
         plateau_text,
         report
             .acwr_ratio
@@ -42,7 +42,12 @@ pub(crate) fn render_progress_report(
         report.lnrmssd.supported,
         report.lnrmssd.recent_mean_7d.map(|value| format!("{value:.2}")).unwrap_or_else(|| "unavailable".into()),
         report.lnrmssd.recent_cv_7d.map(|value| format!("{value:.4}")).unwrap_or_else(|| "unavailable".into()),
+        report.lnrmssd.trend_slope.map(|value| format!("{value:.4}")).unwrap_or_else(|| "unavailable".into()),
+        report.lnrmssd.sample_count,
         report.tid_drift.supported,
+        report.tid_drift.weekly_samples,
+        report.tid_drift.entropy_recent_4w.map(|value| format!("{value:.3}")).unwrap_or_else(|| "unavailable".into()),
+        report.tid_drift.entropy_prior_4w.map(|value| format!("{value:.3}")).unwrap_or_else(|| "unavailable".into()),
         report.tid_drift.drift_state,
         report.tid_drift.dominant_zone.map(|value| value.to_string()).unwrap_or_else(|| "unavailable".into()),
     )));
@@ -118,5 +123,7 @@ mod tests {
         let markdown = format!("{:?}", blocks);
         assert!(markdown.contains("Plateau Detection"));
         assert!(markdown.contains("TID drift unavailable"));
+        assert!(markdown.contains("lnRMSSD 7-day Rollup"));
+        assert!(markdown.contains("Sample count"));
     }
 }
