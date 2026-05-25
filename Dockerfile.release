@@ -1,0 +1,14 @@
+FROM gcr.io/distroless/cc-debian13
+
+ARG TARGETARCH
+
+WORKDIR /home/nonroot
+COPY dist/linux/${TARGETARCH}/intervals_icu_mcp /usr/local/bin/intervals_icu_mcp
+USER nonroot
+ENV MCP_TRANSPORT=http
+ENV MCP_HTTP_ADDRESS=0.0.0.0:3000
+ENV MAX_HTTP_BODY_SIZE=4194304
+ENV RUST_LOG=info
+EXPOSE 3000
+ENTRYPOINT ["/usr/local/bin/intervals_icu_mcp"]
+CMD []
