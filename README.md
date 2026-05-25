@@ -2,10 +2,10 @@
 
 A high-performance **Rust MCP server for Intervals.icu** designed around one idea: an LLM should interact with a **small, semantically rich coaching interface**, not a raw pile of endpoint wrappers.
 
-[![.github/workflows/ci.yml](https://github.com/like-a-freedom/rusty-intervals/actions/workflows/ci.yml/badge.svg)](https://github.com/like-a-freedom/rusty-intervals/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/like-a-freedom/rusty-intervals?label=release)](https://github.com/like-a-freedom/rusty-intervals/releases)
+[![.github/workflows/ci.yml](https://github.com/like-a-freedom/rusty-intervals-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/like-a-freedom/rusty-intervals-mcp/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/like-a-freedom/rusty-intervals-mcp?label=release)](https://github.com/like-a-freedom/rusty-intervals-mcp/releases)
 [![codecov](https://codecov.io/gh/like-a-freedom/rusty-intervals-mcp/graph/badge.svg?token=I47UV16VY5)](https://codecov.io/gh/like-a-freedom/rusty-intervals-mcp)
-![Rust](https://img.shields.io/badge/rust-1.92+-orange.svg)
+![Rust](https://img.shields.io/badge/rust-stable-orange.svg)
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 
 > **Public contract:** 9 high-level intents + 1 resource  
@@ -214,7 +214,7 @@ Intent responses include `suggestions` and `next_actions` so the host model know
 
 ### Prerequisites
 
-- **Rust 1.94+** with Cargo, or
+- **Rust stable** with Cargo, or
 - **Docker**
 
 ### Get your Intervals.icu credentials
@@ -620,11 +620,18 @@ The codebase includes:
 
 Docker packaging in this repository is for the **HTTP streamable MCP** transport. For local STDIO clients such as VS Code or Claude Desktop, run the binary directly instead of containerizing it.
 
+This repo keeps two Dockerfiles on purpose:
+
+- `Dockerfile` — used for local development and `docker compose`; it builds the Rust binary inside the image.
+- `Dockerfile.release` — used by the GitHub release workflow; it packages prebuilt Linux binaries into a slim runtime image.
+
 ### Build the container
 
 ```sh
 docker build -t rusty-intervals:latest .
 ```
+
+This uses the default `Dockerfile` and compiles the project inside the builder stage.
 
 ### Run locally with environment variables
 
@@ -651,7 +658,7 @@ The container exposes:
 
 ### Docker Compose
 
-`docker-compose.yml` is preconfigured for HTTP mode. Provide the required secrets and credentials in your shell or `.env` file, then start the service:
+`docker-compose.yml` is preconfigured for HTTP mode and builds from the default `Dockerfile`. Provide the required secrets and credentials in your shell or `.env` file, then start the service:
 
 ```sh
 docker compose up -d
@@ -666,6 +673,10 @@ At minimum, set these variables before launch:
 ### Remote MCP clients
 
 If your MCP host supports remote HTTP MCP servers, see `examples/mcp_remote.json` for a minimal example.
+
+### Release image packaging
+
+The GitHub release workflow builds the multi-arch container image from `Dockerfile.release` after compiling Linux `amd64` and `arm64` binaries in CI. That Dockerfile is meant for release packaging, not for a standalone local `docker build`.
 
 For production deployment:
 
