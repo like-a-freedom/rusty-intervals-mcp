@@ -1063,13 +1063,25 @@ pub(crate) fn render_espe_section(
     if let Some(p_max) = anchors.p_max {
         lines.push(format!("  pMax: {:.0} W", p_max));
     }
-    if let Some(derived) = derived
-        && let Some(glycolytic_bias) = derived.glycolytic_bias
-    {
-        lines.push(format!(
-            "  Glycolytic Bias (pMax/eFTP): {:.2}",
-            glycolytic_bias
-        ));
+    if let Some(derived) = derived {
+        if let Some(glycolytic_bias) = derived.glycolytic_bias {
+            lines.push(format!(
+                "  Glycolytic Bias (pMax/eFTP): {:.2}",
+                glycolytic_bias
+            ));
+        }
+        if let Some(val) = derived.aerobic_durability {
+            lines.push(format!("  Aerobic Durability (P60/P5): {:.2}", val));
+        }
+        if let Some(val) = derived.durability_gradient {
+            lines.push(format!("  Durability Gradient (P60/P20): {:.2}", val));
+        }
+        if let Some(val) = derived.balance_score {
+            lines.push(format!("  Balance Score: {:.2}", val));
+        }
+        if let Some(val) = derived.vo2_reserve_ratio {
+            lines.push(format!("  VO2 Reserve Ratio (P5/eFTP): {:.2}", val));
+        }
     }
     Some(lines.join("\n"))
 }
