@@ -611,6 +611,115 @@ pub fn parse_wellness_metrics(payload: Option<&Value>) -> Option<WellnessMetrics
     })
 }
 
+use crate::domains::progress::LnRmssdRollup;
+use chrono::{NaiveDate, NaiveDateTime};
+
+fn parse_series_date(value: &str) -> Option<NaiveDate> {
+    NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S")
+        .ok()
+        .map(|dt| dt.date())
+        .or_else(|| NaiveDate::parse_from_str(value, "%Y-%m-%d").ok())
+}
+
+pub fn extract_ctl_series(payload: Option<&Value>) -> Option<(Vec<String>, Vec<f64>)> {
+    let entries = payload?.as_array()?;
+    let mut ordered = entries
+        .iter()
+        .filter_map(Value::as_object)
+        .filter_map(|object| {
+            let date = object.get("date").and_then(Value::as_str)?;
+            let ctl = get_number(object, FITNESS_CTL_KEYS)
+                .or_else(|| get_number(object, API_LOAD_CHRONIC_KEYS))?;
+            Some((date.to_string(), ctl))
+        })
+        .collect::<Vec<_>>();
+
+    ordered.sort_by_key(|(date, _)| parse_series_date(date).unwrap_or(NaiveDate::MIN));
+    if ordered.is_empty() {
+        return None;
+    }
+
+    let dates = ordered.iter().map(|(date, _)| date.clone()).collect();
+    let values = ordered.iter().map(|(_, ctl)| *ctl).collect();
+    Some((dates, values))
+}
+
+pub fn extract_hrv_series(payload: Option<&Value>) -> Option<Vec<f64>> {
+    let entries = payload?.as_array()?;
+    let mut ordered = entries
+        .iter()
+        .filter_map(Value::as_object)
+        .filter_map(|object| {
+            let date = object.get("date").and_then(Value::as_str)?;
+            let hrv = get_number(object, HRV_KEYS)?;
+            Some((date.to_string(), hrv))
+        })
+        .collect::<Vec<_>>();
+
+    ordered.sort_by_key(|(date, _)| parse_series_date(date).unwrap_or(NaiveDate::MIN));
+    if ordered.is_empty() {
+        return None;
+    }
+
+    Some(ordered.into_iter().map(|(_, value)| value).collect())
+}
+
+pub fn compute_lnrmssd_rollup(daily_hrv: &[f64]) -> LnRmssdRollup {
+    let ln_values = daily_hrv
+        .iter()
+        .copied()
+        .filter(|value| *value > 0.0)
+        .map(f64::ln)
+        .collect::<Vec<_>>();
+
+    if ln_values.len() < 7 {
+        return LnRmssdRollup {
+            supported: false,
+            sample_count: ln_values.len(),
+            ..Default::default()
+        };
+    }
+
+    let recent = &ln_values[ln_values.len() - 7..];
+    let mean = recent.iter().sum::<f64>() / recent.len() as f64;
+    let variance = recent
+        .iter()
+        .map(|value| {
+            let delta = value - mean;
+            delta * delta
+        })
+        .sum::<f64>()
+        / recent.len() as f64;
+
+    LnRmssdRollup {
+        supported: true,
+        recent_mean_7d: Some(mean),
+        recent_cv_7d: if mean.abs() < f64::EPSILON {
+            None
+        } else {
+            Some(variance.sqrt() / mean.abs())
+        },
+        trend_slope: compute_hrv_trend_slope(recent),
+        sample_count: ln_values.len(),
+    }
+}
+
+pub fn compute_tid_entropy(z1_pct: f64, z2_pct: f64, z3_pct: f64) -> Option<f64> {
+    let total = z1_pct + z2_pct + z3_pct;
+    if total <= f64::EPSILON {
+        return None;
+    }
+
+    let normalized = [z1_pct / total, z2_pct / total, z3_pct / total];
+    let entropy = normalized
+        .iter()
+        .copied()
+        .filter(|value| *value > f64::EPSILON)
+        .map(|value| -value * value.log2())
+        .sum();
+    Some(entropy)
+}
+
 fn split_recent_and_baseline(entries: &[Value]) -> (&[Value], &[Value]) {
     let recent_len = entries.len().min(RECENT_WELLNESS_WINDOW);
     let recent_start = entries.len().saturating_sub(recent_len);
@@ -973,7 +1082,6 @@ pub fn compare_power_curves(
 }
 
 /// Primary: max(wbal_start - wbal_end) across intervals; fallback: icu_max_wbal_depletion.
-#[allow(clippy::needless_pass_by_value)]
 pub fn compute_wdr_metrics(
     intervals: Option<&Value>,
     activity_detail: Option<&Value>,
@@ -2201,5 +2309,46 @@ mod tests {
     #[test]
     fn compute_monotony_constant_load() {
         assert_eq!(compute_monotony(&[100.0; 7]), Some(10.0));
+    }
+
+    #[test]
+    fn extract_ctl_series_sorts_entries_by_date() {
+        use serde_json::json;
+
+        let payload = json!([
+            {"date": "2026-01-03", "fitness": 62.0},
+            {"date": "2026-01-01", "fitness": 60.0},
+            {"date": "2026-01-02", "ctl": 61.0}
+        ]);
+
+        let (dates, values) = extract_ctl_series(Some(&payload)).unwrap();
+        assert_eq!(dates, vec!["2026-01-01", "2026-01-02", "2026-01-03"]);
+        assert_eq!(values, vec![60.0, 61.0, 62.0]);
+    }
+
+    #[test]
+    fn extract_hrv_series_sorts_entries_by_date() {
+        use serde_json::json;
+
+        let payload = json!([
+            {"date": "2026-01-02", "hrv": 64.0},
+            {"date": "2026-01-01", "hrv": 62.0}
+        ]);
+
+        let values = extract_hrv_series(Some(&payload)).unwrap();
+        assert_eq!(values, vec![62.0, 64.0]);
+    }
+
+    #[test]
+    fn compute_lnrmssd_rollup_requires_seven_days() {
+        let rollup = compute_lnrmssd_rollup(&[60.0, 61.0, 62.0]);
+        assert!(!rollup.supported);
+        assert_eq!(rollup.sample_count, 3);
+    }
+
+    #[test]
+    fn compute_tid_entropy_is_high_for_even_distribution() {
+        let entropy = compute_tid_entropy(0.33, 0.34, 0.33).unwrap();
+        assert!(entropy > 1.5);
     }
 }

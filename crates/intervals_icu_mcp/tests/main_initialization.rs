@@ -116,8 +116,8 @@ async fn test_handler_initialization_with_mock_client() {
     );
     let handler = intervals_icu_mcp::IntervalsMcpHandler::new(Arc::new(client));
 
-    // Handler starts with 8 intent tools (always available)
-    assert_eq!(handler.tool_count(), 8);
+    // Handler starts with 9 intent tools (always available)
+    assert_eq!(handler.tool_count(), 9);
 }
 
 #[tokio::test]

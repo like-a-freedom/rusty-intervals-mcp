@@ -23,6 +23,7 @@ pub mod events;
 pub mod fitness;
 pub mod gear;
 pub mod nutrition;
+pub mod progress;
 pub mod resources;
 pub mod sport_settings;
 pub mod wellness;
