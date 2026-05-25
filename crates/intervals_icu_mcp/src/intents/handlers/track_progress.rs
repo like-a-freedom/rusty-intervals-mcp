@@ -214,5 +214,14 @@ mod tests {
 
         let rendered = format!("{:?}", output.content);
         assert!(rendered.contains("Progress Tracking Report"));
+        assert!(rendered.contains("Plateau Detection"));
+        assert!(rendered.contains("Load Context"));
+        assert!(rendered.contains("HRV Context"));
+        assert!(rendered.contains("lnRMSSD 7-day Rollup"));
+        assert!(rendered.contains("TID Drift"));
+        assert!(rendered.contains("Warnings"));
+        assert!(!output.suggestions.is_empty());
+        assert!(!output.next_actions.is_empty());
+        assert_eq!(output.next_actions.len(), 3);
     }
 }
