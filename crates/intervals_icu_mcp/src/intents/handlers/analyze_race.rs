@@ -406,6 +406,34 @@ impl IntentHandler for AnalyzeRaceHandler {
                 race_readiness.score, tier
             )));
 
+            if let Some(wellness) = &race_context.metrics.wellness {
+                let mut wellness_lines = Vec::new();
+                if let Some(hrv) = wellness.avg_hrv {
+                    wellness_lines.push(format!("HRV: {:.0} ms", hrv));
+                }
+                if let Some(sleep) = wellness.avg_sleep_hours {
+                    wellness_lines.push(format!("Sleep: {:.1} hrs", sleep));
+                }
+                if let Some(rhr) = wellness.avg_resting_hr {
+                    wellness_lines.push(format!("Resting HR: {:.0} bpm", rhr));
+                }
+                if let Some(ratio) = wellness.hrv_ratio {
+                    wellness_lines.push(format!("HRV ratio: {:.2}", ratio));
+                }
+                if let Some(trend) = &wellness.hrv_trend_state {
+                    wellness_lines.push(format!("HRV trend: {}", trend));
+                }
+                if let Some(index) = wellness.recovery_index {
+                    wellness_lines.push(format!("Recovery index: {:.2}", index));
+                }
+                if !wellness_lines.is_empty() {
+                    content.push(ContentBlock::markdown(format!(
+                        "Wellness Context\n  {}",
+                        wellness_lines.join("\n  ")
+                    )));
+                }
+            }
+
             if analysis_mode == RaceAnalysisMode::Strategy {
                 content.push(ContentBlock::markdown(
                     "Strategy Review\n  Focus on pacing discipline, fueling timing, and how effort changed across segments.\n  Compare the first and final third of the race for execution drift.\n  Revisit terrain-specific decisions, aid-station timing, and surges that may have raised cost late in the race.".to_string(),

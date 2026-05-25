@@ -19,10 +19,11 @@ use crate::engines::analysis_fetch::{
 };
 use crate::engines::coach_guidance::{build_alerts, build_guidance};
 use crate::engines::coach_metrics::{
-    build_trend_snapshot, classify_tid_model, compute_load_management_metrics, compute_ndli_7d,
-    compute_wdr_metrics, compute_z2_hr_variance, derive_espe_metrics, derive_trend_metrics,
-    derive_volume_metrics, derive_workout_metrics_context, enrich_anchors_from_activity,
-    extract_sportinfo_anchors, parse_api_load_snapshot, parse_fitness_metrics,
+    build_trend_snapshot, classify_tid_model, compute_heat_metrics_7d,
+    compute_load_management_metrics, compute_ndli_7d, compute_wdr_metrics, compute_z2_hr_variance,
+    derive_espe_metrics, derive_trend_metrics, derive_volume_metrics,
+    derive_workout_metrics_context, enrich_anchors_from_activity, extract_sportinfo_anchors,
+    parse_api_load_snapshot, parse_fitness_metrics,
 };
 use crate::engines::cp_regression::{fit_cp, validate_cp};
 use crate::engines::trail_execution::compute_terrain_context;
@@ -1061,6 +1062,11 @@ impl AnalyzeTrainingHandler {
         let period_ids: Vec<String> = period.iter().map(|a| a.id.clone()).collect();
         let ndli = compute_ndli_7d(&fetched.activity_details, &period_ids);
         period_context.metrics.ndli = Some(ndli);
+
+        period_context.metrics.heat = Some(compute_heat_metrics_7d(
+            &fetched.activity_details,
+            &period_ids,
+        ));
 
         let mut espe_anchors = extract_sportinfo_anchors(fetched.wellness.as_ref());
         if let Some(last_activity_id) = period_ids.last()

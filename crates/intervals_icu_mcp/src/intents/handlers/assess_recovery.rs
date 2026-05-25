@@ -218,6 +218,42 @@ impl AssessRecoveryHandler {
             vec!["TSB".into(), format!("{:.0}", tsb), tsb_status.into()],
         ];
 
+        if let Some(trend_slope) = wellness.hrv_trend_slope {
+            let status = if trend_slope > 0.0 {
+                "↗ Improving"
+            } else {
+                "↘ Declining"
+            };
+            rows.push(vec![
+                "HRV Trend Slope".into(),
+                format!("{:.2}", trend_slope),
+                status.into(),
+            ]);
+        }
+
+        if let Some(rqi) = wellness.recovery_quality_index {
+            let rqi_status = if rqi >= 0.8 {
+                "✅ Good"
+            } else if rqi >= 0.5 {
+                "⚠️ Fair"
+            } else {
+                "❌ Low"
+            };
+            rows.push(vec![
+                "Recovery Quality".into(),
+                format!("{:.2}", rqi),
+                rqi_status.into(),
+            ]);
+        }
+
+        if wellness.hrv_suppression_flag {
+            rows.push(vec![
+                "HRV Suppression".into(),
+                "detected".into(),
+                "❌ Suppressed".into(),
+            ]);
+        }
+
         if let Some(recovery_index) = wellness.recovery_index {
             let recovery_status = if recovery_index >= 1.2 {
                 "✅ Supportive"
