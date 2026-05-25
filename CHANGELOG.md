@@ -65,6 +65,25 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Progress tracking engine**: new `track_progress` MCP intent that detects trailing CTL plateaus via changepoint analysis (linear regression + athlete-aware flat-band personalization), summarizes load-management context (ACWR, monotony, strain), surfaces TID drift (Shannon entropy delta over rolling 4-week windows, drift classification, dominant zone), computes lnRMSSD 7-day rollup, and emits evidence-weighted coaching hypotheses (volume, intensity distribution, recovery) with confidence scores.
+- New domain types in `domains/progress.rs`: `TrendState`, `TidDriftState`, `HypothesisDomain`, `ChangepointResult`, `LnRmssdRollup`, `TidDriftMetrics`, `ProgressHypothesis`, `ProgressReport`.
+- New changepoint engine in `engines/changepoint.rs`: trailing CTL plateau detection with athlete-aware flat-band estimation, backward step search, and linear regression slope.
+- New progress orchestration engine in `engines/progress_tracking.rs`: weekly zone distribution grouping, TID drift computation, hypothesis ranking, progress report assembly.
+- New `track_progress` MCP handler in `intents/handlers/track_progress.rs` with wellness and activity fetching.
+- New progress report renderer in `intents/handlers/render/progress.rs` with plateau detection, load context, HRV context, lnRMSSD rollup, TID drift, hypotheses, and warnings sections.
+- CTL/HRV extraction helpers in `coach_metrics.rs`: `extract_ctl_series`, `extract_hrv_series`, `compute_lnrmssd_rollup`, `compute_tid_entropy`.
+- Wiring fix: `compute_heat_metrics_7d` now called in `analyze_training` period analysis path (previously always returned None).
+- Wiring fix: wellness context (HRV, sleep, RHR, HRV ratio, recovery index) now rendered in `analyze_race` output (previously fetched and parsed but discarded).
+- Wiring fix: `hrv_trend_slope`, `recovery_quality_index`, and `hrv_suppression_flag` now rendered in `assess_recovery` metrics table.
+- Wiring fix: ESPE derived metrics (`aerobic_durability`, `durability_gradient`, `balance_score`, `vo2_reserve_ratio`) now rendered in `render_espe_section` (previously computed but hidden).
+- All analytical MCP outputs now include inline metric explanations (parenthetical context for monotony, strain, stress tolerance, fatigue index, WDRM, NDLI, ISDM signed decoupling, EF halves, eFTP, W′, pMax, efficiency factor, HRV ratio, recovery index, lnRMSSD, TID entropy).
+
+### Changed
+- Major magic number refactor across `changepoint.rs`, `progress_tracking.rs`, and `track_progress.rs`: 17 hardcoded literals extracted to named constants.
+- `track_progress` tool description expanded per MCP design skill guidelines (when to use, when NOT to use, argument descriptions, return shape).
+- Renderer test and handler test strengthened to verify all output sections.
+
 ## [0.1.0] - 2025-12-15
 - Initial MCP-compatible Intervals.icu client in Rust.
 - Auth via API key and athlete id, configurable base URL.

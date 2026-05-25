@@ -8,7 +8,7 @@ A high-performance **Rust MCP server for Intervals.icu** designed around one ide
 ![Rust](https://img.shields.io/badge/rust-1.92+-orange.svg)
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 
-> **Public contract:** 8 high-level intents + 1 resource  
+> **Public contract:** 9 high-level intents + 1 resource  
 > **Internal execution layer:** dynamic OpenAPI runtime that stays aligned with Intervals.icu  
 > **Design goal:** respect the agent's context window and return decision-ready coaching context
 
@@ -60,7 +60,7 @@ In other words: **dynamic under the hood, curated at the boundary**.
 
 ### 1. Intent-driven public interface
 
-The LLM sees **8 high-level intents** such as `analyze_training` or `modify_training`, not dozens of endpoint-shaped tools.
+The LLM sees **9 high-level intents** such as `analyze_training` or `modify_training`, not dozens of endpoint-shaped tools.
 
 ### 2. Dynamic OpenAPI runtime retained internally
 
@@ -78,6 +78,8 @@ Responses are designed for LLMs:
 ### 4. Deterministic coaching analytics
 
 Read-only coaching intents use a deterministic pipeline to compute metrics from a growing library of engines:
+
+**Progress Tracking:** CTL plateau detection via changepoint analysis with athlete-aware flat-band estimation, TID drift (Shannon entropy deltas over rolling 4-week windows), lnRMSSD rollup with trend slope and coefficient of variation, and evidence-weighted coaching hypotheses (volume, intensity distribution, recovery) with confidence ranking and recommended interventions.
 
 **Performance Intelligence:** eFTP/W′/pMax extraction (ESPE), W′ depletion (WDRM), signed aerobic decoupling (ISDM) with durability state, Z2 HR stability.
 
@@ -111,7 +113,7 @@ The public MCP contract is intentionally small and stable.
 ### Intents
 
 | Intent | Purpose | Mutating | Example ask |
-|---|---|---:|---|
+|---|---|---|---:|---|
 | `plan_training` | Create training plans across any horizon | ✅ | “Build me a 12-week 50K plan” |
 | `analyze_training` | Analyze a single workout or a training period | ❌ | “Analyze yesterday’s workout” |
 | `modify_training` | Move, edit, create, or delete workouts and events | ✅ | “Move Saturday’s workout to Sunday” |
@@ -120,6 +122,7 @@ The public MCP contract is intentionally small and stable.
 | `manage_profile` | View or update thresholds, zones, and profile settings | ✅ | “Update my threshold values from a lab test” |
 | `manage_gear` | List, add, or retire gear | ✅ | “How much mileage is on my shoes?” |
 | `analyze_race` | Post-race analysis and follow-up guidance | ❌ | “How did my 50K go?” |
+| `track_progress` | Detect plateaus, surface TID drift, and rank coaching hypotheses | ❌ | “Why have I stopped improving?” |
 
 ### Resource
 
@@ -144,7 +147,7 @@ LLM Host (VS Code / Claude / Cursor / other MCP client)
             v
   +-----------------------------+
   | Intent Layer                |
-  | 8 public coaching intents   |
+  | 9 public coaching intents   |
   +-----------------------------+
             |
             v
@@ -389,6 +392,8 @@ The best way to use this MCP server is to ask for **outcomes**, not API mechanic
 - “How is my recovery looking over the last 7 days?”
 - “Am I ready for intensity tomorrow?”
 - “Compare this month with last month”
+- “Why have I stopped improving?” — `track_progress` detects training plateaus from CTL history, surfaces load context, TID drift, HRV trend, and ranks possible root causes
+- “Is my training volume stalled?” — `track_progress` identifies plateau onset date, duration, and trailing slope, with recommendations for gradual volume increase
 
 ### Calendar changes
 
@@ -421,6 +426,16 @@ Fetch → Audit → Compute → Interpret → Render
 - it renders compact, guidance-rich output for the host model
 
 ### Where it shows up most strongly
+
+#### `track_progress`
+
+- CTL plateau detection from wellness history using linear regression slope across trailing 28-day window with backward step search
+- athlete-aware flat-band personalisation when 8+ weeks of CTL history exist
+- load context: ACWR ratio and state (underloaded/productive/watch/overreaching), monotony, strain
+- HRV context: baseline-relative ratio, trend state (suppressed/within_range), lnRMSSD 7-day rollup with mean, CV, and trend slope
+- TID drift analysis: weekly 3-zone distributions grouped by ISO week, Shannon entropy delta (recent 4w vs prior 4w), drift classification (stable/converging/polarizing), dominant zone identification
+- evidence-weighted coaching hypotheses: volume hypothesis with ACWR and monotony signals, intensity distribution hypothesis with TID drift and monotony, recovery hypothesis with HRV suppression and ACWR state
+- explicit warnings when data is insufficient for specific sub-analyses
 
 #### `analyze_training`
 
