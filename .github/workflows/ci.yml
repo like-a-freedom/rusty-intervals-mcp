@@ -32,7 +32,7 @@ jobs:
           toolchain: stable
           components: rustfmt,clippy,llvm-tools-preview
           cache: true
-          cache-workspaces: true
+          cache-workspaces: .
 
       - name: Run fmt check
         run: cargo fmt --all -- --check
@@ -109,7 +109,7 @@ jobs:
         with:
           toolchain: stable
           cache: true
-          cache-workspaces: true
+          cache-workspaces: .
           target: ${{ matrix.platform.target }}
 
       - name: Build binary
