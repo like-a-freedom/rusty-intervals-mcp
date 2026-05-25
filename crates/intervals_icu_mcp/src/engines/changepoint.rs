@@ -6,9 +6,13 @@ const PLATEAU_WINDOW_DAYS: usize = 28;
 const BACKWARD_STEP_DAYS: usize = 7;
 const CHECK_WINDOW_DAYS: usize = 14;
 const DEFAULT_FLAT_SLOPE_PER_WEEK_THRESHOLD: f64 = 0.5;
+const MIN_CTL_HISTORY_FOR_PERSONALIZATION: usize = 56;
+const DAYS_PER_WEEK: usize = 7;
+const MIN_WEEKS_FOR_PERSONALIZATION: usize = 8;
+const MIN_SLOPE_VALUES: usize = 2;
 
 pub fn linear_regression_slope(values: &[f64]) -> Option<f64> {
-    if values.len() < 2 {
+    if values.len() < MIN_SLOPE_VALUES {
         return None;
     }
 
@@ -27,17 +31,17 @@ pub fn linear_regression_slope(values: &[f64]) -> Option<f64> {
 }
 
 fn athlete_flat_slope_band(ctl_values: &[f64]) -> f64 {
-    if ctl_values.len() < 56 {
+    if ctl_values.len() < MIN_CTL_HISTORY_FOR_PERSONALIZATION {
         return DEFAULT_FLAT_SLOPE_PER_WEEK_THRESHOLD;
     }
 
     let weekly_means = ctl_values
-        .chunks(7)
+        .chunks(DAYS_PER_WEEK)
         .filter(|chunk| !chunk.is_empty())
         .map(|chunk| chunk.iter().sum::<f64>() / chunk.len() as f64)
         .collect::<Vec<_>>();
 
-    if weekly_means.len() < 8 {
+    if weekly_means.len() < MIN_WEEKS_FOR_PERSONALIZATION {
         return DEFAULT_FLAT_SLOPE_PER_WEEK_THRESHOLD;
     }
 
@@ -80,7 +84,7 @@ fn trailing_flat_start(ctl_values: &[f64], flat_band: f64) -> usize {
         }
 
         let candidate = &ctl_values[candidate_start..candidate_end];
-        let candidate_slope = linear_regression_slope(candidate).map(|s| s * 7.0);
+        let candidate_slope = linear_regression_slope(candidate).map(|s| s * DAYS_PER_WEEK as f64);
         let candidate_is_flat = candidate_slope
             .map(|slope| slope.abs() < flat_band)
             .unwrap_or(false);
@@ -102,7 +106,8 @@ pub fn detect_trailing_ctl_plateau(dates: &[String], ctl_values: &[f64]) -> Chan
 
     let recent = &ctl_values[ctl_values.len() - PLATEAU_WINDOW_DAYS..];
     let flat_band = athlete_flat_slope_band(ctl_values);
-    let trailing_slope_per_week = linear_regression_slope(recent).map(|slope| slope * 7.0);
+    let trailing_slope_per_week =
+        linear_regression_slope(recent).map(|slope| slope * DAYS_PER_WEEK as f64);
     let trend = trailing_slope_per_week
         .map(|slope| classify_trend(slope, flat_band))
         .unwrap_or_default();

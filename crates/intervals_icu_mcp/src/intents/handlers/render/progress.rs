@@ -28,7 +28,7 @@ pub(crate) fn render_progress_report(
     };
 
     sections.push(ContentBlock::markdown(format!(
-        "## Progress Tracking Report\n\n### Plateau Detection\n{}\n\n### Load Context\n- ACWR: {}\n- Monotony: {}\n- Strain: {}\n\n### HRV Context\n- HRV ratio: {}\n- HRV trend: {}\n- HRV suppressed: {}\n\n### TID Drift\n- Supported: {}\n- Drift state: {:?}\n- Dominant zone: {}",
+        "## Progress Tracking Report\n\n### Plateau Detection\n{}\n\n### Load Context\n- ACWR: {}\n- Monotony: {}\n- Strain: {}\n\n### HRV Context\n- HRV ratio: {}\n- HRV trend: {}\n- HRV suppressed: {}\n\n### lnRMSSD 7-day Rollup\n- Supported: {}\n- Recent mean: {}\n- Recent CV: {}\n\n### TID Drift\n- Supported: {}\n- Drift state: {:?}\n- Dominant zone: {}",
         plateau_text,
         report
             .acwr_ratio
@@ -39,6 +39,9 @@ pub(crate) fn render_progress_report(
         report.hrv_ratio.map(|value| format!("{value:.2}")).unwrap_or_else(|| "unavailable".into()),
         report.hrv_trend_state.clone().unwrap_or_else(|| "unavailable".into()),
         report.hrv_suppressed,
+        report.lnrmssd.supported,
+        report.lnrmssd.recent_mean_7d.map(|value| format!("{value:.2}")).unwrap_or_else(|| "unavailable".into()),
+        report.lnrmssd.recent_cv_7d.map(|value| format!("{value:.4}")).unwrap_or_else(|| "unavailable".into()),
         report.tid_drift.supported,
         report.tid_drift.drift_state,
         report.tid_drift.dominant_zone.map(|value| value.to_string()).unwrap_or_else(|| "unavailable".into()),

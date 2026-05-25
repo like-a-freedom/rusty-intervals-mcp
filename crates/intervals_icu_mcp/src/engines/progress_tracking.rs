@@ -16,6 +16,10 @@ use crate::engines::coach_metrics::{
 };
 
 const DEFAULT_TID_DRIFT_DELTA_THRESHOLD: f64 = 0.15;
+const MIN_WEEKS_FOR_TID_DRIFT: usize = 4;
+const MONOTONY_HIGH_THRESHOLD: f64 = 1.5;
+const HYPOTHESIS_MIN_CONFIDENCE: f64 = 0.50;
+const TRAILING_LOAD_WINDOW_DAYS: usize = 7;
 
 fn parse_activity_date(value: &str) -> Option<NaiveDate> {
     NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S")
@@ -99,7 +103,7 @@ pub fn build_weekly_zone_distributions(
 }
 
 pub fn compute_tid_drift(weekly: &[(f64, f64, f64)]) -> TidDriftMetrics {
-    if weekly.len() < 4 {
+    if weekly.len() < MIN_WEEKS_FOR_TID_DRIFT {
         return TidDriftMetrics::default();
     }
 
@@ -108,12 +112,12 @@ pub fn compute_tid_drift(weekly: &[(f64, f64, f64)]) -> TidDriftMetrics {
         .filter_map(|(z1, z2, z3)| compute_tid_entropy(*z1, *z2, *z3))
         .collect::<Vec<_>>();
 
-    if entropies.len() < 4 {
+    if entropies.len() < MIN_WEEKS_FOR_TID_DRIFT {
         return TidDriftMetrics::default();
     }
 
-    let recent = &entropies[entropies.len().saturating_sub(4)..];
-    let prior = &entropies[..entropies.len().saturating_sub(4)];
+    let recent = &entropies[entropies.len().saturating_sub(MIN_WEEKS_FOR_TID_DRIFT)..];
+    let prior = &entropies[..entropies.len().saturating_sub(MIN_WEEKS_FOR_TID_DRIFT)];
     let recent_mean = recent.iter().sum::<f64>() / recent.len() as f64;
     let prior_mean = if prior.is_empty() {
         recent_mean
@@ -164,12 +168,15 @@ pub fn match_hypotheses(report: &ProgressReport) -> Vec<ProgressHypothesis> {
                 report.acwr_state.as_deref(),
                 Some("productive") | Some("underloaded")
             ),
-            report.monotony.map(|value| value < 1.5).unwrap_or(false),
+            report
+                .monotony
+                .map(|value| value < MONOTONY_HIGH_THRESHOLD)
+                .unwrap_or(false),
             matches!(report.tid_drift.drift_state, TidDriftState::Stable),
         ],
         &[0.35, 0.25, 0.20, 0.20],
     );
-    if volume_confidence >= 0.50 {
+    if volume_confidence >= HYPOTHESIS_MIN_CONFIDENCE {
         hypotheses.push(ProgressHypothesis {
             domain: HypothesisDomain::Volume,
             confidence: volume_confidence,
@@ -194,13 +201,16 @@ pub fn match_hypotheses(report: &ProgressReport) -> Vec<ProgressHypothesis> {
     let intensity_confidence = weighted_confidence(
         &[
             report.plateau.trend == crate::domains::progress::TrendState::Flat,
-            report.monotony.map(|value| value >= 1.5).unwrap_or(false),
+            report
+                .monotony
+                .map(|value| value >= MONOTONY_HIGH_THRESHOLD)
+                .unwrap_or(false),
             matches!(report.tid_drift.drift_state, TidDriftState::Converging),
             report.tid_drift.dominant_zone == Some(2),
         ],
         &[0.30, 0.25, 0.25, 0.20],
     );
-    if intensity_confidence >= 0.50 {
+    if intensity_confidence >= HYPOTHESIS_MIN_CONFIDENCE {
         hypotheses.push(ProgressHypothesis {
             domain: HypothesisDomain::IntensityDistribution,
             confidence: intensity_confidence,
@@ -235,7 +245,7 @@ pub fn match_hypotheses(report: &ProgressReport) -> Vec<ProgressHypothesis> {
         ],
         &[0.30, 0.30, 0.20, 0.20],
     );
-    if recovery_confidence >= 0.50 {
+    if recovery_confidence >= HYPOTHESIS_MIN_CONFIDENCE {
         hypotheses.push(ProgressHypothesis {
             domain: HypothesisDomain::Recovery,
             confidence: recovery_confidence,
@@ -321,8 +331,8 @@ pub fn build_progress_report(
         .iter()
         .map(|(_, load)| *load)
         .collect::<Vec<_>>();
-    let trailing_7d = if daily_load_values.len() >= 7 {
-        &daily_load_values[daily_load_values.len() - 7..]
+    let trailing_7d = if daily_load_values.len() >= TRAILING_LOAD_WINDOW_DAYS {
+        &daily_load_values[daily_load_values.len() - TRAILING_LOAD_WINDOW_DAYS..]
     } else {
         &daily_load_values[..]
     };
