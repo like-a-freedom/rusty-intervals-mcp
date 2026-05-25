@@ -7,6 +7,7 @@ mod manage_profile;
 mod modify_training;
 mod plan_training;
 pub mod render;
+mod track_progress;
 
 pub use analyze_race::AnalyzeRaceHandler;
 pub use analyze_training::AnalyzeTrainingHandler;
@@ -16,3 +17,4 @@ pub use manage_gear::ManageGearHandler;
 pub use manage_profile::ManageProfileHandler;
 pub use modify_training::ModifyTrainingHandler;
 pub use plan_training::PlanTrainingHandler;
+pub use track_progress::TrackProgressHandler;

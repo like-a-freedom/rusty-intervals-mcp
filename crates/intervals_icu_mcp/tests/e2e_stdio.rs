@@ -150,6 +150,7 @@ async fn e2e_stdio_lists_tools_and_calls_profile() {
         "manage_profile",
         "manage_gear",
         "analyze_race",
+        "track_progress",
     ];
 
     for tool in &tools.tools {
@@ -219,8 +220,8 @@ async fn e2e_stdio_lists_tools_and_calls_profile() {
         .map(|t| t.name.to_string())
         .collect();
 
-    // Verify only 8 intent tools are exposed (no dynamic OpenAPI tools)
-    assert_eq!(names.len(), 8, "Should have exactly 8 intent tools");
+    // Verify only 9 intent tools are exposed (no dynamic OpenAPI tools)
+    assert_eq!(names.len(), 9, "Should have exactly 9 intent tools");
     for expected_name in expected_tool_names {
         assert!(
             names.iter().any(|name| name == expected_name),

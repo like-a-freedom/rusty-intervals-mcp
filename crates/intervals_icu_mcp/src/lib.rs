@@ -17,6 +17,7 @@ use crate::auth::{DecryptedCredentials, HttpBaseUrl};
 use crate::intents::handlers::{
     AnalyzeRaceHandler, AnalyzeTrainingHandler, AssessRecoveryHandler, ComparePeriodsHandler,
     ManageGearHandler, ManageProfileHandler, ModifyTrainingHandler, PlanTrainingHandler,
+    TrackProgressHandler,
 };
 use crate::intents::{
     IdempotencyMiddleware, IntentRouter, intent_error_to_error_data,
@@ -41,6 +42,20 @@ pub mod types;
 pub use event_id::{EventId, FolderId};
 pub use state::{DownloadState, DownloadStatus, WebhookEvent};
 pub use types::*;
+
+fn all_intent_handlers() -> Vec<Box<dyn intents::IntentHandler>> {
+    vec![
+        Box::new(PlanTrainingHandler::new()) as Box<dyn intents::IntentHandler>,
+        Box::new(AnalyzeTrainingHandler::new()) as Box<dyn intents::IntentHandler>,
+        Box::new(ModifyTrainingHandler::new()) as Box<dyn intents::IntentHandler>,
+        Box::new(ComparePeriodsHandler::new()) as Box<dyn intents::IntentHandler>,
+        Box::new(AssessRecoveryHandler::new()) as Box<dyn intents::IntentHandler>,
+        Box::new(ManageProfileHandler::new()) as Box<dyn intents::IntentHandler>,
+        Box::new(ManageGearHandler::new()) as Box<dyn intents::IntentHandler>,
+        Box::new(AnalyzeRaceHandler::new()) as Box<dyn intents::IntentHandler>,
+        Box::new(TrackProgressHandler::new()) as Box<dyn intents::IntentHandler>,
+    ]
+}
 
 #[derive(Clone)]
 pub struct IntervalsMcpHandler {
@@ -83,17 +98,7 @@ impl IntervalsMcpHandler {
         // Create idempotency middleware
         let idempotency = Arc::new(IdempotencyMiddleware::new());
 
-        // Create all 8 intent handlers
-        let handlers = vec![
-            Box::new(PlanTrainingHandler::new()) as Box<dyn intents::IntentHandler>,
-            Box::new(AnalyzeTrainingHandler::new()) as Box<dyn intents::IntentHandler>,
-            Box::new(ModifyTrainingHandler::new()) as Box<dyn intents::IntentHandler>,
-            Box::new(ComparePeriodsHandler::new()) as Box<dyn intents::IntentHandler>,
-            Box::new(AssessRecoveryHandler::new()) as Box<dyn intents::IntentHandler>,
-            Box::new(ManageProfileHandler::new()) as Box<dyn intents::IntentHandler>,
-            Box::new(ManageGearHandler::new()) as Box<dyn intents::IntentHandler>,
-            Box::new(AnalyzeRaceHandler::new()) as Box<dyn intents::IntentHandler>,
-        ];
+        let handlers = all_intent_handlers();
 
         // Create intent router
         let intent_router = Arc::new(IntentRouter::new(handlers, client.clone(), idempotency));
@@ -270,24 +275,7 @@ impl ServerHandler for IntervalsMcpHandler {
             Some(client) => {
                 // Create temporary router with per-request client
                 let idempotency = Arc::new(intents::IdempotencyMiddleware::new());
-                let handlers = vec![
-                    Box::new(intents::handlers::PlanTrainingHandler::new())
-                        as Box<dyn intents::IntentHandler>,
-                    Box::new(intents::handlers::AnalyzeTrainingHandler::new())
-                        as Box<dyn intents::IntentHandler>,
-                    Box::new(intents::handlers::ModifyTrainingHandler::new())
-                        as Box<dyn intents::IntentHandler>,
-                    Box::new(intents::handlers::ComparePeriodsHandler::new())
-                        as Box<dyn intents::IntentHandler>,
-                    Box::new(intents::handlers::AssessRecoveryHandler::new())
-                        as Box<dyn intents::IntentHandler>,
-                    Box::new(intents::handlers::ManageProfileHandler::new())
-                        as Box<dyn intents::IntentHandler>,
-                    Box::new(intents::handlers::ManageGearHandler::new())
-                        as Box<dyn intents::IntentHandler>,
-                    Box::new(intents::handlers::AnalyzeRaceHandler::new())
-                        as Box<dyn intents::IntentHandler>,
-                ];
+                let handlers = all_intent_handlers();
                 let router = Arc::new(intents::IntentRouter::new(handlers, client, idempotency));
 
                 match router
@@ -648,7 +636,7 @@ mod tests {
     #[tokio::test]
     async fn handler_registers_tools() {
         let handler = test_handler();
-        assert_eq!(handler.tool_count(), 8);
+        assert_eq!(handler.tool_count(), 9);
     }
 
     #[test]
@@ -670,7 +658,7 @@ mod tests {
     fn tool_count_matches_internal_tools_without_cache() {
         let handler = test_handler();
         // tool_count() includes 8 intent tools even before dynamic registry load
-        assert_eq!(handler.tool_count(), 8);
+        assert_eq!(handler.tool_count(), 9);
     }
 
     #[tokio::test]
@@ -769,7 +757,7 @@ mod tests {
     #[test]
     fn new_multi_tenant_creates_placeholder_client() {
         let handler = IntervalsMcpHandler::new_multi_tenant();
-        assert_eq!(handler.tool_count(), 8);
+        assert_eq!(handler.tool_count(), 9);
     }
 
     #[tokio::test]
@@ -902,21 +890,21 @@ mod tests {
         // Note: Full list_tools testing requires RequestContext which is complex to construct.
         // Integration tests in tests/ directory cover the full flow.
         // Here we just verify the handler has the right tool count.
-        assert_eq!(handler.tool_count(), 8);
+        assert_eq!(handler.tool_count(), 9);
     }
 
     #[tokio::test]
     async fn test_list_tools_have_input_schemas() {
         let handler = test_handler();
         // Schema validation is done in integration tests
-        assert_eq!(handler.tool_count(), 8);
+        assert_eq!(handler.tool_count(), 9);
     }
 
     #[tokio::test]
     async fn test_list_tools_have_descriptions() {
         let handler = test_handler();
         // Description validation is done in integration tests
-        assert_eq!(handler.tool_count(), 8);
+        assert_eq!(handler.tool_count(), 9);
     }
 
     // ========================================================================
@@ -935,7 +923,7 @@ mod tests {
         // Note: Full list_resources testing requires RequestContext.
         // Integration tests cover the full flow.
         // Here we verify the handler is properly configured.
-        assert_eq!(handler.tool_count(), 8);
+        assert_eq!(handler.tool_count(), 9);
     }
 
     // ========================================================================

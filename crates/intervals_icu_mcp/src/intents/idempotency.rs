@@ -154,9 +154,11 @@ impl IdempotencyMiddleware {
         token: &str,
         request_fingerprint: &str,
     ) -> Result<Option<IntentOutput>, IntentError> {
-        let mut cache = self.cache.write().await;
+        let cache = self.cache.read().await;
         if let Some(entry) = cache.entries.get(token) {
             if entry.is_expired() {
+                drop(cache);
+                let mut cache = self.cache.write().await;
                 cache.entries.remove(token);
                 cache.stats.expired_count += 1;
                 return Ok(None);
