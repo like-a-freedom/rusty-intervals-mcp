@@ -15,6 +15,7 @@
 //! - [`resources`]: MCP resource handling
 //! - [`sport_settings`]: Sport settings filtering and compaction
 //! - [`wellness`]: Wellness data summarization
+//! - [`workout_validator`]: Workout Builder syntax validation
 //! - [`workouts`]: Workout library operations
 
 pub mod activity_analysis;
@@ -27,6 +28,7 @@ pub mod progress;
 pub mod resources;
 pub mod sport_settings;
 pub mod wellness;
+pub mod workout_validator;
 pub mod workouts;
 
 // Re-export commonly used constants for convenience
