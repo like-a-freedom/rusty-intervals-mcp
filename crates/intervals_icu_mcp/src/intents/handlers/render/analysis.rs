@@ -27,23 +27,36 @@ pub(crate) fn build_load_management_text(
     }
 
     if let Some(monotony) = metrics.monotony {
-        lines.push(format!("  Monotony: {:.2}", monotony));
+        let note = if monotony > 1.5 { " high" } else { "" };
+        lines.push(format!(
+            "  Monotony: {:.2} (higher = samey;{note} >1.5 = concerning)",
+            monotony
+        ));
     }
 
     if let Some(strain) = metrics.strain {
-        lines.push(format!("  Strain: {:.0}", strain));
+        lines.push(format!("  Strain: {:.0} (total load × monotony)", strain));
     }
 
     if let Some(stress_tolerance) = metrics.stress_tolerance {
-        lines.push(format!("  Stress Tolerance: {:.2}", stress_tolerance));
+        lines.push(format!(
+            "  Stress Tolerance: {:.2} (higher = more resilient)",
+            stress_tolerance
+        ));
     }
 
     if let Some(fatigue_index) = metrics.fatigue_index {
-        lines.push(format!("  Fatigue Index: {:.2}", fatigue_index));
+        lines.push(format!(
+            "  Fatigue Index: {:.2} (higher = more fatigue accumulated)",
+            fatigue_index
+        ));
     }
 
     if let Some(durability_index) = metrics.durability_index {
-        lines.push(format!("  Durability Index: {:.3}", durability_index));
+        lines.push(format!(
+            "  Durability Index: {:.3} (lower = decay risk)",
+            durability_index
+        ));
     }
 
     if lines.len() == 1 {
@@ -1055,13 +1068,19 @@ pub(crate) fn render_espe_section(
     }
     let mut lines = vec!["Power-Duration Anchors".to_string()];
     if let Some(eftp) = anchors.eftp {
-        lines.push(format!("  eFTP: {:.0} W", eftp));
+        lines.push(format!(
+            "  eFTP: {:.0} W (functional threshold power)",
+            eftp
+        ));
     }
     if let Some(w_prime) = anchors.w_prime {
-        lines.push(format!("  W′: {:.0} J", w_prime));
+        lines.push(format!("  W′: {:.0} J (anaerobic work capacity)", w_prime));
     }
     if let Some(p_max) = anchors.p_max {
-        lines.push(format!("  pMax: {:.0} W", p_max));
+        lines.push(format!(
+            "  pMax: {:.0} W (maximum neuromuscular power)",
+            p_max
+        ));
     }
     if let Some(derived) = derived {
         if let Some(glycolytic_bias) = derived.glycolytic_bias {
@@ -1077,7 +1096,10 @@ pub(crate) fn render_espe_section(
             lines.push(format!("  Durability Gradient (P60/P20): {:.2}", val));
         }
         if let Some(val) = derived.balance_score {
-            lines.push(format!("  Balance Score: {:.2}", val));
+            lines.push(format!(
+                "  Balance Score: {:.2} (deviation from ideal P1/P20 ratio)",
+                val
+            ));
         }
         if let Some(val) = derived.vo2_reserve_ratio {
             lines.push(format!("  VO2 Reserve Ratio (P5/eFTP): {:.2}", val));
@@ -1093,25 +1115,34 @@ pub(crate) fn render_wdrm_section(wdrm: &Option<WdrMetrics>) -> Option<String> {
     }
     let mut lines = vec!["W′ Depletion (WDRM)".to_string()];
     if let Some(max_depletion) = wdrm.max_wbal_depletion {
-        lines.push(format!("  Max W′ Depletion: {:.0} J", max_depletion));
+        lines.push(format!(
+            "  Max W′ Depletion: {:.0} J (peak W′ used)",
+            max_depletion
+        ));
     }
     if let Some(depletion_pct) = wdrm.depletion_pct {
-        lines.push(format!("  Depletion: {:.0}%", depletion_pct * 100.0));
+        lines.push(format!(
+            "  Depletion: {:.0}% (of W′ capacity)",
+            depletion_pct * 100.0
+        ));
     }
     if let Some(joules) = wdrm.joules_above_ftp {
-        lines.push(format!("  Joules Above FTP: {:.0}", joules));
+        lines.push(format!(
+            "  Joules Above FTP: {:.0} (work above threshold)",
+            joules
+        ));
     }
     if wdrm.sessions_with_data_7d > 0
         && let Some(mean_depletion) = wdrm.mean_depletion_pct_7d
     {
         lines.push(format!(
-            "  Mean 7d Depletion: {:.0}%",
+            "  Mean 7d Depletion: {:.0}% (avg daily W′ spend)",
             mean_depletion * 100.0
         ));
     }
     if wdrm.sessions_with_data_7d > 0 {
         lines.push(format!(
-            "  High Depletion Sessions (7d): {}",
+            "  High Depletion Sessions (7d): {} (sessions >80% depletion)",
             wdrm.high_depletion_sessions_7d
         ));
     }
@@ -1122,7 +1153,7 @@ pub(crate) fn render_isdm_section(decoupling: &Option<DecouplingMetrics>) -> Opt
     let decoupling = decoupling.as_ref()?;
     let mut lines = vec!["Aerobic Decoupling (ISDM)".to_string()];
     lines.push(format!(
-        "  Signed Decoupling: {:.1}%",
+        "  Signed Decoupling: {:.1}% (negative = improving, positive = drifting)",
         decoupling.signed_decoupling_pct
     ));
     lines.push(format!(
@@ -1134,10 +1165,10 @@ pub(crate) fn render_isdm_section(decoupling: &Option<DecouplingMetrics>) -> Opt
         decoupling.durability_state
     ));
     if let Some(ef1) = decoupling.efficiency_factor_first_half {
-        lines.push(format!("  EF First Half: {:.3}", ef1));
+        lines.push(format!("  EF First Half: {:.3} (efficiency, early)", ef1));
     }
     if let Some(ef2) = decoupling.efficiency_factor_second_half {
-        lines.push(format!("  EF Second Half: {:.3}", ef2));
+        lines.push(format!("  EF Second Half: {:.3} (efficiency, late)", ef2));
     }
     if let Some(variance) = decoupling.z2_hr_variance {
         let stability = if variance < 25.0 {
@@ -1161,19 +1192,31 @@ pub(crate) fn render_ndli_section(ndli: &Option<NdliMetrics>) -> Option<String> 
         return None;
     }
     let mut lines = vec!["Neural Density Load Index (NDLI)".to_string()];
-    lines.push(format!("  State: {}", ndli.ndli_state));
+    lines.push(format!(
+        "  State: {} (workload concentration risk)",
+        ndli.ndli_state
+    ));
     lines.push(format!(
         "  High-Intensity Days (7d): {}",
         ndli.high_intensity_days_7d
     ));
     if let Some(if_val) = ndli.mean_intensity_factor_7d {
-        lines.push(format!("  Mean IF: {:.3}", if_val));
+        lines.push(format!(
+            "  Mean IF: {:.3} (intensity factor, 1.0 = FTP)",
+            if_val
+        ));
     }
     if let Some(ef) = ndli.mean_efficiency_factor_7d {
-        lines.push(format!("  Mean EF: {:.3}", ef));
+        lines.push(format!(
+            "  Mean EF: {:.3} (efficiency factor, higher = fresher)",
+            ef
+        ));
     }
     if let Some(vi) = ndli.mean_variability_index_7d {
-        lines.push(format!("  Mean VI: {:.2}", vi));
+        lines.push(format!(
+            "  Mean VI: {:.2} (variability index, >1.1 = variable)",
+            vi
+        ));
     }
     Some(lines.join("\n"))
 }

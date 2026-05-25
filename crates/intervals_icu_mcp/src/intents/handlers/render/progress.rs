@@ -28,7 +28,7 @@ pub(crate) fn render_progress_report(
     };
 
     sections.push(ContentBlock::markdown(format!(
-        "## Progress Tracking Report\n\n### Plateau Detection\n{}\n\n### Load Context\n- ACWR: {}\n- Monotony: {}\n- Strain: {}\n\n### HRV Context\n- HRV ratio: {}\n- HRV trend: {}\n- HRV suppressed: {}\n\n### lnRMSSD 7-day Rollup\n- Supported: {}\n- Recent mean: {}\n- Recent CV: {}\n- Trend slope: {}\n- Sample count: {}\n\n### TID Drift\n- Supported: {}\n- Weekly samples: {}\n- Entropy recent 4w: {}\n- Entropy prior 4w: {}\n- Drift state: {:?}\n- Dominant zone: {}",
+        "## Progress Tracking Report\n\n### Plateau Detection\n{}\n\n### Load Context\n- ACWR: {}\n- Monotony: {} (higher = samey)\n- Strain: {} (total load × monotony)\n\n### HRV Context\n- HRV ratio: {} (1.0 = recovered)\n- HRV trend: {}\n- HRV suppressed: {}\n\n### lnRMSSD 7-day Rollup\n- Supported: {}\n- Recent mean: {} (ln-scale)\n- Recent CV: {} (variability)\n- Trend slope: {} (per day)\n- Sample count: {}\n\n### TID Drift\n- Supported: {}\n- Weekly samples: {}\n- Entropy recent 4w: {} (lower = concentrated)\n- Entropy prior 4w: {} (reference)\n- Drift state: {:?}\n- Dominant zone: {}",
         plateau_text,
         report
             .acwr_ratio

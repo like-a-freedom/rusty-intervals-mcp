@@ -569,7 +569,10 @@ impl AnalyzeTrainingHandler {
         {
             let mut lines = workout.execution_notes.clone();
             if let Some(efficiency_factor) = workout.efficiency_factor {
-                lines.push(format!("Efficiency Factor: {:.2}", efficiency_factor));
+                lines.push(format!(
+                    "Efficiency Factor: {:.2} (power/HR, higher = fresher)",
+                    efficiency_factor
+                ));
             }
             if let Some(decoupling) = &workout.aerobic_decoupling {
                 lines.push(format!(

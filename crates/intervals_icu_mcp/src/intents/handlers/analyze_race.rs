@@ -331,7 +331,10 @@ impl IntentHandler for AnalyzeRaceHandler {
                     execution_lines.push(load_note.clone());
                 }
                 if let Some(efficiency_factor) = race_metrics.efficiency_factor {
-                    execution_lines.push(format!("Efficiency Factor: {:.2}", efficiency_factor));
+                    execution_lines.push(format!(
+                        "Efficiency Factor: {:.2} (power/HR, higher = fresher)",
+                        efficiency_factor
+                    ));
                 }
                 if let Some(decoupling) = &race_metrics.aerobic_decoupling {
                     execution_lines.push(format!(
@@ -418,13 +421,27 @@ impl IntentHandler for AnalyzeRaceHandler {
                     wellness_lines.push(format!("Resting HR: {:.0} bpm", rhr));
                 }
                 if let Some(ratio) = wellness.hrv_ratio {
-                    wellness_lines.push(format!("HRV ratio: {:.2}", ratio));
+                    let status = if ratio >= 1.0 {
+                        "recovered"
+                    } else if ratio >= 0.9 {
+                        "adequate"
+                    } else {
+                        "suppressed"
+                    };
+                    wellness_lines.push(format!("HRV ratio: {:.2} ({})", ratio, status));
                 }
                 if let Some(trend) = &wellness.hrv_trend_state {
                     wellness_lines.push(format!("HRV trend: {}", trend));
                 }
                 if let Some(index) = wellness.recovery_index {
-                    wellness_lines.push(format!("Recovery index: {:.2}", index));
+                    let status = if index >= 1.2 {
+                        "supportive"
+                    } else if index >= 0.9 {
+                        "watch"
+                    } else {
+                        "low"
+                    };
+                    wellness_lines.push(format!("Recovery index: {:.2} ({})", index, status));
                 }
                 if !wellness_lines.is_empty() {
                     content.push(ContentBlock::markdown(format!(
