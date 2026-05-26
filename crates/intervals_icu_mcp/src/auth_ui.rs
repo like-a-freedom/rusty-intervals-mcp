@@ -255,7 +255,13 @@ pub async fn serve_css() -> impl IntoResponse {
 
 // ── HTML shell ───────────────────────────────────────────────────────────
 
-fn page_shell(title: &str, page: &str, body: Markup) -> Markup {
+fn page_shell(
+    title: &str,
+    page: &str,
+    body: Markup,
+    flash_success: Option<String>,
+    flash_error: Option<String>,
+) -> Markup {
     fn nav_link(label: &str, href: &str, current: &str) -> Markup {
         if href == current {
             html! { a.active href=(href) { (label) } }
@@ -316,6 +322,8 @@ fn page_shell(title: &str, page: &str, body: Markup) -> Markup {
                       border-radius: 0.5rem;
                       font-size: 0.875rem;
                     }
+                    .flash-banner { margin: 1rem auto; max-width: 48rem; animation: flashIn .35s ease-out; }
+                    @keyframes flashIn { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
                     input[type=hidden] { display: none; }
                     .nav-bar { display: flex; align-items: center; gap: 1rem; padding: 0.75rem 1.5rem;
                       border-bottom: 1px solid var(--mui-border, #e5e7eb); }
@@ -340,6 +348,11 @@ fn page_shell(title: &str, page: &str, body: Markup) -> Markup {
                     (nav_link("Home", "/ui", page))
                     (nav_link("Tokens", "/ui/tokens", page))
                 }
+                @if let Some(ref msg) = flash_error {
+                    .flash-banner.error-alert { (msg) }
+                } @else if let Some(ref msg) = flash_success {
+                    .flash-banner.success-alert { (msg) }
+                }
                 .mui-container {
                     (body)
                 }
@@ -356,7 +369,7 @@ pub struct UiQuery {
     pub success: Option<String>,
 }
 
-fn render_home_body(query: &UiQuery, csrf: &str) -> Markup {
+fn render_home_body(csrf: &str) -> Markup {
     use maud_ui::primitives::{button, card, field, input};
 
     html! {
@@ -422,14 +435,6 @@ fn render_home_body(query: &UiQuery, csrf: &str) -> Markup {
                             ..Default::default()
                         }))
                     }
-                    @if let Some(ref error) = query.error {
-                        br;
-                        div.error-alert { (error) }
-                    }
-                    @if let Some(ref success) = query.success {
-                        br;
-                        div.success-alert { (success) }
-                    }
                 },
                 ..Default::default()
             }))
@@ -446,7 +451,9 @@ pub async fn ui_home(
     let html = page_shell(
         "Token Setup",
         "/ui",
-        render_home_body(&query, &session.csrf_token),
+        render_home_body(&session.csrf_token),
+        query.success,
+        query.error,
     );
     let mut resp = html.into_response();
     set_session_cookie(&mut resp, &session.session_id);
@@ -542,7 +549,7 @@ pub async fn ui_create_token(
                     &expiry_formatted,
                     &token_request.ttl_label(),
                 );
-                let html = page_shell("Token Generated", "/ui", body);
+                let html = page_shell("Token Generated", "/ui", body, None, None);
                 let mut resp = html.into_response();
                 set_session_cookie(&mut resp, &session.session_id);
                 resp
@@ -627,6 +634,7 @@ pub struct TokenListQuery {
     pub sort: Option<String>,
     pub order: Option<String>,
     pub success: Option<String>,
+    pub error: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -677,14 +685,14 @@ pub async fn ui_list_tokens(
     let ascending = query.order.as_deref() != Some("desc");
     let sorted = sort_tokens(filtered, sort, ascending);
 
-    let body = render_token_list(
-        &sorted,
-        &session.csrf_token,
-        &query.sort,
-        &query.order,
-        &query.success,
+    let body = render_token_list(&sorted, &session.csrf_token, &query.sort, &query.order);
+    let html = page_shell(
+        "Token Management",
+        "/ui/tokens",
+        body,
+        query.success,
+        query.error,
     );
-    let html = page_shell("Token Management", "/ui/tokens", body);
     let mut resp = html.into_response();
     set_session_cookie(&mut resp, &session.session_id);
     resp
@@ -725,7 +733,6 @@ fn render_token_list(
     csrf: &str,
     current_sort: &Option<String>,
     current_order: &Option<String>,
-    success: &Option<String>,
 ) -> Markup {
     use maud_ui::primitives::{badge, button, card};
 
@@ -752,10 +759,6 @@ fn render_token_list(
         title: Some("Active Tokens".into()),
         description: Some("Manage tokens issued through this interface.".into()),
         children: html! {
-            @if let Some(msg) = success {
-                div.success-alert { (msg) }
-                br;
-            }
             @if tokens.is_empty() {
                 div style="text-align:center;padding:2rem 0;" {
                     p style="color:var(--mui-muted-foreground,#6b7280);margin-bottom:1rem;" {
