@@ -89,6 +89,9 @@ fn page_shell(title: &str, _csrf_token: &str, page: &str, body: Markup) -> Marku
                 meta name="viewport" content="width=device-width, initial-scale=1";
                 title { (title) " — Intervals.icu MCP" }
                 link rel="stylesheet" href="/ui/static/css";
+                script {
+                    r#"document.addEventListener("DOMContentLoaded",()=>{const e=document.querySelector(".error-alert,.success-alert");if(e){setTimeout(()=>{e.style.transition="opacity .4s";e.style.opacity="0";setTimeout(()=>e.remove(),400)},5e3);if(window.history.replaceState){const u=new URL(window.location);u.searchParams.delete("error");u.searchParams.delete("success");window.history.replaceState({},"",u)}}})"#
+                }
                 style {
                     r#"                    .mui-card { margin: 4rem auto; }
                     .mui-card--narrow { max-width: 28rem; }
