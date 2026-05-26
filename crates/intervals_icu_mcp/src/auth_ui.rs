@@ -6,8 +6,9 @@ use axum::{
 };
 use intervals_icu_client::IntervalsClient;
 use maud::{DOCTYPE, Markup, html};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use uuid::Uuid;
@@ -36,7 +37,7 @@ fn generate_csrf_token() -> String {
 
 // ── Token registry ───────────────────────────────────────────────────────
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TokenRecord {
     pub jti: String,
     pub athlete_id: String,
@@ -54,6 +55,25 @@ pub struct UiState {
     pub app_state: Arc<AppState>,
     pub sessions: SessionStore,
     pub tokens: TokenRegistry,
+    pub registry_path: Option<PathBuf>,
+}
+
+impl UiState {
+    pub fn new(app_state: Arc<AppState>, registry_path: Option<PathBuf>) -> Self {
+        let tokens = Arc::new(RwLock::new(
+            registry_path
+                .as_ref()
+                .and_then(|p| std::fs::read_to_string(p).ok())
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_default(),
+        ));
+        Self {
+            app_state,
+            sessions: Arc::new(RwLock::new(HashMap::new())),
+            tokens,
+            registry_path,
+        }
+    }
 }
 
 // ── CSS route ────────────────────────────────────────────────────────────
@@ -298,6 +318,17 @@ fn set_session_cookie(resp: &mut axum::response::Response, session_id: &str) {
         .insert(SET_COOKIE, cookie.parse().unwrap());
 }
 
+async fn save_registry(registry: &TokenRegistry, path: &Option<PathBuf>) {
+    if let Some(path) = path {
+        if let Some(parent) = path.parent() {
+            let _ = tokio::fs::create_dir_all(parent).await;
+        }
+        if let Ok(data) = serde_json::to_vec(&*registry.read().await) {
+            let _ = tokio::fs::write(path, data).await;
+        }
+    }
+}
+
 // ── Token creation (POST /ui/token) ──────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -371,6 +402,7 @@ pub async fn ui_create_token(
                     revoked: false,
                 });
                 drop(registry);
+                save_registry(&ui.tokens, &ui.registry_path).await;
 
                 let mut session = ui.sessions.write().await;
                 if let Some(s) = session.get_mut(&session_id) {
@@ -697,6 +729,8 @@ pub async fn ui_revoke_token(
             token.revoked = true;
         }
     }
+
+    save_registry(&ui.tokens, &ui.registry_path).await;
 
     crate::metrics::record_ui_action("token_revoked");
     tracing::info!(

@@ -328,7 +328,7 @@ The server includes a minimal browser-based token management UI at `/ui` when ru
 
 The UI is server-rendered HTML with rate limiting (2 req/s, burst 5). No additional environment variables are needed — it uses the same `JWT_MASTER_KEY` and `JWT_TTL_SECONDS` as the JSON `/auth` endpoint.
 
-**Revocation scope:** Token revocation in the UI is session-scoped (in-memory). Revoked tokens are not checked by the JWT verification middleware — a revoked token remains usable until it expires. This is a known limitation of the current stateless JWT architecture. See `crates/intervals_icu_mcp/src/auth.rs` for details.
+**Revocation scope:** Token revocation in the UI is session-scoped. By default tokens are stored in‑memory and lost on restart. Set `MCP_TOKEN_REGISTRY_PATH` to a writable file path to persist issued tokens across restarts (e.g., `/data/tokens.json` in Docker).
 
 ## VS Code / Copilot setup
 
