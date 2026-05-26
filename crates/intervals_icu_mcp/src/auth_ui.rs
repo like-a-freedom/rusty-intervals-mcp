@@ -278,7 +278,7 @@ fn page_shell(
                 title { (title) " — Intervals.icu MCP" }
                 link rel="stylesheet" href="/ui/static/css";
                 script {
-                    r#"document.addEventListener("DOMContentLoaded",()=>{const a=document.querySelector(".error-alert,.success-alert");a&&(setTimeout(()=>{a.style.transition="opacity .4s";a.style.opacity="0";setTimeout(()=>a.remove(),400)},5e3),window.history.replaceState&&((n=new URL(window.location)).searchParams.delete("error"),n.searchParams.delete("success"),window.history.replaceState({},"",n)));document.querySelector("[data-clipboard]")?.addEventListener("click",function(){navigator.clipboard.writeText(this.dataset.clipboard).then(()=>{let t=this.querySelector(".copy-toast");t||(t=document.createElement("span"),t.className="copy-toast",t.textContent="Copied!",this.appendChild(t),requestAnimationFrame(()=>t.classList.add("show"))),setTimeout(()=>{t.classList.remove("show"),setTimeout(()=>t.remove(),250)},1200)}).catch(()=>{})})})"#
+                    r#"document.addEventListener("DOMContentLoaded",()=>{const b=document.querySelector(".flash-banner");b&&(setTimeout(()=>{b.classList.add("dismissing"),setTimeout(()=>b.remove(),400)},5e3),window.history.replaceState&&((u=new URL(window.location)).searchParams.delete("error"),u.searchParams.delete("success"),window.history.replaceState({},"",u)));document.querySelector("[data-clipboard]")?.addEventListener("click",function(){navigator.clipboard.writeText(this.dataset.clipboard).then(()=>{let t=this.querySelector(".copy-toast");t||(t=document.createElement("span"),t.className="copy-toast",t.textContent="Copied!",this.appendChild(t),requestAnimationFrame(()=>t.classList.add("show"))),setTimeout(()=>{t.classList.remove("show"),setTimeout(()=>t.remove(),250)},1200)}).catch(()=>{})})})"#
                 }
                 style {
                     r#"                    .mui-card { margin: 4rem auto; }
@@ -323,6 +323,7 @@ fn page_shell(
                       font-size: 0.875rem;
                     }
                     .flash-banner { margin: 1rem auto; max-width: 48rem; animation: flashIn .35s ease-out; }
+                    .flash-banner.dismissing { opacity: 0; transition: opacity .4s ease; }
                     @keyframes flashIn { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
                     input[type=hidden] { display: none; }
                     .nav-bar { display: flex; align-items: center; gap: 1rem; padding: 0.75rem 1.5rem;
