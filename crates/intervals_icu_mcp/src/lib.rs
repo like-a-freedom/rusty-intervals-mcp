@@ -548,6 +548,10 @@ pub async fn run_http_server(
     let metrics_route = metrics::create_metrics_router();
 
     let app = axum::Router::new()
+        .route(
+            "/",
+            axum::routing::get(|| async { axum::response::Redirect::to("/ui") }),
+        )
         .merge(auth_route)
         .merge(ui_route)
         .merge(mcp_route)
