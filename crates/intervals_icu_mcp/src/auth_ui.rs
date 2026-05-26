@@ -339,6 +339,7 @@ fn page_shell(
                     .mui-table th a:hover { opacity: 0.75; }
                     .sort-arrow { display: inline-block; font-size: 0.625rem; line-height: 1; }
                     .ttl-select { width: 100%; padding: 0.5rem; border: 1px solid var(--mui-border, #e5e7eb); border-radius: 0.375rem; background: var(--mui-bg, #fff); color: var(--mui-text, #111827); font-size: 0.875rem; }
+                    .field-hint { font-weight: 400; color: var(--mui-muted-foreground, #6b7280); font-size: 0.75rem; margin-left: 0.5rem; }
                     .token-info-grid { display: grid; grid-template-columns: auto 1fr; gap: 0.5rem 1rem; margin-top: 1rem; font-size: 0.875rem; }
                     .token-info-grid dt { color: var(--mui-muted-foreground, #6b7280); text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.75rem; }
                     .token-info-grid dd { margin: 0; }"#
@@ -411,24 +412,22 @@ fn render_home_body(csrf: &str) -> Markup {
                             },
                             ..Default::default()
                         }))
-                        (field::render(field::Props {
-                            label: "Token TTL".into(),
-                            id: "ttl_days".into(),
-                            description: Some("How long the token will be valid.".into()),
-                            children: html! {
-                                select.ttl-select name="ttl_days" id="ttl_days" {
-                                    option value="1" { "1 day" }
-                                    option value="7" { "7 days" }
-                                    option value="30" selected { "30 days (default)" }
-                                    option value="90" { "90 days" }
-                                    option value="180" { "180 days" }
-                                    option value="365" { "1 year" }
-                                    option value="1825" { "5 years" }
-                                    option value="3650" { "10 years" }
-                                }
-                            },
-                            ..Default::default()
-                        }))
+                        div.mui-field {
+                            label.mui-field__label for="ttl_days" {
+                                "Token TTL"
+                                span.field-hint { "How long the token will be valid." }
+                            }
+                            select.ttl-select name="ttl_days" id="ttl_days" {
+                                option value="1" { "1 day" }
+                                option value="7" { "7 days" }
+                                option value="30" selected { "30 days (default)" }
+                                option value="90" { "90 days" }
+                                option value="180" { "180 days" }
+                                option value="365" { "1 year" }
+                                option value="1825" { "5 years" }
+                                option value="3650" { "10 years" }
+                            }
+                        }
                         br;
                         (button::render(button::Props {
                             label: "Generate Token".into(),
