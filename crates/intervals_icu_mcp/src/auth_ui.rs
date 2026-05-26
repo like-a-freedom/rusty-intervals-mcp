@@ -605,12 +605,16 @@ fn render_token_list(
                 br;
             }
             @if tokens.is_empty() {
-                p { "No tokens have been issued yet." }
-                a href="/ui" {
-                    (button::render(button::Props {
-                        label: "Generate a Token".into(),
-                        ..Default::default()
-                    }))
+                div style="text-align:center;padding:2rem 0;" {
+                    p style="color:var(--mui-muted-foreground,#6b7280);margin-bottom:1rem;" {
+                        "No tokens yet. Create one to get started."
+                    }
+                    a href="/ui" {
+                        (button::render(button::Props {
+                            label: "Create a Token".into(),
+                            ..Default::default()
+                        }))
+                    }
                 }
             } @else {
                 div.mui-table-wrapper {
