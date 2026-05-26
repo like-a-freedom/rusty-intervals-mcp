@@ -22,7 +22,7 @@ services:
       INTERVALS_ICU_API_KEY: ${INTERVALS_ICU_API_KEY:-""}
       MCP_TOKEN_REGISTRY_PATH: ${MCP_TOKEN_REGISTRY_PATH:-/data/tokens.json}
     volumes:
-      - intervals_mcp_data:/data
+      - ./data:/data
     restart: unless-stopped
     logging:
       driver: "json-file"
