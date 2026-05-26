@@ -90,7 +90,7 @@ fn page_shell(title: &str, _csrf_token: &str, page: &str, body: Markup) -> Marku
                 title { (title) " — Intervals.icu MCP" }
                 link rel="stylesheet" href="/ui/static/css";
                 script {
-                    r#"document.addEventListener("DOMContentLoaded",()=>{const e=document.querySelector(".error-alert,.success-alert");if(e){setTimeout(()=>{e.style.transition="opacity .4s";e.style.opacity="0";setTimeout(()=>e.remove(),400)},5e3);if(window.history.replaceState){const u=new URL(window.location);u.searchParams.delete("error");u.searchParams.delete("success");window.history.replaceState({},"",u)}}})"#
+                    r#"document.addEventListener("DOMContentLoaded",()=>{const a=document.querySelector(".error-alert,.success-alert");a&&(setTimeout(()=>{a.style.transition="opacity .4s";a.style.opacity="0";setTimeout(()=>a.remove(),400)},5e3),window.history.replaceState&&((n=new URL(window.location)).searchParams.delete("error"),n.searchParams.delete("success"),window.history.replaceState({},"",n)));document.querySelector("[data-clipboard]")?.addEventListener("click",function(){navigator.clipboard.writeText(this.dataset.clipboard).then(()=>{const t=this.textContent;this.textContent="Copied!",setTimeout(()=>this.textContent=t,1500)}).catch(()=>{})})})"#
                 }
                 style {
                     r#"                    .mui-card { margin: 4rem auto; }
@@ -107,8 +107,10 @@ fn page_shell(title: &str, _csrf_token: &str, page: &str, body: Markup) -> Marku
                       background: #0f172a;
                       color: #e2e8f0;
                       padding: 1rem;
+                      padding-top: 2rem;
                       border-radius: 0.5rem;
                       border: 1px solid #1e293b;
+                      position: relative;
                     }
                     .copy-btn { position: absolute; top: 0.5rem; right: 0.5rem; }
                     .error-alert {
@@ -421,6 +423,9 @@ fn render_token_success(
         description: Some("Copy this token now — you won't see it again.".into()),
         children: html! {
             div class="token-display" {
+                button.copy-btn data-clipboard=(token) style="position:absolute;top:0.5rem;right:0.5rem;background:#1e293b;color:#94a3b8;border:1px solid #334155;border-radius:0.375rem;padding:0.25rem 0.5rem;font-size:0.75rem;cursor:pointer;" {
+                    "Copy"
+                }
                 (token)
             }
             br;
