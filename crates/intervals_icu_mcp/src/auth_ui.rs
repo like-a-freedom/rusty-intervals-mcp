@@ -73,7 +73,14 @@ pub async fn serve_css() -> impl IntoResponse {
 
 // ── HTML shell ───────────────────────────────────────────────────────────
 
-fn page_shell(title: &str, _csrf_token: &str, body: Markup) -> Markup {
+fn page_shell(title: &str, _csrf_token: &str, page: &str, body: Markup) -> Markup {
+    fn nav_link(label: &str, href: &str, current: &str) -> Markup {
+        if href == current {
+            html! { a.active href=(href) { (label) } }
+        } else {
+            html! { a href=(href) { (label) } }
+        }
+    }
     html! {
         (DOCTYPE)
         html lang="en" {
@@ -138,8 +145,8 @@ fn page_shell(title: &str, _csrf_token: &str, body: Markup) -> Markup {
             body {
                 .nav-bar {
                     .brand { "Intervals.icu MCP" }
-                    a href="/ui" { "Home" }
-                    a href="/ui/tokens" { "Tokens" }
+                    (nav_link("Home", "/ui", page))
+                    (nav_link("Tokens", "/ui/tokens", page))
                 }
                 .mui-container {
                     (body)
@@ -248,7 +255,7 @@ pub async fn ui_home(
     }
     };
 
-    let html = page_shell("Token Setup", &csrf, body);
+    let html = page_shell("Token Setup", &csrf, "/ui", body);
     let mut resp = html.into_response();
     set_session_cookie(&mut resp, &session_id);
     resp
@@ -376,7 +383,7 @@ pub async fn ui_create_token(
 
                 let csrf = get_csrf(&ui.sessions, &session_id).await;
                 let body = render_token_success(&token, &athlete_id, &expiry_formatted, &ttl_label);
-                let html = page_shell("Token Generated", &csrf, body);
+                let html = page_shell("Token Generated", &csrf, "/ui", body);
                 let mut resp = html.into_response();
                 set_session_cookie(&mut resp, &session_id);
                 resp
@@ -521,8 +528,8 @@ pub async fn ui_list_tokens(
     let ascending = query.order.as_deref() != Some("desc");
     let sorted = sort_tokens(filtered, sort, ascending);
 
-    let body = render_token_list(&sorted, &csrf, &query.sort, &query.order);
-    let html = page_shell("Token Management", &csrf, body);
+    let body = render_token_list(&sorted, &csrf, &query.sort, &query.order, &query.success);
+    let html = page_shell("Token Management", &csrf, "/ui/tokens", body);
     let mut resp = html.into_response();
     set_session_cookie(&mut resp, &session_id);
     resp
@@ -563,6 +570,7 @@ fn render_token_list(
     csrf: &str,
     current_sort: &Option<String>,
     current_order: &Option<String>,
+    success: &Option<String>,
 ) -> Markup {
     use maud_ui::primitives::{badge, button, card};
 
@@ -589,6 +597,10 @@ fn render_token_list(
         title: Some("Active Tokens".into()),
         description: Some("Manage tokens issued through this interface.".into()),
         children: html! {
+            @if let Some(msg) = success {
+                div.success-alert { (msg) }
+                br;
+            }
             @if tokens.is_empty() {
                 p { "No tokens have been issued yet." }
                 a href="/ui" {
