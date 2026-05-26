@@ -564,7 +564,26 @@ fn render_token_list(
     current_sort: &Option<String>,
     current_order: &Option<String>,
 ) -> Markup {
-    use maud_ui::primitives::{badge, button, card, table};
+    use maud_ui::primitives::{badge, button, card};
+
+    fn th_link(
+        label: &str,
+        field: &str,
+        current_sort: &Option<String>,
+        current_order: &Option<String>,
+    ) -> Markup {
+        let arrow = sort_arrow(field, current_sort, current_order);
+        html! {
+            th.mui-table__th {
+                a href=(sort_href(field, current_sort, current_order)) style="color:inherit;text-decoration:none;display:inline-flex;align-items:center;gap:0.125rem;" {
+                    (label)
+                    @if !arrow.is_empty() {
+                        span.sort-arrow { (arrow) }
+                    }
+                }
+            }
+        }
+    }
 
     card::render(card::Props {
         title: Some("Active Tokens".into()),
@@ -579,69 +598,51 @@ fn render_token_list(
                     }))
                 }
             } @else {
-                div style="margin-bottom:0.75rem;font-size:0.75rem;color:var(--mui-muted-foreground,#6b7280);" {
-                    "Sort: "
-                    a href=(sort_href("athlete", current_sort, current_order)) style="color:inherit;text-decoration:underline;margin:0 0.25rem;" {
-                        "Athlete ID"(sort_arrow("athlete", current_sort, current_order))
-                    }
-                    "|"
-                    a href=(sort_href("issued", current_sort, current_order)) style="color:inherit;text-decoration:underline;margin:0 0.25rem;" {
-                        "Issued"(sort_arrow("issued", current_sort, current_order))
-                    }
-                    "|"
-                    a href=(sort_href("expires", current_sort, current_order)) style="color:inherit;text-decoration:underline;margin:0 0.25rem;" {
-                        "Expires"(sort_arrow("expires", current_sort, current_order))
-                    }
-                    "|"
-                    a href=(sort_href("status", current_sort, current_order)) style="color:inherit;text-decoration:underline;margin:0 0.25rem;" {
-                        "Status"(sort_arrow("status", current_sort, current_order))
-                    }
-                }
-                (table::render(table::Props {
-                    headers: vec![
-                        "Athlete ID".into(),
-                        "Issued".into(),
-                        "Expires".into(),
-                        "Status".into(),
-                        "Action".into(),
-                    ],
-                    rich_rows: tokens
-                        .iter()
-                        .map(|t| {
-                            let issued_fmt = format_datetime(&t.issued_at);
-                            let expires_fmt = format_datetime(&t.expires_at);
-                            let status_badge = if t.revoked {
-                                badge::render(badge::Props { label: "Revoked".into(), variant: badge::Variant::Danger, ..Default::default() })
-                            } else {
-                                badge::render(badge::Props { label: "Active".into(), variant: badge::Variant::Success, ..Default::default() })
-                            };
-                            let action = if !t.revoked {
-                                html! {
-                                    form method="POST" action={"/ui/revoke/"(t.jti)} {
-                                        input type="hidden" name="_csrf" value=(csrf);
-                                        (button::render(button::Props {
-                                            label: "Revoke".into(),
-                                            variant: button::Variant::Danger,
-                                            size: button::Size::Sm,
-                                            button_type: "submit",
-                                            ..Default::default()
-                                        }))
+                div.mui-table-wrapper {
+                    table.mui-table {
+                        thead {
+                            tr {
+                                (th_link("Athlete ID", "athlete", current_sort, current_order))
+                                (th_link("Issued", "issued", current_sort, current_order))
+                                (th_link("Expires", "expires", current_sort, current_order))
+                                (th_link("Status", "status", current_sort, current_order))
+                                th.mui-table__th { "Action" }
+                            }
+                        }
+                        tbody {
+                            @for t in tokens {
+                                tr.mui-table__row {
+                                    @let issued_fmt = format_datetime(&t.issued_at);
+                                    @let expires_fmt = format_datetime(&t.expires_at);
+                                    td.mui-table__td { (t.athlete_id) }
+                                    td.mui-table__td { (issued_fmt) }
+                                    td.mui-table__td { (expires_fmt) }
+                                    td.mui-table__td {
+                                        @if t.revoked {
+                                            (badge::render(badge::Props { label: "Revoked".into(), variant: badge::Variant::Danger, ..Default::default() }))
+                                        } @else {
+                                            (badge::render(badge::Props { label: "Active".into(), variant: badge::Variant::Success, ..Default::default() }))
+                                        }
+                                    }
+                                    td.mui-table__td {
+                                        @if !t.revoked {
+                                            form method="POST" action={"/ui/revoke/"(t.jti)} {
+                                                input type="hidden" name="_csrf" value=(csrf);
+                                                (button::render(button::Props {
+                                                    label: "Revoke".into(),
+                                                    variant: button::Variant::Danger,
+                                                    size: button::Size::Sm,
+                                                    button_type: "submit",
+                                                    ..Default::default()
+                                                }))
+                                            }
+                                        }
                                     }
                                 }
-                            } else {
-                                html! {}
-                            };
-                            vec![
-                                table::CellMarkup::markup(html! { (t.athlete_id) }, false),
-                                table::CellMarkup::markup(html! { (issued_fmt) }, false),
-                                table::CellMarkup::markup(html! { (expires_fmt) }, false),
-                                table::CellMarkup::markup(status_badge, false),
-                                table::CellMarkup::markup(action, false),
-                            ]
-                        })
-                        .collect(),
-                    ..Default::default()
-                }))
+                            }
+                        }
+                    }
+                }
             }
         },
         ..Default::default()
