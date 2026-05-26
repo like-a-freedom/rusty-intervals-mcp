@@ -83,28 +83,56 @@ fn page_shell(title: &str, _csrf_token: &str, body: Markup) -> Markup {
                 title { (title) " — Intervals.icu MCP" }
                 link rel="stylesheet" href="/ui/static/css";
                 style {
-                    ".mui-card { max-width: 28rem; margin: 4rem auto; }"
-                    ".mui-card__body { padding: 1.5rem; }"
-                    ".token-display { "
-                    "  font-family: 'SF Mono', 'Fira Code', monospace;"
-                    "  font-size: 0.75rem;"
-                    "  word-break: break-all;"
-                    "  background: var(--mui-bg-muted, #f5f5f5);"
-                    "  padding: 1rem;"
-                    "  border-radius: 0.5rem;"
-                    "  position: relative;"
-                    "}"
-                    ".copy-btn { "
-                    "  position: absolute; top: 0.5rem; right: 0.5rem;"
-                    "}"
-                    ".error-msg { color: var(--mui-danger, #e11d48); margin-bottom: 1rem; }"
-                    ".success-msg { color: var(--mui-success, #16a34a); margin-bottom: 1rem; }"
-                    "input[type=hidden] { display: none; }"
-                    ".nav-bar { display: flex; align-items: center; gap: 1rem; padding: 0.75rem 1.5rem; "
-                    "  border-bottom: 1px solid var(--mui-border, #e5e7eb); }"
-                    ".nav-bar a { color: var(--mui-text-muted, #6b7280); text-decoration: none; font-size: 0.875rem; }"
-                    ".nav-bar a:hover { color: var(--mui-text, #111827); }"
-                    ".nav-bar .brand { font-weight: 600; font-size: 1rem; color: var(--mui-text, #111827); }"
+                    r#"                    .mui-card { margin: 4rem auto; }
+                    .mui-card--narrow { max-width: 28rem; }
+                    .mui-card__body { padding: 1.5rem; }
+                    .mui-card__title { margin-bottom: 0.5rem; }
+                    .mui-card__description { margin-top: 0.5rem; }
+                    .mui-field + .mui-field { margin-top: 1.25rem; }
+                    .tokens-page-card .mui-card { max-width: none; width: 100%; }
+                    .token-display {
+                      font-family: 'SF Mono', 'Fira Code', monospace;
+                      font-size: 0.75rem;
+                      word-break: break-all;
+                      background: #0f172a;
+                      color: #e2e8f0;
+                      padding: 1rem;
+                      border-radius: 0.5rem;
+                      border: 1px solid #1e293b;
+                    }
+                    .copy-btn { position: absolute; top: 0.5rem; right: 0.5rem; }
+                    .error-alert {
+                      background: rgba(225, 29, 72, 0.1);
+                      border: 1px solid var(--mui-danger, #e11d48);
+                      color: var(--mui-danger, #e11d48);
+                      padding: 0.75rem 1rem;
+                      border-radius: 0.5rem;
+                      font-size: 0.875rem;
+                    }
+                    .success-alert {
+                      background: rgba(22, 163, 74, 0.1);
+                      border: 1px solid var(--mui-success, #16a34a);
+                      color: var(--mui-success, #16a34a);
+                      padding: 0.75rem 1rem;
+                      border-radius: 0.5rem;
+                      font-size: 0.875rem;
+                    }
+                    input[type=hidden] { display: none; }
+                    .nav-bar { display: flex; align-items: center; gap: 1rem; padding: 0.75rem 1.5rem;
+                      border-bottom: 1px solid var(--mui-border, #e5e7eb); }
+                    .nav-bar a { color: var(--mui-text-muted, #6b7280); text-decoration: none; font-size: 0.875rem; }
+                    .nav-bar a:hover { color: var(--mui-text, #111827); }
+                    .nav-bar a.active { color: var(--mui-text, #111827); font-weight: 500; }
+                    .nav-bar .brand { font-weight: 600; font-size: 1rem; color: var(--mui-text, #111827); }
+                    .mui-table-wrapper { width: 100%; overflow-x: auto; }
+                    .mui-table { width: 100%; }
+                    .mui-table th a { color: inherit; text-decoration: none; display: inline-flex; align-items: center; gap: 0.25rem; }
+                    .mui-table th a:hover { opacity: 0.75; }
+                    .sort-arrow { display: inline-block; font-size: 0.625rem; line-height: 1; }
+                    .ttl-select { width: 100%; padding: 0.5rem; border: 1px solid var(--mui-border, #e5e7eb); border-radius: 0.375rem; background: var(--mui-bg, #fff); color: var(--mui-text, #111827); font-size: 0.875rem; }
+                    .token-info-grid { display: grid; grid-template-columns: auto 1fr; gap: 0.5rem 1rem; margin-top: 1rem; font-size: 0.875rem; }
+                    .token-info-grid dt { color: var(--mui-muted-foreground, #6b7280); text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.75rem; }
+                    .token-info-grid dd { margin: 0; }"#
                 }
             }
             body {
@@ -143,16 +171,12 @@ pub async fn ui_home(
 
     use maud_ui::primitives::{button, card, field, input};
 
-    let body = card::render(card::Props {
-        title: Some("MCP Server Token".into()),
-        description: Some("Enter your Intervals.icu credentials to generate an API token".into()),
+    let body = html! {
+        div style="max-width: 28rem; margin: 0 auto;" {
+            (card::render(card::Props {
+                title: Some("MCP Server Token".into()),
+                description: Some("Enter your Intervals.icu credentials to generate an API token".into()),
         children: html! {
-            @if let Some(ref error) = query.error {
-                div class="error-msg" { (error) }
-            }
-            @if let Some(ref success) = query.success {
-                div class="success-msg" { (success) }
-            }
             form method="POST" action="/ui/token" {
                 input type="hidden" name="_csrf" value=(csrf);
                 (field::render(field::Props {
@@ -184,6 +208,24 @@ pub async fn ui_home(
                     },
                     ..Default::default()
                 }))
+                (field::render(field::Props {
+                    label: "Token TTL".into(),
+                    id: "ttl_days".into(),
+                    description: Some("How long the token will be valid.".into()),
+                    children: html! {
+                        select.ttl-select name="ttl_days" id="ttl_days" {
+                            option value="1" { "1 day" }
+                            option value="7" { "7 days" }
+                            option value="30" selected { "30 days (default)" }
+                            option value="90" { "90 days" }
+                            option value="180" { "180 days" }
+                            option value="365" { "1 year" }
+                            option value="1825" { "5 years" }
+                            option value="3650" { "10 years" }
+                        }
+                    },
+                    ..Default::default()
+                }))
                 br;
                 (button::render(button::Props {
                     label: "Generate Token".into(),
@@ -192,9 +234,19 @@ pub async fn ui_home(
                     ..Default::default()
                 }))
             }
+            @if let Some(ref error) = query.error {
+                br;
+                div.error-alert { (error) }
+            }
+            @if let Some(ref success) = query.success {
+                br;
+                div.success-alert { (success) }
+            }
         },
         ..Default::default()
-    });
+    }))
+    }
+    };
 
     let html = page_shell("Token Setup", &csrf, body);
     let mut resp = html.into_response();
@@ -243,6 +295,7 @@ pub struct TokenForm {
     pub api_key: Option<String>,
     pub email: Option<String>,
     pub password: Option<String>,
+    pub ttl_days: Option<u64>,
 }
 
 fn redirect_with_session(url: &str, session_id: &str) -> Response {
@@ -281,16 +334,21 @@ pub async fn ui_create_token(
         secrecy::SecretString::new(api_key.clone().into()),
     );
 
+    let ttl_days = form.ttl_days.unwrap_or(30).clamp(1, 3650);
+    let ttl_seconds = ttl_days * 86400;
+
     match client.get_athlete_profile().await {
-        Ok(_) => match ui.app_state.jwt_manager.issue_token(
-            &athlete_id,
-            &api_key,
-            ui.app_state.jwt_ttl_seconds,
-        ) {
+        Ok(_) => match ui
+            .app_state
+            .jwt_manager
+            .issue_token(&athlete_id, &api_key, ttl_seconds)
+        {
             Ok(token) => {
                 let jti = Uuid::new_v4().to_string();
                 let now = chrono::Utc::now();
-                let expires = now + chrono::TimeDelta::seconds(ui.app_state.jwt_ttl_seconds as i64);
+                let expires = now + chrono::TimeDelta::seconds(ttl_seconds as i64);
+                let expiry_formatted = format_datetime(&expires.to_rfc3339());
+                let ttl_label = format!("{} day{}", ttl_days, if ttl_days == 1 { "" } else { "s" });
 
                 let mut registry = ui.tokens.write().await;
                 registry.push(TokenRecord {
@@ -317,7 +375,7 @@ pub async fn ui_create_token(
                 );
 
                 let csrf = get_csrf(&ui.sessions, &session_id).await;
-                let body = render_token_success(&token, &athlete_id, ui.app_state.jwt_ttl_seconds);
+                let body = render_token_success(&token, &athlete_id, &expiry_formatted, &ttl_label);
                 let html = page_shell("Token Generated", &csrf, body);
                 let mut resp = html.into_response();
                 set_session_cookie(&mut resp, &session_id);
@@ -332,16 +390,23 @@ pub async fn ui_create_token(
     }
 }
 
-fn render_token_success(token: &str, athlete_id: &str, expires_in: u64) -> Markup {
+fn format_datetime(rfc3339: &str) -> String {
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(rfc3339) {
+        dt.format("%d %b %Y %H:%M").to_string()
+    } else {
+        rfc3339.to_string()
+    }
+}
+
+fn render_token_success(
+    token: &str,
+    athlete_id: &str,
+    expiry_formatted: &str,
+    ttl_label: &str,
+) -> Markup {
     use maud_ui::primitives::{button, card};
 
-    let expiry_human = if expires_in >= 86400 {
-        format!("{} days", expires_in / 86400)
-    } else {
-        format!("{} seconds", expires_in)
-    };
-
-    card::render(card::Props {
+    let card_content = card::render(card::Props {
         title: Some("Token Generated".into()),
         description: Some("Copy this token now — you won't see it again.".into()),
         children: html! {
@@ -349,9 +414,13 @@ fn render_token_success(token: &str, athlete_id: &str, expires_in: u64) -> Marku
                 (token)
             }
             br;
-            p {
-                strong { "Athlete ID: " } (athlete_id) br;
-                strong { "Expires: " } (expiry_human)
+            dl.token-info-grid {
+                dt { "Athlete ID" }
+                dd { (athlete_id) }
+                dt { "TTL" }
+                dd { (ttl_label) }
+                dt { "Expires" }
+                dd { (expiry_formatted) }
             }
             br;
             a href="/ui" {
@@ -371,7 +440,12 @@ fn render_token_success(token: &str, athlete_id: &str, expires_in: u64) -> Marku
             }
         },
         ..Default::default()
-    })
+    });
+    html! {
+        div style="max-width: 28rem; margin: 0 auto;" {
+            (card_content)
+        }
+    }
 }
 
 async fn get_csrf(store: &SessionStore, session_id: &str) -> String {
@@ -385,7 +459,48 @@ async fn get_csrf(store: &SessionStore, session_id: &str) -> String {
 
 // ── Token listing (GET /ui/tokens) ───────────────────────────────────────
 
-pub async fn ui_list_tokens(State(ui): State<UiState>, headers: HeaderMap) -> Response {
+#[derive(Deserialize, Default)]
+pub struct TokenListQuery {
+    pub sort: Option<String>,
+    pub order: Option<String>,
+    pub success: Option<String>,
+}
+
+enum SortField {
+    IssuedAt,
+    ExpiresAt,
+    AthleteId,
+    Status,
+}
+
+fn parse_sort_field(s: &str) -> SortField {
+    match s {
+        "issued" => SortField::IssuedAt,
+        "expires" => SortField::ExpiresAt,
+        "athlete" => SortField::AthleteId,
+        "status" => SortField::Status,
+        _ => SortField::IssuedAt,
+    }
+}
+
+fn sort_tokens(mut tokens: Vec<TokenRecord>, sort: SortField, ascending: bool) -> Vec<TokenRecord> {
+    tokens.sort_by(|a, b| {
+        let cmp = match sort {
+            SortField::IssuedAt => a.issued_at.cmp(&b.issued_at),
+            SortField::ExpiresAt => a.expires_at.cmp(&b.expires_at),
+            SortField::AthleteId => a.athlete_id.cmp(&b.athlete_id),
+            SortField::Status => a.revoked.cmp(&b.revoked),
+        };
+        if ascending { cmp } else { cmp.reverse() }
+    });
+    tokens
+}
+
+pub async fn ui_list_tokens(
+    State(ui): State<UiState>,
+    headers: HeaderMap,
+    Query(query): Query<TokenListQuery>,
+) -> Response {
     let session_id = get_or_create_session(&ui.sessions, &headers).await;
     let csrf = get_csrf(&ui.sessions, &session_id).await;
 
@@ -402,14 +517,53 @@ pub async fn ui_list_tokens(State(ui): State<UiState>, headers: HeaderMap) -> Re
             .collect()
     };
 
-    let body = render_token_list(&filtered, &csrf);
+    let sort = parse_sort_field(query.sort.as_deref().unwrap_or("issued"));
+    let ascending = query.order.as_deref() != Some("desc");
+    let sorted = sort_tokens(filtered, sort, ascending);
+
+    let body = render_token_list(&sorted, &csrf, &query.sort, &query.order);
     let html = page_shell("Token Management", &csrf, body);
     let mut resp = html.into_response();
     set_session_cookie(&mut resp, &session_id);
     resp
 }
 
-fn render_token_list(tokens: &[TokenRecord], csrf: &str) -> Markup {
+fn sort_href(
+    sort_field: &str,
+    current_sort: &Option<String>,
+    current_order: &Option<String>,
+) -> String {
+    let is_current = current_sort.as_deref() == Some(sort_field);
+    let new_order = if is_current && current_order.as_deref() != Some("desc") {
+        "desc"
+    } else {
+        "asc"
+    };
+    format!("/ui/tokens?sort={sort_field}&order={new_order}")
+}
+
+fn sort_arrow(
+    sort_field: &str,
+    current_sort: &Option<String>,
+    current_order: &Option<String>,
+) -> &'static str {
+    if current_sort.as_deref() == Some(sort_field) {
+        if current_order.as_deref() == Some("desc") {
+            " ▼"
+        } else {
+            " ▲"
+        }
+    } else {
+        ""
+    }
+}
+
+fn render_token_list(
+    tokens: &[TokenRecord],
+    csrf: &str,
+    current_sort: &Option<String>,
+    current_order: &Option<String>,
+) -> Markup {
     use maud_ui::primitives::{badge, button, card, table};
 
     card::render(card::Props {
@@ -425,6 +579,24 @@ fn render_token_list(tokens: &[TokenRecord], csrf: &str) -> Markup {
                     }))
                 }
             } @else {
+                div style="margin-bottom:0.75rem;font-size:0.75rem;color:var(--mui-muted-foreground,#6b7280);" {
+                    "Sort: "
+                    a href=(sort_href("athlete", current_sort, current_order)) style="color:inherit;text-decoration:underline;margin:0 0.25rem;" {
+                        "Athlete ID"(sort_arrow("athlete", current_sort, current_order))
+                    }
+                    "|"
+                    a href=(sort_href("issued", current_sort, current_order)) style="color:inherit;text-decoration:underline;margin:0 0.25rem;" {
+                        "Issued"(sort_arrow("issued", current_sort, current_order))
+                    }
+                    "|"
+                    a href=(sort_href("expires", current_sort, current_order)) style="color:inherit;text-decoration:underline;margin:0 0.25rem;" {
+                        "Expires"(sort_arrow("expires", current_sort, current_order))
+                    }
+                    "|"
+                    a href=(sort_href("status", current_sort, current_order)) style="color:inherit;text-decoration:underline;margin:0 0.25rem;" {
+                        "Status"(sort_arrow("status", current_sort, current_order))
+                    }
+                }
                 (table::render(table::Props {
                     headers: vec![
                         "Athlete ID".into(),
@@ -436,6 +608,8 @@ fn render_token_list(tokens: &[TokenRecord], csrf: &str) -> Markup {
                     rich_rows: tokens
                         .iter()
                         .map(|t| {
+                            let issued_fmt = format_datetime(&t.issued_at);
+                            let expires_fmt = format_datetime(&t.expires_at);
                             let status_badge = if t.revoked {
                                 badge::render(badge::Props { label: "Revoked".into(), variant: badge::Variant::Danger, ..Default::default() })
                             } else {
@@ -449,6 +623,7 @@ fn render_token_list(tokens: &[TokenRecord], csrf: &str) -> Markup {
                                             label: "Revoke".into(),
                                             variant: button::Variant::Danger,
                                             size: button::Size::Sm,
+                                            button_type: "submit",
                                             ..Default::default()
                                         }))
                                     }
@@ -458,8 +633,8 @@ fn render_token_list(tokens: &[TokenRecord], csrf: &str) -> Markup {
                             };
                             vec![
                                 table::CellMarkup::markup(html! { (t.athlete_id) }, false),
-                                table::CellMarkup::markup(html! { (t.issued_at) }, false),
-                                table::CellMarkup::markup(html! { (t.expires_at) }, false),
+                                table::CellMarkup::markup(html! { (issued_fmt) }, false),
+                                table::CellMarkup::markup(html! { (expires_fmt) }, false),
                                 table::CellMarkup::markup(status_badge, false),
                                 table::CellMarkup::markup(action, false),
                             ]
@@ -505,5 +680,5 @@ pub async fn ui_revoke_token(
         "Token revoked via web UI"
     );
 
-    redirect_with_session("/ui/tokens", &session_id)
+    redirect_with_session("/ui/tokens?success=Token+revoked", &session_id)
 }
