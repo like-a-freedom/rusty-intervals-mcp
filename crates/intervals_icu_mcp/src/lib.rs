@@ -26,6 +26,7 @@ use crate::intents::{
 use intervals_icu_client::IntervalsClient;
 
 pub mod auth;
+pub mod auth_ui;
 pub mod compact;
 pub mod domains;
 pub mod dynamic;
@@ -472,6 +473,30 @@ pub async fn run_http_server(
 
     let handler = IntervalsMcpHandler::new_multi_tenant();
 
+    let ui_state = auth_ui::UiState {
+        app_state: app_state.clone(),
+        sessions: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+        tokens: Arc::new(tokio::sync::RwLock::new(Vec::new())),
+    };
+
+    let ui_config = tower_governor::governor::GovernorConfigBuilder::default()
+        .per_second(2)
+        .burst_size(5)
+        .finish()
+        .unwrap();
+
+    let ui_route = axum::Router::new()
+        .route("/ui", axum::routing::get(auth_ui::ui_home))
+        .route("/ui/token", axum::routing::post(auth_ui::ui_create_token))
+        .route("/ui/tokens", axum::routing::get(auth_ui::ui_list_tokens))
+        .route(
+            "/ui/revoke/:jti",
+            axum::routing::post(auth_ui::ui_revoke_token),
+        )
+        .route("/ui/static/css", axum::routing::get(auth_ui::serve_css))
+        .layer(tower_governor::GovernorLayer::new(ui_config))
+        .with_state(ui_state);
+
     let auth_config = tower_governor::governor::GovernorConfigBuilder::default()
         .per_second(1)
         .burst_size(3)
@@ -524,6 +549,7 @@ pub async fn run_http_server(
 
     let app = axum::Router::new()
         .merge(auth_route)
+        .merge(ui_route)
         .merge(mcp_route)
         .merge(health_route)
         .merge(metrics_route);

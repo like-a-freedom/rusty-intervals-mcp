@@ -854,6 +854,17 @@ async fn test_auth_endpoint_issues_jwt_for_valid_credentials() {
         .get("token")
         .and_then(|value| value.as_str())
         .expect("token should be present");
+    let expires_in = payload
+        .get("expires_in")
+        .and_then(|v| v.as_u64())
+        .expect("expires_in should be present");
+    let athlete_id = payload
+        .get("athlete_id")
+        .and_then(|v| v.as_str())
+        .expect("athlete_id should be present");
+
+    assert_eq!(expires_in, 3600);
+    assert_eq!(athlete_id, "i123456");
 
     let credentials = jwt_manager.verify_token(token).expect("jwt should verify");
     assert_eq!(credentials.athlete_id, "i123456");

@@ -315,6 +315,21 @@ Generate secret with:
 - Default: 90 days (7776000 seconds)
 - Configurable via `JWT_TTL_SECONDS`
 
+## Token Management Web UI
+
+The server includes a minimal browser-based token management UI at `/ui` when running in HTTP mode. It is useful for ad‑hoc token creation without `curl`.
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/ui` | GET | Token creation form |
+| `/ui/token` | POST | Create a JWT token (form body: `athlete_id`, `api_key`) |
+| `/ui/tokens` | GET | List active (non-revoked) tokens |
+| `/ui/revoke/{jti}` | POST | Revoke a token by its JTI |
+
+The UI is server-rendered HTML with rate limiting (2 req/s, burst 5). No additional environment variables are needed — it uses the same `JWT_MASTER_KEY` and `JWT_TTL_SECONDS` as the JSON `/auth` endpoint.
+
+**Revocation scope:** Token revocation in the UI is session-scoped (in-memory). Revoked tokens are not checked by the JWT verification middleware — a revoked token remains usable until it expires. This is a known limitation of the current stateless JWT architecture. See `crates/intervals_icu_mcp/src/auth.rs` for details.
+
 ## VS Code / Copilot setup
 
 For local development, the simplest VS Code MCP configuration is:
