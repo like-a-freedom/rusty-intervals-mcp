@@ -272,7 +272,7 @@ fn page_shell(title: &str, page: &str, body: Markup) -> Markup {
                 title { (title) " — Intervals.icu MCP" }
                 link rel="stylesheet" href="/ui/static/css";
                 script {
-                    r#"document.addEventListener("DOMContentLoaded",()=>{const a=document.querySelector(".error-alert,.success-alert");a&&(setTimeout(()=>{a.style.transition="opacity .4s";a.style.opacity="0";setTimeout(()=>a.remove(),400)},5e3),window.history.replaceState&&((n=new URL(window.location)).searchParams.delete("error"),n.searchParams.delete("success"),window.history.replaceState({},"",n)));document.querySelector("[data-clipboard]")?.addEventListener("click",function(){navigator.clipboard.writeText(this.dataset.clipboard).then(()=>{const t=this.textContent;this.textContent="Copied!",setTimeout(()=>this.textContent=t,1500)}).catch(()=>{})})})"#
+                    r#"document.addEventListener("DOMContentLoaded",()=>{const a=document.querySelector(".error-alert,.success-alert");a&&(setTimeout(()=>{a.style.transition="opacity .4s";a.style.opacity="0";setTimeout(()=>a.remove(),400)},5e3),window.history.replaceState&&((n=new URL(window.location)).searchParams.delete("error"),n.searchParams.delete("success"),window.history.replaceState({},"",n)));document.querySelector("[data-clipboard]")?.addEventListener("click",function(){navigator.clipboard.writeText(this.dataset.clipboard).then(()=>{let t=this.querySelector(".copy-toast");t||(t=document.createElement("span"),t.className="copy-toast",t.textContent="Copied!",this.appendChild(t),requestAnimationFrame(()=>t.classList.add("show"))),setTimeout(()=>{t.classList.remove("show"),setTimeout(()=>t.remove(),250)},1200)}).catch(()=>{})})})"#
                 }
                 style {
                     r#"                    .mui-card { margin: 4rem auto; }
@@ -294,7 +294,12 @@ fn page_shell(title: &str, page: &str, body: Markup) -> Markup {
                       border: 1px solid #1e293b;
                       position: relative;
                     }
-                    .copy-btn { position: absolute; top: 0.5rem; right: 0.5rem; }
+                    .copy-btn { position: absolute; top: 0.5rem; right: 0.5rem; background: none; border: none; color: #64748b; cursor: pointer; padding: 0.25rem; line-height: 1; display: inline-flex; align-items: center; justify-content: center; border-radius: 0.25rem; transition: color .15s, background .15s; }
+                    .copy-btn:hover { color: #e2e8f0; background: rgba(226,232,240,0.08); }
+                    .copy-btn:active svg { transform: scale(0.85); }
+                    .copy-btn svg { display: block; transition: transform .15s; }
+                    .copy-toast { position: absolute; top: -1.5rem; right: 0; font-size: 0.65rem; color: #22c55e; white-space: nowrap; opacity: 0; transition: opacity .25s, transform .25s; pointer-events: none; transform: translateY(4px); }
+                    .copy-toast.show { opacity: 1; transform: translateY(0); }
                     .error-alert {
                       background: rgba(225, 29, 72, 0.1);
                       border: 1px solid var(--mui-danger, #e11d48);
@@ -572,8 +577,11 @@ fn render_token_success(
         description: Some("Copy this token now — you won't see it again.".into()),
         children: html! {
             div class="token-display" {
-                button.copy-btn data-clipboard=(token) style="position:absolute;top:0.5rem;right:0.5rem;background:#1e293b;color:#94a3b8;border:1px solid #334155;border-radius:0.375rem;padding:0.25rem 0.5rem;font-size:0.75rem;cursor:pointer;" {
-                    "Copy"
+                button.copy-btn data-clipboard=(token) {
+                    svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" {
+                        rect x="8" y="2" width="8" height="4" rx="1" ry="1" {}
+                        path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" {}
+                    }
                 }
                 (token)
             }
