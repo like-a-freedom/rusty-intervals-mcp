@@ -134,9 +134,23 @@ pub fn record_tool_call(tool: &str, success: bool, duration_secs: f64) {
     .record(duration_secs);
 }
 
-/// Record token issuance.
+/// Record token issuance (defaults to "jwt" source).
 pub fn record_token_issued() {
-    counter!("intervals_icu_mcp_tokens_issued_total").increment(1);
+    record_token_issued_with_source("jwt");
+}
+
+/// Record token issuance with explicit source label (jwt, oauth, ui).
+pub fn record_token_issued_with_source(source: &str) {
+    counter!(
+        "intervals_icu_mcp_tokens_issued_total",
+        "source" => source.to_string()
+    )
+    .increment(1);
+}
+
+/// Record a UI action (e.g., token_created, token_revoked).
+pub fn record_ui_action(action: &str) {
+    counter!("mcp_ui_action_total", "action" => action.to_string()).increment(1);
 }
 
 /// Record token verification.

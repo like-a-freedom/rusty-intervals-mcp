@@ -1,6 +1,6 @@
 [package]
 name = "intervals_icu_mcp"
-version = "2.7.2"
+version = "2.8.0"
 edition = "2024"
 
 [dependencies]
@@ -35,6 +35,11 @@ async-trait = "0.1.89"
 thiserror = "2.0.18"
 # JWT authentication for multi-tenant HTTP mode
 jwt-simple = "0.12.16"
+# Server-rendered HTML UI
+maud = { version = "0.27", features = ["axum"] }
+maud-ui = "0.2.1"
+# URL parsing for query parameter encoding
+url = "2"
 # AES-256-GCM for api_key encryption
 aes-gcm = "0.10.3"
 # Rate limiting for multi-tenant mode
@@ -55,7 +60,7 @@ rmcp = { version = "1.7.0", features = [
     "transport-child-process",
 ] }
 async-trait = "0.1.89"
-reqwest = { version = "0.13.3", features = ["json", "query"] }
+reqwest = { version = "0.13.3", features = ["json", "query", "form"] }
 once_cell = "1.21.3"
 tempfile = "3.27.0"
 serial_test = "3.4.0"
