@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use rmcp::ErrorData;
@@ -473,11 +474,10 @@ pub async fn run_http_server(
 
     let handler = IntervalsMcpHandler::new_multi_tenant();
 
-    let ui_state = auth_ui::UiState {
-        app_state: app_state.clone(),
-        sessions: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
-        tokens: Arc::new(tokio::sync::RwLock::new(Vec::new())),
-    };
+    let registry_path = std::env::var("MCP_TOKEN_REGISTRY_PATH")
+        .ok()
+        .map(PathBuf::from);
+    let ui_state = auth_ui::UiState::new(app_state.clone(), registry_path);
 
     let ui_config = tower_governor::governor::GovernorConfigBuilder::default()
         .per_second(2)

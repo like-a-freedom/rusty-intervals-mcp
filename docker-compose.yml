@@ -20,6 +20,9 @@ services:
       INTERVALS_ICU_BASE_URL: ${INTERVALS_ICU_BASE_URL:-https://intervals.icu}
       INTERVALS_ICU_ATHLETE_ID: ${INTERVALS_ICU_ATHLETE_ID:-""}
       INTERVALS_ICU_API_KEY: ${INTERVALS_ICU_API_KEY:-""}
+      MCP_TOKEN_REGISTRY_PATH: ${MCP_TOKEN_REGISTRY_PATH:-/data/tokens.json}
+    volumes:
+      - intervals_mcp_data:/data
     restart: unless-stopped
     logging:
       driver: "json-file"
@@ -31,3 +34,6 @@ services:
         limits:
           cpus: '0.1'
           memory: 128M
+
+volumes:
+  intervals_mcp_data:

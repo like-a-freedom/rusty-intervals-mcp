@@ -5,7 +5,6 @@ use axum::{
 use intervals_icu_mcp::auth::{self, AppState};
 use intervals_icu_mcp::auth_ui::{self, UiState};
 use std::sync::Arc;
-use tokio::sync::RwLock;
 
 fn test_ui_state() -> UiState {
     let secret = b"test_secret_key_for_jwt_signing_12345678901234567890123456789012";
@@ -16,11 +15,7 @@ fn test_ui_state() -> UiState {
         base_url: "https://intervals.icu".to_string(),
     });
 
-    UiState {
-        app_state,
-        sessions: Arc::new(RwLock::new(std::collections::HashMap::new())),
-        tokens: Arc::new(RwLock::new(Vec::new())),
-    }
+    UiState::new(app_state, None)
 }
 
 #[tokio::test]
