@@ -23,3 +23,4 @@ AGENTS.md
 tarpaulin-report.html
 *.profraw
 cobertura.xml
+data/tokens.json
