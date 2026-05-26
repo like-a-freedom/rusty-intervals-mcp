@@ -3,10 +3,10 @@
 //! # Revocation scope
 //!
 //! JWT tokens are stateless — once issued they remain valid until they expire,
-//! regardless of the web UI revocation list. The [`crate::auth_ui::revoke_token`]
-//! handler stores revoked token JTIs in an in-memory `HashSet` scoped to the
-//! web UI session, but this does **not** propagate to the JWT verification path
-//! in [`JwtManager::verify_token`] or the MCP authentication middleware.
+//! regardless of the web UI revocation list. The [`crate::auth_ui::ui_revoke_token`]
+//! handler only marks entries in the web UI token registry, and that registry does
+//! **not** propagate to the JWT verification path in [`JwtManager::verify_token`]
+//! or the MCP authentication middleware.
 //! Full JWT revocation would require a persistent blacklist checked on every
 //! verification — that is out of scope for the current architecture.
 

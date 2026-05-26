@@ -16,6 +16,11 @@ use uuid::Uuid;
 use crate::auth::AppState;
 
 const MAUD_UI_CSS: &str = include_str!("../static/maud-ui.css");
+const DEFAULT_TOKEN_TTL_DAYS: u64 = 30;
+const MAX_TOKEN_TTL_DAYS: u64 = 3650;
+const SECONDS_PER_DAY: u64 = 86_400;
+const SESSION_COOKIE_NAME: &str = "mcp_session";
+const SESSION_COOKIE_MAX_AGE_SECONDS: u64 = 3600;
 
 // ── Session types ────────────────────────────────────────────────────────
 
@@ -48,6 +53,49 @@ pub struct TokenRecord {
 
 pub type TokenRegistry = Arc<RwLock<Vec<TokenRecord>>>;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SessionContext {
+    session_id: String,
+    csrf_token: String,
+    athlete_id: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct TokenRequestData {
+    athlete_id: String,
+    api_key: String,
+    ttl_days: u64,
+}
+
+impl TokenRequestData {
+    fn from_form(form: TokenForm) -> Option<Self> {
+        let athlete_id = form.athlete_id.or(form.email).unwrap_or_default();
+        let api_key = form.api_key.or(form.password).unwrap_or_default();
+
+        if athlete_id.is_empty() || api_key.is_empty() {
+            return None;
+        }
+
+        Some(Self {
+            athlete_id,
+            api_key,
+            ttl_days: normalize_ttl_days(form.ttl_days),
+        })
+    }
+
+    fn ttl_seconds(&self) -> u64 {
+        self.ttl_days * SECONDS_PER_DAY
+    }
+
+    fn ttl_label(&self) -> String {
+        format!(
+            "{} day{}",
+            self.ttl_days,
+            if self.ttl_days == 1 { "" } else { "s" }
+        )
+    }
+}
+
 // ── App state for auth_ui ────────────────────────────────────────────────
 
 #[derive(Clone)]
@@ -74,6 +122,120 @@ impl UiState {
             registry_path,
         }
     }
+
+    async fn session_context(&self, headers: &HeaderMap) -> SessionContext {
+        let session_id = self.get_or_create_session_id(headers).await;
+        let session = self.session(&session_id).await;
+
+        SessionContext {
+            csrf_token: session
+                .as_ref()
+                .map(|session| session.csrf_token.clone())
+                .unwrap_or_default(),
+            athlete_id: session.and_then(|session| session.athlete_id),
+            session_id,
+        }
+    }
+
+    async fn get_or_create_session_id(&self, headers: &HeaderMap) -> String {
+        if let Some(session_id) = session_id_from_headers(headers)
+            && self.sessions.read().await.contains_key(&session_id)
+        {
+            return session_id;
+        }
+
+        let session_id = generate_session_id();
+        let csrf = generate_csrf_token();
+        self.sessions.write().await.insert(
+            session_id.clone(),
+            SessionData {
+                csrf_token: csrf,
+                athlete_id: None,
+            },
+        );
+        session_id
+    }
+
+    async fn session(&self, session_id: &str) -> Option<SessionData> {
+        self.sessions.read().await.get(session_id).cloned()
+    }
+
+    async fn csrf_matches(&self, session_id: &str, submitted_csrf: &str) -> bool {
+        self.session(session_id)
+            .await
+            .map(|session| session.csrf_token == submitted_csrf)
+            .unwrap_or(false)
+    }
+
+    async fn remember_athlete(&self, session_id: &str, athlete_id: &str) {
+        if let Some(session) = self.sessions.write().await.get_mut(session_id) {
+            session.athlete_id = Some(athlete_id.to_string());
+        }
+    }
+
+    async fn tokens_for_athlete(&self, athlete_id: &str) -> Vec<TokenRecord> {
+        self.tokens
+            .read()
+            .await
+            .iter()
+            .filter(|token| token.athlete_id == athlete_id)
+            .cloned()
+            .collect()
+    }
+
+    async fn record_token(&self, record: TokenRecord) {
+        self.tokens.write().await.push(record);
+        self.persist_registry().await;
+    }
+
+    async fn revoke_token(&self, jti: &str) -> bool {
+        let revoked = {
+            let mut registry = self.tokens.write().await;
+            if let Some(token) = registry.iter_mut().find(|token| token.jti == jti) {
+                token.revoked = true;
+                true
+            } else {
+                false
+            }
+        };
+
+        if revoked {
+            self.persist_registry().await;
+        }
+
+        revoked
+    }
+
+    async fn persist_registry(&self) {
+        if let Some(path) = self.registry_path.as_ref() {
+            if let Some(parent) = path.parent() {
+                let _ = tokio::fs::create_dir_all(parent).await;
+            }
+
+            let tokens = self.tokens.read().await.clone();
+            if let Ok(data) = serde_json::to_vec(&tokens) {
+                let _ = tokio::fs::write(path, data).await;
+            }
+        }
+    }
+}
+
+fn normalize_ttl_days(ttl_days: Option<u64>) -> u64 {
+    ttl_days
+        .unwrap_or(DEFAULT_TOKEN_TTL_DAYS)
+        .clamp(1, MAX_TOKEN_TTL_DAYS)
+}
+
+fn session_id_from_headers(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get(header::COOKIE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|cookie| {
+            cookie.split(';').map(str::trim).find_map(|pair| {
+                let (name, value) = pair.split_once('=')?;
+                (name == SESSION_COOKIE_NAME).then(|| value.to_string())
+            })
+        })
 }
 
 // ── CSS route ────────────────────────────────────────────────────────────
@@ -93,7 +255,7 @@ pub async fn serve_css() -> impl IntoResponse {
 
 // ── HTML shell ───────────────────────────────────────────────────────────
 
-fn page_shell(title: &str, _csrf_token: &str, page: &str, body: Markup) -> Markup {
+fn page_shell(title: &str, page: &str, body: Markup) -> Markup {
     fn nav_link(label: &str, href: &str, current: &str) -> Markup {
         if href == current {
             html! { a.active href=(href) { (label) } }
@@ -189,144 +351,111 @@ pub struct UiQuery {
     pub success: Option<String>,
 }
 
+fn render_home_body(query: &UiQuery, csrf: &str) -> Markup {
+    use maud_ui::primitives::{button, card, field, input};
+
+    html! {
+        div style="max-width: 28rem; margin: 0 auto;" {
+            (card::render(card::Props {
+                title: Some("MCP Server Token".into()),
+                description: Some("Enter your Intervals.icu credentials to generate an API token".into()),
+                children: html! {
+                    form method="POST" action="/ui/token" {
+                        input type="hidden" name="_csrf" value=(csrf);
+                        (field::render(field::Props {
+                            label: "Athlete ID".into(),
+                            id: "athlete_id".into(),
+                            required: true,
+                            children: html! {
+                                (input::render(input::Props {
+                                    name: "athlete_id".into(),
+                                    placeholder: "e.g. i123456".into(),
+                                    required: true,
+                                    ..Default::default()
+                                }))
+                            },
+                            ..Default::default()
+                        }))
+                        (field::render(field::Props {
+                            label: "API Key".into(),
+                            id: "api_key".into(),
+                            required: true,
+                            children: html! {
+                                (input::render(input::Props {
+                                    name: "api_key".into(),
+                                    input_type: input::InputType::Password,
+                                    placeholder: "Your Intervals.icu API key".into(),
+                                    required: true,
+                                    ..Default::default()
+                                }))
+                            },
+                            ..Default::default()
+                        }))
+                        (field::render(field::Props {
+                            label: "Token TTL".into(),
+                            id: "ttl_days".into(),
+                            description: Some("How long the token will be valid.".into()),
+                            children: html! {
+                                select.ttl-select name="ttl_days" id="ttl_days" {
+                                    option value="1" { "1 day" }
+                                    option value="7" { "7 days" }
+                                    option value="30" selected { "30 days (default)" }
+                                    option value="90" { "90 days" }
+                                    option value="180" { "180 days" }
+                                    option value="365" { "1 year" }
+                                    option value="1825" { "5 years" }
+                                    option value="3650" { "10 years" }
+                                }
+                            },
+                            ..Default::default()
+                        }))
+                        br;
+                        (button::render(button::Props {
+                            label: "Generate Token".into(),
+                            button_type: "submit",
+                            variant: button::Variant::Default,
+                            ..Default::default()
+                        }))
+                    }
+                    @if let Some(ref error) = query.error {
+                        br;
+                        div.error-alert { (error) }
+                    }
+                    @if let Some(ref success) = query.success {
+                        br;
+                        div.success-alert { (success) }
+                    }
+                },
+                ..Default::default()
+            }))
+        }
+    }
+}
+
 pub async fn ui_home(
     State(ui): State<UiState>,
     Query(query): Query<UiQuery>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    let session_id = get_or_create_session(&ui.sessions, &headers).await;
-    let session = ui.sessions.read().await.get(&session_id).cloned();
-    let csrf = session
-        .as_ref()
-        .map(|s| s.csrf_token.clone())
-        .unwrap_or_default();
-
-    use maud_ui::primitives::{button, card, field, input};
-
-    let body = html! {
-        div style="max-width: 28rem; margin: 0 auto;" {
-            (card::render(card::Props {
-                title: Some("MCP Server Token".into()),
-                description: Some("Enter your Intervals.icu credentials to generate an API token".into()),
-        children: html! {
-            form method="POST" action="/ui/token" {
-                input type="hidden" name="_csrf" value=(csrf);
-                (field::render(field::Props {
-                    label: "Athlete ID".into(),
-                    id: "athlete_id".into(),
-                    required: true,
-                    children: html! {
-                        (input::render(input::Props {
-                            name: "athlete_id".into(),
-                            placeholder: "e.g. i123456".into(),
-                            required: true,
-                            ..Default::default()
-                        }))
-                    },
-                    ..Default::default()
-                }))
-                (field::render(field::Props {
-                    label: "API Key".into(),
-                    id: "api_key".into(),
-                    required: true,
-                    children: html! {
-                        (input::render(input::Props {
-                            name: "api_key".into(),
-                            input_type: input::InputType::Password,
-                            placeholder: "Your Intervals.icu API key".into(),
-                            required: true,
-                            ..Default::default()
-                        }))
-                    },
-                    ..Default::default()
-                }))
-                (field::render(field::Props {
-                    label: "Token TTL".into(),
-                    id: "ttl_days".into(),
-                    description: Some("How long the token will be valid.".into()),
-                    children: html! {
-                        select.ttl-select name="ttl_days" id="ttl_days" {
-                            option value="1" { "1 day" }
-                            option value="7" { "7 days" }
-                            option value="30" selected { "30 days (default)" }
-                            option value="90" { "90 days" }
-                            option value="180" { "180 days" }
-                            option value="365" { "1 year" }
-                            option value="1825" { "5 years" }
-                            option value="3650" { "10 years" }
-                        }
-                    },
-                    ..Default::default()
-                }))
-                br;
-                (button::render(button::Props {
-                    label: "Generate Token".into(),
-                    button_type: "submit",
-                    variant: button::Variant::Default,
-                    ..Default::default()
-                }))
-            }
-            @if let Some(ref error) = query.error {
-                br;
-                div.error-alert { (error) }
-            }
-            @if let Some(ref success) = query.success {
-                br;
-                div.success-alert { (success) }
-            }
-        },
-        ..Default::default()
-    }))
-    }
-    };
-
-    let html = page_shell("Token Setup", &csrf, "/ui", body);
-    let mut resp = html.into_response();
-    set_session_cookie(&mut resp, &session_id);
-    resp
-}
-
-async fn get_or_create_session(store: &SessionStore, headers: &HeaderMap) -> String {
-    if let Some(cookie) = headers.get(header::COOKIE).and_then(|v| v.to_str().ok()) {
-        for pair in cookie.split("; ") {
-            if let Some(sid) = pair.strip_prefix("mcp_session=")
-                && store.read().await.contains_key(sid)
-            {
-                return sid.to_string();
-            }
-        }
-    }
-    let sid = generate_session_id();
-    let csrf = generate_csrf_token();
-    store.write().await.insert(
-        sid.clone(),
-        SessionData {
-            csrf_token: csrf,
-            athlete_id: None,
-        },
+    let session = ui.session_context(&headers).await;
+    let html = page_shell(
+        "Token Setup",
+        "/ui",
+        render_home_body(&query, &session.csrf_token),
     );
-    sid
+    let mut resp = html.into_response();
+    set_session_cookie(&mut resp, &session.session_id);
+    resp
 }
 
 fn set_session_cookie(resp: &mut axum::response::Response, session_id: &str) {
     use axum::http::header::SET_COOKIE;
     let cookie = format!(
-        "mcp_session={}; HttpOnly; SameSite=Strict; Path=/ui; Max-Age=3600",
-        session_id
+        "{}={}; HttpOnly; SameSite=Strict; Path=/ui; Max-Age={}",
+        SESSION_COOKIE_NAME, session_id, SESSION_COOKIE_MAX_AGE_SECONDS
     );
     resp.headers_mut()
         .insert(SET_COOKIE, cookie.parse().unwrap());
-}
-
-async fn save_registry(registry: &TokenRegistry, path: &Option<PathBuf>) {
-    if let Some(path) = path {
-        if let Some(parent) = path.parent() {
-            let _ = tokio::fs::create_dir_all(parent).await;
-        }
-        if let Ok(data) = serde_json::to_vec(&*registry.read().await) {
-            let _ = tokio::fs::write(path, data).await;
-        }
-    }
 }
 
 // ── Token creation (POST /ui/token) ──────────────────────────────────────
@@ -352,85 +481,73 @@ pub async fn ui_create_token(
     headers: HeaderMap,
     Form(form): Form<TokenForm>,
 ) -> Response {
-    let session_id = get_or_create_session(&ui.sessions, &headers).await;
-    let submitted_csrf = form._csrf.as_deref().unwrap_or("");
-    let valid_csrf = {
-        let session = ui.sessions.read().await.get(&session_id).cloned();
-        session
-            .map(|s| s.csrf_token == submitted_csrf)
-            .unwrap_or(false)
+    let session = ui.session_context(&headers).await;
+    let submitted_csrf = form._csrf.clone().unwrap_or_default();
+    if !ui.csrf_matches(&session.session_id, &submitted_csrf).await {
+        return redirect_with_session("/ui?error=Invalid+session+%28CSRF%29", &session.session_id);
+    }
+
+    let Some(token_request) = TokenRequestData::from_form(form) else {
+        return redirect_with_session("/ui?error=Missing+credentials", &session.session_id);
     };
-    if !valid_csrf {
-        return redirect_with_session("/ui?error=Invalid+session+%28CSRF%29", &session_id);
-    }
-
-    let athlete_id = form.athlete_id.or(form.email).unwrap_or_default();
-    let api_key = form.api_key.or(form.password).unwrap_or_default();
-
-    if athlete_id.is_empty() || api_key.is_empty() {
-        return redirect_with_session("/ui?error=Missing+credentials", &session_id);
-    }
 
     let client = intervals_icu_client::http_client::ReqwestIntervalsClient::new(
         &ui.app_state.base_url,
-        athlete_id.clone(),
-        secrecy::SecretString::new(api_key.clone().into()),
+        token_request.athlete_id.clone(),
+        secrecy::SecretString::new(token_request.api_key.clone().into()),
     );
 
-    let ttl_days = form.ttl_days.unwrap_or(30).clamp(1, 3650);
-    let ttl_seconds = ttl_days * 86400;
+    let ttl_seconds = token_request.ttl_seconds();
 
     match client.get_athlete_profile().await {
-        Ok(_) => match ui
-            .app_state
-            .jwt_manager
-            .issue_token(&athlete_id, &api_key, ttl_seconds)
-        {
+        Ok(_) => match ui.app_state.jwt_manager.issue_token(
+            &token_request.athlete_id,
+            &token_request.api_key,
+            ttl_seconds,
+        ) {
             Ok(token) => {
-                let jti = Uuid::new_v4().to_string();
                 let now = chrono::Utc::now();
                 let expires = now + chrono::TimeDelta::seconds(ttl_seconds as i64);
-                let expiry_formatted = format_datetime(&expires.to_rfc3339());
-                let ttl_label = format!("{} day{}", ttl_days, if ttl_days == 1 { "" } else { "s" });
+                let expires_at = expires.to_rfc3339();
+                let expiry_formatted = format_datetime(&expires_at);
 
-                let mut registry = ui.tokens.write().await;
-                registry.push(TokenRecord {
-                    jti: jti.clone(),
-                    athlete_id: athlete_id.clone(),
+                ui.record_token(TokenRecord {
+                    jti: Uuid::new_v4().to_string(),
+                    athlete_id: token_request.athlete_id.clone(),
                     issued_at: now.to_rfc3339(),
-                    expires_at: expires.to_rfc3339(),
+                    expires_at,
                     revoked: false,
-                });
-                drop(registry);
-                save_registry(&ui.tokens, &ui.registry_path).await;
+                })
+                .await;
 
-                let mut session = ui.sessions.write().await;
-                if let Some(s) = session.get_mut(&session_id) {
-                    s.athlete_id = Some(athlete_id.clone());
-                }
-                drop(session);
+                ui.remember_athlete(&session.session_id, &token_request.athlete_id)
+                    .await;
 
                 crate::metrics::record_token_issued_with_source("ui");
                 crate::metrics::record_ui_action("token_created");
                 tracing::info!(
-                    athlete_id = %athlete_id,
+                    athlete_id = %token_request.athlete_id,
                     ui_action = "token_created",
                     "Token created via web UI"
                 );
 
-                let csrf = get_csrf(&ui.sessions, &session_id).await;
-                let body = render_token_success(&token, &athlete_id, &expiry_formatted, &ttl_label);
-                let html = page_shell("Token Generated", &csrf, "/ui", body);
+                let body = render_token_success(
+                    &token,
+                    &token_request.athlete_id,
+                    &expiry_formatted,
+                    &token_request.ttl_label(),
+                );
+                let html = page_shell("Token Generated", "/ui", body);
                 let mut resp = html.into_response();
-                set_session_cookie(&mut resp, &session_id);
+                set_session_cookie(&mut resp, &session.session_id);
                 resp
             }
             Err(e) => redirect_with_session(
                 &format!("/ui?error=Token+generation+failed%3A+{e}"),
-                &session_id,
+                &session.session_id,
             ),
         },
-        Err(_) => redirect_with_session("/ui?error=Invalid+credentials", &session_id),
+        Err(_) => redirect_with_session("/ui?error=Invalid+credentials", &session.session_id),
     }
 }
 
@@ -495,15 +612,6 @@ fn render_token_success(
     }
 }
 
-async fn get_csrf(store: &SessionStore, session_id: &str) -> String {
-    store
-        .read()
-        .await
-        .get(session_id)
-        .map(|s| s.csrf_token.clone())
-        .unwrap_or_default()
-}
-
 // ── Token listing (GET /ui/tokens) ───────────────────────────────────────
 
 #[derive(Deserialize, Default)]
@@ -513,6 +621,7 @@ pub struct TokenListQuery {
     pub success: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SortField {
     IssuedAt,
     ExpiresAt,
@@ -548,30 +657,28 @@ pub async fn ui_list_tokens(
     headers: HeaderMap,
     Query(query): Query<TokenListQuery>,
 ) -> Response {
-    let session_id = get_or_create_session(&ui.sessions, &headers).await;
-    let csrf = get_csrf(&ui.sessions, &session_id).await;
-
-    let session = ui.sessions.read().await.get(&session_id).cloned();
-    let current_athlete = session.and_then(|s| s.athlete_id).unwrap_or_default();
-
-    let all_tokens = ui.tokens.read().await.clone();
-    let filtered: Vec<TokenRecord> = if current_athlete.is_empty() {
+    let session = ui.session_context(&headers).await;
+    let current_athlete = session.athlete_id.unwrap_or_default();
+    let filtered = if current_athlete.is_empty() {
         vec![]
     } else {
-        all_tokens
-            .into_iter()
-            .filter(|t| t.athlete_id == current_athlete)
-            .collect()
+        ui.tokens_for_athlete(&current_athlete).await
     };
 
     let sort = parse_sort_field(query.sort.as_deref().unwrap_or("issued"));
     let ascending = query.order.as_deref() != Some("desc");
     let sorted = sort_tokens(filtered, sort, ascending);
 
-    let body = render_token_list(&sorted, &csrf, &query.sort, &query.order, &query.success);
-    let html = page_shell("Token Management", &csrf, "/ui/tokens", body);
+    let body = render_token_list(
+        &sorted,
+        &session.csrf_token,
+        &query.sort,
+        &query.order,
+        &query.success,
+    );
+    let html = page_shell("Token Management", "/ui/tokens", body);
     let mut resp = html.into_response();
-    set_session_cookie(&mut resp, &session_id);
+    set_session_cookie(&mut resp, &session.session_id);
     resp
 }
 
@@ -713,24 +820,13 @@ pub async fn ui_revoke_token(
     axum::extract::Path(jti): axum::extract::Path<String>,
     Form(form): Form<HashMap<String, String>>,
 ) -> Response {
-    let session_id = get_or_create_session(&ui.sessions, &headers).await;
-    let valid_csrf = {
-        let session = ui.sessions.read().await.get(&session_id).cloned();
-        let submitted = form.get("_csrf").map(|s| s.as_str()).unwrap_or("");
-        session.map(|s| s.csrf_token == submitted).unwrap_or(false)
-    };
-    if !valid_csrf {
-        return redirect_with_session("/ui/tokens?error=Invalid+CSRF", &session_id);
+    let session = ui.session_context(&headers).await;
+    let submitted_csrf = form.get("_csrf").map(|value| value.as_str()).unwrap_or("");
+    if !ui.csrf_matches(&session.session_id, submitted_csrf).await {
+        return redirect_with_session("/ui/tokens?error=Invalid+CSRF", &session.session_id);
     }
 
-    {
-        let mut registry = ui.tokens.write().await;
-        if let Some(token) = registry.iter_mut().find(|t| t.jti == jti) {
-            token.revoked = true;
-        }
-    }
-
-    save_registry(&ui.tokens, &ui.registry_path).await;
+    ui.revoke_token(&jti).await;
 
     crate::metrics::record_ui_action("token_revoked");
     tracing::info!(
@@ -739,5 +835,189 @@ pub async fn ui_revoke_token(
         "Token revoked via web UI"
     );
 
-    redirect_with_session("/ui/tokens?success=Token+revoked", &session_id)
+    redirect_with_session("/ui/tokens?success=Token+revoked", &session.session_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::HeaderValue;
+
+    fn test_ui_state() -> UiState {
+        let secret = b"test_secret_key_for_jwt_signing_12345678901234567890123456789012";
+        let jwt_manager = Arc::new(crate::auth::JwtManager::new(secret, [0u8; 32]));
+        let app_state = Arc::new(AppState {
+            jwt_manager,
+            jwt_ttl_seconds: 3600,
+            base_url: "https://intervals.icu".to_string(),
+        });
+
+        UiState::new(app_state, None)
+    }
+
+    fn headers_with_cookie(cookie: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::COOKIE, HeaderValue::from_str(cookie).unwrap());
+        headers
+    }
+
+    #[test]
+    fn auth_ui_token_request_uses_primary_fields() {
+        let request = TokenRequestData::from_form(TokenForm {
+            _csrf: None,
+            athlete_id: Some("i123456".to_string()),
+            api_key: Some("secret".to_string()),
+            email: Some("ignored@example.com".to_string()),
+            password: Some("ignored".to_string()),
+            ttl_days: Some(7),
+        })
+        .expect("request should be normalized");
+
+        assert_eq!(request.athlete_id, "i123456");
+        assert_eq!(request.api_key, "secret");
+        assert_eq!(request.ttl_days, 7);
+    }
+
+    #[test]
+    fn auth_ui_token_request_uses_fallback_fields() {
+        let request = TokenRequestData::from_form(TokenForm {
+            _csrf: None,
+            athlete_id: None,
+            api_key: None,
+            email: Some("i654321".to_string()),
+            password: Some("fallback-secret".to_string()),
+            ttl_days: Some(1),
+        })
+        .expect("fallback fields should work");
+
+        assert_eq!(request.athlete_id, "i654321");
+        assert_eq!(request.api_key, "fallback-secret");
+        assert_eq!(request.ttl_seconds(), SECONDS_PER_DAY);
+        assert_eq!(request.ttl_label(), "1 day");
+    }
+
+    #[test]
+    fn auth_ui_token_request_rejects_missing_credentials() {
+        let request = TokenRequestData::from_form(TokenForm {
+            _csrf: None,
+            athlete_id: Some(String::new()),
+            api_key: Some(String::new()),
+            email: None,
+            password: None,
+            ttl_days: None,
+        });
+
+        assert!(request.is_none());
+    }
+
+    #[test]
+    fn auth_ui_normalize_ttl_days_applies_defaults_and_limits() {
+        assert_eq!(normalize_ttl_days(None), DEFAULT_TOKEN_TTL_DAYS);
+        assert_eq!(normalize_ttl_days(Some(0)), 1);
+        assert_eq!(normalize_ttl_days(Some(9_999)), MAX_TOKEN_TTL_DAYS);
+    }
+
+    #[test]
+    fn auth_ui_session_id_from_headers_handles_multiple_cookies() {
+        let headers = headers_with_cookie("theme=dark; mcp_session=session-123; mode=compact");
+
+        assert_eq!(
+            session_id_from_headers(&headers),
+            Some("session-123".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn auth_ui_session_context_reuses_existing_session() {
+        let ui = test_ui_state();
+        let first_session = ui.session_context(&HeaderMap::new()).await;
+        let headers = headers_with_cookie(&format!(
+            "theme=dark; {}={}",
+            SESSION_COOKIE_NAME, first_session.session_id
+        ));
+
+        let reused_session = ui.session_context(&headers).await;
+
+        assert_eq!(reused_session.session_id, first_session.session_id);
+        assert_eq!(reused_session.csrf_token, first_session.csrf_token);
+    }
+
+    #[tokio::test]
+    async fn auth_ui_session_helpers_track_athlete_and_csrf() {
+        let ui = test_ui_state();
+        let session = ui.session_context(&HeaderMap::new()).await;
+
+        assert!(
+            ui.csrf_matches(&session.session_id, &session.csrf_token)
+                .await
+        );
+        assert!(!ui.csrf_matches(&session.session_id, "invalid").await);
+
+        ui.remember_athlete(&session.session_id, "i123456").await;
+
+        let headers =
+            headers_with_cookie(&format!("{}={}", SESSION_COOKIE_NAME, session.session_id));
+        let updated_session = ui.session_context(&headers).await;
+
+        assert_eq!(updated_session.athlete_id.as_deref(), Some("i123456"));
+    }
+
+    #[tokio::test]
+    async fn auth_ui_token_registry_filters_and_revokes() {
+        let ui = test_ui_state();
+
+        ui.record_token(TokenRecord {
+            jti: "jti-1".to_string(),
+            athlete_id: "athlete-a".to_string(),
+            issued_at: "2026-05-26T10:00:00Z".to_string(),
+            expires_at: "2026-05-27T10:00:00Z".to_string(),
+            revoked: false,
+        })
+        .await;
+        ui.record_token(TokenRecord {
+            jti: "jti-2".to_string(),
+            athlete_id: "athlete-b".to_string(),
+            issued_at: "2026-05-26T11:00:00Z".to_string(),
+            expires_at: "2026-05-27T11:00:00Z".to_string(),
+            revoked: false,
+        })
+        .await;
+
+        let athlete_tokens = ui.tokens_for_athlete("athlete-a").await;
+        assert_eq!(athlete_tokens.len(), 1);
+        assert_eq!(athlete_tokens[0].jti, "jti-1");
+        assert!(!athlete_tokens[0].revoked);
+
+        assert!(ui.revoke_token("jti-1").await);
+        assert!(!ui.revoke_token("missing-jti").await);
+
+        let athlete_tokens = ui.tokens_for_athlete("athlete-a").await;
+        assert!(athlete_tokens[0].revoked);
+    }
+
+    #[test]
+    fn auth_ui_sort_tokens_orders_by_requested_field() {
+        let tokens = vec![
+            TokenRecord {
+                jti: "jti-1".to_string(),
+                athlete_id: "b-athlete".to_string(),
+                issued_at: "2026-05-26T11:00:00Z".to_string(),
+                expires_at: "2026-05-28T11:00:00Z".to_string(),
+                revoked: false,
+            },
+            TokenRecord {
+                jti: "jti-2".to_string(),
+                athlete_id: "a-athlete".to_string(),
+                issued_at: "2026-05-26T10:00:00Z".to_string(),
+                expires_at: "2026-05-27T10:00:00Z".to_string(),
+                revoked: true,
+            },
+        ];
+
+        let sorted = sort_tokens(tokens, SortField::AthleteId, true);
+        assert_eq!(sorted[0].athlete_id, "a-athlete");
+
+        let sorted = sort_tokens(sorted, SortField::Status, true);
+        assert!(!sorted[0].revoked);
+    }
 }
