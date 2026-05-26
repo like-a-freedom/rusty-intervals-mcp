@@ -490,7 +490,7 @@ pub async fn run_http_server(
         .route("/ui/token", axum::routing::post(auth_ui::ui_create_token))
         .route("/ui/tokens", axum::routing::get(auth_ui::ui_list_tokens))
         .route(
-            "/ui/revoke/:jti",
+            "/ui/revoke/{jti}",
             axum::routing::post(auth_ui::ui_revoke_token),
         )
         .route("/ui/static/css", axum::routing::get(auth_ui::serve_css))
