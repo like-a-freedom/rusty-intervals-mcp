@@ -288,6 +288,7 @@ fn page_shell(
                     .mui-card__description { margin-top: 0.5rem; }
                     .mui-field + .mui-field { margin-top: 1.25rem; }
                     .tokens-page-card .mui-card { max-width: none; width: 100%; }
+                    .mui-container { padding: 0 1.5rem; }
                     .token-display {
                       font-family: 'SF Mono', 'Fira Code', monospace;
                       font-size: 0.75rem;
