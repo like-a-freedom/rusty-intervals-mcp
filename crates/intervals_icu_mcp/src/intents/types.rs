@@ -365,26 +365,31 @@ pub fn intent_output_to_call_tool_result(
 
 /// Convert IntentError to MCP ErrorData
 pub fn intent_error_to_error_data(error: &IntentError) -> rmcp::ErrorData {
-    let message = match error {
-        IntentError::UnknownIntent(name) => format!(
-            "Unknown intent '{}'. Available: plan_training, analyze_training, modify_training, compare_periods, assess_recovery, manage_profile, manage_gear, analyze_race",
-            name
-        ),
-        IntentError::ValidationError(msg) => format!("Invalid input: {}. Check parameters.", msg),
-        IntentError::IdempotencyConflict(msg) => {
-            format!("Idempotency conflict: {}. Returning cached.", msg)
+    match error {
+        IntentError::UnknownIntent(name) => {
+            rmcp::ErrorData::invalid_request(format!("Unknown intent '{name}'"), None)
+        }
+        IntentError::ValidationError(msg) => {
+            rmcp::ErrorData::invalid_params(format!("Invalid input: {msg}"), None)
+        }
+        IntentError::IdempotencyConflict(_msg) => {
+            rmcp::ErrorData::invalid_request("This request has already been processed.", None)
         }
         IntentError::ApiClientError(msg) => {
             let lower = msg.to_ascii_lowercase();
             if lower.contains("status 429") || lower.contains("rate limit") {
-                format!("API rate limit exceeded: {}. Wait briefly and retry.", msg)
+                rmcp::ErrorData::internal_error(
+                    "Rate limit exceeded. Please wait and try again.",
+                    None,
+                )
             } else {
-                format!("API error: {}. Check connection.", msg)
+                rmcp::ErrorData::internal_error("API request failed. Please try again.", None)
             }
         }
-        IntentError::InternalError(msg) => format!("Internal error: {}. Try again.", msg),
-    };
-    rmcp::ErrorData::invalid_params(message, None)
+        IntentError::InternalError(msg) => {
+            rmcp::ErrorData::internal_error(format!("Something went wrong: {msg}"), None)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -655,7 +660,6 @@ mod tests {
         let error_data = intent_error_to_error_data(&err);
         assert!(error_data.message.contains("Unknown intent"));
         assert!(error_data.message.contains("test"));
-        assert!(error_data.message.contains("plan_training"));
     }
 
     #[test]
@@ -670,16 +674,14 @@ mod tests {
     fn test_intent_error_to_error_data_idempotency() {
         let err = IntentError::IdempotencyConflict("Duplicate token".into());
         let error_data = intent_error_to_error_data(&err);
-        assert!(error_data.message.contains("Idempotency conflict"));
-        assert!(error_data.message.contains("Duplicate token"));
+        assert!(error_data.message.contains("already been processed"));
     }
 
     #[test]
     fn test_intent_error_to_error_data_api() {
         let err = IntentError::api("Network error");
         let error_data = intent_error_to_error_data(&err);
-        assert!(error_data.message.contains("API error"));
-        assert!(error_data.message.contains("Network error"));
+        assert!(error_data.message.contains("request failed"));
     }
 
     #[test]
@@ -687,15 +689,15 @@ mod tests {
         let err =
             IntentError::api("Failed to fetch upcoming workouts: API error: status 429, message: ");
         let error_data = intent_error_to_error_data(&err);
-        assert!(error_data.message.contains("rate limit"));
-        assert!(error_data.message.contains("retry"));
+        assert!(error_data.message.contains("Rate limit"));
+        assert!(error_data.message.contains("try again"));
     }
 
     #[test]
     fn test_intent_error_to_error_data_internal() {
         let err = IntentError::internal("Crash");
         let error_data = intent_error_to_error_data(&err);
-        assert!(error_data.message.contains("Internal error"));
+        assert!(error_data.message.contains("Something went wrong"));
         assert!(error_data.message.contains("Crash"));
     }
 
