@@ -531,43 +531,13 @@ impl Default for ComparePeriodsHandler {
 mod tests {
     use super::*;
     use crate::test_support::mock::MockIntervalsClient;
-    use chrono::NaiveDate;
     use intervals_icu_client::ActivitySummary;
     use std::collections::HashMap;
     use std::sync::Arc;
 
     // ========================================================================
-    // Constructor Tests
-    // ========================================================================
-
-    #[test]
-    fn test_new_handler() {
-        let handler = ComparePeriodsHandler::new();
-        assert_eq!(handler.name(), "compare_periods");
-    }
-
-    #[test]
-    fn test_default_handler() {
-        let _handler = ComparePeriodsHandler;
-    }
-
-    // ========================================================================
     // IntentHandler Trait Implementation Tests
     // ========================================================================
-
-    #[test]
-    fn test_name() {
-        let handler = ComparePeriodsHandler::new();
-        assert_eq!(IntentHandler::name(&handler), "compare_periods");
-    }
-
-    #[test]
-    fn test_description() {
-        let handler = ComparePeriodsHandler::new();
-        let desc = IntentHandler::description(&handler);
-        assert!(desc.contains("Compares performance"));
-        assert!(desc.contains("like-for-like"));
-    }
 
     #[test]
     fn test_input_schema_structure() {
@@ -589,12 +559,6 @@ mod tests {
         assert!(required.contains(&json!("period_a_end")));
         assert!(required.contains(&json!("period_b_start")));
         assert!(required.contains(&json!("period_b_end")));
-    }
-
-    #[test]
-    fn test_requires_idempotency_token() {
-        let handler = ComparePeriodsHandler::new();
-        assert!(!IntentHandler::requires_idempotency_token(&handler));
     }
 
     // ========================================================================
@@ -687,8 +651,8 @@ mod tests {
         };
 
         let (value, note) = requested_metric_value("volume", &stats);
-        assert!(value.contains("5.0"));
-        assert!(note.contains("derived from total moving time"));
+        assert_eq!(value, "5.0 h");
+        assert_eq!(note, "derived from total moving time");
     }
 
     #[test]
@@ -707,8 +671,8 @@ mod tests {
         };
 
         let (value, note) = requested_metric_value("pace", &stats);
-        assert!(value.contains("6:00")); // 6 min/km
-        assert!(note.contains("derived"));
+        assert_eq!(value, "6:00 /km");
+        assert_eq!(note, "derived");
     }
 
     #[test]
@@ -728,7 +692,7 @@ mod tests {
 
         let (value, note) = requested_metric_value("pace", &stats);
         assert_eq!(value, "n/a");
-        assert!(note.contains("unavailable"));
+        assert_eq!(note, "distance/time unavailable");
     }
 
     #[test]
@@ -755,8 +719,8 @@ mod tests {
         };
 
         let (value, note) = requested_metric_value("hr", &stats);
-        assert!(value.contains("150"));
-        assert!(note.contains("average"));
+        assert_eq!(value, "150 bpm");
+        assert_eq!(note, "average of activity HR values");
     }
 
     #[test]
@@ -781,7 +745,7 @@ mod tests {
 
         let (value, note) = requested_metric_value("hr", &stats);
         assert_eq!(value, "n/a");
-        assert!(note.contains("unavailable"));
+        assert_eq!(note, "average HR unavailable");
     }
 
     #[test]
@@ -808,8 +772,8 @@ mod tests {
         };
 
         let (value, note) = requested_metric_value("tss", &stats);
-        assert!(value.contains("75.0"));
-        assert!(note.contains("training load"));
+        assert_eq!(value, "75.0");
+        assert_eq!(note, "sum of training load");
     }
 
     #[test]
@@ -829,7 +793,7 @@ mod tests {
 
         let (value, note) = requested_metric_value("unknown_metric", &stats);
         assert_eq!(value, "n/a");
-        assert!(note.contains("not yet modeled"));
+        assert_eq!(note, "metric 'unknown_metric' not yet modeled");
     }
 
     // ========================================================================
@@ -837,37 +801,13 @@ mod tests {
     // ========================================================================
 
     #[test]
-    fn test_requested_metric_label_hr() {
+    fn test_requested_metric_labels() {
         assert_eq!(requested_metric_label("hr"), "HR");
-    }
-
-    #[test]
-    fn test_requested_metric_label_tss() {
         assert_eq!(requested_metric_label("tss"), "TSS");
-    }
-
-    #[test]
-    fn test_requested_metric_label_pace() {
         assert_eq!(requested_metric_label("pace"), "Pace");
-    }
-
-    #[test]
-    fn test_requested_metric_label_volume() {
         assert_eq!(requested_metric_label("volume"), "Volume");
-    }
-
-    #[test]
-    fn test_requested_metric_label_custom() {
         assert_eq!(requested_metric_label("custom_metric"), "CUSTOM METRIC");
-    }
-
-    #[test]
-    fn test_requested_metric_label_zones() {
         assert_eq!(requested_metric_label("zones"), "Zones");
-    }
-
-    #[test]
-    fn test_requested_metric_label_intensity() {
         assert_eq!(requested_metric_label("intensity"), "Intensity");
     }
 
@@ -907,7 +847,7 @@ mod tests {
         // 250 total TSS / 2 weeks = 125 TSS/wk
         assert!(value.contains("TSS/wk"), "value: {value}");
         assert!(value.contains("125"), "value: {value}");
-        assert!(note.contains("training load"));
+        assert_eq!(note, "weekly average training load");
     }
 
     #[test]
@@ -927,7 +867,7 @@ mod tests {
         };
         let (value, note) = requested_metric_value("zones", &stats);
         assert_eq!(value, "n/a");
-        assert!(note.contains("unavailable"));
+        assert_eq!(note, "zone times unavailable");
     }
 
     #[test]
@@ -959,7 +899,7 @@ mod tests {
         let (value, note) = requested_metric_value("zones", &stats);
         assert!(value.contains("Z1: 60m"), "value: {value}");
         assert!(value.contains("Z2: 30m"), "value: {value}");
-        assert!(note.contains("icu_zone_times"));
+        assert_eq!(note, "aggregated from icu_zone_times");
     }
 
     // ========================================================================
@@ -967,27 +907,11 @@ mod tests {
     // ========================================================================
 
     #[test]
-    fn test_format_duration_one_hour() {
+    fn test_format_duration() {
         assert_eq!(format_duration(3600), "1:00");
-    }
-
-    #[test]
-    fn test_format_duration_two_hours_thirty() {
         assert_eq!(format_duration(9000), "2:30");
-    }
-
-    #[test]
-    fn test_format_duration_zero() {
         assert_eq!(format_duration(0), "0:00");
-    }
-
-    #[test]
-    fn test_format_duration_minutes_only() {
         assert_eq!(format_duration(1800), "0:30");
-    }
-
-    #[test]
-    fn test_format_duration_with_seconds() {
         assert_eq!(format_duration(3659), "1:00"); // Seconds are truncated
     }
 
@@ -996,172 +920,11 @@ mod tests {
     // ========================================================================
 
     #[test]
-    fn test_format_pct_positive() {
+    fn test_format_pct() {
         assert_eq!(format_pct(Some(10.5)), "+10.5%");
-    }
-
-    #[test]
-    fn test_format_pct_negative() {
         assert_eq!(format_pct(Some(-5.25)), "-5.2%");
-    }
-
-    #[test]
-    fn test_format_pct_zero() {
         assert_eq!(format_pct(Some(0.0)), "+0.0%");
-    }
-
-    #[test]
-    fn test_format_pct_none() {
         assert_eq!(format_pct(None), "n/a");
-    }
-
-    // ========================================================================
-    // PeriodStats Struct Tests
-    // ========================================================================
-
-    #[test]
-    fn test_period_stats_structure() {
-        let stats = PeriodStats {
-            snapshot: TrendSnapshot {
-                activity_count: 10,
-                total_time_secs: 36_000,
-                total_distance_m: 100_500.0,
-                total_elevation_m: 1500.0,
-            },
-            window_days: 28,
-            activities: Vec::new(),
-            activity_details: std::collections::HashMap::new(),
-            planned_count: 0,
-        };
-
-        assert_eq!(stats.snapshot.activity_count, 10);
-        assert_eq!(stats.snapshot.total_time_secs, 36_000);
-        assert!((stats.snapshot.total_distance_m - 100_500.0).abs() < 0.01);
-        assert!((stats.snapshot.total_elevation_m - 1500.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn test_empty_period_stats() {
-        let stats = PeriodStats {
-            snapshot: TrendSnapshot {
-                activity_count: 0,
-                total_time_secs: 0,
-                total_distance_m: 0.0,
-                total_elevation_m: 0.0,
-            },
-            window_days: 7,
-            activities: Vec::new(),
-            activity_details: std::collections::HashMap::new(),
-            planned_count: 0,
-        };
-
-        assert_eq!(stats.snapshot.activity_count, 0);
-        assert_eq!(stats.snapshot.total_time_secs, 0);
-        assert_eq!(stats.snapshot.total_distance_m, 0.0);
-        assert_eq!(stats.snapshot.total_elevation_m, 0.0);
-    }
-
-    // ========================================================================
-    // Input Validation and Default Value Tests
-    // ========================================================================
-
-    #[test]
-    fn test_default_labels() {
-        let input = json!({
-            "period_a_start": "2026-01-01",
-            "period_a_end": "2026-01-31",
-            "period_b_start": "2026-02-01",
-            "period_b_end": "2026-02-28"
-        });
-
-        let a_label = input
-            .get("period_a_label")
-            .and_then(|v| v.as_str())
-            .unwrap_or("Period A");
-        let b_label = input
-            .get("period_b_label")
-            .and_then(|v| v.as_str())
-            .unwrap_or("Period B");
-
-        assert_eq!(a_label, "Period A");
-        assert_eq!(b_label, "Period B");
-    }
-
-    #[test]
-    fn test_date_parsing() {
-        let valid_date = "2026-03-01";
-        let result = NaiveDate::parse_from_str(valid_date, "%Y-%m-%d");
-        assert!(result.is_ok());
-
-        let invalid_date = "01-03-2026";
-        let result = NaiveDate::parse_from_str(invalid_date, "%Y-%m-%d");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_volume_change_calculation() {
-        let old_dist = 100.0;
-        let new_dist = 110.0;
-        let change = ((new_dist - old_dist) / old_dist * 100.0) as f32;
-        assert!((change - 10.0).abs() < 0.1);
-
-        let old_dist = 100.0;
-        let new_dist = 90.0;
-        let change = ((new_dist - old_dist) / old_dist * 100.0) as f32;
-        assert!((change - (-10.0)).abs() < 0.1);
-    }
-
-    #[test]
-    fn test_delta_formatting() {
-        let delta = 5;
-        let formatted = if delta >= 0 {
-            format!("+{}", delta)
-        } else {
-            delta.to_string()
-        };
-        assert_eq!(formatted, "+5");
-
-        let delta = -5;
-        let formatted = if delta >= 0 {
-            format!("+{}", delta)
-        } else {
-            delta.to_string()
-        };
-        assert_eq!(formatted, "-5");
-    }
-
-    #[test]
-    fn test_time_formatting() {
-        let minutes = 125;
-        let formatted = format!("{}:{:02}", minutes / 60, minutes % 60);
-        assert_eq!(formatted, "2:05");
-
-        let minutes = 60;
-        let formatted = format!("{}:{:02}", minutes / 60, minutes % 60);
-        assert_eq!(formatted, "1:00");
-    }
-
-    #[test]
-    fn test_suggestions_based_on_volume_change() {
-        let volume_change: f32 = 5.0;
-        let suggestion = if volume_change.abs() <= 10.0 {
-            "within normal range"
-        } else if volume_change > 10.0 {
-            "increased"
-        } else {
-            "decreased"
-        };
-        assert_eq!(suggestion, "within normal range");
-
-        let volume_change: f32 = 15.0;
-        let suggestion = if volume_change.abs() <= 10.0 {
-            "within normal range"
-        } else if volume_change > 10.0 {
-            "increased"
-        } else {
-            "decreased"
-        };
-        assert_eq!(suggestion, "increased");
     }
 
     // ========================================================================

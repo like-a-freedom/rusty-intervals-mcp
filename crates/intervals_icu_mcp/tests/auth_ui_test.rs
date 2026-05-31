@@ -37,8 +37,13 @@ async fn test_ui_home_returns_html() {
 
     let body = resp.text().await.unwrap();
     assert!(
-        body.contains("Generate Token") || body.contains("Home"),
-        "page should contain expected headings, got: {}..",
+        body.contains("Generate Token"),
+        "page should contain 'Generate Token', got: {}..",
+        &body[..200]
+    );
+    assert!(
+        body.contains("Home"),
+        "page should contain 'Home', got: {}..",
         &body[..200]
     );
     assert!(body.contains("stylesheet"), "page should link a stylesheet");
@@ -61,13 +66,13 @@ async fn test_ui_css_served() {
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
-    assert!(
+    assert_eq!(
         resp.headers()
             .get("content-type")
             .unwrap()
             .to_str()
-            .unwrap()
-            .contains("text/css")
+            .unwrap(),
+        "text/css; charset=utf-8"
     );
 }
 

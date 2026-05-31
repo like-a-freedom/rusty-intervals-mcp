@@ -12,6 +12,18 @@ use reqwest::Client;
 use std::sync::Arc;
 use std::time::Duration;
 
+async fn wait_for_server(addr: std::net::SocketAddr) {
+    let mut retries = 20;
+    while retries > 0 {
+        if tokio::net::TcpStream::connect(addr).await.is_ok() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        retries -= 1;
+    }
+    panic!("server did not start within timeout");
+}
+
 use intervals_icu_client::{AthleteProfile, IntervalsClient};
 use intervals_icu_mcp::auth::{AppState, HttpBaseUrl, JwtManager, auth_endpoint, auth_middleware};
 use secrecy::ExposeSecret;
@@ -492,8 +504,7 @@ async fn test_http_server_starts_and_accepts_connections() {
         server.await.ok();
     });
 
-    // Give server a moment to start
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    wait_for_server(addr).await;
 
     // Test connection to /mcp endpoint
     let http_client = Client::new();
@@ -536,7 +547,7 @@ async fn test_http_server_mcp_endpoint_exists() {
         server.await.ok();
     });
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    wait_for_server(addr).await;
 
     // Test that /mcp endpoint exists (POST should be accepted)
     // Streamable HTTP transport may return various codes depending on session state
@@ -593,7 +604,7 @@ async fn test_http_server_respects_body_size_limit() {
         server.await.ok();
     });
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    wait_for_server(addr).await;
 
     // Test with large payload (should be rejected)
     let http_client = Client::new();
@@ -646,7 +657,7 @@ async fn test_http_server_handles_multiple_requests() {
         server.await.ok();
     });
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    wait_for_server(addr).await;
 
     // Send multiple requests
     let http_client = Client::new();
@@ -695,7 +706,7 @@ async fn test_http_server_handles_invalid_json() {
         server.await.ok();
     });
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    wait_for_server(addr).await;
 
     // Send invalid JSON
     let http_client = Client::new();
@@ -743,7 +754,7 @@ async fn test_http_server_handles_missing_content_type() {
         server.await.ok();
     });
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    wait_for_server(addr).await;
 
     // Send request without Content-Type header
     let http_client = Client::new();
@@ -835,7 +846,7 @@ async fn test_auth_endpoint_issues_jwt_for_valid_credentials() {
         server.await.ok();
     });
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    wait_for_server(addr).await;
 
     let response = Client::new()
         .post(format!("http://{}/auth", addr))
@@ -908,7 +919,7 @@ async fn test_mcp_route_requires_bearer_token_and_accepts_valid_jwt() {
         server.await.ok();
     });
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    wait_for_server(addr).await;
 
     let http_client = Client::new();
     let missing_auth = http_client
@@ -968,7 +979,7 @@ async fn test_mcp_rejects_disallowed_host_header() {
         server.await.ok();
     });
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    wait_for_server(addr).await;
 
     let http_client = Client::builder()
         .no_proxy()
@@ -1021,7 +1032,7 @@ async fn test_mcp_accepts_allowed_host_header() {
         server.await.ok();
     });
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    wait_for_server(addr).await;
 
     let http_client = Client::builder()
         .no_proxy()

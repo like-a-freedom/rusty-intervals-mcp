@@ -99,12 +99,14 @@ async fn e2e_stdio_lists_tools_and_calls_profile() {
         }
     };
 
-    // Give server a moment to initialize
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-
-    let peer_info = service
-        .peer_info()
-        .expect("client should capture initialize result from server");
+    // Wait for server to initialize (retry instead of fixed sleep)
+    for _ in 0..20 {
+        if service.peer_info().is_some() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let peer_info = service.peer_info().expect("server should be initialized");
     assert!(
         peer_info.capabilities.tools.is_some(),
         "server initialize must advertise tool capability or MCP hosts may discover zero tools"

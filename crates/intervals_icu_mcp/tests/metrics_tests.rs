@@ -27,67 +27,40 @@ fn validate_metrics_token(auth_header: Option<&str>, expected_token: Option<&str
     }
 }
 
-/// Test metrics endpoint authentication logic directly
-///
-/// Note: We test the auth logic without modifying global env vars to avoid race conditions.
-/// The actual router tests should be done in integration tests with proper test isolation.
 #[tokio::test]
 #[serial]
-async fn test_metrics_auth_logic() {
-    // Test the auth validation function directly
-    // This avoids global state issues
-
-    // When token is set, check should fail without auth header
-    let token = Some("test_token_123");
-    let auth_header: Option<&str> = None;
+async fn test_metrics_auth_fails_without_header() {
     assert!(
-        !validate_metrics_token(auth_header, token),
+        !validate_metrics_token(None, Some("test_token_123")),
         "Should fail without auth header when token is set"
-    );
-
-    // With wrong token
-    let auth_header = Some("Bearer wrong_token");
-    assert!(
-        !validate_metrics_token(auth_header, token),
-        "Should fail with wrong token"
-    );
-
-    // With correct token
-    let auth_header = Some("Bearer test_token_123");
-    assert!(
-        validate_metrics_token(auth_header, token),
-        "Should succeed with correct token"
-    );
-
-    // Without token configured, any request should succeed
-    let token: Option<&str> = None;
-    let auth_header: Option<&str> = None;
-    assert!(
-        validate_metrics_token(auth_header, token),
-        "Should succeed when no token configured"
     );
 }
 
-/// Test that metrics module exports the expected API
 #[tokio::test]
 #[serial]
-async fn test_metrics_api_is_available() {
-    // Verify all public functions exist
-    // This is a compile-time check
-    let _: fn(&str, bool, f64) = intervals_icu_mcp::metrics::record_tool_call;
-    let _: fn() = intervals_icu_mcp::metrics::record_token_issued;
-    let _: fn(&str) = intervals_icu_mcp::metrics::record_token_verification;
-    let _: fn(&str) = intervals_icu_mcp::metrics::record_rate_limited;
-    let _: fn(&str, &str, u16, f64) = intervals_icu_mcp::metrics::record_http_request;
-    let _: fn() = intervals_icu_mcp::metrics::increment_active_requests;
-    let _: fn() = intervals_icu_mcp::metrics::decrement_active_requests;
-    let _: fn(&str) = intervals_icu_mcp::metrics::record_athlete_activity;
-    let _: fn(&str) = intervals_icu_mcp::metrics::record_auth_failure;
-    let _: fn(&str) = intervals_icu_mcp::metrics::record_mcp_session;
-    let _: fn(&str) = intervals_icu_mcp::metrics::record_mcp_method_call;
-    let _: fn() -> Option<&'static metrics_exporter_prometheus::PrometheusHandle> =
-        intervals_icu_mcp::metrics::get_prometheus_handle;
-    let _: fn() -> axum::Router = intervals_icu_mcp::metrics::create_metrics_router;
+async fn test_metrics_auth_fails_with_wrong_token() {
+    assert!(
+        !validate_metrics_token(Some("Bearer wrong_token"), Some("test_token_123")),
+        "Should fail with wrong token"
+    );
+}
+
+#[tokio::test]
+#[serial]
+async fn test_metrics_auth_succeeds_with_correct_token() {
+    assert!(
+        validate_metrics_token(Some("Bearer test_token_123"), Some("test_token_123")),
+        "Should succeed with correct token"
+    );
+}
+
+#[tokio::test]
+#[serial]
+async fn test_metrics_auth_succeeds_when_no_token_configured() {
+    assert!(
+        validate_metrics_token(None, None),
+        "Should succeed when no token configured"
+    );
 }
 
 /// Helper to ensure Prometheus recorder is available for tests.

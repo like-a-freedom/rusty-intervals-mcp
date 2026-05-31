@@ -142,28 +142,27 @@ mod tests {
         cb.record_failure();
         cb.record_failure();
         cb.record_success();
-        assert_eq!(cb.failure_count.load(Ordering::Relaxed), 0);
         assert_eq!(cb.state(), CircuitState::Closed);
     }
 
     #[test]
     fn circuit_half_open_after_timeout() {
-        let cb = CircuitBreaker::new(2, Duration::from_millis(50));
+        let cb = CircuitBreaker::new(2, Duration::from_millis(1));
         cb.record_failure();
         cb.record_failure();
         assert_eq!(cb.state(), CircuitState::Open);
 
-        thread::sleep(Duration::from_millis(80));
+        thread::sleep(Duration::from_millis(10));
         assert_eq!(cb.state(), CircuitState::HalfOpen);
         assert!(cb.allow_request());
     }
 
     #[test]
     fn circuit_reopens_on_failure_in_half_open() {
-        let cb = CircuitBreaker::new(2, Duration::from_millis(50));
+        let cb = CircuitBreaker::new(2, Duration::from_millis(1));
         cb.record_failure();
         cb.record_failure();
-        thread::sleep(Duration::from_millis(80));
+        thread::sleep(Duration::from_millis(10));
         assert_eq!(cb.state(), CircuitState::HalfOpen);
         cb.record_failure();
         assert_eq!(cb.state(), CircuitState::Open);

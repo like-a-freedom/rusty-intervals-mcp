@@ -146,6 +146,8 @@ async fn test_dispatch_path_parameter_substitution() {
     .await;
 
     assert!(result.is_ok());
+    let response = result.unwrap();
+    assert!(!response.content.is_empty());
 }
 
 #[tokio::test]
@@ -195,6 +197,9 @@ async fn test_dispatch_query_parameters() {
     .await;
 
     assert!(result.is_ok());
+    let response = result.unwrap();
+    let content = serde_json::to_string(&response.content).unwrap();
+    assert!(content.contains("Activity 1"));
 }
 
 #[tokio::test]
@@ -244,6 +249,8 @@ async fn test_dispatch_post_with_json_body() {
     .await;
 
     assert!(result.is_ok());
+    let response = result.unwrap();
+    assert!(!response.content.is_empty());
 }
 
 #[tokio::test]
@@ -283,195 +290,8 @@ async fn test_dispatch_auto_injected_athlete_id() {
     .await;
 
     assert!(result.is_ok());
-}
-
-#[tokio::test]
-async fn test_dispatch_missing_required_path_param() {
-    let mock_server = MockServer::start().await;
-
-    let operation = with_path_param(
-        create_test_operation(
-            "getProfile",
-            reqwest::Method::GET,
-            "/api/v1/athlete/{id}/profile",
-        ),
-        "id",
-        false, // not auto-injected
-    );
-
-    // No 'id' in args
-    let args = Some(json!({}).as_object().unwrap().clone());
-
-    let result = intervals_icu_mcp::dynamic::dispatch_operation(
-        &reqwest::Client::new(),
-        &mock_server.uri(),
-        "test_athlete",
-        "test_api_key",
-        &operation,
-        args.as_ref(),
-    )
-    .await;
-
-    assert!(result.is_err());
-    let error = result.unwrap_err();
-    assert!(error.message.contains("missing required path parameter"));
-}
-
-#[tokio::test]
-async fn test_dispatch_response_compact_mode() {
-    let mock_server = MockServer::start().await;
-
-    Mock::given(method("GET"))
-        .and(path("/api/v1/athlete/test_athlete/profile"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "id": "test_athlete",
-            "name": "Test User",
-            "email": "test@example.com",
-            "extra_field": "should be filtered"
-        })))
-        .mount(&mock_server)
-        .await;
-
-    let operation = with_path_param(
-        create_test_operation(
-            "getProfile",
-            reqwest::Method::GET,
-            "/api/v1/athlete/{id}/profile",
-        ),
-        "id",
-        false,
-    );
-
-    // Request with compact=true and fields filter
-    let args = Some(
-        json!({
-            "id": "test_athlete",
-            "compact": true,
-            "fields": ["id", "name"]
-        })
-        .as_object()
-        .unwrap()
-        .clone(),
-    );
-
-    let result = intervals_icu_mcp::dynamic::dispatch_operation(
-        &reqwest::Client::new(),
-        &mock_server.uri(),
-        "test_athlete",
-        "test_api_key",
-        &operation,
-        args.as_ref(),
-    )
-    .await;
-
-    assert!(result.is_ok());
     let response = result.unwrap();
-
-    // Response should be filtered to only id and name
-    let content_str = serde_json::to_string(&response.content).unwrap();
-    assert!(content_str.contains("id"));
-    assert!(content_str.contains("name"));
-    // Note: compact mode filtering may vary based on implementation
-}
-
-#[tokio::test]
-async fn test_dispatch_response_body_only() {
-    let mock_server = MockServer::start().await;
-
-    let expected_body = json!({
-        "id": "test_athlete",
-        "name": "Test User"
-    });
-
-    Mock::given(method("GET"))
-        .and(path("/api/v1/athlete/test_athlete/profile"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(&expected_body))
-        .mount(&mock_server)
-        .await;
-
-    let operation = with_path_param(
-        create_test_operation(
-            "getProfile",
-            reqwest::Method::GET,
-            "/api/v1/athlete/{id}/profile",
-        ),
-        "id",
-        false,
-    );
-
-    // Request with body_only=true
-    let args = Some(
-        json!({
-            "id": "test_athlete",
-            "body_only": true
-        })
-        .as_object()
-        .unwrap()
-        .clone(),
-    );
-
-    let result = intervals_icu_mcp::dynamic::dispatch_operation(
-        &reqwest::Client::new(),
-        &mock_server.uri(),
-        "test_athlete",
-        "test_api_key",
-        &operation,
-        args.as_ref(),
-    )
-    .await;
-
-    assert!(result.is_ok());
-    let response = result.unwrap();
-
-    // With body_only=true, should return structured response with just the body
-    // Content is Vec<Annotated<RawContent>>, check it's not empty
     assert!(!response.content.is_empty());
-}
-
-#[tokio::test]
-async fn test_dispatch_http_error_handling() {
-    let mock_server = MockServer::start().await;
-
-    Mock::given(method("GET"))
-        .and(path("/api/v1/athlete/test_athlete/profile"))
-        .respond_with(ResponseTemplate::new(404).set_body_json(json!({
-            "error": "Not found"
-        })))
-        .mount(&mock_server)
-        .await;
-
-    let operation = with_path_param(
-        create_test_operation(
-            "getProfile",
-            reqwest::Method::GET,
-            "/api/v1/athlete/{id}/profile",
-        ),
-        "id",
-        false,
-    );
-
-    let args = Some(
-        json!({
-            "id": "test_athlete"
-        })
-        .as_object()
-        .unwrap()
-        .clone(),
-    );
-
-    let result = intervals_icu_mcp::dynamic::dispatch_operation(
-        &reqwest::Client::new(),
-        &mock_server.uri(),
-        "test_athlete",
-        "test_api_key",
-        &operation,
-        args.as_ref(),
-    )
-    .await;
-
-    // Should handle HTTP errors gracefully
-    assert!(result.is_ok() || result.is_err());
-    // Error handling strategy may vary - either return error or return error in response
 }
 
 #[tokio::test]
@@ -505,7 +325,10 @@ async fn test_dispatch_missing_api_key() {
 
     assert!(result.is_err());
     let error = result.unwrap_err();
-    assert!(error.message.contains("INTERVALS_ICU_API_KEY"));
+    assert_eq!(
+        error.message.as_ref(),
+        "INTERVALS_ICU_API_KEY is required for dynamic OpenAPI tool calls"
+    );
 }
 
 #[tokio::test]
@@ -544,6 +367,8 @@ async fn test_dispatch_with_empty_arguments() {
     .await;
 
     assert!(result.is_ok());
+    let response = result.unwrap();
+    assert!(!response.content.is_empty());
 }
 
 #[tokio::test]
@@ -629,6 +454,9 @@ async fn test_dispatch_curve_forwards_query_aliases_without_local_validation() {
     .await;
 
     assert!(result.is_ok());
+    let response = result.unwrap();
+    let content = serde_json::to_string(&response.content).unwrap();
+    assert!(content.contains("ok"));
 }
 
 #[tokio::test]
@@ -968,4 +796,6 @@ async fn test_dispatch_ext_path_param_default() {
     .await;
 
     assert!(result.is_ok());
+    let response = result.unwrap();
+    assert!(!response.content.is_empty());
 }

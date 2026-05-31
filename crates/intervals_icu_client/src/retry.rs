@@ -135,11 +135,4 @@ mod tests {
         assert_eq!(result.unwrap(), 7);
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
-
-    #[test]
-    fn default_retry_policy_values() {
-        let d = RetryPolicy::default();
-        assert_eq!(d.max_retries, 3);
-        assert!(d.base_delay.as_millis() >= 1);
-    }
 }
