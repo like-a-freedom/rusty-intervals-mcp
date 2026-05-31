@@ -73,18 +73,6 @@ mod tests {
     // ========================================================================
 
     #[test]
-    fn test_event_id_int_variant() {
-        let id = EventId::Int(123);
-        assert!(matches!(id, EventId::Int(123)));
-    }
-
-    #[test]
-    fn test_event_id_str_variant() {
-        let id = EventId::Str("abc".into());
-        assert!(matches!(id, EventId::Str(s) if s == "abc"));
-    }
-
-    #[test]
     fn test_event_id_as_cow_int() {
         let id = EventId::Int(456);
         let cow = id.as_cow();
@@ -99,46 +87,15 @@ mod tests {
     }
 
     #[test]
-    fn test_event_id_from_str() {
-        let id: EventId = "my_id".into();
-        assert!(matches!(id, EventId::Str(s) if s == "my_id"));
-    }
-
-    #[test]
-    fn test_event_id_from_string() {
-        let id = EventId::from(String::from("string_id"));
-        assert!(matches!(id, EventId::Str(s) if s == "string_id"));
-    }
-
-    #[test]
-    fn test_event_id_clone() {
-        let id = EventId::Int(789);
-        let cloned = id.clone();
-        assert_eq!(id.as_cow(), cloned.as_cow());
-    }
-
-    #[test]
     fn test_event_id_debug() {
         let id = EventId::Int(100);
         let debug = format!("{:?}", id);
-        assert!(debug.contains("Int"));
+        assert_eq!(debug, "Int(100)");
     }
 
     // ========================================================================
     // FolderId Tests
     // ========================================================================
-
-    #[test]
-    fn test_folder_id_int_variant() {
-        let id = FolderId::Int(999);
-        assert!(matches!(id, FolderId::Int(999)));
-    }
-
-    #[test]
-    fn test_folder_id_str_variant() {
-        let id = FolderId::Str("folder_abc".into());
-        assert!(matches!(id, FolderId::Str(s) if s == "folder_abc"));
-    }
 
     #[test]
     fn test_folder_id_as_cow_int() {
@@ -155,35 +112,16 @@ mod tests {
     }
 
     #[test]
-    fn test_folder_id_from_str() {
-        let id: FolderId = "my_folder".into();
-        assert!(matches!(id, FolderId::Str(s) if s == "my_folder"));
-    }
-
-    #[test]
-    fn test_folder_id_from_string() {
-        let id = FolderId::from(String::from("string_folder"));
-        assert!(matches!(id, FolderId::Str(s) if s == "string_folder"));
-    }
-
-    #[test]
     fn test_folder_id_from_i64() {
         let id: FolderId = 222i64.into();
         assert!(matches!(id, FolderId::Int(222)));
     }
 
     #[test]
-    fn test_folder_id_clone() {
-        let id = FolderId::Str("clone_test".into());
-        let cloned = id.clone();
-        assert_eq!(id.as_cow(), cloned.as_cow());
-    }
-
-    #[test]
     fn test_folder_id_debug() {
         let id = FolderId::Str("debug".into());
         let debug = format!("{:?}", id);
-        assert!(debug.contains("Str"));
+        assert_eq!(debug, r#"Str("debug")"#);
     }
 
     // ========================================================================

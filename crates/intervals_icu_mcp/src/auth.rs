@@ -436,8 +436,7 @@ mod tests {
             [1u8; 32],
         );
         let result = wrong_manager.decrypt_api_key(&encrypted);
-        // Decryption should fail with wrong key
-        assert!(result.is_err());
+        assert!(matches!(result, Err(AuthError::EncryptionError)));
     }
 
     #[test]
@@ -478,7 +477,7 @@ mod tests {
         tampered[10] = 'X';
         let tampered_token: String = tampered.into_iter().collect();
         let result = manager.verify_token(&tampered_token);
-        assert!(result.is_err());
+        assert!(matches!(result, Err(AuthError::InvalidToken)));
     }
 
     #[test]
@@ -626,13 +625,6 @@ mod tests {
         assert_eq!(cloned.api_key.expose_secret(), "test_key");
     }
 
-    #[test]
-    fn test_http_base_url_clone() {
-        let base_url = HttpBaseUrl("https://intervals.icu".to_string());
-        let cloned = base_url.clone();
-        assert_eq!(cloned.0, "https://intervals.icu");
-    }
-
     #[tokio::test]
     async fn test_auth_endpoint_invalid_credentials() {
         let secret = b"test_secret_key_for_jwt_signing_12345678901234567890123456789012";
@@ -657,8 +649,7 @@ mod tests {
         )
         .await;
 
-        // Should fail with InvalidCredentials (API call will fail)
-        assert!(result.is_err());
+        assert!(matches!(result, Err(AuthError::InvalidCredentials)));
     }
 
     // ========================================

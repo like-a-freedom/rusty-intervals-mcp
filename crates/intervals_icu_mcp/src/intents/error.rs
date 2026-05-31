@@ -250,16 +250,18 @@ mod tests {
     #[test]
     fn test_error_guidance_serialize_without_suggested_intent() {
         let g = ErrorGuidance::new("Cause".into(), "Fix".into(), None);
-        let serialized = serde_json::to_string(&g).unwrap();
-        assert!(!serialized.contains("suggested_intent"));
+        let serialized = serde_json::to_value(&g).unwrap();
+        assert_eq!(serialized.get("suggested_intent"), None);
     }
 
     #[test]
     fn test_error_guidance_serialize_with_suggested_intent() {
         let g = ErrorGuidance::new("Cause".into(), "Fix".into(), Some("intent".into()));
-        let serialized = serde_json::to_string(&g).unwrap();
-        assert!(serialized.contains("suggested_intent"));
-        assert!(serialized.contains("intent"));
+        let serialized = serde_json::to_value(&g).unwrap();
+        assert_eq!(
+            serialized.get("suggested_intent").and_then(|v| v.as_str()),
+            Some("intent")
+        );
     }
 
     #[test]
@@ -284,17 +286,8 @@ mod tests {
     fn test_error_guidance_debug_format() {
         let g = ErrorGuidance::new("Cause".into(), "Fix".into(), Some("intent".into()));
         let debug_str = format!("{:?}", g);
-        assert!(debug_str.contains("ErrorGuidance"));
-        assert!(debug_str.contains("Cause"));
-        assert!(debug_str.contains("Fix"));
-    }
-
-    #[test]
-    fn test_error_guidance_clone() {
-        let g1 = ErrorGuidance::new("Cause".into(), "Fix".into(), Some("intent".into()));
-        let g2 = g1.clone();
-        assert_eq!(g1.cause, g2.cause);
-        assert_eq!(g1.correction, g2.correction);
-        assert_eq!(g1.suggested_intent, g2.suggested_intent);
+        assert!(debug_str.starts_with("ErrorGuidance"));
+        assert!(debug_str.contains("cause: \"Cause\""));
+        assert!(debug_str.contains("correction: \"Fix\""));
     }
 }

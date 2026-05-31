@@ -377,25 +377,14 @@ pub struct DownloadProgress {
 
 #[cfg(test)]
 mod tests {
-    use crate::http_client::ReqwestIntervalsClient;
     use serde_json::json;
-
-    #[tokio::test]
-    async fn client_new_and_basic() {
-        let client = ReqwestIntervalsClient::new(
-            "http://localhost",
-            "ath",
-            secrecy::SecretString::new("key".into()),
-        );
-        let _ = client;
-    }
 
     #[test]
     fn deserialize_opt_string_from_number() {
         let payload =
             json!({"id": 123, "start_date_local": "2025-12-15", "name": "x", "category": "NOTE"});
         let e: super::Event = serde_json::from_value(payload).expect("deserialize number id");
-        assert_eq!(e.id.unwrap(), "123");
+        assert_eq!(e.id, Some("123".to_string()));
     }
 
     #[test]

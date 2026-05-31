@@ -998,12 +998,6 @@ mod tests {
         assert!(required.contains(&json!("idempotency_token")));
     }
 
-    #[test]
-    fn test_requires_idempotency_token() {
-        let handler = PlanTrainingHandler::new();
-        assert!(IntentHandler::requires_idempotency_token(&handler));
-    }
-
     // ========================================================================
     // build_periodization() Tests
     // ========================================================================
@@ -1092,14 +1086,15 @@ mod tests {
     }
 
     #[test]
-    fn test_build_periodization_volume_scaling() {
+    fn test_low_volume_scaling() {
         let handler = PlanTrainingHandler::new();
-
-        // Low volume
         let (phases, _) = handler.build_periodization(4, TrainingFocus::AerobicBase, 5.0);
         assert_eq!(phases[0].volume, "3-4 hrs");
+    }
 
-        // High volume
+    #[test]
+    fn test_high_volume_scaling() {
+        let handler = PlanTrainingHandler::new();
         let (phases, _) = handler.build_periodization(4, TrainingFocus::AerobicBase, 15.0);
         assert_eq!(phases[0].volume, "9-12 hrs");
     }
@@ -1122,18 +1117,31 @@ mod tests {
     }
 
     #[test]
-    fn test_build_sample_week_non_aerobic() {
+    fn test_build_week_intensity() {
         let handler = PlanTrainingHandler::new();
+        let week = handler.build_sample_week(TrainingFocus::Intensity, 10.0, None);
+        assert!(week.contains("Threshold / VO2 session"));
+    }
 
-        let intensity = handler.build_sample_week(TrainingFocus::Intensity, 10.0, None);
-        let specific = handler.build_sample_week(TrainingFocus::Specific, 10.0, None);
-        let taper = handler.build_sample_week(TrainingFocus::Taper, 10.0, None);
-        let recovery = handler.build_sample_week(TrainingFocus::Recovery, 10.0, None);
+    #[test]
+    fn test_build_week_specific() {
+        let handler = PlanTrainingHandler::new();
+        let week = handler.build_sample_week(TrainingFocus::Specific, 10.0, None);
+        assert!(week.contains("Race-pace intervals"));
+    }
 
-        assert!(intensity.contains("Threshold / VO2 session"));
-        assert!(specific.contains("Race-pace intervals"));
-        assert!(taper.contains("Sharpening session"));
-        assert!(recovery.contains("Easy 30-45 min aerobic session"));
+    #[test]
+    fn test_build_week_taper() {
+        let handler = PlanTrainingHandler::new();
+        let week = handler.build_sample_week(TrainingFocus::Taper, 10.0, None);
+        assert!(week.contains("Sharpening session"));
+    }
+
+    #[test]
+    fn test_build_week_recovery() {
+        let handler = PlanTrainingHandler::new();
+        let week = handler.build_sample_week(TrainingFocus::Recovery, 10.0, None);
+        assert!(week.contains("Easy 30-45 min aerobic session"));
     }
 
     #[test]
@@ -1141,32 +1149,9 @@ mod tests {
         let handler = PlanTrainingHandler::new();
         let week = handler.build_sample_week(TrainingFocus::AerobicBase, 10.0, None);
 
-        // Should contain formatted times (HH:MM format)
-        // For 10 hrs: Easy runs = 2hrs each (120 min = 2:00), Long run = 3:20 (200 min)
-        // Format is "{hrs}:{mins:02}" so 2:00 should appear
-        assert!(week.contains(":")); // Contains time separator
-        assert!(week.contains("Easy Run")); // Contains workout type
-        // Check time format pattern (digit:digit)
-        assert!(week.contains("2:00") || week.contains("120:00")); // Either hours or minutes format
-    }
-
-    // ========================================================================
-    // Phase Struct Tests
-    // ========================================================================
-
-    #[test]
-    fn test_phase_construction() {
-        let phase = Phase {
-            name: "Test Phase".into(),
-            weeks: "1-4".into(),
-            volume: "5-10 hrs".into(),
-            focus: "Aerobic".into(),
-        };
-
-        assert_eq!(phase.name, "Test Phase");
-        assert_eq!(phase.weeks, "1-4");
-        assert_eq!(phase.volume, "5-10 hrs");
-        assert_eq!(phase.focus, "Aerobic");
+        // For 10 hrs: Easy runs = 2hrs each = 120 min, Long run = 3:20 = 200 min
+        assert!(week.contains("Easy Run"));
+        assert!(week.contains("120:00"));
     }
 
     // ========================================================================

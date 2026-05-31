@@ -812,9 +812,11 @@ mod tests {
         let handler = test_handler();
         let payload = serde_json::json!({"id": "test-123"});
 
-        let result = handler.process_webhook("invalid_sig", payload).await;
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("webhook secret not set"));
+        let err = handler
+            .process_webhook("invalid_sig", payload)
+            .await
+            .unwrap_err();
+        assert_eq!(err, "webhook secret not set");
     }
 
     #[tokio::test]
@@ -826,8 +828,8 @@ mod tests {
         let payload = serde_json::json!({"id": "test-123"});
         let result = handler.process_webhook("invalid_sig", payload).await;
         // Should fail signature verification, not "secret not set"
-        assert!(result.is_err());
-        assert!(!result.unwrap_err().contains("webhook secret not set"));
+        let err = result.unwrap_err();
+        assert_ne!(err, "webhook secret not set");
     }
 
     #[tokio::test]
@@ -923,39 +925,6 @@ mod tests {
         assert_eq!(handler.tool_count(), 9);
     }
 
-    #[tokio::test]
-    async fn test_list_tools_have_input_schemas() {
-        let handler = test_handler();
-        // Schema validation is done in integration tests
-        assert_eq!(handler.tool_count(), 9);
-    }
-
-    #[tokio::test]
-    async fn test_list_tools_have_descriptions() {
-        let handler = test_handler();
-        // Description validation is done in integration tests
-        assert_eq!(handler.tool_count(), 9);
-    }
-
-    // ========================================================================
-    // call_tool() Tests - Intent Routing
-    // ========================================================================
-    // Note: call_tool tests require constructing non-exhaustive rmcp types.
-    // Integration tests in tests/ directory cover call_tool routing.
-
-    // ========================================================================
-    // list_resources() Tests
-    // ========================================================================
-
-    #[tokio::test]
-    async fn test_list_resources_returns_athlete_profile() {
-        let handler = test_handler();
-        // Note: Full list_resources testing requires RequestContext.
-        // Integration tests cover the full flow.
-        // Here we verify the handler is properly configured.
-        assert_eq!(handler.tool_count(), 9);
-    }
-
     // ========================================================================
     // get_info() Tests
     // ========================================================================
@@ -964,10 +933,15 @@ mod tests {
     fn test_get_info_has_server_instructions() {
         let handler = test_handler();
         let info = handler.get_info();
-        assert!(info.instructions.is_some());
         let instructions = info.instructions.unwrap();
-        assert!(instructions.contains("Intervals.icu"));
-        assert!(instructions.contains("intent-driven"));
+        assert!(
+            instructions.contains("Intervals.icu"),
+            "instructions should mention Intervals.icu"
+        );
+        assert!(
+            instructions.contains("intent-driven"),
+            "instructions should mention intent-driven"
+        );
     }
 
     // ========================================================================

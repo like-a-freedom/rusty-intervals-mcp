@@ -50,7 +50,7 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::ConfigError;
+    use secrecy::ExposeSecret;
 
     #[test]
     fn from_env_missing_api_key() {
@@ -59,13 +59,11 @@ mod tests {
             "INTERVALS_ICU_BASE_URL" => Some("http://localhost".into()),
             _ => None,
         };
-        let res = Config::from_env_with(get);
-        assert!(res.is_err());
-        if let Err(IntervalsError::Config(ConfigError::MissingEnvVar(var))) = res {
-            assert!(var.contains("API_KEY"));
-        } else {
-            panic!("Expected ConfigError::MissingEnvVar");
-        }
+        let err = Config::from_env_with(get).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "configuration error: required environment variable INTERVALS_ICU_API_KEY is not set"
+        );
     }
 
     #[test]
@@ -75,13 +73,11 @@ mod tests {
             "INTERVALS_ICU_BASE_URL" => Some("http://localhost".into()),
             _ => None,
         };
-        let res = Config::from_env_with(get);
-        assert!(res.is_err());
-        if let Err(IntervalsError::Config(ConfigError::MissingEnvVar(var))) = res {
-            assert!(var.contains("ATHLETE_ID"));
-        } else {
-            panic!("Expected ConfigError::MissingEnvVar");
-        }
+        let err = Config::from_env_with(get).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "configuration error: required environment variable INTERVALS_ICU_ATHLETE_ID is not set"
+        );
     }
 
     #[test]
@@ -95,18 +91,6 @@ mod tests {
         let cfg = Config::from_env_with(get).expect("cfg");
         assert_eq!(cfg.athlete_id, "42");
         assert_eq!(cfg.base_url, "http://localhost");
-    }
-
-    #[test]
-    fn from_env_exposes_api_key() {
-        use secrecy::ExposeSecret;
-        let get = |k: &str| match k {
-            "INTERVALS_ICU_API_KEY" => Some("sekrit".into()),
-            "INTERVALS_ICU_ATHLETE_ID" => Some("42".into()),
-            "INTERVALS_ICU_BASE_URL" => Some("http://localhost".into()),
-            _ => None,
-        };
-        let cfg = Config::from_env_with(get).expect("cfg");
         assert_eq!(cfg.api_key.expose_secret(), "sekrit");
     }
 
@@ -118,18 +102,6 @@ mod tests {
             _ => None,
         };
         let cfg = Config::from_env_with(get).expect("cfg");
-        assert_eq!(cfg.base_url, "https://intervals.icu");
-    }
-
-    #[test]
-    fn from_env_uses_real_env() {
-        use std::collections::HashMap;
-        let mut m = HashMap::new();
-        m.insert("INTERVALS_ICU_API_KEY", "sekrit");
-        m.insert("INTERVALS_ICU_ATHLETE_ID", "99");
-        let get = |k: &str| m.get(k).map(std::string::ToString::to_string);
-        let cfg = Config::from_env_with(get).expect("cfg from env");
-        assert_eq!(cfg.athlete_id, "99");
         assert_eq!(cfg.base_url, "https://intervals.icu");
     }
 }

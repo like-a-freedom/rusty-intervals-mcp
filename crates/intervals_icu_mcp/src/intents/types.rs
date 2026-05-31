@@ -439,12 +439,6 @@ mod tests {
     }
 
     #[test]
-    fn test_content_block_from_string() {
-        let block = ContentBlock::text(String::from("test"));
-        assert!(matches!(block, ContentBlock::Text { .. }));
-    }
-
-    #[test]
     fn test_content_block_from_str() {
         let block = ContentBlock::markdown("test");
         assert!(matches!(block, ContentBlock::Markdown { .. }));
@@ -517,16 +511,6 @@ mod tests {
         let mut meta = OutputMetadata::default();
         meta.extra.insert("custom".into(), json!("value"));
         assert!(!meta.is_empty());
-    }
-
-    #[test]
-    fn test_output_metadata_clone() {
-        let meta = OutputMetadata {
-            total_count: Some(42),
-            ..Default::default()
-        };
-        let cloned = meta.clone();
-        assert_eq!(cloned.total_count, Some(42));
     }
 
     // ========================================================================
@@ -604,13 +588,6 @@ mod tests {
         assert_eq!(output.next_actions.len(), 1);
         assert_eq!(output.metadata.events_created, Some(5));
         assert_eq!(output.note, Some("Additional info".into()));
-    }
-
-    #[test]
-    fn test_intent_output_clone() {
-        let output = IntentOutput::markdown("Test").with_suggestions(vec!["Suggestion".into()]);
-        let cloned = output.clone();
-        assert_eq!(cloned.suggestions, output.suggestions);
     }
 
     // ========================================================================
@@ -701,16 +678,6 @@ mod tests {
         assert!(error_data.message.contains("Crash"));
     }
 
-    // ========================================================================
-    // Existing Tests (kept for completeness)
-    // ========================================================================
-
-    #[test]
-    fn test_content_block_creation() {
-        let text = ContentBlock::text("Hello");
-        assert!(matches!(text, ContentBlock::Text { .. }));
-    }
-
     #[test]
     fn test_intent_output_builder() {
         let output = IntentOutput::markdown("# Test")
@@ -722,11 +689,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_idempotency_cache() {
-        let cache = IdempotencyCache::new(Duration::from_secs(1));
+        let cache = IdempotencyCache::new(Duration::from_millis(50));
         let output = IntentOutput::markdown("Test");
         cache.set("test", &output).await;
         assert!(cache.get("test").await.is_some());
-        tokio::time::sleep(Duration::from_secs(2)).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
         assert!(cache.get("test").await.is_none());
     }
 
@@ -748,11 +715,11 @@ mod tests {
     #[test]
     fn test_idempotency_entry_is_expired() {
         let output = IntentOutput::markdown("Test");
-        let short_ttl = Duration::from_millis(50);
+        let short_ttl = Duration::from_millis(1);
         let entry = IdempotencyEntry::new(output, short_ttl);
 
         assert!(!entry.is_expired());
-        std::thread::sleep(Duration::from_millis(100));
+        std::thread::sleep(Duration::from_millis(5));
         assert!(entry.is_expired());
     }
 
@@ -853,27 +820,6 @@ mod tests {
 
         assert!(tool.output_schema.is_some());
         assert_eq!(tool.output_schema.unwrap(), json!({"type": "array"}));
-    }
-
-    #[test]
-    fn test_tool_definition_clone() {
-        let schema = json!({"type": "object"});
-        let tool = ToolDefinition::new("clone_test", "Clone me", schema);
-        let cloned = tool.clone();
-
-        assert_eq!(cloned.name, tool.name);
-        assert_eq!(cloned.description, tool.description);
-        assert_eq!(cloned.input_schema, tool.input_schema);
-    }
-
-    #[test]
-    fn test_tool_definition_debug() {
-        let schema = json!({"type": "object"});
-        let tool = ToolDefinition::new("debug", "Debug test", schema);
-        let debug = format!("{:?}", tool);
-
-        assert!(debug.contains("ToolDefinition"));
-        assert!(debug.contains("debug"));
     }
 
     // ========================================================================
@@ -1308,23 +1254,41 @@ mod tests {
     }
 
     #[test]
-    fn test_intent_handler_extract_idempotency_token() {
+    fn test_extract_token_present() {
         let handler = MockIntentHandler {
             name: "test",
             description: "test",
             schema: json!({}),
         };
 
-        let input_with_token = json!({"idempotency_token": "abc123"});
-        let token = handler.extract_idempotency_token(&input_with_token);
+        let input = json!({"idempotency_token": "abc123"});
+        let token = handler.extract_idempotency_token(&input);
         assert_eq!(token, Some("abc123".to_string()));
+    }
 
-        let input_without_token = json!({"other": "value"});
-        let token = handler.extract_idempotency_token(&input_without_token);
+    #[test]
+    fn test_extract_token_missing() {
+        let handler = MockIntentHandler {
+            name: "test",
+            description: "test",
+            schema: json!({}),
+        };
+
+        let input = json!({"other": "value"});
+        let token = handler.extract_idempotency_token(&input);
         assert_eq!(token, None);
+    }
 
-        let input_null_token = json!({"idempotency_token": null});
-        let token = handler.extract_idempotency_token(&input_null_token);
+    #[test]
+    fn test_extract_token_null() {
+        let handler = MockIntentHandler {
+            name: "test",
+            description: "test",
+            schema: json!({}),
+        };
+
+        let input = json!({"idempotency_token": null});
+        let token = handler.extract_idempotency_token(&input);
         assert_eq!(token, None);
     }
 

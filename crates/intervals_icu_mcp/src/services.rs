@@ -126,8 +126,7 @@ mod tests {
     fn verify_signature_rejects_invalid_signature() {
         let payload = serde_json::json!({"id": "evt-1"});
         let result = verify_signature("secret", "deadbeef", &payload);
-        assert!(result.is_err());
-        assert_eq!(result.err().unwrap(), "signature mismatch");
+        assert_eq!(result, Err("signature mismatch".to_string()));
     }
 
     #[test]
@@ -138,21 +137,22 @@ mod tests {
         let signature = hex::encode(mac.finalize().into_bytes());
 
         let result = verify_signature("secret", &signature, &payload);
-        assert!(result.is_ok());
+        result.unwrap();
     }
 
     #[test]
     fn verify_signature_empty_secret_fails() {
         let payload = serde_json::json!({"id": "evt-1"});
         let result = verify_signature("", "deadbeef", &payload);
-        assert!(result.is_err());
+        assert_eq!(result, Err("signature mismatch".to_string()));
     }
 
     #[test]
     fn verify_signature_invalid_hex_fails() {
         let payload = serde_json::json!({"id": "evt-1"});
         let result = verify_signature("secret", "not_validhex", &payload);
-        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("Invalid character") || err.contains("Odd number"));
     }
 
     #[test]
@@ -165,8 +165,7 @@ mod tests {
         // Tamper with payload
         let tampered = serde_json::json!({"id": "evt-2"});
         let result = verify_signature("secret", &signature, &tampered);
-        assert!(result.is_err());
-        assert_eq!(result.err().unwrap(), "signature mismatch");
+        assert_eq!(result, Err("signature mismatch".to_string()));
     }
 
     #[tokio::test]
@@ -203,8 +202,8 @@ mod tests {
         let payload = serde_json::json!({"id": "test-1"});
         let result = service.process_webhook("invalid", payload).await;
 
-        assert!(result.is_err());
-        assert_eq!(result.err().unwrap(), "webhook secret not set");
+        let err = result.unwrap_err();
+        assert_eq!(err, "webhook secret not set");
     }
 
     #[tokio::test]
