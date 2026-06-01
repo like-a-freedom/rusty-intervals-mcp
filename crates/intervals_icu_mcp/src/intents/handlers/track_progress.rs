@@ -9,7 +9,9 @@ use serde_json::Value;
 use serde_json::json;
 
 use crate::domains::coach::AnalysisWindow;
-use crate::engines::progress_tracking::build_progress_report;
+use crate::engines::progress_tracking::{
+    MAX_WELLNESS_DAYS_FALLBACK, MIN_DAYS_FOR_PLATEAU, build_progress_report, count_ctl_points,
+};
 use crate::intents::{IdempotencyCache, IntentError, IntentHandler, IntentOutput, OutputMetadata};
 
 use super::render::progress::render_progress_report;
@@ -106,10 +108,32 @@ On error: API or validation errors with descriptive messages."
         let start_date = end_date - Duration::days((period_days as i64) - 1);
         let window = AnalysisWindow::new(start_date, end_date);
 
-        let wellness = client
+        // Fetch wellness with the requested window, then auto-expand to the API maximum
+        // if the initial window is too short for plateau detection. The user-supplied
+        // `period_weeks` is treated as a hint, not a hard cap — if it leaves us under
+        // 28 days of CTL history we try again with the largest range the server can serve.
+        let mut wellness = client
             .get_wellness(Some(period_days))
             .await
             .map_err(|error| IntentError::api(format!("Failed to fetch wellness: {error}")))?;
+
+        let available = count_ctl_points(&wellness);
+        let max_days = MAX_WELLNESS_DAYS_FALLBACK;
+        if available < MIN_DAYS_FOR_PLATEAU
+            && period_days < max_days
+            && period_weeks < MAX_PERIOD_WEEKS
+        {
+            tracing::info!(
+                requested_days = period_days,
+                available_ctl_points = available,
+                min_required = MIN_DAYS_FOR_PLATEAU,
+                max_days,
+                "initial wellness window too short for plateau detection; retrying with max range"
+            );
+            wellness = client.get_wellness(Some(max_days)).await.map_err(|error| {
+                IntentError::api(format!("Failed to fetch expanded wellness: {error}"))
+            })?;
+        }
 
         let activities = client
             .get_recent_activities(
@@ -223,5 +247,72 @@ mod tests {
         assert!(!output.suggestions.is_empty());
         assert!(!output.next_actions.is_empty());
         assert_eq!(output.next_actions.len(), 3);
+    }
+
+    fn short_wellness() -> serde_json::Value {
+        // 10 days of CTL — under the 28-day plateau threshold, must trigger auto-expand.
+        json!(
+            (0..10)
+                .map(|i| json!({
+                    "date": format!("2026-01-{:02}", i + 1),
+                    "fitness": 60.0 + i as f64,
+                }))
+                .collect::<Vec<_>>()
+        )
+    }
+
+    #[tokio::test]
+    async fn execute_auto_expand_issues_second_wellness_call_with_max_range() {
+        let mock = MockIntervalsClient::builder().with_wellness(short_wellness());
+        let observations = mock.observations();
+
+        let handler = TrackProgressHandler::new();
+        handler
+            .execute(
+                json!({"period_weeks": 4, "hypothesis_mode": false}),
+                Arc::new(mock) as Arc<dyn intervals_icu_client::IntervalsClient>,
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            observations.wellness_call_count(),
+            2,
+            "expected the handler to issue a second get_wellness call when the first was too short"
+        );
+        assert_eq!(
+            observations.wellness_last_days_back(),
+            Some(MAX_WELLNESS_DAYS_FALLBACK),
+            "second call should request the maximum wellness window"
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_skips_auto_expand_when_request_already_at_max_weeks() {
+        let mock = MockIntervalsClient::builder().with_wellness(short_wellness());
+        let observations = mock.observations();
+
+        let handler = TrackProgressHandler::new();
+        handler
+            .execute(
+                // period_weeks=24 hits MAX_PERIOD_WEEKS, so no auto-expand attempt.
+                json!({"period_weeks": 24, "hypothesis_mode": false}),
+                Arc::new(mock) as Arc<dyn intervals_icu_client::IntervalsClient>,
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            observations.wellness_call_count(),
+            1,
+            "no second call should be made when the requested window is already at MAX_PERIOD_WEEKS"
+        );
+        assert_eq!(
+            observations.wellness_last_days_back(),
+            Some(24 * 7),
+            "single call should request exactly the user-supplied period_weeks in days"
+        );
     }
 }

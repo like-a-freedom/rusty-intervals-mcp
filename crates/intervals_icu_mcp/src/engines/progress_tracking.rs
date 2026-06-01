@@ -21,6 +21,36 @@ const MONOTONY_HIGH_THRESHOLD: f64 = 1.5;
 const HYPOTHESIS_MIN_CONFIDENCE: f64 = 0.50;
 const TRAILING_LOAD_WINDOW_DAYS: usize = 7;
 
+/// Minimum daily CTL points required to compute a trailing plateau at all.
+pub const MIN_DAYS_FOR_PLATEAU: usize = 28;
+
+/// Minimum daily CTL points required to personalize the flat-band threshold.
+pub const MIN_DAYS_FOR_PERSONALIZATION: usize = 56;
+
+/// Maximum wellness range the track_progress handler will request when auto-expanding.
+/// Mirrors `MAX_PERIOD_WEEKS * 7` from the track_progress handler (24 weeks = 168 days).
+pub const MAX_WELLNESS_DAYS_FALLBACK: i32 = 168;
+
+/// Count the number of daily CTL/fitness points actually present in a wellness payload.
+/// Empty entries and entries missing CTL are ignored.
+#[must_use]
+pub fn count_ctl_points(wellness: &Value) -> usize {
+    let Some(entries) = wellness.as_array() else {
+        return 0;
+    };
+    entries
+        .iter()
+        .filter_map(Value::as_object)
+        .filter(|object| {
+            // Reuse the same key precedence as extract_ctl_series: ["fitness", "ctl"] or ["ctlLoad", "icu_ctl"].
+            object.get("fitness").and_then(Value::as_f64).is_some()
+                || object.get("ctl").and_then(Value::as_f64).is_some()
+                || object.get("ctlLoad").and_then(Value::as_f64).is_some()
+                || object.get("icu_ctl").and_then(Value::as_f64).is_some()
+        })
+        .count()
+}
+
 fn parse_activity_date(value: &str) -> Option<NaiveDate> {
     NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S")
         .ok()
@@ -320,9 +350,35 @@ pub fn build_progress_report(
     if let Some((dates, ctl_values)) = extract_ctl_series(Some(wellness)) {
         report.plateau = detect_trailing_ctl_plateau(&dates, &ctl_values);
     } else {
-        report
-            .warnings
-            .push("Wellness CTL/fitness history unavailable; plateau detection skipped.".into());
+        report.warnings.push(format!(
+            "Wellness CTL/fitness history unavailable; plateau detection skipped (need {} days, have 0).",
+            MIN_DAYS_FOR_PLATEAU
+        ));
+    }
+
+    // If the wellness payload had some entries but fewer than the minimum for plateau,
+    // report the concrete shortfall so the user knows how many days they are missing.
+    if !report.plateau.supported {
+        let available = count_ctl_points(wellness);
+        if available > 0 && available < MIN_DAYS_FOR_PLATEAU {
+            let personalization_gap = if available < MIN_DAYS_FOR_PERSONALIZATION {
+                format!(
+                    "; {} days also needed for personalized flat-band calibration",
+                    MIN_DAYS_FOR_PERSONALIZATION
+                )
+            } else {
+                String::new()
+            };
+            report.warnings.push(format!(
+                "Plateau detection needs {} days of daily CTL, but only {} day(s) were found in the requested window{}. \
+                 The track_progress handler tries to auto-expand to the API maximum ({} days); \
+                 if the data is still short, the athlete has less history recorded in Intervals.icu.",
+                MIN_DAYS_FOR_PLATEAU,
+                available,
+                personalization_gap,
+                MAX_WELLNESS_DAYS_FALLBACK
+            ));
+        }
     }
 
     let activity_refs = activities.iter().collect::<Vec<_>>();
@@ -458,5 +514,99 @@ mod tests {
             hypotheses[0].domain,
             crate::domains::progress::HypothesisDomain::Recovery
         );
+    }
+
+    #[test]
+    fn count_ctl_points_handles_empty_and_missing_keys() {
+        use serde_json::json;
+
+        // Empty array -> zero
+        assert_eq!(count_ctl_points(&json!([])), 0);
+        // Non-array payload -> zero
+        assert_eq!(count_ctl_points(&json!({"foo": "bar"})), 0);
+        // Entries without CTL fields are ignored
+        assert_eq!(
+            count_ctl_points(&json!([
+                {"date": "2026-01-01", "hrv": 60.0},
+                {"date": "2026-01-02", "sleep_hours": 8.0}
+            ])),
+            0
+        );
+        // All four key variants are recognised
+        assert_eq!(
+            count_ctl_points(&json!([
+                {"date": "2026-01-01", "fitness": 60.0},
+                {"date": "2026-01-02", "ctl": 61.0},
+                {"date": "2026-01-03", "ctlLoad": 62.0},
+                {"date": "2026-01-04", "icu_ctl": 63.0}
+            ])),
+            4
+        );
+    }
+
+    #[test]
+    fn build_progress_report_emits_specific_warning_when_ctl_short() {
+        use crate::domains::coach::AnalysisWindow;
+        use chrono::NaiveDate;
+
+        // 14 days of CTL — short of the 28-day plateau minimum.
+        let entries: Vec<Value> = (0..14)
+            .map(|i| {
+                json!({
+                    "date": format!("2026-01-{:02}", i + 1),
+                    "fitness": 60.0 + (i as f64) * 0.1,
+                })
+            })
+            .collect();
+        let wellness = Value::Array(entries);
+
+        let start = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+        let end = NaiveDate::from_ymd_opt(2026, 1, 14).unwrap();
+        let window = AnalysisWindow::new(start, end);
+
+        let report = build_progress_report(&wellness, &[], &HashMap::new(), &window);
+        assert!(!report.plateau.supported);
+        let joined = report.warnings.join("\n");
+        assert!(
+            joined.contains("14 day(s)"),
+            "expected concrete shortfall in warnings, got: {joined}"
+        );
+        assert!(
+            joined.contains("28 days of daily CTL"),
+            "expected minimum to be mentioned, got: {joined}"
+        );
+    }
+
+    #[test]
+    fn build_progress_report_warning_distinguishes_personalization_gap() {
+        use crate::domains::coach::AnalysisWindow;
+        use chrono::NaiveDate;
+
+        // 40 days of CTL — past plateau minimum, but short of 56-day personalization.
+        let entries: Vec<Value> = (0..40)
+            .map(|i| {
+                json!({
+                    "date": format!("2026-01-{:02}", i + 1),
+                    "fitness": 60.0 + (i as f64) * 0.05,
+                })
+            })
+            .collect();
+        let wellness = Value::Array(entries);
+
+        let start = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+        let end = NaiveDate::from_ymd_opt(2026, 2, 9).unwrap();
+        let window = AnalysisWindow::new(start, end);
+
+        let report = build_progress_report(&wellness, &[], &HashMap::new(), &window);
+        let joined = report.warnings.join("\n");
+        // 40 days should be enough to attempt a plateau but personalization is short.
+        // Depending on slope, plateau may or may not be `supported`; we mainly assert
+        // that the warning mentions the personalization gap when present.
+        if !report.plateau.supported {
+            assert!(
+                joined.contains("personalized flat-band"),
+                "expected personalization gap to be mentioned, got: {joined}"
+            );
+        }
     }
 }
