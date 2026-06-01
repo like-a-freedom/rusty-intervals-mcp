@@ -504,6 +504,24 @@ mod tests {
     use crate::test_support::mock::MockIntervalsClient;
     use std::sync::Arc;
 
+    fn content_text(content: &[ContentBlock]) -> String {
+        content
+            .iter()
+            .flat_map(|b| match b {
+                ContentBlock::Text { text } => vec![text.clone()],
+                ContentBlock::Markdown { markdown } => vec![markdown.clone()],
+                ContentBlock::Table { headers, rows } => {
+                    let mut parts: Vec<String> = headers.clone();
+                    for row in rows {
+                        parts.extend(row.clone());
+                    }
+                    parts
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     // ========================================================================
     // Constructor Tests
     // ========================================================================
@@ -1077,8 +1095,8 @@ mod tests {
         assert!(result.is_ok());
 
         let output = result.unwrap();
-        let content_text = format!("{:?}", output.content);
-        assert!(content_text.contains("Historical activity recalculation was skipped"));
+        let content_str = content_text(&output.content);
+        assert!(content_str.contains("Historical activity recalculation was skipped"));
     }
 
     #[tokio::test]
@@ -1180,8 +1198,8 @@ mod tests {
         assert!(result.is_ok());
 
         let output = result.unwrap();
-        let content_text = format!("{:?}", output.content);
-        assert!(content_text.contains("manual")); // Default source
+        let content_str = content_text(&output.content);
+        assert!(content_str.contains("manual")); // Default source
     }
 
     #[tokio::test]

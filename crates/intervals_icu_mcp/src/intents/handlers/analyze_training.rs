@@ -1454,6 +1454,24 @@ mod tests {
     use chrono::NaiveDate;
     use serde_json::json;
 
+    fn content_text(content: &[ContentBlock]) -> String {
+        content
+            .iter()
+            .flat_map(|b| match b {
+                ContentBlock::Text { text } => vec![text.clone()],
+                ContentBlock::Markdown { markdown } => vec![markdown.clone()],
+                ContentBlock::Table { headers, rows } => {
+                    let mut parts: Vec<String> = headers.clone();
+                    for row in rows {
+                        parts.extend(row.clone());
+                    }
+                    parts
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     // ========================================================================
     // Constructor Tests
     // ========================================================================
@@ -1542,29 +1560,6 @@ mod tests {
         assert_ne!(target_type, "period");
     }
 
-    #[test]
-    fn test_validation_date_format() {
-        // Valid date
-        let result = NaiveDate::parse_from_str("2026-03-01", "%Y-%m-%d");
-        assert!(result.is_ok());
-
-        // Invalid date
-        let result = NaiveDate::parse_from_str("invalid", "%Y-%m-%d");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_validation_date_range() {
-        let start = NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
-        let end = NaiveDate::from_ymd_opt(2026, 3, 31).unwrap();
-
-        // Valid range
-        assert!(start <= end);
-
-        // Invalid range
-        assert!(end > start);
-    }
-
     // ========================================================================
     // Analysis Type Tests
     // ========================================================================
@@ -1635,62 +1630,6 @@ mod tests {
     }
 
     // ========================================================================
-    // Date Parsing Tests
-    // ========================================================================
-
-    #[test]
-    fn test_date_parsing_valid() {
-        let dates = vec!["2026-01-01", "2026-06-15", "2026-12-31"];
-
-        for date_str in dates {
-            let result = NaiveDate::parse_from_str(date_str, "%Y-%m-%d");
-            assert!(result.is_ok(), "Failed to parse {}", date_str);
-        }
-    }
-
-    #[test]
-    fn test_date_parsing_invalid() {
-        let invalid_dates = vec!["01-01-2026", "2026/01/01", "March 1, 2026", "invalid", ""];
-
-        for date_str in invalid_dates {
-            let result = NaiveDate::parse_from_str(date_str, "%Y-%m-%d");
-            assert!(result.is_err(), "Should fail to parse {}", date_str);
-        }
-    }
-
-    // ========================================================================
-    // Period Calculation Tests
-    // ========================================================================
-
-    #[test]
-    fn test_period_days_calculation() {
-        let start = NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
-        let end = NaiveDate::from_ymd_opt(2026, 3, 31).unwrap();
-        let days = (end - start).num_days() as i32 + 30; // Buffer as in code
-        assert_eq!(days, 60);
-    }
-
-    #[test]
-    fn test_weekly_average_calculation() {
-        let start = NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
-        let end = NaiveDate::from_ymd_opt(2026, 3, 15).unwrap();
-        let weeks = ((end - start).num_days() as f64 / 7.0).max(1.0);
-        assert!((weeks - 2.0).abs() < 0.1);
-    }
-
-    // ========================================================================
-    // Content Block Tests
-    // ========================================================================
-
-    #[test]
-    fn test_content_block_types() {
-        // Verify ContentBlock can be created with different types
-        let _markdown = ContentBlock::markdown("# Test".to_string());
-        let _table = ContentBlock::table(vec!["Header".to_string()], vec![vec!["Row".to_string()]]);
-        let _text = ContentBlock::text("Test".to_string());
-    }
-
-    // ========================================================================
     // Error Message Tests
     // ========================================================================
 
@@ -1700,14 +1639,6 @@ mod tests {
         let err = IntentError::validation("Missing: target_type".to_string());
         let err_str = err.to_string();
         assert!(err_str.contains("target_type"));
-    }
-
-    #[test]
-    fn test_date_error_message_format() {
-        let date = "invalid";
-        let err_msg = format!("Invalid date format: {}. Use YYYY-MM-DD.", date);
-        assert!(err_msg.contains("Invalid date format"));
-        assert!(err_msg.contains("YYYY-MM-DD"));
     }
 
     #[test]
@@ -2681,7 +2612,7 @@ mod tests {
         let output = result.unwrap();
         assert!(!output.content.is_empty());
         // Verify basic structure
-        let content_str = format!("{:?}", output.content);
+        let content_str = content_text(&output.content);
         assert!(content_str.contains("Analysis"));
         assert!(content_str.contains("Test Workout"));
     }
@@ -2717,7 +2648,7 @@ mod tests {
         let result = handler.execute(input, client, None).await;
         assert!(result.is_ok());
         let output = result.unwrap();
-        let content_str = format!("{:?}", output.content);
+        let content_str = content_text(&output.content);
         assert!(content_str.contains("Detailed Breakdown"));
         assert!(content_str.contains("Execution Context"));
     }
@@ -2749,7 +2680,7 @@ mod tests {
         let result = handler.execute(input, client, None).await;
         assert!(result.is_ok());
         let output = result.unwrap();
-        let content_str = format!("{:?}", output.content);
+        let content_str = content_text(&output.content);
         assert!(content_str.contains("Interval Analysis"));
         assert!(content_str.contains("Detected Intervals"));
     }
@@ -2781,7 +2712,7 @@ mod tests {
         let result = handler.execute(input, client, None).await;
         assert!(result.is_ok());
         let output = result.unwrap();
-        let content_str = format!("{:?}", output.content);
+        let content_str = content_text(&output.content);
         assert!(content_str.contains("Stream Insights"));
         assert!(content_str.contains("watts"));
     }
@@ -2817,7 +2748,7 @@ mod tests {
         let result = handler.execute(input, client, None).await;
         assert!(result.is_ok());
         let output = result.unwrap();
-        let content_str = format!("{:?}", output.content);
+        let content_str = content_text(&output.content);
         assert!(content_str.contains("HR Histogram"));
         assert!(content_str.contains("Power Histogram"));
     }
@@ -2849,7 +2780,7 @@ mod tests {
         let result = handler.execute(input, client, None).await;
         assert!(result.is_ok());
         let output = result.unwrap();
-        let content_str = format!("{:?}", output.content);
+        let content_str = content_text(&output.content);
         assert!(content_str.contains("Best Efforts"));
     }
 
@@ -2869,7 +2800,7 @@ mod tests {
         let result = handler.execute(input, client, None).await;
         assert!(result.is_ok());
         let output = result.unwrap();
-        let content_str = format!("{:?}", output.content);
+        let content_str = content_text(&output.content);
         assert!(content_str.contains("No activities found"));
         assert!(!output.suggestions.is_empty());
     }
@@ -2903,7 +2834,7 @@ mod tests {
         let result = handler.execute(input, client, None).await;
         assert!(result.is_ok());
         let output = result.unwrap();
-        let content_str = format!("{:?}", output.content);
+        let content_str = content_text(&output.content);
         assert!(content_str.contains("Multiple activities found"));
         assert!(content_str.contains("Morning Run"));
         assert!(content_str.contains("Evening Ride"));
@@ -2939,7 +2870,7 @@ mod tests {
         let result = handler.execute(input, client, None).await;
         assert!(result.is_ok());
         let output = result.unwrap();
-        let content_str = format!("{:?}", output.content);
+        let content_str = content_text(&output.content);
         // Should only match the Tempo Run
         assert!(content_str.contains("Tempo Run"));
     }
@@ -3024,7 +2955,7 @@ mod tests {
         let result = handler.execute(input, client, None).await;
         assert!(result.is_ok());
         let output = result.unwrap();
-        let content_str = format!("{:?}", output.content);
+        let content_str = content_text(&output.content);
         assert!(content_str.contains("Workout Comments"));
         assert!(content_str.contains("Great job!"));
     }
@@ -3103,7 +3034,7 @@ mod tests {
         let result = handler.execute(input, client, None).await;
         assert!(result.is_ok());
         let output = result.unwrap();
-        let content_str = format!("{:?}", output.content);
+        let content_str = content_text(&output.content);
         assert!(content_str.contains("Period:"));
         assert!(content_str.contains("2026-03-01"));
         assert!(content_str.contains("2026-03-07"));
@@ -3123,7 +3054,7 @@ mod tests {
         let result = handler.execute(input, client, None).await;
         assert!(result.is_ok());
         let output = result.unwrap();
-        let content_str = format!("{:?}", output.content);
+        let content_str = content_text(&output.content);
         assert!(content_str.contains("No activities found"));
     }
 
@@ -3157,7 +3088,7 @@ mod tests {
         let result = handler.execute(input, client, None).await;
         assert!(result.is_ok());
         let output = result.unwrap();
-        let content_str = format!("{:?}", output.content);
+        let content_str = content_text(&output.content);
         assert!(content_str.contains("Calendar Events"));
         assert!(content_str.contains("Race Day"));
     }
@@ -3285,7 +3216,7 @@ mod tests {
         let result = handler.execute(input, client, None).await;
         assert!(result.is_ok());
         let output = result.unwrap();
-        let content_str = format!("{:?}", output.content);
+        let content_str = content_text(&output.content);
         // Should only include the interval run
         assert!(content_str.contains("Period:"));
     }
@@ -3323,7 +3254,7 @@ mod tests {
         let result = handler.execute(input, client, None).await;
         assert!(result.is_ok());
         let output = result.unwrap();
-        let content_str = format!("{:?}", output.content);
+        let content_str = content_text(&output.content);
         assert!(content_str.contains("Requested Metrics"));
     }
 
@@ -3357,7 +3288,7 @@ mod tests {
         let result = handler.execute(input, client, None).await;
         assert!(result.is_ok());
         let output = result.unwrap();
-        let content_str = format!("{:?}", output.content);
+        let content_str = content_text(&output.content);
         assert!(content_str.contains("Daily Load Series"));
     }
 
@@ -3384,7 +3315,7 @@ mod tests {
         let result = handler.execute(input, client, None).await;
         assert!(result.is_ok());
         let output = result.unwrap();
-        let content_str = format!("{:?}", output.content);
+        let content_str = content_text(&output.content);
         // Interval sessions section appears when interval workouts found
         assert!(content_str.contains("Period:"));
     }

@@ -621,6 +621,24 @@ mod tests {
     use intervals_icu_client::{ActivitySummary, IntervalsError};
     use std::sync::Arc;
 
+    fn content_text(content: &[ContentBlock]) -> String {
+        content
+            .iter()
+            .flat_map(|b| match b {
+                ContentBlock::Text { text } => vec![text.clone()],
+                ContentBlock::Markdown { markdown } => vec![markdown.clone()],
+                ContentBlock::Table { headers, rows } => {
+                    let mut parts: Vec<String> = headers.clone();
+                    for row in rows {
+                        parts.extend(row.clone());
+                    }
+                    parts
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     #[test]
     fn test_new_handler() {
         let handler = AssessRecoveryHandler::new();
@@ -1540,7 +1558,7 @@ mod tests {
         let result = handler.execute(input, client, None).await;
         assert!(result.is_ok());
         let output = result.unwrap();
-        let content_str = format!("{:?}", output.content);
+        let content_str = content_text(&output.content);
         assert!(content_str.contains("Recovery Assessment"));
         assert!(content_str.contains("Easy"));
         assert!(content_str.contains("Green light"));
@@ -1568,7 +1586,7 @@ mod tests {
         let result = handler.execute(input, client, None).await;
         assert!(result.is_ok());
         let output = result.unwrap();
-        let content_str = format!("{:?}", output.content);
+        let content_str = content_text(&output.content);
         assert!(content_str.contains("Red Flags Detected"));
         assert!(
             output.next_actions.iter().any(|a| a.contains("rest day")),
@@ -1597,7 +1615,7 @@ mod tests {
         let result = handler.execute(input, client, None).await;
         assert!(result.is_ok());
         let output = result.unwrap();
-        let content_str = format!("{:?}", output.content);
+        let content_str = content_text(&output.content);
         assert!(
             !content_str.contains("Red Flags"),
             "Expected no red flags in content when disabled"
@@ -1612,7 +1630,7 @@ mod tests {
         let result = handler.execute(input, client, None).await;
         assert!(result.is_ok());
         let output = result.unwrap();
-        let content_str = format!("{:?}", output.content);
+        let content_str = content_text(&output.content);
         assert!(content_str.contains("Ready for quality"));
         assert!(
             output
@@ -1632,7 +1650,7 @@ mod tests {
         let result = handler.execute(input, client, None).await;
         assert!(result.is_ok());
         let output = result.unwrap();
-        let content_str = format!("{:?}", output.content);
+        let content_str = content_text(&output.content);
         assert!(content_str.contains("Long run acceptable"));
         assert!(
             output.next_actions.iter().any(|a| a.contains("Fuel early")),
@@ -1649,7 +1667,7 @@ mod tests {
         let result = handler.execute(input, client, None).await;
         assert!(result.is_ok());
         let output = result.unwrap();
-        let content_str = format!("{:?}", output.content);
+        let content_str = content_text(&output.content);
         assert!(content_str.contains("Race-ready"));
         assert!(
             output.next_actions.iter().any(|a| a.contains("Recheck")),
@@ -1678,7 +1696,7 @@ mod tests {
         let result = handler.execute(input, client, None).await;
         assert!(result.is_ok());
         let output = result.unwrap();
-        let content_str = format!("{:?}", output.content);
+        let content_str = content_text(&output.content);
         assert!(content_str.contains("Hold intensity"));
     }
 
@@ -1702,7 +1720,7 @@ mod tests {
         let result = handler.execute(input, client, None).await;
         assert!(result.is_ok());
         let output = result.unwrap();
-        let content_str = format!("{:?}", output.content);
+        let content_str = content_text(&output.content);
         assert!(content_str.contains("Trim the long day"));
     }
 
@@ -1726,7 +1744,7 @@ mod tests {
         let result = handler.execute(input, client, None).await;
         assert!(result.is_ok());
         let output = result.unwrap();
-        let content_str = format!("{:?}", output.content);
+        let content_str = content_text(&output.content);
         assert!(content_str.contains("Not race-ready"));
     }
 
@@ -1783,7 +1801,7 @@ mod tests {
         let result = handler.execute(input, client, None).await;
         assert!(result.is_ok());
         let output = result.unwrap();
-        let content_str = format!("{:?}", output.content);
+        let content_str = content_text(&output.content);
         assert!(
             content_str.contains("Recovery Index unavailable"),
             "Expected recovery index note but got: {}",
@@ -1811,7 +1829,7 @@ mod tests {
         let result = handler.execute(input, client, None).await;
         assert!(result.is_ok());
         let output = result.unwrap();
-        let content_str = format!("{:?}", output.content);
+        let content_str = content_text(&output.content);
         // With wellness disabled, recovery metrics will use default zeros
         assert!(content_str.contains("Recovery Assessment"));
         assert!(!content_str.contains("Recovery Index"));
@@ -1867,7 +1885,7 @@ mod tests {
         let result = handler.execute(input, client, None).await;
         assert!(result.is_ok());
         let output = result.unwrap();
-        let content_str = format!("{:?}", output.content);
+        let content_str = content_text(&output.content);
         assert!(content_str.contains("None detected"));
         assert!(!content_str.contains("Red Flags Detected"));
     }

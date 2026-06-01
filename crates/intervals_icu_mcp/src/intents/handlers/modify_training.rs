@@ -724,6 +724,24 @@ mod tests {
     use super::*;
     use intervals_icu_client::EventCategory;
 
+    fn content_text(content: &[ContentBlock]) -> String {
+        content
+            .iter()
+            .flat_map(|b| match b {
+                ContentBlock::Text { text } => vec![text.clone()],
+                ContentBlock::Markdown { markdown } => vec![markdown.clone()],
+                ContentBlock::Table { headers, rows } => {
+                    let mut parts: Vec<String> = headers.clone();
+                    for row in rows {
+                        parts.extend(row.clone());
+                    }
+                    parts
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     #[test]
     fn test_new_handler() {
         let handler = ModifyTrainingHandler::new();
@@ -1531,7 +1549,7 @@ mod tests {
         let result = handler.execute(input, client, None).await;
         assert!(result.is_ok());
         let output = result.unwrap();
-        let content_str = format!("{:?}", output.content);
+        let content_str = content_text(&output.content);
         assert!(content_str.contains("Preview (dry_run)"));
         assert!(content_str.contains("Updated Tempo Run"));
     }
@@ -1559,7 +1577,7 @@ mod tests {
         let result = handler.execute(input, client, None).await;
         assert!(result.is_ok());
         let output = result.unwrap();
-        let content_str = format!("{:?}", output.content);
+        let content_str = content_text(&output.content);
         assert!(content_str.contains("Changes Applied"));
         assert!(output.metadata.events_modified == Some(1));
     }
@@ -1579,7 +1597,7 @@ mod tests {
         let result = handler.execute(input, client, None).await;
         assert!(result.is_ok());
         let output = result.unwrap();
-        let content_str = format!("{:?}", output.content);
+        let content_str = content_text(&output.content);
         assert!(content_str.contains("No events found"));
         assert!(!output.suggestions.is_empty());
     }
@@ -1617,7 +1635,7 @@ mod tests {
         let result = handler.execute(input, client, None).await;
         assert!(result.is_ok());
         let output = result.unwrap();
-        let content_str = format!("{:?}", output.content);
+        let content_str = content_text(&output.content);
         assert!(content_str.contains("Updated Tempo"));
     }
 
@@ -1644,7 +1662,7 @@ mod tests {
         let result = handler.execute(input, client, None).await;
         assert!(result.is_ok());
         let output = result.unwrap();
-        let content_str = format!("{:?}", output.content);
+        let content_str = content_text(&output.content);
         assert!(content_str.contains("No events matched"));
     }
 
@@ -1709,7 +1727,7 @@ mod tests {
         let result = handler.execute(input, client, None).await;
         assert!(result.is_ok());
         let output = result.unwrap();
-        let content_str = format!("{:?}", output.content);
+        let content_str = content_text(&output.content);
         assert!(content_str.contains("2026-03-01 to 2026-03-07"));
     }
 
@@ -1736,7 +1754,7 @@ mod tests {
         let result = handler.execute(input, client, None).await;
         assert!(result.is_ok());
         let output = result.unwrap();
-        let content_str = format!("{:?}", output.content);
+        let content_str = content_text(&output.content);
         assert!(content_str.contains("Preview (dry_run)"));
         assert!(content_str.contains("New Workout"));
         assert!(output.metadata.events_created == Some(1));
@@ -1759,7 +1777,7 @@ mod tests {
         let result = handler.execute(input, client, None).await;
         assert!(result.is_ok());
         let output = result.unwrap();
-        let content_str = format!("{:?}", output.content);
+        let content_str = content_text(&output.content);
         assert!(content_str.contains("Created"));
     }
 
@@ -1811,7 +1829,7 @@ mod tests {
         let result = handler.execute(input, client, None).await;
         assert!(result.is_ok());
         let output = result.unwrap();
-        let content_str = format!("{:?}", output.content);
+        let content_str = content_text(&output.content);
         assert!(content_str.contains("Marathon"));
     }
 
@@ -1851,7 +1869,7 @@ mod tests {
         let result = handler.execute(input, client, None).await;
         assert!(result.is_ok());
         let output = result.unwrap();
-        let content_str = format!("{:?}", output.content);
+        let content_str = content_text(&output.content);
         assert!(
             content_str.contains("Workout Builder Warnings"),
             "expected validation warnings in create response, got: {}",
@@ -1887,7 +1905,7 @@ mod tests {
         let result = handler.execute(input, client, None).await;
         assert!(result.is_ok());
         let output = result.unwrap();
-        let content_str = format!("{:?}", output.content);
+        let content_str = content_text(&output.content);
         assert!(
             !content_str.contains("Workout Builder Warnings"),
             "unexpected validation warnings for clean description: {}",
@@ -1914,7 +1932,7 @@ mod tests {
         let result = handler.execute(input, client, None).await;
         assert!(result.is_ok());
         let output = result.unwrap();
-        let content_str = format!("{:?}", output.content);
+        let content_str = content_text(&output.content);
         assert!(
             content_str.contains("duration_mismatch"),
             "expected duration_mismatch warning, got: {}",
@@ -1948,7 +1966,7 @@ mod tests {
         let result = handler.execute(input, client, None).await;
         assert!(result.is_ok());
         let output = result.unwrap();
-        let content_str = format!("{:?}", output.content);
+        let content_str = content_text(&output.content);
         assert!(content_str.contains("Preview (dry_run)"));
         assert!(content_str.contains("1"));
     }
@@ -1975,7 +1993,7 @@ mod tests {
         let result = handler.execute(input, client, None).await;
         assert!(result.is_ok());
         let output = result.unwrap();
-        let content_str = format!("{:?}", output.content);
+        let content_str = content_text(&output.content);
         assert!(content_str.contains("Deleted"));
         assert!(output.metadata.events_deleted == Some(1));
     }
@@ -2012,7 +2030,7 @@ mod tests {
         let result = handler.execute(input, client, None).await;
         assert!(result.is_ok());
         let output = result.unwrap();
-        let content_str = format!("{:?}", output.content);
+        let content_str = content_text(&output.content);
         assert!(content_str.contains("2"));
     }
 
@@ -2049,7 +2067,7 @@ mod tests {
         let result = handler.execute(input, client, None).await;
         assert!(result.is_ok());
         let output = result.unwrap();
-        let content_str = format!("{:?}", output.content);
+        let content_str = content_text(&output.content);
         // Should only delete the tempo run
         assert!(content_str.contains("1"));
     }
@@ -2069,7 +2087,7 @@ mod tests {
         let result = handler.execute(input, client, None).await;
         assert!(result.is_ok());
         let output = result.unwrap();
-        let content_str = format!("{:?}", output.content);
+        let content_str = content_text(&output.content);
         assert!(content_str.contains("0"));
     }
 
