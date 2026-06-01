@@ -70,6 +70,7 @@ pub(crate) mod mock {
     use serde_json::{Value, json};
     use std::collections::HashMap;
     use std::sync::Arc;
+    use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// Shared mock for `IntervalsClient`. Covers both single-activity and period test scenarios.
@@ -81,6 +82,28 @@ pub(crate) mod mock {
     ///     .with_workout_detail(json!({...}))
     ///     .build();
     /// ```
+    /// Shared observation state for `MockIntervalsClient`. Cloned into both the mock
+    /// and the test, so tests can inspect call counts even after the mock has been
+    /// moved into a `dyn IntervalsClient` trait object.
+    #[derive(Default, Debug)]
+    pub(crate) struct MockObservations {
+        pub wellness_last_days_back: Mutex<Option<i32>>,
+        pub wellness_calls: AtomicUsize,
+    }
+
+    impl MockObservations {
+        pub fn wellness_call_count(&self) -> usize {
+            self.wellness_calls.load(Ordering::SeqCst)
+        }
+
+        pub fn wellness_last_days_back(&self) -> Option<i32> {
+            *self
+                .wellness_last_days_back
+                .lock()
+                .expect("wellness_last_days_back mutex poisoned")
+        }
+    }
+
     #[derive(Default)]
     pub(crate) struct MockIntervalsClient {
         pub activities: Vec<ActivitySummary>,
@@ -103,6 +126,9 @@ pub(crate) mod mock {
         pub upcoming_workouts: Option<Value>,
         pub upcoming_workouts_error: Option<IntervalsError>,
         pub upcoming_workouts_calls: Arc<AtomicUsize>,
+        /// Observations shared with the test. `Arc` so the test can keep its own
+        /// reference after the mock is wrapped in a trait object.
+        pub observations: Arc<MockObservations>,
     }
 
     impl MockIntervalsClient {
@@ -212,6 +238,13 @@ pub(crate) mod mock {
         pub fn with_upcoming_workouts(mut self, workouts: Value) -> Self {
             self.upcoming_workouts = Some(workouts);
             self
+        }
+
+        /// Returns the `MockObservations` shared with this mock. Tests can keep this
+        /// handle and inspect call counts even after the mock is wrapped in a
+        /// `dyn IntervalsClient` trait object.
+        pub fn observations(&self) -> Arc<MockObservations> {
+            self.observations.clone()
         }
 
         pub fn with_upcoming_workouts_error(mut self, error: IntervalsError) -> Self {
@@ -452,7 +485,15 @@ pub(crate) mod mock {
             Ok(json!([]))
         }
 
-        async fn get_wellness(&self, _days_back: Option<i32>) -> Result<Value, IntervalsError> {
+        async fn get_wellness(&self, days_back: Option<i32>) -> Result<Value, IntervalsError> {
+            self.observations
+                .wellness_calls
+                .fetch_add(1, Ordering::SeqCst);
+            *self
+                .observations
+                .wellness_last_days_back
+                .lock()
+                .expect("wellness_last_days_back mutex poisoned") = days_back;
             Ok(self.wellness.clone().unwrap_or_else(|| json!([])))
         }
 
