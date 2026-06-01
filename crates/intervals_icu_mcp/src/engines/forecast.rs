@@ -147,11 +147,78 @@ mod tests {
     }
 
     #[test]
+    fn tsb_projection_with_empty_loads_returns_empty_vec() {
+        let results = project_tsb(50.0, 50.0, &[]);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn tsb_projection_with_single_day_load_returns_single_projection() {
+        let results = project_tsb(50.0, 50.0, &[100.0]);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].day, 1);
+        // First day: ctl=50 + (100-50)/42, atl=50 + (100-50)/7
+        // ctl ≈ 51.19, atl ≈ 57.14, tsb ≈ -5.95
+        assert!(results[0].tsb < 0.0);
+    }
+
+    #[test]
+    fn tsb_projection_day_index_starts_at_one_and_increments() {
+        let results = project_tsb(50.0, 50.0, &[100.0, 100.0, 100.0]);
+        assert_eq!(results[0].day, 1);
+        assert_eq!(results[1].day, 2);
+        assert_eq!(results[2].day, 3);
+    }
+
+    #[test]
+    fn tsb_projection_balanced_class_with_zero_loads() {
+        let results = project_tsb(0.0, 0.0, &[0.0; 5]);
+        for projection in &results {
+            assert!((projection.tsb).abs() < 1e-9);
+            assert_eq!(projection.ctl, 0.0);
+            assert_eq!(projection.atl, 0.0);
+        }
+    }
+
+    #[test]
+    fn tsb_production_classification_load_pressure_band() {
+        // TSB in -10 to 10 range is "balanced", below -10 is "load_pressure"
+        let results = project_tsb(100.0, 100.0, &[50.0; 1]);
+        // day 1: ctl=100+(50-100)/42≈98.81, atl=100+(50-100)/7≈92.86, tsb≈5.95
+        assert_eq!(results[0].fatigue_class, "balanced");
+    }
+
+    #[test]
+    fn tsb_production_classification_fresh_band() {
+        // TSB in 10 to 25 is "fresh"
+        let results = project_tsb(60.0, 40.0, &[30.0; 14]);
+        let last = results.last().unwrap();
+        // ATL drops faster than CTL, so TSB rises into the [10, 25) "fresh" band
+        assert_eq!(last.fatigue_class, "fresh");
+        assert!(last.tsb >= 10.0 && last.tsb < 25.0);
+    }
+
+    #[test]
+    fn tsb_production_classification_transition_band() {
+        // TSB > 25 is "transition"
+        let results = project_tsb(100.0, 50.0, &[0.0; 21]);
+        let last = results.last().unwrap();
+        assert_eq!(last.fatigue_class, "transition");
+    }
+
+    #[test]
     fn parameterized_load_values() {
         assert!((parameterized_load("easy") - 50.0).abs() < 0.01);
         assert!((parameterized_load("tempo") - 100.0).abs() < 0.01);
         assert!((parameterized_load("hard") - 150.0).abs() < 0.01);
         assert!((parameterized_load("race") - 250.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn parameterized_load_unknown_intensity_uses_fallback_multiplier() {
+        // Unknown intensity defaults to 1.5× easy
+        assert!((parameterized_load("xyz") - 75.0).abs() < 0.01);
+        assert!((parameterized_load("") - 75.0).abs() < 0.01);
     }
 
     #[test]
@@ -165,5 +232,34 @@ mod tests {
     fn taper_efficiency_partial() {
         let (efficiency, _) = compute_taper_efficiency(20.0, 40.0, 8.0);
         assert!((efficiency - 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn taper_efficiency_overreduction_clamps_to_max() {
+        // Actual reduction > target: ratio > 1.0, but clamped to 2.0
+        let (efficiency, _) = compute_taper_efficiency(80.0, 40.0, 30.0);
+        assert!((efficiency - 2.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn taper_efficiency_zero_target_returns_one() {
+        // target_volume_reduction_pct = 0 → efficiency = 1.0 (no taper planned)
+        let (efficiency, _) = compute_taper_efficiency(40.0, 0.0, 15.0);
+        assert!((efficiency - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn taper_efficiency_zero_actual_returns_zero_response() {
+        // actual_volume_reduction_pct = 0 → response = 0.0 (no volume reduced)
+        let (efficiency, response) = compute_taper_efficiency(0.0, 40.0, 15.0);
+        assert_eq!(efficiency, 0.0);
+        assert_eq!(response, 0.0);
+    }
+
+    #[test]
+    fn taper_efficiency_negative_actual_clamped_to_zero() {
+        // Volume increase (negative reduction) → efficiency clamped to 0
+        let (efficiency, _) = compute_taper_efficiency(-10.0, 40.0, 5.0);
+        assert_eq!(efficiency, 0.0);
     }
 }

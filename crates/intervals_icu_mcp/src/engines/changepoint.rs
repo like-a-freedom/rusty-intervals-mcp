@@ -153,6 +153,36 @@ mod tests {
     }
 
     #[test]
+    fn linear_regression_slope_returns_negative_for_falling_series() {
+        let slope = linear_regression_slope(&[100.0, 90.0, 80.0, 70.0]).unwrap();
+        assert!(slope < 0.0);
+    }
+
+    #[test]
+    fn linear_regression_slope_returns_near_zero_for_constant_series() {
+        let slope = linear_regression_slope(&[50.0, 50.0, 50.0, 50.0]).unwrap();
+        assert!(slope.abs() < 1e-9);
+    }
+
+    #[test]
+    fn linear_regression_slope_returns_none_for_single_value() {
+        assert!(linear_regression_slope(&[42.0]).is_none());
+    }
+
+    #[test]
+    fn linear_regression_slope_returns_none_for_empty_series() {
+        let empty: &[f64] = &[];
+        assert!(linear_regression_slope(empty).is_none());
+    }
+
+    #[test]
+    fn linear_regression_slope_computes_exact_value_for_simple_pair() {
+        // (0, 10), (1, 20) → slope = 10
+        let slope = linear_regression_slope(&[10.0, 20.0]).unwrap();
+        assert!((slope - 10.0).abs() < 1e-9);
+    }
+
+    #[test]
     fn detects_trailing_plateau_and_counts_only_flat_tail() {
         let dates = dates(56);
         let mut values = Vec::new();

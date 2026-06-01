@@ -611,6 +611,125 @@ mod tests {
     }
 
     #[test]
+    fn compare_periods_with_zero_b_period_yields_zero_percent_deltas() {
+        let period_a = PeriodSummary {
+            workout_count: 10,
+            total_time_hours: 20.0,
+            total_distance_km: 150.0,
+            total_tss: 3000.0,
+            ..Default::default()
+        };
+        let period_b = PeriodSummary::default();
+
+        let comparison = AnalysisEngine::compare_periods(&period_a, &period_b, "A", "B");
+
+        for metric in &comparison.metrics {
+            assert_eq!(
+                metric.delta_percent, 0.0,
+                "delta_percent must be 0 when period_b value is 0 (got {} for {})",
+                metric.delta_percent, metric.name
+            );
+        }
+    }
+
+    #[test]
+    fn compare_periods_with_equal_periods_yields_zero_deltas() {
+        let identical = PeriodSummary {
+            workout_count: 8,
+            total_time_hours: 16.0,
+            total_distance_km: 120.0,
+            total_tss: 2400.0,
+            ..Default::default()
+        };
+
+        let comparison = AnalysisEngine::compare_periods(&identical, &identical, "Now", "Then");
+
+        for metric in &comparison.metrics {
+            assert_eq!(metric.delta_absolute, 0.0);
+            assert_eq!(metric.delta_percent, 0.0);
+        }
+        assert!(comparison.summary.contains("within normal range"));
+    }
+
+    #[test]
+    fn compare_periods_volume_increase_above_threshold_warns_overtraining() {
+        let period_a = PeriodSummary {
+            workout_count: 10,
+            total_time_hours: 30.0,
+            total_distance_km: 250.0,
+            total_tss: 4500.0,
+            ..Default::default()
+        };
+        let period_b = PeriodSummary {
+            workout_count: 8,
+            total_time_hours: 20.0,
+            total_distance_km: 180.0,
+            total_tss: 3000.0,
+            ..Default::default()
+        };
+
+        let comparison = AnalysisEngine::compare_periods(&period_a, &period_b, "Now", "Then");
+
+        assert!(comparison.summary.contains("increased"));
+        assert!(comparison.summary.contains("overtraining"));
+    }
+
+    #[test]
+    fn compare_periods_volume_decrease_below_threshold_suggests_recovery() {
+        let period_a = PeriodSummary {
+            workout_count: 6,
+            total_time_hours: 10.0,
+            total_distance_km: 80.0,
+            total_tss: 1500.0,
+            ..Default::default()
+        };
+        let period_b = PeriodSummary {
+            workout_count: 12,
+            total_time_hours: 25.0,
+            total_distance_km: 200.0,
+            total_tss: 4000.0,
+            ..Default::default()
+        };
+
+        let comparison = AnalysisEngine::compare_periods(&period_a, &period_b, "Now", "Then");
+
+        assert!(comparison.summary.contains("decreased"));
+        assert!(comparison.summary.contains("recovery"));
+    }
+
+    #[test]
+    fn compare_periods_preserves_label_order_in_result() {
+        let period_a = PeriodSummary {
+            workout_count: 5,
+            total_time_hours: 10.0,
+            total_distance_km: 80.0,
+            total_tss: 1500.0,
+            ..Default::default()
+        };
+        let period_b = PeriodSummary::default();
+
+        let comparison =
+            AnalysisEngine::compare_periods(&period_a, &period_b, "Custom A", "Custom B");
+
+        assert_eq!(comparison.period_a_label, "Custom A");
+        assert_eq!(comparison.period_b_label, "Custom B");
+    }
+
+    #[test]
+    fn compare_periods_produces_four_metrics() {
+        let period_a = PeriodSummary::default();
+        let period_b = PeriodSummary::default();
+
+        let comparison = AnalysisEngine::compare_periods(&period_a, &period_b, "A", "B");
+
+        assert_eq!(comparison.metrics.len(), 4);
+        assert_eq!(comparison.metrics[0].name, "Workouts");
+        assert_eq!(comparison.metrics[1].name, "Volume (hours)");
+        assert_eq!(comparison.metrics[2].name, "Distance (km)");
+        assert_eq!(comparison.metrics[3].name, "TSS");
+    }
+
+    #[test]
     fn test_trend_directions() {
         use chrono::Duration;
 
