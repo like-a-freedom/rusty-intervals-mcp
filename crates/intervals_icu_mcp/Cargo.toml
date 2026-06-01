@@ -1,6 +1,6 @@
 [package]
 name = "intervals_icu_mcp"
-version = "2.8.0"
+version = "2.8.1"
 edition = "2024"
 
 [dependencies]
@@ -18,14 +18,14 @@ rmcp = { version = "1.7.0", features = [
 ] }
 intervals_icu_client = { path = "../intervals_icu_client" }
 axum = { version = "0.8.9", features = ["macros"] }
-hyper = "1.9.0"
+hyper = "1.10.1"
 metrics = "0.24.6"
 metrics-exporter-prometheus = "0.18.3"
 tracing = "0.1.44"
 anyhow = "1.0.102"
 tower-http = { version = "0.6.11", features = ["timeout"] }
-uuid = { version = "1.23.1", features = ["v4"] }
-reqwest = { version = "0.13.3", features = ["json", "query"] }
+uuid = { version = "1.23.2", features = ["v4"] }
+reqwest = { version = "0.13.4", features = ["json", "query"] }
 hmac = "0.13"
 sha2 = "0.11"
 hkdf = "0.13"
@@ -39,7 +39,7 @@ jwt-simple = "0.12.16"
 maud = { version = "0.27", features = ["axum"] }
 maud-ui = "0.2.1"
 # URL parsing for query parameter encoding
-url = "2"
+url = "2.5.8"
 # AES-256-GCM for api_key encryption
 aes-gcm = "0.10.3"
 # Rate limiting for multi-tenant mode
@@ -60,7 +60,7 @@ rmcp = { version = "1.7.0", features = [
     "transport-child-process",
 ] }
 async-trait = "0.1.89"
-reqwest = { version = "0.13.3", features = ["json", "query", "form"] }
-once_cell = "1.21.3"
+reqwest = { version = "0.13.4", features = ["json", "query", "form"] }
+once_cell = "1.21.4"
 tempfile = "3.27.0"
-serial_test = "3.4.0"
+serial_test = "3.5.0"
