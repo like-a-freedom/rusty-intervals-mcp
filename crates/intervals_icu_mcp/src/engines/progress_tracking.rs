@@ -370,13 +370,8 @@ pub fn build_progress_report(
                 String::new()
             };
             report.warnings.push(format!(
-                "Plateau detection needs {} days of daily CTL, but only {} day(s) were found in the requested window{}. \
-                 The track_progress handler tries to auto-expand to the API maximum ({} days); \
-                 if the data is still short, the athlete has less history recorded in Intervals.icu.",
-                MIN_DAYS_FOR_PLATEAU,
-                available,
-                personalization_gap,
-                MAX_WELLNESS_DAYS_FALLBACK
+                "Plateau detection needs {} days of daily CTL, but only {} day(s) were found{}.",
+                MIN_DAYS_FOR_PLATEAU, available, personalization_gap,
             ));
         }
     }
