@@ -38,6 +38,17 @@ pub fn parse_openapi_spec(
             }
 
             if contains_multipart(op) {
+                let op_id = op
+                    .get("operationId")
+                    .and_then(Value::as_str)
+                    .unwrap_or("<unnamed>");
+                tracing::warn!(
+                    operation_id = op_id,
+                    path = %path,
+                    method = method_name.to_uppercase(),
+                    "skipping multipart operation: dynamic dispatcher does not handle multipart/form-data; \
+                     use a typed IntervalsClient method or extend dispatch to support file uploads"
+                );
                 continue;
             }
 
@@ -659,13 +670,22 @@ mod tests {
                             }
                         }
                     }
+                },
+                "/list": {
+                    "get": {
+                        "operationId": "list_files",
+                        "summary": "List files"
+                    }
                 }
             }
         });
 
         let result = parse_openapi_spec(&spec, &HashSet::new(), &HashSet::new());
-        assert!(result.is_ok());
-        assert!(result.unwrap().is_empty());
+        let registry = result.unwrap();
+        // Multipart operation skipped, non-multipart included.
+        assert!(registry.operation("upload_file").is_none());
+        assert!(registry.operation("list_files").is_some());
+        assert_eq!(registry.len(), 1);
     }
 
     #[test]
