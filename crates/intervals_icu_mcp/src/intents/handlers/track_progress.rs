@@ -111,12 +111,9 @@ On error: API or validation errors with descriptive messages."
         // Fetch wellness with the requested window, then auto-expand to the API maximum
         // if the initial window is too short for plateau detection. The user-supplied
         // `period_weeks` is treated as a hint, not a hard cap — if it leaves us under
-        // 28 days of CTL history we try again with the largest range the server can serve.
-        let mut data_fetch_notes: Vec<String> = Vec::new();
-
-        let initial_days_back = period_days;
+        // 28 days of CTL history we silently retry with the largest range the server can serve.
         let mut wellness = client
-            .get_wellness(Some(initial_days_back))
+            .get_wellness(Some(period_days))
             .await
             .map_err(|error| IntentError::api(format!("Failed to fetch wellness: {error}")))?;
 
@@ -127,20 +124,12 @@ On error: API or validation errors with descriptive messages."
             && period_weeks < MAX_PERIOD_WEEKS
         {
             tracing::info!(
-                requested_days = initial_days_back,
+                requested_days = period_days,
                 available_ctl_points = initial_ctl_points,
                 min_required = MIN_DAYS_FOR_PLATEAU,
                 max_days,
                 "initial wellness window too short for plateau detection; retrying with max range"
             );
-            data_fetch_notes.push(format!(
-                "Wellness window auto-expanded: requested {} days ({} weeks) returned {} CTL point(s); \
-                 re-queried with {} days to maximize available history.",
-                initial_days_back,
-                period_weeks,
-                initial_ctl_points,
-                max_days
-            ));
             wellness = client.get_wellness(Some(max_days)).await.map_err(|error| {
                 IntentError::api(format!("Failed to fetch expanded wellness: {error}"))
             })?;
@@ -165,30 +154,7 @@ On error: API or validation errors with descriptive messages."
             }
         }
 
-        let mut report = build_progress_report(&wellness, &activities, &activity_details, &window);
-
-        // Surface data-fetch diagnostics in the report so the user can see what
-        // actually happened (auto-expand, coverage, etc.) without checking server logs.
-        if !data_fetch_notes.is_empty() {
-            report.warnings.extend(data_fetch_notes);
-        }
-        let final_ctl_points = count_ctl_points(&wellness);
-        if final_ctl_points < MIN_DAYS_FOR_PLATEAU {
-            // Prepend a coverage note so the user sees it before the generic warnings.
-            let coverage_pct = if initial_days_back > 0 {
-                (final_ctl_points as f64 / initial_days_back as f64 * 100.0).round()
-            } else {
-                0.0
-            };
-            report.warnings.insert(
-                0,
-                format!(
-                    "Wellness coverage: {} day(s) of CTL available, {}% of the {} day window requested. \
-                     Plateau needs {} days minimum.",
-                    final_ctl_points, coverage_pct, initial_days_back, MIN_DAYS_FOR_PLATEAU
-                ),
-            );
-        }
+        let report = build_progress_report(&wellness, &activities, &activity_details, &window);
 
         let content = render_progress_report(&report, hypothesis_mode);
 
@@ -352,11 +318,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn execute_report_surfaces_auto_expand_and_coverage() {
-        // 10-day wellness with a small period_weeks triggers auto-expand. Even
-        // though the second call uses the max range, the mock returns the same
-        // 10-point payload so the report should still report insufficient data
-        // AND surface the auto-expand note + coverage percentage to the user.
+    async fn execute_report_surfaces_actionable_warnings_without_operational_noise() {
+        // 10-day wellness triggers auto-expand silently. Even though the second call
+        // uses the max range, the mock returns the same 10-point payload so the report
+        // should contain actionable warnings about insufficient data, but NOT
+        // operational details like "auto-expanded" or "Wellness coverage".
         let mock = MockIntervalsClient::builder().with_wellness(short_wellness());
         let handler = TrackProgressHandler::new();
         let output = handler
@@ -370,16 +336,21 @@ mod tests {
 
         let rendered = format!("{:?}", output.content);
         assert!(
-            rendered.contains("auto-expanded"),
-            "rendered output should mention the auto-expand happened; got: {rendered}"
+            !rendered.contains("auto-expanded"),
+            "rendered output should NOT contain operational details; got: {rendered}"
         );
         assert!(
-            rendered.contains("10 day(s)"),
-            "rendered output should report the concrete CTL point count; got: {rendered}"
+            !rendered.contains("Wellness coverage"),
+            "rendered output should NOT contain coverage percentage; got: {rendered}"
         );
         assert!(
-            rendered.contains("Wellness coverage"),
-            "rendered output should include a coverage note; got: {rendered}"
+            !rendered.contains("re-queried"),
+            "rendered output should NOT contain retry details; got: {rendered}"
+        );
+        // Should still have actionable warnings about what data is missing.
+        assert!(
+            rendered.contains("lnRMSSD") || rendered.contains("Plateau"),
+            "rendered output should contain actionable data-availability warnings; got: {rendered}"
         );
     }
 }
