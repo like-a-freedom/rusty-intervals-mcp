@@ -420,11 +420,19 @@ pub fn build_progress_report(
         .unwrap_or(false);
 
     if let Some(hrv_values) = extract_hrv_series(Some(wellness)) {
+        let hrv_total = hrv_values.len();
         report.lnrmssd = compute_lnrmssd_rollup(&hrv_values);
+        if !report.lnrmssd.supported && hrv_total > 0 {
+            report.warnings.push(format!(
+                "lnRMSSD 7-day rollup needs 7 days of HRV, but only {} day(s) of HRV were found. \
+                 Recovery context (HRV ratio / trend) is still computed from the available data.",
+                hrv_total
+            ));
+        }
     } else {
         report
             .warnings
-            .push("Wellness HRV history unavailable; lnRMSSD rollup skipped.".into());
+            .push("Wellness HRV history unavailable; lnRMSSD rollup and HRV ratio skipped.".into());
     }
 
     // Interpretation rule: if enough athlete-specific history exists, downstream
@@ -434,9 +442,20 @@ pub fn build_progress_report(
     let weekly_zones = build_weekly_zone_distributions(activities, activity_details);
     report.tid_drift = compute_tid_drift(&weekly_zones);
     if !report.tid_drift.supported {
-        report
-            .warnings
-            .push("TID drift unavailable; not enough activity details with zone data.".into());
+        let have = weekly_zones.len();
+        let need = MIN_WEEKS_FOR_TID_DRIFT;
+        if have > 0 {
+            report.warnings.push(format!(
+                "TID drift needs {} weeks of activity details with zone data, but only {} week(s) were available. \
+                 Check that activities have icu_zone_times populated.",
+                need, have
+            ));
+        } else {
+            report.warnings.push(
+                "TID drift unavailable; no activity details with zone data were found in the window."
+                    .into(),
+            );
+        }
     }
 
     report.hypotheses = match_hypotheses(&report);
@@ -608,5 +627,76 @@ mod tests {
                 "expected personalization gap to be mentioned, got: {joined}"
             );
         }
+    }
+
+    #[test]
+    fn build_progress_report_warns_when_hrv_history_too_short_for_lnrmssd() {
+        use crate::domains::coach::AnalysisWindow;
+        use chrono::NaiveDate;
+
+        // 30 days of CTL, but only 3 days of HRV — lnRMSSD rollup will be unsupported.
+        let entries: Vec<Value> = (0..30)
+            .map(|i| {
+                if i < 3 {
+                    json!({
+                        "date": format!("2026-01-{:02}", (i % 30) + 1),
+                        "fitness": 60.0 + (i as f64) * 0.05,
+                        "hrv": 60.0,
+                    })
+                } else {
+                    json!({
+                        "date": format!("2026-01-{:02}", (i % 30) + 1),
+                        "fitness": 60.0 + (i as f64) * 0.05,
+                    })
+                }
+            })
+            .collect();
+        let wellness = Value::Array(entries);
+
+        let start = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+        let end = NaiveDate::from_ymd_opt(2026, 1, 30).unwrap();
+        let window = AnalysisWindow::new(start, end);
+
+        let report = build_progress_report(&wellness, &[], &HashMap::new(), &window);
+        assert!(!report.lnrmssd.supported);
+        let joined = report.warnings.join("\n");
+        assert!(
+            joined.contains("lnRMSSD 7-day rollup needs 7 days"),
+            "expected lnRMSSD shortfall warning, got: {joined}"
+        );
+        assert!(
+            joined.contains("3 day(s)"),
+            "expected concrete HRV count in warning, got: {joined}"
+        );
+    }
+
+    #[test]
+    fn build_progress_report_warns_when_tid_drift_lacks_zone_data() {
+        use crate::domains::coach::AnalysisWindow;
+        use chrono::NaiveDate;
+
+        // Long CTL history so plateau warning is silent, but no activity details
+        // at all, so TID drift should warn about the absence.
+        let entries: Vec<Value> = (0..30)
+            .map(|i| {
+                json!({
+                    "date": format!("2026-01-{:02}", i + 1),
+                    "fitness": 60.0 + (i as f64) * 0.05,
+                })
+            })
+            .collect();
+        let wellness = Value::Array(entries);
+
+        let start = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+        let end = NaiveDate::from_ymd_opt(2026, 1, 30).unwrap();
+        let window = AnalysisWindow::new(start, end);
+
+        let report = build_progress_report(&wellness, &[], &HashMap::new(), &window);
+        assert!(!report.tid_drift.supported);
+        let joined = report.warnings.join("\n");
+        assert!(
+            joined.contains("TID drift unavailable"),
+            "expected TID warning, got: {joined}"
+        );
     }
 }
