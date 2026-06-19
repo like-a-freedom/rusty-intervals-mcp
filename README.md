@@ -301,7 +301,8 @@ curl -s http://127.0.0.1:3000/mcp \
 
 Current HTTP security/runtime notes:
 - `/auth` is rate-limited separately for brute-force protection (1 req/sec, burst size 3).
-- `/mcp` rate limiting is applied at the endpoint/peer-IP layer.
+- `/mcp` rate limiting is applied per-athlete (using `athlete_id` from the JWT) with configurable limits (`MCP_RATE_LIMIT_PER_SECOND`, `MCP_RATE_LIMIT_BURST`). Unauthenticated requests fall back to IP-based limiting.
+- TCP keepalive is enabled on the server socket using `IDLE_TIMEOUT_SECONDS` as the keepalive idle time.
 - HTTP mode requires `JWT_MASTER_KEY` for JWT signing and encryption.
 - Container deployments are intended for **HTTP streamable MCP**. STDIO is for local child-process integrations and usually does not benefit from Docker.
 - The HTTP server also supports `REQUEST_TIMEOUT_SECONDS`, `IDLE_TIMEOUT_SECONDS`, and `JWT_TTL_SECONDS` for runtime tuning.
@@ -547,6 +548,11 @@ For production, prefer `credentials_file` over inline bearer tokens so secrets s
 
 For full metrics specification, see [`docs/OBSERVABILITY_SRS.md`](docs/OBSERVABILITY_SRS.md).
 
+## Architecture & Reliability
+
+- [Runtime architecture](docs/ARCHITECTURE.md) — layering, transports, and middleware
+- [HTTP reliability](docs/HTTP_RELIABILITY.md) — rate limiting, keepalive, graceful shutdown, and 429 recovery
+
 ## Runtime configuration
 
 See `.env.example` for the standard environment layout.
@@ -570,7 +576,9 @@ See `.env.example` for the standard environment layout.
 | `MCP_HTTP_ADDRESS` | `127.0.0.1:3000` | Listen address for HTTP mode |
 | `MAX_HTTP_BODY_SIZE` | `4194304` | Max request body size in bytes (HTTP mode) |
 | `REQUEST_TIMEOUT_SECONDS` | `30` | Max time to process a single HTTP request |
-| `IDLE_TIMEOUT_SECONDS` | `60` | Idle connection timeout in HTTP mode |
+| `IDLE_TIMEOUT_SECONDS` | `60` | Idle connection timeout and TCP keepalive idle time in HTTP mode |
+| `MCP_RATE_LIMIT_PER_SECOND` | `5` | Per-athlete rate limit (requests per second) for `/mcp` |
+| `MCP_RATE_LIMIT_BURST` | `15` | Per-athlete burst capacity for `/mcp` |
 | `JWT_MASTER_KEY` | unset | 64-byte hex key (128 hex chars) required for JWT in HTTP mode |
 | `JWT_TTL_SECONDS` | `7776000` | JWT lifetime in seconds (default 90 days) |
 | `MCP_ALLOWED_HOSTS` | `localhost,127.0.0.1,::1` | Allowed Host headers (anti-DNS-rebinding); set to public hostname(s) when behind a reverse proxy |
