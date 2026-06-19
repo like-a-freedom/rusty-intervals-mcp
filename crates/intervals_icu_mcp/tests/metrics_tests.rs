@@ -176,3 +176,36 @@ async fn test_upstream_error_metrics_are_recorded() {
         output
     );
 }
+
+/// Test that rate limit metrics are recorded when record_rate_limited is called
+#[tokio::test]
+#[serial]
+async fn test_rate_limit_metrics_are_recorded() {
+    ensure_recorder_initialized();
+
+    let handle = intervals_icu_mcp::metrics::get_prometheus_handle()
+        .expect("Prometheus handle should be available after init");
+
+    // Record rate limit events
+    intervals_icu_mcp::metrics::record_rate_limited("mcp");
+    intervals_icu_mcp::metrics::record_rate_limited("mcp");
+    intervals_icu_mcp::metrics::record_rate_limited("auth");
+
+    let output = handle.render();
+
+    assert!(
+        output.contains("intervals_icu_mcp_rate_limited_total"),
+        "Should contain rate limited counter in metrics output: {}",
+        output
+    );
+    assert!(
+        output.contains("endpoint=\"mcp\""),
+        "Should have mcp endpoint label: {}",
+        output
+    );
+    assert!(
+        output.contains("endpoint=\"auth\""),
+        "Should have auth endpoint label: {}",
+        output
+    );
+}

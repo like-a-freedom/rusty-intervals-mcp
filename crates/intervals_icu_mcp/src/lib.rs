@@ -461,7 +461,29 @@ pub async fn run_http_server(
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
         .unwrap_or(60);
-    let _idle_timeout = std::time::Duration::from_secs(idle_timeout_secs);
+    let idle_timeout = std::time::Duration::from_secs(idle_timeout_secs);
+
+    // Validate rate limit env vars — warn on invalid values, fall back to defaults
+    let mcp_rate_env = std::env::var("MCP_RATE_LIMIT_PER_SECOND").ok();
+    let mcp_burst_env = std::env::var("MCP_RATE_LIMIT_BURST").ok();
+    if let Some(ref val) = mcp_rate_env
+        && val.parse::<u64>().ok().filter(|&v| v > 0).is_none()
+    {
+        tracing::warn!(
+            value = %val,
+            "MCP_RATE_LIMIT_PER_SECOND is invalid or zero, using default 5"
+        );
+    }
+    if let Some(ref val) = mcp_burst_env
+        && val.parse::<u32>().ok().filter(|&v| v > 0).is_none()
+    {
+        tracing::warn!(
+            value = %val,
+            "MCP_RATE_LIMIT_BURST is invalid or zero, using default 15"
+        );
+    }
+    let (mcp_rate_per_second, mcp_burst_size) =
+        parse_rate_limit_values(mcp_rate_env.as_deref(), mcp_burst_env.as_deref());
 
     let base_url = std::env::var("INTERVALS_ICU_BASE_URL")
         .unwrap_or_else(|_| "https://intervals.icu".to_string());
@@ -525,18 +547,26 @@ pub async fn run_http_server(
     );
 
     let mcp_config = tower_governor::governor::GovernorConfigBuilder::default()
-        .per_second(2)
-        .burst_size(10)
+        .per_second(mcp_rate_per_second)
+        .burst_size(mcp_burst_size)
+        .key_extractor(AthleteKeyExtractor)
         .finish()
         .unwrap();
+    let mcp_governor = tower_governor::GovernorLayer::new(mcp_config).error_handler(|err| {
+        if let tower_governor::errors::GovernorError::TooManyRequests { wait_time, .. } = &err {
+            metrics::record_rate_limited("mcp");
+            tracing::warn!(wait_time, "MCP rate limit exceeded");
+        }
+        err.into_response().map(axum::body::Body::from)
+    });
     let mcp_route = axum::Router::new()
         .nest_service("/mcp", mcp_service)
         .layer(axum::Extension(auth::HttpBaseUrl(base_url.clone())))
+        .layer(mcp_governor)
         .layer(axum::middleware::from_fn_with_state(
             jwt_manager.clone(),
             auth::auth_middleware,
         ))
-        .layer(tower_governor::GovernorLayer::new(mcp_config))
         .layer(axum::extract::DefaultBodyLimit::max(max_body_size))
         .layer(tower_http::timeout::TimeoutLayer::with_status_code(
             axum::http::StatusCode::REQUEST_TIMEOUT,
@@ -564,7 +594,22 @@ pub async fn run_http_server(
         "starting HTTP server with JWT authentication"
     );
 
-    let listener = tokio::net::TcpListener::bind(address).await?;
+    // Create TCP socket with keepalive to prevent idle connection drops
+    let socket = socket2::Socket::new(
+        socket2::Domain::for_address(address),
+        socket2::Type::STREAM,
+        Some(socket2::Protocol::TCP),
+    )?;
+    configure_tcp_keepalive(&socket, idle_timeout)?;
+    socket.set_nonblocking(true)?;
+    let sock_addr = socket2::SockAddr::from(address);
+    socket.bind(&sock_addr)?;
+    socket.listen(128)?;
+    // Convert socket2::Socket → OwnedFd → std::net::TcpListener → tokio::net::TcpListener
+    let owned_fd: std::os::fd::OwnedFd = socket.into();
+    let std_listener = std::net::TcpListener::from(owned_fd);
+    let listener = tokio::net::TcpListener::from_std(std_listener)?;
+
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
@@ -646,6 +691,63 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    Ok(())
+}
+
+/// Rate limit key extractor that uses `athlete_id` from JWT credentials
+/// as the rate-limiting key. Falls back to client IP for unauthenticated requests.
+#[derive(Debug, Clone)]
+struct AthleteKeyExtractor;
+
+impl tower_governor::key_extractor::KeyExtractor for AthleteKeyExtractor {
+    type Key = String;
+
+    fn extract<T>(
+        &self,
+        req: &axum::http::Request<T>,
+    ) -> Result<String, tower_governor::errors::GovernorError> {
+        // Prefer athlete_id from JWT credentials (set by auth_middleware)
+        if let Some(creds) = req.extensions().get::<auth::DecryptedCredentials>() {
+            return Ok(creds.athlete_id.clone());
+        }
+        // Fallback to client IP for unauthenticated endpoints
+        if let Some(addr) = req
+            .extensions()
+            .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        {
+            return Ok(format!("ip:{}", addr.0.ip()));
+        }
+        Err(tower_governor::errors::GovernorError::UnableToExtractKey)
+    }
+}
+
+/// Parse rate limit config from optional string values.
+/// Returns `(per_second, burst_size)` with defaults of 5 and 15.
+fn parse_rate_limit_values(per_second: Option<&str>, burst_size: Option<&str>) -> (u64, u32) {
+    let rate = per_second
+        .and_then(|s| s.parse::<u64>().ok())
+        .filter(|&v| v > 0)
+        .unwrap_or(5);
+    let burst = burst_size
+        .and_then(|s| s.parse::<u32>().ok())
+        .filter(|&v| v > 0)
+        .unwrap_or(15);
+    (rate, burst)
+}
+
+/// Configure TCP keepalive on a socket2::Socket.
+///
+/// Sets idle time before sending keepalive probes and interval between probes.
+/// OS defaults are used for retry count.
+fn configure_tcp_keepalive(
+    socket: &socket2::Socket,
+    idle: std::time::Duration,
+) -> Result<(), std::io::Error> {
+    socket.set_keepalive(true)?;
+    let ka = socket2::TcpKeepalive::new()
+        .with_time(idle)
+        .with_interval(std::time::Duration::from_secs(10));
+    socket.set_tcp_keepalive(&ka)?;
     Ok(())
 }
 
@@ -1032,5 +1134,159 @@ mod tests {
             2,
             "trailing comma yields two items (one empty)"
         );
+    }
+
+    // ── AthleteKeyExtractor tests ──────────────────────────────────────
+
+    #[test]
+    fn athlete_key_extractor_extracts_athlete_id_from_credentials() {
+        use tower_governor::key_extractor::KeyExtractor;
+
+        let mut req = axum::http::Request::builder()
+            .uri("http://localhost/mcp")
+            .body(())
+            .unwrap();
+        req.extensions_mut().insert(DecryptedCredentials {
+            athlete_id: "athlete-42".to_string(),
+            api_key: SecretString::new("secret-key".to_string().into()),
+        });
+
+        let key = AthleteKeyExtractor.extract(&req).unwrap();
+        assert_eq!(key, "athlete-42");
+    }
+
+    #[test]
+    fn athlete_key_extractor_falls_back_to_ip_when_no_credentials() {
+        use tower_governor::key_extractor::KeyExtractor;
+
+        let addr: std::net::SocketAddr = "10.0.0.1:54321".parse().unwrap();
+        let mut req = axum::http::Request::builder()
+            .uri("http://localhost/mcp")
+            .body(())
+            .unwrap();
+        req.extensions_mut()
+            .insert(axum::extract::ConnectInfo(addr));
+
+        let key = AthleteKeyExtractor.extract(&req).unwrap();
+        assert_eq!(key, "ip:10.0.0.1");
+    }
+
+    #[test]
+    fn athlete_key_extractor_returns_error_when_no_key_available() {
+        use tower_governor::key_extractor::KeyExtractor;
+
+        let req = axum::http::Request::builder()
+            .uri("http://localhost/mcp")
+            .body(())
+            .unwrap();
+
+        let result = AthleteKeyExtractor.extract(&req);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn athlete_key_extractor_prefers_credentials_over_ip() {
+        use tower_governor::key_extractor::KeyExtractor;
+
+        let addr: std::net::SocketAddr = "10.0.0.1:54321".parse().unwrap();
+        let mut req = axum::http::Request::builder()
+            .uri("http://localhost/mcp")
+            .body(())
+            .unwrap();
+        req.extensions_mut().insert(DecryptedCredentials {
+            athlete_id: "athlete-99".to_string(),
+            api_key: SecretString::new("key".to_string().into()),
+        });
+        req.extensions_mut()
+            .insert(axum::extract::ConnectInfo(addr));
+
+        let key = AthleteKeyExtractor.extract(&req).unwrap();
+        assert_eq!(key, "athlete-99");
+    }
+
+    // ── Rate limit config parsing tests ─────────────────────────────────
+
+    #[test]
+    fn parse_rate_limit_both_none_returns_defaults() {
+        let (rate, burst) = parse_rate_limit_values(None, None);
+        assert_eq!(rate, 5);
+        assert_eq!(burst, 15);
+    }
+
+    #[test]
+    fn parse_rate_limit_valid_values() {
+        let (rate, burst) = parse_rate_limit_values(Some("10"), Some("30"));
+        assert_eq!(rate, 10);
+        assert_eq!(burst, 30);
+    }
+
+    #[test]
+    fn parse_rate_limit_invalid_rate_returns_default() {
+        let (rate, _) = parse_rate_limit_values(Some("not-a-number"), Some("30"));
+        assert_eq!(rate, 5);
+    }
+
+    #[test]
+    fn parse_rate_limit_invalid_burst_returns_default() {
+        let (_, burst) = parse_rate_limit_values(Some("10"), Some("also-not"));
+        assert_eq!(burst, 15);
+    }
+
+    #[test]
+    fn parse_rate_limit_zero_rate_returns_default() {
+        let (rate, _) = parse_rate_limit_values(Some("0"), Some("30"));
+        assert_eq!(rate, 5);
+    }
+
+    #[test]
+    fn parse_rate_limit_zero_burst_returns_default() {
+        let (_, burst) = parse_rate_limit_values(Some("10"), Some("0"));
+        assert_eq!(burst, 15);
+    }
+
+    #[test]
+    fn parse_rate_limit_mixed_valid_invalid() {
+        let (rate, burst) = parse_rate_limit_values(Some("8"), None);
+        assert_eq!(rate, 8);
+        assert_eq!(burst, 15);
+    }
+
+    // ── TCP keepalive tests ────────────────────────────────────────────
+
+    #[test]
+    fn configure_tcp_keepalive_sets_keepalive_on_socket() {
+        let addr: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let socket = socket2::Socket::new(
+            socket2::Domain::for_address(addr),
+            socket2::Type::STREAM,
+            Some(socket2::Protocol::TCP),
+        )
+        .unwrap();
+
+        let idle = std::time::Duration::from_secs(60);
+        configure_tcp_keepalive(&socket, idle).unwrap();
+
+        // Verify keepalive is enabled by checking the socket option
+        assert!(
+            socket.keepalive().unwrap(),
+            "TCP keepalive should be enabled on the socket"
+        );
+    }
+
+    #[test]
+    fn configure_tcp_keepalive_with_zero_duration_still_sets_keepalive() {
+        let addr: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let socket = socket2::Socket::new(
+            socket2::Domain::for_address(addr),
+            socket2::Type::STREAM,
+            Some(socket2::Protocol::TCP),
+        )
+        .unwrap();
+
+        let idle = std::time::Duration::from_secs(0);
+        configure_tcp_keepalive(&socket, idle).unwrap();
+
+        // Even with 0 duration, keepalive should be set (OS will use minimum)
+        assert!(socket.keepalive().unwrap());
     }
 }
