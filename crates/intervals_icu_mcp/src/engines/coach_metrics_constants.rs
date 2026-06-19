@@ -6,6 +6,7 @@ pub const API_LOAD_CHRONIC_KEYS: &[&str] = &["ctlLoad", "icu_ctl"];
 pub const FITNESS_CTL_KEYS: &[&str] = &["fitness", "ctl"];
 pub const FITNESS_ATL_KEYS: &[&str] = &["fatigue", "atl"];
 pub const FITNESS_TSB_KEYS: &[&str] = &["form", "tsb"];
+pub const FITNESS_RAMP_RATE_KEYS: &[&str] = &["rampRate", "ramp_rate"];
 pub const SLEEP_KEYS: &[&str] = &["sleep_hours", "sleepSecs", "sleep_secs"];
 pub const RESTING_HR_KEYS: &[&str] =
     &["resting_hr", "restingHR", "resting_hr_bpm", "avgSleepingHR"];
