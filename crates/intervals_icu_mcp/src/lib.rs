@@ -605,9 +605,8 @@ pub async fn run_http_server(
     let sock_addr = socket2::SockAddr::from(address);
     socket.bind(&sock_addr)?;
     socket.listen(128)?;
-    // Convert socket2::Socket → OwnedFd → std::net::TcpListener → tokio::net::TcpListener
-    let owned_fd: std::os::fd::OwnedFd = socket.into();
-    let std_listener = std::net::TcpListener::from(owned_fd);
+    // Convert socket2::Socket → std::net::TcpListener → tokio::net::TcpListener
+    let std_listener: std::net::TcpListener = socket.into();
     let listener = tokio::net::TcpListener::from_std(std_listener)?;
 
     axum::serve(
