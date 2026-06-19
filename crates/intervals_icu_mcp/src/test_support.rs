@@ -56,6 +56,54 @@ fn snapshot_env(keys: &'static [&'static str]) -> HashMap<&'static str, Option<S
         .collect()
 }
 
+fn clone_intervals_error(
+    err: &intervals_icu_client::IntervalsError,
+) -> intervals_icu_client::IntervalsError {
+    use intervals_icu_client::{ApiError, ConfigError, IntervalsError, ValidationError};
+
+    match err {
+        IntervalsError::Http(e) => IntervalsError::from_status(
+            e.status().map(|status| status.as_u16()).unwrap_or(500),
+            e.to_string(),
+        ),
+        IntervalsError::Config(e) => IntervalsError::Config(match e {
+            ConfigError::MissingEnvVar(value) => ConfigError::MissingEnvVar(value.clone()),
+            ConfigError::InvalidValue { key, message } => ConfigError::InvalidValue {
+                key: key.clone(),
+                message: message.clone(),
+            },
+            ConfigError::Other(message) => ConfigError::Other(message.clone()),
+        }),
+        IntervalsError::Api(api) => IntervalsError::Api(ApiError {
+            status: api.status,
+            message: api.message.clone(),
+            raw_body: api.raw_body.clone(),
+        }),
+        IntervalsError::JsonDecode(_) => IntervalsError::from_status(500, "json decode"),
+        IntervalsError::Validation(validation) => IntervalsError::Validation(match validation {
+            ValidationError::EmptyField { field } => ValidationError::EmptyField {
+                field: field.clone(),
+            },
+            ValidationError::InvalidFormat { field, value } => ValidationError::InvalidFormat {
+                field: field.clone(),
+                value: value.clone(),
+            },
+            ValidationError::UnknownVariant { field, value } => ValidationError::UnknownVariant {
+                field: field.clone(),
+                value: value.clone(),
+            },
+            ValidationError::MissingParameter(value) => {
+                ValidationError::MissingParameter(value.clone())
+            }
+            ValidationError::InvalidParameterCombination(value) => {
+                ValidationError::InvalidParameterCombination(value.clone())
+            }
+        }),
+        IntervalsError::NotFound(message) => IntervalsError::NotFound(message.clone()),
+        IntervalsError::Auth(message) => IntervalsError::Auth(message.clone()),
+    }
+}
+
 // ============================================================================
 // Shared MockIntervalsClient for tests
 // ============================================================================
@@ -513,73 +561,7 @@ pub(crate) mod mock {
         ) -> Result<Value, IntervalsError> {
             self.upcoming_workouts_calls.fetch_add(1, Ordering::SeqCst);
             if let Some(err) = &self.upcoming_workouts_error {
-                return Err(match err {
-                    IntervalsError::Http(e) => IntervalsError::from_status(
-                        e.status().map(|status| status.as_u16()).unwrap_or(500),
-                        e.to_string(),
-                    ),
-                    IntervalsError::Config(e) => IntervalsError::Config(match e {
-                        intervals_icu_client::ConfigError::MissingEnvVar(value) => {
-                            intervals_icu_client::ConfigError::MissingEnvVar(value.clone())
-                        }
-                        intervals_icu_client::ConfigError::InvalidValue { key, message } => {
-                            intervals_icu_client::ConfigError::InvalidValue {
-                                key: key.clone(),
-                                message: message.clone(),
-                            }
-                        }
-                        intervals_icu_client::ConfigError::Other(message) => {
-                            intervals_icu_client::ConfigError::Other(message.clone())
-                        }
-                    }),
-                    IntervalsError::Api(api) => {
-                        IntervalsError::Api(intervals_icu_client::ApiError {
-                            status: api.status,
-                            message: api.message.clone(),
-                            raw_body: api.raw_body.clone(),
-                        })
-                    }
-                    IntervalsError::JsonDecode(_) => {
-                        IntervalsError::from_status(500, "json decode")
-                    }
-                    IntervalsError::Validation(validation) => {
-                        IntervalsError::Validation(match validation {
-                            intervals_icu_client::ValidationError::EmptyField { field } => {
-                                intervals_icu_client::ValidationError::EmptyField {
-                                    field: field.clone(),
-                                }
-                            }
-                            intervals_icu_client::ValidationError::InvalidFormat {
-                                field,
-                                value,
-                            } => intervals_icu_client::ValidationError::InvalidFormat {
-                                field: field.clone(),
-                                value: value.clone(),
-                            },
-                            intervals_icu_client::ValidationError::UnknownVariant {
-                                field,
-                                value,
-                            } => intervals_icu_client::ValidationError::UnknownVariant {
-                                field: field.clone(),
-                                value: value.clone(),
-                            },
-                            intervals_icu_client::ValidationError::MissingParameter(value) => {
-                                intervals_icu_client::ValidationError::MissingParameter(
-                                    value.clone(),
-                                )
-                            }
-                            intervals_icu_client::ValidationError::InvalidParameterCombination(
-                                value,
-                            ) => {
-                                intervals_icu_client::ValidationError::InvalidParameterCombination(
-                                    value.clone(),
-                                )
-                            }
-                        })
-                    }
-                    IntervalsError::NotFound(message) => IntervalsError::NotFound(message.clone()),
-                    IntervalsError::Auth(message) => IntervalsError::Auth(message.clone()),
-                });
+                return Err(super::clone_intervals_error(err));
             }
 
             Ok(self.upcoming_workouts.clone().unwrap_or_else(|| json!([])))
@@ -872,6 +854,61 @@ mod tests {
         }
         unsafe {
             std::env::remove_var("_CUSTOM_TEST_KEY_2_");
+        }
+    }
+
+    #[test]
+    fn test_clone_intervals_error_preserves_api_error() {
+        let original = IntervalsError::Api(ApiError::new(503, "upstream unavailable", "raw"));
+        let cloned = clone_intervals_error(&original);
+
+        match cloned {
+            IntervalsError::Api(api) => {
+                assert_eq!(api.status, 503);
+                assert_eq!(api.message, "upstream unavailable");
+                assert_eq!(api.raw_body, "raw");
+            }
+            other => panic!("expected API error clone, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_clone_intervals_error_preserves_validation_error() {
+        let original = IntervalsError::Validation(ValidationError::InvalidFormat {
+            field: "target_date".into(),
+            value: "bad-date".into(),
+        });
+        let cloned = clone_intervals_error(&original);
+
+        match cloned {
+            IntervalsError::Validation(ValidationError::InvalidFormat { field, value }) => {
+                assert_eq!(field, "target_date");
+                assert_eq!(value, "bad-date");
+            }
+            other => panic!("expected validation error clone, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_clone_intervals_error_preserves_not_found_and_auth() {
+        let missing = clone_intervals_error(&IntervalsError::NotFound("missing".into()));
+        let auth = clone_intervals_error(&IntervalsError::Auth("forbidden".into()));
+
+        assert!(matches!(missing, IntervalsError::NotFound(message) if message == "missing"));
+        assert!(matches!(auth, IntervalsError::Auth(message) if message == "forbidden"));
+    }
+
+    #[test]
+    fn test_clone_intervals_error_maps_json_decode_to_generic_server_error() {
+        let json_err = serde_json::from_str::<()>("invalid").unwrap_err();
+        let cloned = clone_intervals_error(&IntervalsError::JsonDecode(json_err));
+
+        match cloned {
+            IntervalsError::Api(api) => {
+                assert_eq!(api.status, 500);
+                assert_eq!(api.message, "json decode");
+            }
+            other => panic!("expected API fallback clone, got {other:?}"),
         }
     }
 
