@@ -86,7 +86,7 @@ pub fn interpret_fitness_metrics(
         } else if value < TSB_LOAD_PRESSURE_THRESHOLD {
             "fatigued".to_string()
         } else {
-            "neutral".to_string()
+            "balanced".to_string()
         }
     });
 
@@ -1461,6 +1461,13 @@ mod tests {
         let fitness = interpret_fitness_metrics(Some(50.0), Some(70.0), Some(-25.0));
 
         assert_eq!(fitness.load_state.as_deref(), Some("fatigued"));
+    }
+
+    #[test]
+    fn tsb_between_minus_10_and_10_is_classified_as_balanced() {
+        let fitness = interpret_fitness_metrics(Some(50.0), Some(47.0), Some(3.0));
+
+        assert_eq!(fitness.load_state.as_deref(), Some("balanced"));
     }
 
     #[test]

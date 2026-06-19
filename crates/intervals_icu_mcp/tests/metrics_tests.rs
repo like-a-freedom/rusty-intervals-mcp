@@ -199,13 +199,13 @@ async fn test_rate_limit_metrics_are_recorded() {
         output
     );
     assert!(
-        output.contains("endpoint=\"mcp\""),
-        "Should have mcp endpoint label: {}",
+        output.contains("scope=\"mcp\""),
+        "Should have mcp scope label: {}",
         output
     );
     assert!(
-        output.contains("endpoint=\"auth\""),
-        "Should have auth endpoint label: {}",
+        output.contains("scope=\"auth\""),
+        "Should have auth scope label: {}",
         output
     );
 }

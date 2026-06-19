@@ -198,7 +198,7 @@ impl AssessRecoveryHandler {
         let tsb_status = if tsb > crate::engines::coach_guidance::TSB_FRESH {
             "✅ Fresh"
         } else if tsb > crate::engines::coach_guidance::TSB_FATIGUED {
-            "⚠️ Neutral"
+            "⚪ Balanced"
         } else {
             "❌ Fatigued"
         };
@@ -873,23 +873,23 @@ mod tests {
         };
         assert_eq!(status, "Fresh");
 
-        // Neutral
+        // Balanced
         let tsb = 0.0;
         let status = if tsb > TSB_FRESH {
             "Fresh"
         } else if tsb > TSB_FATIGUED {
-            "Neutral"
+            "Balanced"
         } else {
             "Fatigued"
         };
-        assert_eq!(status, "Neutral");
+        assert_eq!(status, "Balanced");
 
         // Fatigued
         let tsb = -15.0;
         let status = if tsb > TSB_FRESH {
             "Fresh"
         } else if tsb > TSB_FATIGUED {
-            "Neutral"
+            "Balanced"
         } else {
             "Fatigued"
         };
@@ -1409,7 +1409,7 @@ mod tests {
     }
 
     #[test]
-    fn recovery_rows_tsb_neutral() {
+    fn recovery_rows_tsb_balanced() {
         let rows = AssessRecoveryHandler::build_recovery_metric_rows(
             &WellnessMetrics {
                 avg_sleep_hours: Some(7.5),
@@ -1424,7 +1424,7 @@ mod tests {
             },
         );
         let tsb_row = rows.iter().find(|r| r[0] == "TSB").expect("TSB row");
-        assert!(tsb_row[2].contains("Neutral"));
+        assert!(tsb_row[2].contains("Balanced"));
     }
 
     #[test]

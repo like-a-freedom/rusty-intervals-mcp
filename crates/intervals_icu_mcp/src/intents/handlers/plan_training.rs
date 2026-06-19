@@ -398,7 +398,7 @@ impl IntentHandler for PlanTrainingHandler {
                 } else if tsb < -10.0 {
                     "Fatigued"
                 } else {
-                    "Neutral"
+                    "Balanced"
                 };
                 format!("\nCurrent TSB: {:.0} ({})", tsb, state)
             })
@@ -1780,7 +1780,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_execute_with_tsb_neutral() {
+    async fn test_execute_with_tsb_balanced() {
         let handler = PlanTrainingHandler::new();
         let client =
             Arc::new(MockIntervalsClient::builder().with_fitness_summary(json!({"tsb": 5.0})));
@@ -1793,7 +1793,7 @@ mod tests {
         assert!(result.is_ok());
         let output = result.unwrap();
         let content_str = format!("{:?}", output.content);
-        assert!(content_str.contains("Neutral"));
+        assert!(content_str.contains("Balanced"));
         assert!(!output.suggestions.iter().any(|s| s.contains("TSB")));
     }
 
