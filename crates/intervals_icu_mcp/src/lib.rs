@@ -463,27 +463,10 @@ pub async fn run_http_server(
         .unwrap_or(60);
     let idle_timeout = std::time::Duration::from_secs(idle_timeout_secs);
 
-    // Validate rate limit env vars — warn on invalid values, fall back to defaults
-    let mcp_rate_env = std::env::var("MCP_RATE_LIMIT_PER_SECOND").ok();
-    let mcp_burst_env = std::env::var("MCP_RATE_LIMIT_BURST").ok();
-    if let Some(ref val) = mcp_rate_env
-        && val.parse::<u64>().ok().filter(|&v| v > 0).is_none()
-    {
-        tracing::warn!(
-            value = %val,
-            "MCP_RATE_LIMIT_PER_SECOND is invalid or zero, using default 5"
-        );
-    }
-    if let Some(ref val) = mcp_burst_env
-        && val.parse::<u32>().ok().filter(|&v| v > 0).is_none()
-    {
-        tracing::warn!(
-            value = %val,
-            "MCP_RATE_LIMIT_BURST is invalid or zero, using default 15"
-        );
-    }
-    let (mcp_rate_per_second, mcp_burst_size) =
-        parse_rate_limit_values(mcp_rate_env.as_deref(), mcp_burst_env.as_deref());
+    let (mcp_rate_per_second, mcp_burst_size) = parse_rate_limit_values(
+        std::env::var("MCP_RATE_LIMIT_PER_SECOND").ok().as_deref(),
+        std::env::var("MCP_RATE_LIMIT_BURST").ok().as_deref(),
+    );
 
     let base_url = std::env::var("INTERVALS_ICU_BASE_URL")
         .unwrap_or_else(|_| "https://intervals.icu".to_string());
@@ -723,14 +706,36 @@ impl tower_governor::key_extractor::KeyExtractor for AthleteKeyExtractor {
 /// Parse rate limit config from optional string values.
 /// Returns `(per_second, burst_size)` with defaults of 5 and 15.
 fn parse_rate_limit_values(per_second: Option<&str>, burst_size: Option<&str>) -> (u64, u32) {
-    let rate = per_second
+    let rate = match per_second
         .and_then(|s| s.parse::<u64>().ok())
         .filter(|&v| v > 0)
-        .unwrap_or(5);
-    let burst = burst_size
+    {
+        Some(v) => v,
+        None => {
+            if per_second.is_some() {
+                tracing::warn!(
+                    value = ?per_second,
+                    "MCP_RATE_LIMIT_PER_SECOND is invalid or zero, using default 5"
+                );
+            }
+            5
+        }
+    };
+    let burst = match burst_size
         .and_then(|s| s.parse::<u32>().ok())
         .filter(|&v| v > 0)
-        .unwrap_or(15);
+    {
+        Some(v) => v,
+        None => {
+            if burst_size.is_some() {
+                tracing::warn!(
+                    value = ?burst_size,
+                    "MCP_RATE_LIMIT_BURST is invalid or zero, using default 15"
+                );
+            }
+            15
+        }
+    };
     (rate, burst)
 }
 

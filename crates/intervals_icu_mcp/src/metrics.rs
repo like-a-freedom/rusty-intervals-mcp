@@ -163,10 +163,10 @@ pub fn record_token_verification(status: &str) {
 }
 
 /// Record rate-limited request.
-pub fn record_rate_limited(endpoint: &str) {
+pub fn record_rate_limited(scope: &str) {
     counter!(
         "intervals_icu_mcp_rate_limited_total",
-        "endpoint" => endpoint.to_owned()
+        "scope" => scope.to_owned()
     )
     .increment(1);
 }
