@@ -744,6 +744,12 @@ fn configure_tcp_keepalive(
     idle: std::time::Duration,
 ) -> Result<(), std::io::Error> {
     socket.set_keepalive(true)?;
+    // The OS rejects zero values for keepalive time; clamp to at least 1 second.
+    let idle = if idle.is_zero() {
+        std::time::Duration::from_secs(1)
+    } else {
+        idle
+    };
     let ka = socket2::TcpKeepalive::new()
         .with_time(idle)
         .with_interval(std::time::Duration::from_secs(10));
