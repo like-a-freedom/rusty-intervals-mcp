@@ -131,6 +131,7 @@ pub struct FitnessMetrics {
     pub atl: Option<f64>,
     pub tsb: Option<f64>,
     pub load_state: Option<String>,
+    pub ramp_rate: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]

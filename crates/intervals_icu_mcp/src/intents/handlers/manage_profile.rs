@@ -331,6 +331,12 @@ impl ManageProfileHandler {
                 if let Some(load_state) = fitness.load_state {
                     metric_rows.push(vec!["Load State".to_string(), load_state]);
                 }
+                if let Some(ramp_rate) = fitness.ramp_rate {
+                    metric_rows.push(vec![
+                        "Ramp Rate (CTL/wk)".to_string(),
+                        format!("{:+.2}", ramp_rate),
+                    ]);
+                }
 
                 if metric_rows.len() > 1 {
                     content.push(ContentBlock::table(

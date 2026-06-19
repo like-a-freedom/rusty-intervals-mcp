@@ -707,6 +707,7 @@ mod tests {
                 atl: Some(75.0),
                 tsb: Some(-25.0),
                 load_state: Some("fatigued".into()),
+                ramp_rate: None,
             }),
             ..Default::default()
         };
@@ -840,6 +841,7 @@ mod tests {
                 atl: Some(40.0),
                 tsb: Some(15.0),
                 load_state: Some("fresh".into()),
+                ramp_rate: None,
             }),
             wellness: Some(WellnessMetrics {
                 avg_sleep_hours: Some(7.6),
@@ -864,6 +866,7 @@ mod tests {
                 atl: Some(65.0),
                 tsb: Some(-15.0),
                 load_state: Some("fatigued".into()),
+                ramp_rate: None,
             }),
             ..Default::default()
         };
@@ -881,6 +884,7 @@ mod tests {
                 atl: Some(60.0),
                 tsb: Some(TSB_FATIGUED),
                 load_state: Some("fatigued".into()),
+                ramp_rate: None,
             }),
             ..Default::default()
         };

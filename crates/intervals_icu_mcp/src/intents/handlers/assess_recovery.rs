@@ -452,7 +452,11 @@ impl IntentHandler for AssessRecoveryHandler {
             false,
             false,
             false,
-            None,
+            recovery_context
+                .metrics
+                .fitness
+                .as_ref()
+                .and_then(|f| f.ramp_rate),
             None,
             0,
             recovery_context

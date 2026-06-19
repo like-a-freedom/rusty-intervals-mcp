@@ -79,6 +79,7 @@ pub fn interpret_fitness_metrics(
     ctl: Option<f64>,
     atl: Option<f64>,
     tsb: Option<f64>,
+    ramp_rate: Option<f64>,
 ) -> FitnessMetrics {
     let load_state = tsb.map(|value| {
         if value > TSB_BALANCED_UPPER {
@@ -95,6 +96,7 @@ pub fn interpret_fitness_metrics(
         atl,
         tsb,
         load_state,
+        ramp_rate,
     }
 }
 
@@ -517,8 +519,9 @@ pub fn parse_fitness_metrics(payload: Option<&Value>) -> Option<FitnessMetrics> 
     let ctl = get_number(object, FITNESS_CTL_KEYS);
     let atl = get_number(object, FITNESS_ATL_KEYS);
     let tsb = get_number(object, FITNESS_TSB_KEYS);
+    let ramp_rate = get_number(object, FITNESS_RAMP_RATE_KEYS);
 
-    Some(interpret_fitness_metrics(ctl, atl, tsb))
+    Some(interpret_fitness_metrics(ctl, atl, tsb, ramp_rate))
 }
 
 pub fn parse_wellness_metrics(payload: Option<&Value>) -> Option<WellnessMetrics> {
@@ -1458,14 +1461,14 @@ mod tests {
 
     #[test]
     fn tsb_below_minus_20_is_classified_as_fatigued() {
-        let fitness = interpret_fitness_metrics(Some(50.0), Some(70.0), Some(-25.0));
+        let fitness = interpret_fitness_metrics(Some(50.0), Some(70.0), Some(-25.0), None);
 
         assert_eq!(fitness.load_state.as_deref(), Some("fatigued"));
     }
 
     #[test]
     fn tsb_between_minus_10_and_10_is_classified_as_balanced() {
-        let fitness = interpret_fitness_metrics(Some(50.0), Some(47.0), Some(3.0));
+        let fitness = interpret_fitness_metrics(Some(50.0), Some(47.0), Some(3.0), None);
 
         assert_eq!(fitness.load_state.as_deref(), Some("balanced"));
     }
