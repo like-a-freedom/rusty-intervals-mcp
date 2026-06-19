@@ -1551,6 +1551,14 @@ mod tests {
     }
 
     #[test]
+    fn parse_fitness_metrics_extracts_ramp_rate() {
+        let payload = json!([{"fitness": 50.0, "fatigue": 70.0, "form": -20.0, "rampRate": 2.5}]);
+
+        let metrics = parse_fitness_metrics(Some(&payload)).unwrap();
+        assert_eq!(metrics.ramp_rate, Some(2.5));
+    }
+
+    #[test]
     fn parse_wellness_metrics_supports_seconds_and_snake_case() {
         let payload = json!([
             {"sleepSecs": 25200.0, "restingHR": 50.0, "hrv": 60.0},
