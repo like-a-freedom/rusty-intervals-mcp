@@ -719,7 +719,7 @@ mod tests {
         let entry = IdempotencyEntry::new(output, short_ttl);
 
         assert!(!entry.is_expired());
-        std::thread::sleep(Duration::from_millis(5));
+        std::thread::sleep(Duration::from_millis(50));
         assert!(entry.is_expired());
     }
 
