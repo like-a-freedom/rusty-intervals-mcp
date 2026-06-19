@@ -903,17 +903,12 @@ impl MockCoachClient {
 
     fn with_best_efforts_and_bucket_histograms() -> Self {
         Self {
-            activities: vec![ActivitySummary {
-                id: "payload-1".to_string(),
-                name: Some("Structured Long Run".to_string()),
-                start_date_local: "2026-03-08".to_string(),
-                ..Default::default()
-            }],
-            events: vec![],
-            fitness: json!([{ "fitness": 60.0, "fatigue": 44.0, "form": 16.0 }]),
-            wellness: json!([]),
-            wellness_for_date: json!({}),
-            upcoming_workouts: json!([]),
+            activities: vec![Self::activity(
+                "payload-1",
+                "Structured Long Run",
+                "2026-03-08",
+            )],
+            fitness: Self::fitness_snapshot(60.0, 44.0, 16.0),
             activity_details: json!({
                 "distance": 18000.0,
                 "moving_time": 5400,
@@ -921,15 +916,12 @@ impl MockCoachClient {
                 "average_watts": 215.0,
                 "total_elevation_gain": 110.0
             }),
-            intervals: json!([]),
-            streams: json!({}),
             best_efforts: json!({
                 "best_efforts": [
                     {"seconds": 60, "watts": 310.0, "heartrate": 171.0},
                     {"seconds": 300, "watts": 282.0, "heartrate": 165.0}
                 ]
             }),
-            sport_settings: json!([]),
             hr_histogram: json!([
                 {"min": 120, "max": 124, "secs": 469},
                 {"min": 125, "max": 129, "secs": 1150}
@@ -942,22 +934,18 @@ impl MockCoachClient {
                 {"min": 2.2593105, "max": 2.354023, "secs": 295},
                 {"min": 2.354023, "max": 2.4487357, "secs": 353}
             ]),
+            ..Self::default()
         }
     }
 
     fn with_full_histogram_ranges() -> Self {
         Self {
-            activities: vec![ActivitySummary {
-                id: "hist-full-1".to_string(),
-                name: Some("Recovery Run Z1".to_string()),
-                start_date_local: "2026-03-08".to_string(),
-                ..Default::default()
-            }],
-            events: vec![],
-            fitness: json!([{ "fitness": 58.0, "fatigue": 46.0, "form": 12.0 }]),
-            wellness: json!([]),
-            wellness_for_date: json!({}),
-            upcoming_workouts: json!([]),
+            activities: vec![Self::activity(
+                "hist-full-1",
+                "Recovery Run Z1",
+                "2026-03-08",
+            )],
+            fitness: Self::fitness_snapshot(58.0, 46.0, 12.0),
             activity_details: json!({
                 "distance": 7040.0,
                 "moving_time": 2880,
@@ -965,10 +953,6 @@ impl MockCoachClient {
                 "average_watts": 219.0,
                 "total_elevation_gain": 66.0
             }),
-            intervals: json!([]),
-            streams: json!({}),
-            best_efforts: json!([]),
-            sport_settings: json!([]),
             hr_histogram: json!([
                 {"min": 80, "max": 84, "secs": 1},
                 {"min": 85, "max": 89, "secs": 5},
@@ -1034,22 +1018,18 @@ impl MockCoachClient {
                 {"min": 3.5852873, "max": 3.68, "secs": 1},
                 {"min": 3.68, "max": 3.77, "secs": 1}
             ]),
+            ..Self::default()
         }
     }
 
     fn with_live_best_efforts_shape() -> Self {
         Self {
-            activities: vec![ActivitySummary {
-                id: "live-efforts-1".to_string(),
-                name: Some("Recovery Run Z1".to_string()),
-                start_date_local: "2026-03-08".to_string(),
-                ..Default::default()
-            }],
-            events: vec![],
-            fitness: json!([{ "fitness": 58.0, "fatigue": 46.0, "form": 12.0 }]),
-            wellness: json!([]),
-            wellness_for_date: json!({}),
-            upcoming_workouts: json!([]),
+            activities: vec![Self::activity(
+                "live-efforts-1",
+                "Recovery Run Z1",
+                "2026-03-08",
+            )],
+            fitness: Self::fitness_snapshot(58.0, 46.0, 12.0),
             activity_details: json!({
                 "distance": 7040.0,
                 "moving_time": 2880,
@@ -1057,8 +1037,6 @@ impl MockCoachClient {
                 "average_watts": 219.0,
                 "total_elevation_gain": 66.0
             }),
-            intervals: json!([]),
-            streams: json!({}),
             best_efforts: json!({
                 "stream": "watts",
                 "efforts": [
@@ -1066,10 +1044,7 @@ impl MockCoachClient {
                     {"start_index": 1320, "end_index": 1380, "average": 241.98334, "duration": 60, "distance": null}
                 ]
             }),
-            sport_settings: json!([]),
-            hr_histogram: json!({}),
-            power_histogram: json!({}),
-            pace_histogram: json!({}),
+            ..Self::default()
         }
     }
 }
