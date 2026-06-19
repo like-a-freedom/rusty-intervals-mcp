@@ -20,6 +20,18 @@ struct TrackingMockClient {
     deleted_event_ids: Arc<Mutex<Vec<String>>>,
 }
 
+impl Default for TrackingMockClient {
+    fn default() -> Self {
+        Self {
+            events: vec![],
+            upcoming_workouts: json!([]),
+            updated_events: Arc::new(Mutex::new(Vec::new())),
+            created_events: Arc::new(Mutex::new(Vec::new())),
+            deleted_event_ids: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+}
+
 impl TrackingMockClient {
     fn relative_date(days_from_today: i64) -> String {
         (chrono::Local::now().date_naive() + chrono::Duration::days(days_from_today))
@@ -31,7 +43,6 @@ impl TrackingMockClient {
         let workout_date = Self::relative_date(1);
 
         Self {
-            events: vec![],
             upcoming_workouts: json!([
                 {
                     "id": 94131981,
@@ -44,9 +55,7 @@ impl TrackingMockClient {
                     "paired_activity_id": null
                 }
             ]),
-            updated_events: Arc::new(Mutex::new(Vec::new())),
-            created_events: Arc::new(Mutex::new(Vec::new())),
-            deleted_event_ids: Arc::new(Mutex::new(Vec::new())),
+            ..Self::default()
         }
     }
 
@@ -56,7 +65,6 @@ impl TrackingMockClient {
         let third_date = Self::relative_date(3);
 
         Self {
-            events: vec![],
             upcoming_workouts: json!([
                 {
                     "id": 94131991,
@@ -89,9 +97,7 @@ impl TrackingMockClient {
                     "paired_activity_id": null
                 }
             ]),
-            updated_events: Arc::new(Mutex::new(Vec::new())),
-            created_events: Arc::new(Mutex::new(Vec::new())),
-            deleted_event_ids: Arc::new(Mutex::new(Vec::new())),
+            ..Self::default()
         }
     }
 
@@ -100,7 +106,6 @@ impl TrackingMockClient {
         let sick_date = Self::relative_date(2);
 
         Self {
-            events: vec![],
             upcoming_workouts: json!([
                 {
                     "id": 94131994,
@@ -123,9 +128,7 @@ impl TrackingMockClient {
                     "paired_activity_id": null
                 }
             ]),
-            updated_events: Arc::new(Mutex::new(Vec::new())),
-            created_events: Arc::new(Mutex::new(Vec::new())),
-            deleted_event_ids: Arc::new(Mutex::new(Vec::new())),
+            ..Self::default()
         }
     }
 
