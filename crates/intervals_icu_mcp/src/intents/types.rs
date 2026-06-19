@@ -715,11 +715,11 @@ mod tests {
     #[test]
     fn test_idempotency_entry_is_expired() {
         let output = IntentOutput::markdown("Test");
-        let short_ttl = Duration::from_millis(1);
+        let short_ttl = Duration::from_millis(100);
         let entry = IdempotencyEntry::new(output, short_ttl);
 
         assert!(!entry.is_expired());
-        std::thread::sleep(Duration::from_millis(50));
+        std::thread::sleep(Duration::from_millis(150));
         assert!(entry.is_expired());
     }
 

@@ -502,6 +502,10 @@ pub fn build_guidance(metrics: &CoachMetrics, alerts: &[CoachAlert]) -> CoachGui
             guidance.findings.push(
                 "Freshness markers are positive, but wellness support is incomplete.".to_string(),
             );
+        } else if tsb >= TSB_FATIGUED {
+            guidance.findings.push(
+                "Load balance sits in a balanced range (roughly the grey/maintenance band) — useful for recovery, taper, or maintaining consistency, but usually not the strongest overload window for building fitness.".to_string(),
+            );
         } else if tsb < TSB_FATIGUED {
             guidance
                 .findings
@@ -1525,7 +1529,7 @@ mod tests {
     }
 
     #[test]
-    fn neutral_tsb_does_not_add_fitness_guidance() {
+    fn balanced_tsb_adds_maintenance_finding_without_recovery_prompt() {
         let metrics = CoachMetrics {
             fitness: Some(FitnessMetrics {
                 tsb: Some(3.0),
@@ -1535,6 +1539,12 @@ mod tests {
         };
 
         let guidance = build_guidance(&metrics, &[]);
+        assert!(
+            guidance
+                .findings
+                .iter()
+                .any(|f| f.contains("balanced range"))
+        );
         assert!(!guidance.suggestions.iter().any(|s| s.contains("recovery")));
         assert!(!guidance.suggestions.iter().any(|s| s.contains("ready")));
     }
