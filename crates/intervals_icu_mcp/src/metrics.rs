@@ -256,6 +256,18 @@ pub fn get_prometheus_handle() -> Option<&'static PrometheusHandle> {
     PROMETHEUS_HANDLE.get()
 }
 
+fn validate_metrics_token(auth_header: Option<&str>, expected_token: Option<&str>) -> bool {
+    match expected_token {
+        None => true,
+        Some(expected) => {
+            let provided = auth_header
+                .and_then(|h| h.strip_prefix("Bearer "))
+                .unwrap_or(auth_header.unwrap_or(""));
+            provided == expected
+        }
+    }
+}
+
 /// Create an Axum router for the metrics endpoint.
 ///
 /// The endpoint will require authentication if `PROMETHEUS_METRICS_TOKEN` is set.
@@ -269,17 +281,11 @@ pub fn create_metrics_router() -> axum::Router {
 
     async fn metrics_handler(headers: HeaderMap) -> Response {
         // Check for optional token authentication
-        if let Ok(token) = std::env::var("PROMETHEUS_METRICS_TOKEN") {
-            let auth_header = headers
-                .get("authorization")
-                .and_then(|h| h.to_str().ok())
-                .unwrap_or("");
+        let expected_token = std::env::var("PROMETHEUS_METRICS_TOKEN").ok();
+        let auth_header = headers.get("authorization").and_then(|h| h.to_str().ok());
 
-            let provided_token = auth_header.strip_prefix("Bearer ").unwrap_or(auth_header);
-
-            if provided_token != token {
-                return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-            }
+        if !validate_metrics_token(auth_header, expected_token.as_deref()) {
+            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
         }
 
         // Get metrics output
@@ -334,3 +340,42 @@ pub async fn metrics_middleware(
 
 // Tests are in the separate `tests/metrics_tests.rs` file to avoid
 // global state conflicts with the Prometheus recorder
+
+#[cfg(test)]
+mod tests {
+    use super::validate_metrics_token;
+
+    #[test]
+    fn validate_metrics_token_fails_without_header_when_token_required() {
+        assert!(!validate_metrics_token(None, Some("test_token_123")));
+    }
+
+    #[test]
+    fn validate_metrics_token_fails_with_wrong_token() {
+        assert!(!validate_metrics_token(
+            Some("Bearer wrong_token"),
+            Some("test_token_123")
+        ));
+    }
+
+    #[test]
+    fn validate_metrics_token_accepts_correct_bearer_token() {
+        assert!(validate_metrics_token(
+            Some("Bearer test_token_123"),
+            Some("test_token_123")
+        ));
+    }
+
+    #[test]
+    fn validate_metrics_token_accepts_raw_token() {
+        assert!(validate_metrics_token(
+            Some("test_token_123"),
+            Some("test_token_123")
+        ));
+    }
+
+    #[test]
+    fn validate_metrics_token_accepts_missing_token_when_not_configured() {
+        assert!(validate_metrics_token(None, None));
+    }
+}

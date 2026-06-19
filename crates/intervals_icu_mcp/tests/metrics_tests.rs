@@ -14,55 +14,6 @@
 
 use serial_test::serial;
 
-/// Helper function to validate metrics token
-fn validate_metrics_token(auth_header: Option<&str>, expected_token: Option<&str>) -> bool {
-    match expected_token {
-        None => true, // No token required
-        Some(expected) => {
-            let provided = auth_header
-                .and_then(|h| h.strip_prefix("Bearer "))
-                .unwrap_or(auth_header.unwrap_or(""));
-            provided == expected
-        }
-    }
-}
-
-#[tokio::test]
-#[serial]
-async fn test_metrics_auth_fails_without_header() {
-    assert!(
-        !validate_metrics_token(None, Some("test_token_123")),
-        "Should fail without auth header when token is set"
-    );
-}
-
-#[tokio::test]
-#[serial]
-async fn test_metrics_auth_fails_with_wrong_token() {
-    assert!(
-        !validate_metrics_token(Some("Bearer wrong_token"), Some("test_token_123")),
-        "Should fail with wrong token"
-    );
-}
-
-#[tokio::test]
-#[serial]
-async fn test_metrics_auth_succeeds_with_correct_token() {
-    assert!(
-        validate_metrics_token(Some("Bearer test_token_123"), Some("test_token_123")),
-        "Should succeed with correct token"
-    );
-}
-
-#[tokio::test]
-#[serial]
-async fn test_metrics_auth_succeeds_when_no_token_configured() {
-    assert!(
-        validate_metrics_token(None, None),
-        "Should succeed when no token configured"
-    );
-}
-
 /// Helper to ensure Prometheus recorder is available for tests.
 /// Safe to call multiple times - uses #[serial] to avoid env var races.
 fn ensure_recorder_initialized() {
