@@ -6,6 +6,7 @@ target/
 dev/
 docs/
 .vscode/
+.opencode/
 
 **/*.rs.bk
 **/Cargo.lock
