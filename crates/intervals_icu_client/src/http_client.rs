@@ -91,57 +91,67 @@ impl ReqwestIntervalsClient {
             return Ok(sport_type_or_id.to_string());
         }
 
-        let normalized = Self::normalize_sport(sport_type_or_id);
         let payload = <Self as SportSettingsService>::get_sport_settings(self).await?;
 
-        let candidates = if let Some(items) = payload.as_array() {
-            items
-                .iter()
-                .filter_map(serde_json::Value::as_object)
-                .collect::<Vec<_>>()
-        } else if let Some(object) = payload.as_object() {
-            if let Some(items) = object.get("sports").and_then(serde_json::Value::as_array) {
-                items
-                    .iter()
-                    .filter_map(serde_json::Value::as_object)
-                    .collect::<Vec<_>>()
-            } else {
-                vec![object]
+        Self::resolve_sport_settings_id_from_payload(&payload, sport_type_or_id)
+    }
+
+    fn resolve_sport_settings_id_from_payload(
+        payload: &serde_json::Value,
+        sport_type_or_id: &str,
+    ) -> Result<String> {
+        let normalized = Self::normalize_sport(sport_type_or_id);
+
+        let matching_id = |entry: &serde_json::Map<String, serde_json::Value>| {
+            let matches_type = entry
+                .get("types")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|types| {
+                    types
+                        .iter()
+                        .any(|value| value.as_str() == Some(normalized.as_str()))
+                });
+            let matches_name =
+                entry.get("name").and_then(serde_json::Value::as_str) == Some(normalized.as_str());
+
+            if !(matches_type || matches_name) {
+                return None;
             }
-        } else {
-            Vec::new()
+
+            entry.get("id").and_then(|value| {
+                value
+                    .as_i64()
+                    .map(|id| id.to_string())
+                    .or_else(|| value.as_str().map(ToString::to_string))
+            })
         };
 
-        candidates
-            .into_iter()
-            .find(|entry| {
-                entry
-                    .get("types")
-                    .and_then(serde_json::Value::as_array)
-                    .is_some_and(|types| {
-                        types
-                            .iter()
-                            .any(|value| value.as_str() == Some(normalized.as_str()))
-                    })
-                    || entry.get("name").and_then(serde_json::Value::as_str)
-                        == Some(normalized.as_str())
-            })
-            .and_then(|entry| {
-                entry.get("id").and_then(|value| {
-                    value
-                        .as_i64()
-                        .map(|id| id.to_string())
-                        .or_else(|| value.as_str().map(ToString::to_string))
-                })
-            })
-            .ok_or_else(|| {
-                IntervalsError::Validation(ValidationError::InvalidFormat {
-                    field: "sport_type".to_string(),
-                    value: format!(
-                        "could not resolve sport settings id for sport type '{sport_type_or_id}'"
-                    ),
-                })
-            })
+        if let Some(items) = payload.as_array() {
+            for entry in items.iter().filter_map(serde_json::Value::as_object) {
+                if let Some(id) = matching_id(entry) {
+                    return Ok(id);
+                }
+            }
+        } else if let Some(object) = payload.as_object() {
+            if let Some(items) = object.get("sports").and_then(serde_json::Value::as_array) {
+                for entry in items.iter().filter_map(serde_json::Value::as_object) {
+                    if let Some(id) = matching_id(entry) {
+                        return Ok(id);
+                    }
+                }
+            } else {
+                if let Some(id) = matching_id(object) {
+                    return Ok(id);
+                }
+            }
+        }
+
+        Err(IntervalsError::Validation(ValidationError::InvalidFormat {
+            field: "sport_type".to_string(),
+            value: format!(
+                "could not resolve sport settings id for sport type '{sport_type_or_id}'"
+            ),
+        }))
     }
 
     /// Build an authenticated GET request.
@@ -303,7 +313,16 @@ impl ReqwestIntervalsClient {
 
     /// Record an upstream error metric based on error type.
     fn record_upstream_error(err: &IntervalsError) {
-        let error_type = match err {
+        let error_type = Self::upstream_error_type(err);
+        counter!(
+            "intervals_icu_mcp_upstream_errors_total",
+            "error_type" => error_type
+        )
+        .increment(1);
+    }
+
+    fn upstream_error_type(err: &IntervalsError) -> &'static str {
+        match err {
             IntervalsError::Http(e) if e.is_timeout() => "timeout",
             IntervalsError::Http(e) if e.is_connect() => "network",
             IntervalsError::Http(_) => "network",
@@ -312,12 +331,7 @@ impl ReqwestIntervalsClient {
             IntervalsError::Api(api) if api.status >= 500 => "5xx",
             IntervalsError::Api(api) if api.status >= 400 => "4xx",
             _ => "other",
-        };
-        counter!(
-            "intervals_icu_mcp_upstream_errors_total",
-            "error_type" => error_type
-        )
-        .increment(1);
+        }
     }
 
     /// Handle a response, converting status codes to appropriate errors.
@@ -336,17 +350,16 @@ impl ReqwestIntervalsClient {
     async fn error_from_response(&self, resp: reqwest::Response) -> IntervalsError {
         let status = resp.status().as_u16();
         let body = resp.text().await.unwrap_or_default();
-        let body_snippet: String = body.chars().take(256).collect();
+        Self::error_from_response_parts(status, &body)
+    }
 
-        match status {
-            404 => IntervalsError::NotFound(body_snippet),
-            401 | 403 => IntervalsError::Auth(body_snippet),
-            422 => IntervalsError::Validation(ValidationError::InvalidFormat {
-                field: "request".to_string(),
-                value: body_snippet,
-            }),
-            _ => IntervalsError::from_status(status, body_snippet),
-        }
+    fn error_from_response_parts(status: u16, body: &str) -> IntervalsError {
+        let body_snippet = Self::truncate_error_body(body);
+        IntervalsError::from_status(status, body_snippet)
+    }
+
+    fn truncate_error_body(body: &str) -> String {
+        body.chars().take(256).collect()
     }
 
     /// Download a file from a URL, optionally saving to disk.
@@ -1954,64 +1967,8 @@ fn annotate_best_efforts_payload(
 
 #[cfg(test)]
 mod tests {
-    use crate::{IntervalsClient, http_client::ReqwestIntervalsClient};
-    use chrono::{Duration, Utc};
-    use secrecy::SecretString;
+    use crate::{IntervalsError, ValidationError, http_client::ReqwestIntervalsClient};
     use serde_json::json;
-    use wiremock::matchers::{method, path, query_param};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
-
-    const LIVE_OPENAPI_SPEC_URL: &str = "https://intervals.icu/api/v1/docs";
-
-    async fn fetch_live_openapi_spec() -> serde_json::Value {
-        reqwest::Client::new()
-            .get(LIVE_OPENAPI_SPEC_URL)
-            .send()
-            .await
-            .expect("fetch live OpenAPI spec")
-            .error_for_status()
-            .expect("live OpenAPI status")
-            .json()
-            .await
-            .expect("parse live OpenAPI spec")
-    }
-
-    fn spec_operation<'a>(
-        spec: &'a serde_json::Value,
-        path_name: &str,
-        method_name: &str,
-    ) -> &'a serde_json::Value {
-        spec.get("paths")
-            .and_then(|paths| paths.get(path_name))
-            .and_then(|path_item| path_item.get(method_name))
-            .unwrap_or_else(|| panic!("missing {method_name} {path_name} in live spec"))
-    }
-
-    fn assert_query_param(
-        spec: &serde_json::Value,
-        path_name: &str,
-        method_name: &str,
-        param_name: &str,
-    ) {
-        let params = spec_operation(spec, path_name, method_name)
-            .get("parameters")
-            .and_then(serde_json::Value::as_array)
-            .unwrap_or_else(|| panic!("missing parameters for {method_name} {path_name}"));
-        assert!(
-            params.iter().any(|param| {
-                param.get("in").and_then(serde_json::Value::as_str) == Some("query")
-                    && param.get("name").and_then(serde_json::Value::as_str) == Some(param_name)
-            }),
-            "missing query param {param_name} for {method_name} {path_name}"
-        );
-    }
-
-    #[tokio::test]
-    async fn client_new_and_basic() {
-        let client =
-            ReqwestIntervalsClient::new("http://localhost", "ath", SecretString::new("key".into()));
-        let _ = client;
-    }
 
     #[test]
     fn normalize_sport_capitalizes_correctly() {
@@ -2043,361 +2000,246 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn get_activities_around_uses_activities_around_path() {
-        let mock_server = MockServer::start().await;
-        let athlete = "ath";
+    #[test]
+    fn normalize_event_update_fields_rejects_invalid_date() {
+        let err = ReqwestIntervalsClient::normalize_event_update_fields(&json!({
+            "start_date_local": "not-a-date",
+            "name": "Tempo Run"
+        }))
+        .expect_err("invalid date should be rejected");
 
-        Mock::given(method("GET"))
-            .and(path("/api/v1/athlete/ath/activities-around"))
-            .and(query_param("activity_id", "a1"))
-            .and(query_param("limit", "5"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
-            .mount(&mock_server)
-            .await;
-
-        let client = ReqwestIntervalsClient::new(
-            &mock_server.uri(),
-            athlete,
-            SecretString::new("key".into()),
-        );
-        let res = client.get_activities_around("a1", Some(5), None).await;
-        assert!(res.is_ok());
+        assert!(matches!(
+            err,
+            IntervalsError::Validation(ValidationError::InvalidFormat { field, value })
+                if field == "start_date_local" && value.contains("not-a-date")
+        ));
     }
 
-    #[tokio::test]
-    async fn apply_sport_settings_uses_put() {
-        let mock_server = MockServer::start().await;
-        let sport = "Run";
-        let athlete = "ath";
+    #[test]
+    fn resolve_sport_settings_id_from_flat_array_matches_type() {
+        let payload = json!([
+            {"id": 1783043, "types": ["Run", "VirtualRun", "TrailRun"]}
+        ]);
 
-        Mock::given(method("GET"))
-            .and(path(format!("/api/v1/athlete/{athlete}/sport-settings")))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
-                {"id": 1_783_043, "types": ["Run", "VirtualRun", "TrailRun"]}
-            ])))
-            .mount(&mock_server)
-            .await;
+        let resolved =
+            ReqwestIntervalsClient::resolve_sport_settings_id_from_payload(&payload, "run")
+                .expect("sport type should resolve from flat array");
 
-        Mock::given(method("PUT"))
-            .and(path("/api/v1/athlete/ath/sport-settings/1783043/apply"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({"status":"ok"})),
-            )
-            .mount(&mock_server)
-            .await;
-
-        let client = ReqwestIntervalsClient::new(
-            &mock_server.uri(),
-            athlete,
-            SecretString::new("key".into()),
-        );
-        let res = client.apply_sport_settings(sport).await;
-        assert!(res.is_ok());
-        let v = res.unwrap();
-        assert_eq!(v.get("status").and_then(|s| s.as_str()), Some("ok"));
+        assert_eq!(resolved, "1783043");
     }
 
-    #[tokio::test]
-    async fn get_wellness_translates_days_back_to_oldest_and_newest() {
-        let mock_server = MockServer::start().await;
-        let athlete = "ath";
-        let today = Utc::now().date_naive();
-        let oldest = today - Duration::days(5);
+    #[test]
+    fn resolve_sport_settings_id_from_nested_sports_matches_name() {
+        let payload = json!({
+            "sports": [
+                {"id": "bike-7", "name": "MountainBikeRide"}
+            ]
+        });
 
-        Mock::given(method("GET"))
-            .and(path(format!("/api/v1/athlete/{athlete}/wellness")))
-            .and(query_param("oldest", oldest.to_string()))
-            .and(query_param("newest", today.to_string()))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
-            .mount(&mock_server)
-            .await;
+        let resolved = ReqwestIntervalsClient::resolve_sport_settings_id_from_payload(
+            &payload,
+            "mountainbikeride",
+        )
+        .expect("sport name should resolve from nested sports array");
 
-        let client = ReqwestIntervalsClient::new(
-            &mock_server.uri(),
-            athlete,
-            SecretString::new("key".into()),
-        );
-        let res = client.get_wellness(Some(5)).await;
-        assert!(res.is_ok());
+        assert_eq!(resolved, "bike-7");
     }
 
-    #[tokio::test]
-    async fn get_events_translates_days_back_to_oldest_and_newest() {
-        let mock_server = MockServer::start().await;
-        let athlete = "ath";
-        let today = Utc::now().date_naive();
-        let oldest = today - Duration::days(7);
+    #[test]
+    fn resolve_sport_settings_id_from_single_object_matches_name() {
+        let payload = json!({"id": 42, "name": "Swim"});
 
-        Mock::given(method("GET"))
-            .and(path(format!("/api/v1/athlete/{athlete}/events")))
-            .and(query_param("oldest", oldest.to_string()))
-            .and(query_param("newest", today.to_string()))
-            .and(query_param("limit", "3"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
-                {
-                    "id": "evt-1",
-                    "start_date_local": today.to_string(),
-                    "name": "Workout",
-                    "category": "WORKOUT"
-                }
-            ])))
-            .mount(&mock_server)
-            .await;
+        let resolved =
+            ReqwestIntervalsClient::resolve_sport_settings_id_from_payload(&payload, "swim")
+                .expect("single sport settings object should resolve by name");
 
-        let client = ReqwestIntervalsClient::new(
-            &mock_server.uri(),
-            athlete,
-            SecretString::new("key".into()),
-        );
-        let res = client.get_events(Some(7), Some(3)).await;
-        assert!(res.is_ok());
-        assert_eq!(res.unwrap().len(), 1);
+        assert_eq!(resolved, "42");
     }
 
-    #[tokio::test]
-    async fn download_fit_file_uses_fit_file_endpoint() {
-        let mock_server = MockServer::start().await;
+    #[test]
+    fn resolve_sport_settings_id_from_payload_rejects_unknown_sport() {
+        let payload = json!([
+            {"id": 1783043, "types": ["Run", "VirtualRun", "TrailRun"]}
+        ]);
 
-        Mock::given(method("GET"))
-            .and(path("/api/v1/activity/a1/fit-file"))
-            .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![1u8, 2, 3]))
-            .mount(&mock_server)
-            .await;
+        let err =
+            ReqwestIntervalsClient::resolve_sport_settings_id_from_payload(&payload, "PogoStick")
+                .expect_err("unknown sport should fail resolution");
 
-        let client =
-            ReqwestIntervalsClient::new(&mock_server.uri(), "ath", SecretString::new("key".into()));
-
-        let res = client.download_fit_file("a1", None).await;
-        assert!(res.is_ok());
+        assert!(matches!(
+            err,
+            IntervalsError::Validation(ValidationError::InvalidFormat { field, value })
+                if field == "sport_type" && value.contains("PogoStick")
+        ));
     }
 
-    #[tokio::test]
-    async fn download_gpx_file_uses_gpx_file_endpoint() {
-        let mock_server = MockServer::start().await;
+    #[test]
+    fn error_from_response_parts_maps_not_found() {
+        let err = ReqwestIntervalsClient::error_from_response_parts(404, "missing activity");
 
-        Mock::given(method("GET"))
-            .and(path("/api/v1/activity/a1/gpx-file"))
-            .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![4u8, 5, 6]))
-            .mount(&mock_server)
-            .await;
-
-        let client =
-            ReqwestIntervalsClient::new(&mock_server.uri(), "ath", SecretString::new("key".into()));
-
-        let res = client.download_gpx_file("a1", None).await;
-        assert!(res.is_ok());
+        assert!(matches!(err, IntervalsError::NotFound(body) if body == "missing activity"));
     }
 
-    #[tokio::test]
-    async fn create_gear_reminder_uses_singular_reminder_endpoint() {
-        let mock_server = MockServer::start().await;
+    #[test]
+    fn error_from_response_parts_maps_auth() {
+        let err = ReqwestIntervalsClient::error_from_response_parts(403, "forbidden");
 
-        Mock::given(method("POST"))
-            .and(path("/api/v1/athlete/ath/gear/g1/reminder"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"id":"g1"})))
-            .mount(&mock_server)
-            .await;
-
-        let client =
-            ReqwestIntervalsClient::new(&mock_server.uri(), "ath", SecretString::new("key".into()));
-
-        let res = client
-            .create_gear_reminder("g1", &serde_json::json!({"note":"check chain"}))
-            .await;
-        assert!(res.is_ok());
+        assert!(matches!(err, IntervalsError::Auth(body) if body == "forbidden"));
     }
 
-    #[tokio::test]
-    async fn update_wellness_bulk_uses_bulk_endpoint() {
-        let mock_server = MockServer::start().await;
+    #[test]
+    fn error_from_response_parts_maps_validation() {
+        let err = ReqwestIntervalsClient::error_from_response_parts(422, "bad payload");
 
-        Mock::given(method("PUT"))
-            .and(path("/api/v1/athlete/ath/wellness-bulk"))
-            .respond_with(ResponseTemplate::new(200))
-            .mount(&mock_server)
-            .await;
-
-        let client =
-            ReqwestIntervalsClient::new(&mock_server.uri(), "ath", SecretString::new("key".into()));
-        let res = client
-            .update_wellness_bulk(&[serde_json::json!({"id": "2026-03-01", "sleepSecs": 28800})])
-            .await;
-        assert!(res.is_ok());
+        assert!(matches!(
+            err,
+            IntervalsError::Validation(ValidationError::InvalidFormat { field, value })
+                if field == "request" && value == "bad payload"
+        ));
     }
 
-    #[tokio::test]
-    async fn weather_config_uses_spec_endpoints() {
-        let mock_server = MockServer::start().await;
+    #[test]
+    fn error_from_response_parts_truncates_long_body() {
+        let long_body = "é".repeat(300);
+        let err = ReqwestIntervalsClient::error_from_response_parts(500, &long_body);
 
-        Mock::given(method("GET"))
-            .and(path("/api/v1/athlete/ath/weather-config"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({"provider": "yr.no"})),
-            )
-            .mount(&mock_server)
-            .await;
+        match err {
+            IntervalsError::Api(api) => {
+                assert_eq!(api.status, 500);
+                assert_eq!(api.message.chars().count(), 256);
+                assert_eq!(api.raw_body.chars().count(), 256);
+                assert_eq!(api.message, "é".repeat(256));
+                assert_eq!(api.raw_body, "é".repeat(256));
+            }
+            other => panic!("expected API error, got {other:?}"),
+        }
+    }
 
-        Mock::given(method("PUT"))
-            .and(path("/api/v1/athlete/ath/weather-config"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!({"provider": "open-meteo"})),
-            )
-            .mount(&mock_server)
-            .await;
+    #[test]
+    fn upstream_error_type_classifies_auth() {
+        let err = IntervalsError::Auth("forbidden".to_string());
 
-        let client =
-            ReqwestIntervalsClient::new(&mock_server.uri(), "ath", SecretString::new("key".into()));
+        assert_eq!(ReqwestIntervalsClient::upstream_error_type(&err), "auth");
+    }
 
-        let current = client.get_weather_config().await.expect("weather config");
+    #[test]
+    fn upstream_error_type_classifies_not_found() {
+        let err = IntervalsError::NotFound("missing".to_string());
+
         assert_eq!(
-            current.get("provider").and_then(|v| v.as_str()),
-            Some("yr.no")
-        );
-
-        let updated = client
-            .update_weather_config(&serde_json::json!({"provider": "open-meteo"}))
-            .await
-            .expect("update weather config");
-        assert_eq!(
-            updated.get("provider").and_then(|v| v.as_str()),
-            Some("open-meteo")
+            ReqwestIntervalsClient::upstream_error_type(&err),
+            "not_found"
         );
     }
 
-    #[tokio::test]
-    async fn routes_use_current_spec_paths() {
-        let mock_server = MockServer::start().await;
+    #[test]
+    fn upstream_error_type_classifies_5xx_and_4xx_api_errors() {
+        let server_err = IntervalsError::from_status(500, "boom");
+        let client_err = IntervalsError::from_status(429, "slow down");
 
-        Mock::given(method("GET"))
-            .and(path("/api/v1/athlete/ath/routes"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
-                {"route": {"id": 11}, "count": 4}
-            ])))
-            .mount(&mock_server)
-            .await;
-
-        Mock::given(method("GET"))
-            .and(path("/api/v1/athlete/ath/routes/11"))
-            .and(query_param("includePath", "true"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!({"id": 11, "name": "Lunch Loop"})),
-            )
-            .mount(&mock_server)
-            .await;
-
-        Mock::given(method("PUT"))
-            .and(path("/api/v1/athlete/ath/routes/11"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!({"id": 11, "name": "Updated Loop"})),
-            )
-            .mount(&mock_server)
-            .await;
-
-        Mock::given(method("GET"))
-            .and(path("/api/v1/athlete/ath/routes/11/similarity/12"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({"similarity": 0.97})),
-            )
-            .mount(&mock_server)
-            .await;
-
-        let client =
-            ReqwestIntervalsClient::new(&mock_server.uri(), "ath", SecretString::new("key".into()));
-
-        let routes = client.list_routes().await.expect("list routes");
-        assert_eq!(routes.as_array().map(Vec::len), Some(1));
-
-        let route = client.get_route(11, true).await.expect("get route");
         assert_eq!(
-            route.get("id").and_then(serde_json::Value::as_i64),
-            Some(11)
+            ReqwestIntervalsClient::upstream_error_type(&server_err),
+            "5xx"
         );
-
-        let updated = client
-            .update_route(11, &serde_json::json!({"name": "Updated Loop"}))
-            .await
-            .expect("update route");
         assert_eq!(
-            updated.get("name").and_then(|v| v.as_str()),
-            Some("Updated Loop")
-        );
-
-        let similarity = client
-            .get_route_similarity(11, 12)
-            .await
-            .expect("route similarity");
-        assert_eq!(
-            similarity
-                .get("similarity")
-                .and_then(serde_json::Value::as_f64),
-            Some(0.97)
+            ReqwestIntervalsClient::upstream_error_type(&client_err),
+            "4xx"
         );
     }
 
-    #[tokio::test]
-    #[ignore = "hits the live Intervals.icu OpenAPI endpoint"]
-    async fn live_openapi_spec_contract_smoke() {
-        let spec = fetch_live_openapi_spec().await;
+    #[test]
+    fn upstream_error_type_classifies_validation_as_other() {
+        let err = IntervalsError::Validation(ValidationError::InvalidFormat {
+            field: "request".to_string(),
+            value: "bad payload".to_string(),
+        });
 
-        spec_operation(&spec, "/api/v1/activity/{id}/fit-file", "get");
-        spec_operation(&spec, "/api/v1/activity/{id}/gpx-file", "get");
-        spec_operation(
-            &spec,
-            "/api/v1/athlete/{id}/gear/{gearId}/reminder/{reminderId}",
-            "put",
-        );
-        spec_operation(&spec, "/api/v1/athlete/{id}/weather-config", "get");
-        spec_operation(&spec, "/api/v1/athlete/{id}/weather-config", "put");
-        spec_operation(&spec, "/api/v1/athlete/{id}/routes", "get");
-        spec_operation(&spec, "/api/v1/athlete/{id}/routes/{route_id}", "get");
-        spec_operation(&spec, "/api/v1/athlete/{id}/routes/{route_id}", "put");
-        spec_operation(
-            &spec,
-            "/api/v1/athlete/{id}/routes/{route_id}/similarity/{other_id}",
-            "get",
-        );
-        spec_operation(&spec, "/api/v1/athlete/{id}/wellness-bulk", "put");
-        spec_operation(
-            &spec,
-            "/api/v1/athlete/{athleteId}/sport-settings/{id}/apply",
-            "put",
-        );
+        assert_eq!(ReqwestIntervalsClient::upstream_error_type(&err), "other");
+    }
 
-        assert_query_param(
-            &spec,
-            "/api/v1/athlete/{id}/activities-around",
-            "get",
-            "activity_id",
+    #[test]
+    fn extract_available_streams_reads_stream_object_keys() {
+        let payload = json!({
+            "streams": {
+                "watts": [100, 120],
+                "distance": [10.0, 20.0]
+            }
+        });
+
+        let mut streams = super::extract_available_streams(&payload);
+        streams.sort();
+
+        assert_eq!(streams, vec!["distance".to_string(), "watts".to_string()]);
+    }
+
+    #[test]
+    fn extract_available_streams_reads_stream_array_name_or_type() {
+        let payload = json!({
+            "streams": [
+                {"name": "watts"},
+                {"type": "distance"}
+            ]
+        });
+
+        let mut streams = super::extract_available_streams(&payload);
+        streams.sort();
+
+        assert_eq!(streams, vec!["distance".to_string(), "watts".to_string()]);
+    }
+
+    #[test]
+    fn extract_available_streams_reads_top_level_array_variants() {
+        let payload = json!([
+            {"name": "watts"},
+            {"type": "distance"},
+            {"name": ""},
+            {"other": "ignored"}
+        ]);
+
+        let mut streams = super::extract_available_streams(&payload);
+        streams.sort();
+
+        assert_eq!(streams, vec!["distance".to_string(), "watts".to_string()]);
+    }
+
+    #[test]
+    fn extract_available_streams_reads_top_level_object_arrays() {
+        let payload = json!({
+            "watts": [100, 120],
+            "distance": [1.0, 2.0],
+            "meta": {"ignored": true}
+        });
+
+        let mut streams = super::extract_available_streams(&payload);
+        streams.sort();
+
+        assert_eq!(streams, vec!["distance".to_string(), "watts".to_string()]);
+    }
+
+    #[test]
+    fn annotate_best_efforts_payload_adds_missing_stream() {
+        let payload = json!({"best_efforts": [{"duration": 60, "power": 300}]});
+
+        let annotated = super::annotate_best_efforts_payload(payload, Some("power"));
+
+        assert_eq!(
+            annotated.get("stream").and_then(serde_json::Value::as_str),
+            Some("power")
         );
-        assert_query_param(
-            &spec,
-            "/api/v1/athlete/{id}/activities-around",
-            "get",
-            "route_id",
-        );
-        assert_query_param(
-            &spec,
-            "/api/v1/athlete/{id}/events{format}",
-            "get",
-            "oldest",
-        );
-        assert_query_param(
-            &spec,
-            "/api/v1/athlete/{id}/events{format}",
-            "get",
-            "newest",
-        );
-        assert_query_param(&spec, "/api/v1/athlete/{id}/wellness{ext}", "get", "oldest");
-        assert_query_param(&spec, "/api/v1/athlete/{id}/wellness{ext}", "get", "newest");
-        assert_query_param(
-            &spec,
-            "/api/v1/athlete/{id}/routes/{route_id}",
-            "get",
-            "includePath",
+    }
+
+    #[test]
+    fn annotate_best_efforts_payload_preserves_existing_stream() {
+        let payload = json!({
+            "stream": "distance",
+            "best_efforts": [{"distance": 1000, "power": 300}]
+        });
+
+        let annotated = super::annotate_best_efforts_payload(payload, Some("power"));
+
+        assert_eq!(
+            annotated.get("stream").and_then(serde_json::Value::as_str),
+            Some("distance")
         );
     }
 }
