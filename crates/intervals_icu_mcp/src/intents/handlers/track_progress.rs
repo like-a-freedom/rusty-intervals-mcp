@@ -61,7 +61,7 @@ Arguments:
 - period_weeks (integer, 4–24, default 12): How far back to analyze.
 - hypothesis_mode (boolean, default true): Whether to compute coaching hypotheses (volume, intensity distribution, recovery) and recommendations.
 
-Returns: Progress Tracking Report with plateau detection, load context (ACWR, monotony, strain), HRV context, TID drift analysis, coaching hypotheses with confidence scores, recommendations, and warnings when data is insufficient.
+Returns: Progress Tracking Report with plateau detection, load context (ACWR, monotony, strain), HRV context, TID drift analysis, coaching hypotheses with confidence scores, recommendations, and warnings when data is insufficient. Includes a Fitness Snapshot with current CTL, ATL, TSB, and ramp rate when athlete-summary data is available.
 On error: API or validation errors with descriptive messages."
     }
 

@@ -30,7 +30,11 @@ impl IntentHandler for ComparePeriodsHandler {
 
     fn description(&self) -> &'static str {
         "Compares performance between two periods (like-for-like). \
-         Use for comparing similar workouts or periods, assessing progress, and identifying trends."
+         Returns activity count, time, distance, elevation deltas, requested metric \
+         comparisons, trend context, and a Fitness Snapshot with current CTL, ATL, \
+         TSB, and ramp rate. \
+         Use for comparing similar workouts or periods, assessing progress, and \
+         identifying trends."
     }
 
     fn input_schema(&self) -> Value {
