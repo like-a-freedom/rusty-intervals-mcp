@@ -11,7 +11,7 @@ use crate::domains::coach::AnalysisWindow;
 use crate::engines::analysis_fetch::{PeriodFetchRequest, fetch_period_data};
 use crate::engines::coach_metrics::{
     TrendSnapshot, build_trend_snapshot, compute_consistency_index, derive_trend_metrics,
-    derive_volume_metrics,
+    derive_volume_metrics, parse_fitness_metrics,
 };
 use crate::intents::utils::{filter_activities_by_range, parse_date};
 
@@ -108,6 +108,9 @@ impl IntentHandler for ComparePeriodsHandler {
         let b_consistency =
             compute_consistency_index(b_stats.snapshot.activity_count, b_stats.planned_count);
 
+        let fitness = client.get_fitness_summary().await.ok();
+        let fitness_metrics = parse_fitness_metrics(fitness.as_ref());
+
         let mut content = Vec::new();
         content.push(ContentBlock::markdown(format!(
             "# Comparison: {} vs {}",
@@ -172,6 +175,31 @@ impl IntentHandler for ComparePeriodsHandler {
         ]);
 
         content.push(ContentBlock::table(rows[0].clone(), rows[1..].to_vec()));
+
+        if let Some(ref fm) = fitness_metrics {
+            let mut fit_lines = vec!["Fitness Snapshot".to_string()];
+            if let Some(ctl) = fm.ctl {
+                fit_lines.push(format!("  CTL: {:.0}", ctl));
+            }
+            if let Some(atl) = fm.atl {
+                fit_lines.push(format!("  ATL: {:.0}", atl));
+            }
+            if let Some(tsb) = fm.tsb {
+                let state = if tsb > 10.0 {
+                    "Fresh"
+                } else if tsb < -10.0 {
+                    "Fatigued"
+                } else {
+                    "Balanced"
+                };
+                fit_lines.push(format!("  TSB: {:.0} ({})", tsb, state));
+            }
+            if let Some(rr) = fm.ramp_rate {
+                fit_lines.push(format!("  Ramp Rate: {:+.1}/wk", rr));
+            }
+            content.push(ContentBlock::markdown(fit_lines.join("\n")));
+        }
+
         if !requested_metrics.is_empty() {
             let rows = requested_metrics
                 .iter()
@@ -968,9 +996,10 @@ mod tests {
                 }),
             )
             .with_fitness_summary(json!({
-                "ctl": 45.0,
-                "atl": 30.0,
-                "tsb": 15.0
+                "fitness": 45.0,
+                "fatigue": 30.0,
+                "form": 15.0,
+                "rampRate": 2.0,
             }))
     }
 
@@ -994,6 +1023,32 @@ mod tests {
 
         let output = result.unwrap();
         assert!(!output.content.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_execute_compare_periods_shows_fitness_snapshot() {
+        let handler = ComparePeriodsHandler::new();
+        let client = Arc::new(compare_mock_client());
+        let input = json!({
+            "period_a_start": "2026-03-01",
+            "period_a_end": "2026-03-07",
+            "period_b_start": "2026-03-08",
+            "period_b_end": "2026-03-14"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let content_str = format!("{:?}", result.unwrap().content);
+        assert!(
+            content_str.contains("Fitness Snapshot"),
+            "should show Fitness Snapshot section"
+        );
+        assert!(content_str.contains("CTL"), "should show CTL");
+        assert!(content_str.contains("ATL"), "should show ATL");
+        assert!(
+            content_str.contains("Fresh"),
+            "should show TSB with Fresh state"
+        );
     }
 
     #[tokio::test]

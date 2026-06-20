@@ -601,6 +601,10 @@ impl AnalyzeTrainingHandler {
             content.push(ContentBlock::markdown(isdm_text));
         }
 
+        if let Some(fit_text) = render_fitness_snapshot(&workout_context.metrics.fitness) {
+            content.push(ContentBlock::markdown(fit_text));
+        }
+
         // Add interval analysis
         if analysis_mode.show_interval_section() {
             if let Some(ref intervals) = fetched.intervals
@@ -1227,6 +1231,10 @@ impl AnalyzeTrainingHandler {
             // Heat Stress Context
             if let Some(heat_text) = render_heat_section(&period_context.metrics.heat) {
                 content.push(ContentBlock::markdown(heat_text));
+            }
+
+            if let Some(fit_text) = render_fitness_snapshot(&period_context.metrics.fitness) {
+                content.push(ContentBlock::markdown(fit_text));
             }
 
             // Training Intensity Distribution
@@ -3038,6 +3046,56 @@ mod tests {
         assert!(content_str.contains("Period:"));
         assert!(content_str.contains("2026-03-01"));
         assert!(content_str.contains("2026-03-07"));
+    }
+
+    #[tokio::test]
+    async fn test_analyze_period_shows_fitness_snapshot() {
+        let handler = AnalyzeTrainingHandler::new();
+        let client = Arc::new(
+            MockIntervalsClient::builder()
+                .with_activities(vec![
+                    ActivitySummary {
+                        id: "12345".to_string(),
+                        name: Some("Run 1".to_string()),
+                        start_date_local: "2026-03-01".to_string(),
+                        ..Default::default()
+                    },
+                    ActivitySummary {
+                        id: "12346".to_string(),
+                        name: Some("Run 2".to_string()),
+                        start_date_local: "2026-03-03".to_string(),
+                        ..Default::default()
+                    },
+                ])
+                .with_fitness_summary(json!({
+                    "fitness": 65.0,
+                    "fatigue": 45.0,
+                    "form": 20.0,
+                    "rampRate": 3.0,
+                }))
+                .with_wellness(json!({})),
+        );
+
+        let input = json!({
+            "target_type": "period",
+            "period_start": "2026-03-01",
+            "period_end": "2026-03-07"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let content_str = content_text(&result.unwrap().content);
+        assert!(
+            content_str.contains("Fitness Snapshot"),
+            "should show Fitness Snapshot section"
+        );
+        assert!(content_str.contains("CTL"), "should show CTL");
+        assert!(content_str.contains("ATL"), "should show ATL");
+        assert!(
+            content_str.contains("Fresh"),
+            "should show TSB with Fresh state"
+        );
+        assert!(content_str.contains("Ramp Rate"), "should show Ramp Rate");
     }
 
     #[tokio::test]

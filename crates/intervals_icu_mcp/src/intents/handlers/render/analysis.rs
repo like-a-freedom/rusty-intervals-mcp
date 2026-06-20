@@ -2,7 +2,8 @@ use chrono::NaiveDate;
 use serde_json::Value;
 
 use crate::domains::coach::{
-    DecouplingMetrics, EspeDerivedMetrics, EspePowerAnchors, HeatMetrics, NdliMetrics, WdrMetrics,
+    DecouplingMetrics, EspeDerivedMetrics, EspePowerAnchors, FitnessMetrics, HeatMetrics,
+    NdliMetrics, WdrMetrics,
 };
 use crate::intents::ContentBlock;
 
@@ -1233,6 +1234,31 @@ pub(crate) fn render_heat_section(heat: &Option<HeatMetrics>) -> Option<String> 
     }
     if let Some(max_temp) = heat.heat_max_7d {
         lines.push(format!("  Max Temperature: {:.1} °C", max_temp));
+    }
+    Some(lines.join("\n"))
+}
+
+pub(crate) fn render_fitness_snapshot(fitness: &Option<FitnessMetrics>) -> Option<String> {
+    let metrics = fitness.as_ref()?;
+    let mut lines = vec!["Fitness Snapshot".to_string()];
+    if let Some(ctl) = metrics.ctl {
+        lines.push(format!("  CTL: {:.0}", ctl));
+    }
+    if let Some(atl) = metrics.atl {
+        lines.push(format!("  ATL: {:.0}", atl));
+    }
+    if let Some(tsb) = metrics.tsb {
+        let state = if tsb > 10.0 {
+            "Fresh"
+        } else if tsb < -10.0 {
+            "Fatigued"
+        } else {
+            "Balanced"
+        };
+        lines.push(format!("  TSB: {:.0} ({})", tsb, state));
+    }
+    if let Some(rr) = metrics.ramp_rate {
+        lines.push(format!("  Ramp Rate: {:+.1}/wk", rr));
     }
     Some(lines.join("\n"))
 }

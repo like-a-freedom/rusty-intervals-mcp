@@ -218,6 +218,20 @@ impl AssessRecoveryHandler {
             vec!["TSB".into(), format!("{:.0}", tsb), tsb_status.into()],
         ];
 
+        if let Some(ctl) = fitness.ctl {
+            rows.push(vec!["CTL".into(), format!("{:.0}", ctl), "".into()]);
+        }
+        if let Some(atl) = fitness.atl {
+            rows.push(vec!["ATL".into(), format!("{:.0}", atl), "".into()]);
+        }
+        if let Some(rr) = fitness.ramp_rate {
+            rows.push(vec![
+                "Ramp Rate".into(),
+                format!("{:+.1}/wk", rr),
+                "".into(),
+            ]);
+        }
+
         if let Some(trend_slope) = wellness.hrv_trend_slope {
             let status = if trend_slope > 0.0 {
                 "↗ Improving"
@@ -1116,6 +1130,63 @@ mod tests {
         assert!(!rows.iter().any(|row| row[0] == "Mood"));
         assert!(!rows.iter().any(|row| row[0] == "Stress"));
         assert!(!rows.iter().any(|row| row[0] == "Fatigue"));
+    }
+
+    #[test]
+    fn recovery_rows_include_ctl_atl_ramp_rate_when_available() {
+        let rows = AssessRecoveryHandler::build_recovery_metric_rows(
+            &WellnessMetrics {
+                avg_sleep_hours: Some(7.5),
+                avg_resting_hr: Some(50.0),
+                avg_hrv: Some(70.0),
+                wellness_days_count: 5,
+                ..Default::default()
+            },
+            &FitnessMetrics {
+                ctl: Some(65.0),
+                atl: Some(45.0),
+                tsb: Some(20.0),
+                ramp_rate: Some(2.5),
+                ..Default::default()
+            },
+        );
+
+        assert!(
+            rows.iter()
+                .any(|row| row[0] == "CTL" && row[1].contains("65")),
+            "CTL row should be present"
+        );
+        assert!(
+            rows.iter()
+                .any(|row| row[0] == "ATL" && row[1].contains("45")),
+            "ATL row should be present"
+        );
+        assert!(
+            rows.iter()
+                .any(|row| row[0] == "Ramp Rate" && row[1].contains("2.5")),
+            "Ramp Rate row should be present"
+        );
+    }
+
+    #[test]
+    fn recovery_rows_omit_ctl_atl_ramp_rate_when_none() {
+        let rows = AssessRecoveryHandler::build_recovery_metric_rows(
+            &WellnessMetrics {
+                avg_sleep_hours: Some(7.5),
+                avg_resting_hr: Some(50.0),
+                avg_hrv: Some(70.0),
+                wellness_days_count: 5,
+                ..Default::default()
+            },
+            &FitnessMetrics {
+                tsb: Some(5.0),
+                ..Default::default()
+            },
+        );
+
+        assert!(!rows.iter().any(|row| row[0] == "CTL"));
+        assert!(!rows.iter().any(|row| row[0] == "ATL"));
+        assert!(!rows.iter().any(|row| row[0] == "Ramp Rate"));
     }
 
     // ========================================================================
