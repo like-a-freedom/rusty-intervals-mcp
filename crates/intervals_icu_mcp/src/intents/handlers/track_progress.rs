@@ -156,7 +156,11 @@ On error: API or validation errors with descriptive messages."
 
         let report = build_progress_report(&wellness, &activities, &activity_details, &window);
 
-        let content = render_progress_report(&report, hypothesis_mode);
+        let fitness = client.get_fitness_summary().await.ok();
+        let fitness_metrics =
+            crate::engines::coach_metrics::parse_fitness_metrics(fitness.as_ref());
+
+        let content = render_progress_report(&report, hypothesis_mode, fitness_metrics.as_ref());
 
         Ok(IntentOutput::new(content)
             .with_suggestions(report.recommendations.clone())
@@ -248,6 +252,50 @@ mod tests {
         assert!(!output.suggestions.is_empty());
         assert!(!output.next_actions.is_empty());
         assert_eq!(output.next_actions.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn execute_shows_fitness_snapshot_when_available() {
+        let client = MockIntervalsClient::builder()
+            .with_fitness_summary(json!({
+                "fitness": 65.0,
+                "fatigue": 45.0,
+                "form": 20.0,
+                "rampRate": 3.0,
+            }))
+            .with_wellness(json!([
+                {"date": "2026-01-01", "ctl": 60.0, "hrv": 65.0},
+                {"date": "2026-01-02", "ctl": 60.0, "hrv": 65.0},
+            ]))
+            .with_activities(vec![ActivitySummary {
+                id: "act-1".into(),
+                start_date_local: "2026-01-01".into(),
+                training_load: Some(50),
+                ..Default::default()
+            }]);
+
+        let handler = TrackProgressHandler::new();
+        let output = handler
+            .execute(
+                json!({"period_weeks": 1, "hypothesis_mode": false}),
+                Arc::new(client),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let rendered = format!("{:?}", output.content);
+        assert!(
+            rendered.contains("Fitness Snapshot"),
+            "should show Fitness Snapshot section"
+        );
+        assert!(rendered.contains("CTL"), "should show CTL");
+        assert!(rendered.contains("ATL"), "should show ATL");
+        assert!(
+            rendered.contains("Fresh"),
+            "should show TSB with Fresh state"
+        );
+        assert!(rendered.contains("Ramp Rate"), "should show Ramp Rate");
     }
 
     fn short_wellness() -> serde_json::Value {

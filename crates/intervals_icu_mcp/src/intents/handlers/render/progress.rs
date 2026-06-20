@@ -1,9 +1,11 @@
+use crate::domains::coach::FitnessMetrics;
 use crate::domains::progress::ProgressReport;
 use crate::intents::ContentBlock;
 
 pub(crate) fn render_progress_report(
     report: &ProgressReport,
     hypothesis_mode: bool,
+    fitness: Option<&FitnessMetrics>,
 ) -> Vec<ContentBlock> {
     let mut sections = Vec::new();
 
@@ -51,6 +53,30 @@ pub(crate) fn render_progress_report(
         report.tid_drift.drift_state,
         report.tid_drift.dominant_zone.map(|value| value.to_string()).unwrap_or_else(|| "unavailable".into()),
     )));
+
+    if let Some(fm) = fitness {
+        let mut fit_lines = vec!["### Fitness Snapshot".to_string()];
+        if let Some(ctl) = fm.ctl {
+            fit_lines.push(format!("- CTL: {:.0}", ctl));
+        }
+        if let Some(atl) = fm.atl {
+            fit_lines.push(format!("- ATL: {:.0}", atl));
+        }
+        if let Some(tsb) = fm.tsb {
+            let state = if tsb > 10.0 {
+                "Fresh"
+            } else if tsb < -10.0 {
+                "Fatigued"
+            } else {
+                "Balanced"
+            };
+            fit_lines.push(format!("- TSB: {:.0} ({})", tsb, state));
+        }
+        if let Some(rr) = fm.ramp_rate {
+            fit_lines.push(format!("- Ramp Rate: {:+.1}/wk", rr));
+        }
+        sections.push(ContentBlock::markdown(fit_lines.join("\n")));
+    }
 
     if hypothesis_mode && !report.hypotheses.is_empty() {
         let body = report
@@ -119,7 +145,7 @@ mod tests {
             ..Default::default()
         };
 
-        let blocks = render_progress_report(&report, true);
+        let blocks = render_progress_report(&report, true, None);
         let markdown = format!("{:?}", blocks);
         assert!(markdown.contains("Plateau Detection"));
         assert!(markdown.contains("TID drift unavailable"));

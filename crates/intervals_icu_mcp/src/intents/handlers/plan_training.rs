@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 
 use crate::domains::events::validate_and_prepare_event;
+use crate::engines::coach_metrics::parse_fitness_metrics;
 use crate::engines::forecast::project_tsb;
 use crate::intents::utils::parse_date;
 
@@ -141,6 +142,7 @@ impl IntentHandler for PlanTrainingHandler {
         } else {
             None
         };
+        let fitness_metrics = parse_fitness_metrics(fitness.as_ref());
 
         // --- Task 2: Wellness ---
         let wellness = if adaptive {
@@ -389,9 +391,9 @@ impl IntentHandler for PlanTrainingHandler {
                 )
             })
             .unwrap_or_default();
-        let tsb_line = fitness
+        let tsb_line = fitness_metrics
             .as_ref()
-            .and_then(|f| f.get("tsb").and_then(|v| v.as_f64()))
+            .and_then(|f| f.tsb)
             .map(|tsb| {
                 let state = if tsb > 10.0 {
                     "Fresh"
@@ -402,6 +404,21 @@ impl IntentHandler for PlanTrainingHandler {
                 };
                 format!("\nCurrent TSB: {:.0} ({})", tsb, state)
             })
+            .unwrap_or_default();
+        let ctl_line = fitness_metrics
+            .as_ref()
+            .and_then(|f| f.ctl)
+            .map(|ctl| format!("\nCurrent CTL: {:.0}", ctl))
+            .unwrap_or_default();
+        let atl_line = fitness_metrics
+            .as_ref()
+            .and_then(|f| f.atl)
+            .map(|atl| format!("\nCurrent ATL: {:.0}", atl))
+            .unwrap_or_default();
+        let ramp_rate_line = fitness_metrics
+            .as_ref()
+            .and_then(|f| f.ramp_rate)
+            .map(|rr| format!("\nRamp Rate: {:+.1}/wk", rr))
             .unwrap_or_default();
         let readiness_line = wellness_snapshot
             .readiness
@@ -419,7 +436,7 @@ impl IntentHandler for PlanTrainingHandler {
 
         content.push(ContentBlock::markdown(format!(
             "# Training Plan: {}{}\n\
-             Athlete: {}{}{}{}{}{}{}\n\
+             Athlete: {}{}{}{}{}{}{}{}{}{}\n\
              Period: {} to {} ({} weeks)\n\
              Focus: {}\n\
              Max Hours/Week: {:.1}",
@@ -431,6 +448,9 @@ impl IntentHandler for PlanTrainingHandler {
             lthr_line,
             historical_line,
             tsb_line,
+            ctl_line,
+            atl_line,
+            ramp_rate_line,
             readiness_line,
             period_start,
             period_end,
@@ -477,11 +497,8 @@ impl IntentHandler for PlanTrainingHandler {
         content.push(ContentBlock::markdown(format!("Structure\n{}", structure)));
 
         // --- TSB Forecast ---
-        if let Some(ref f) = fitness
-            && let (Some(current_ctl), Some(current_atl)) = (
-                f.get("ctl").and_then(|v| v.as_f64()),
-                f.get("atl").and_then(|v| v.as_f64()),
-            )
+        if let Some(ref f) = fitness_metrics
+            && let (Some(current_ctl), Some(current_atl)) = (f.ctl, f.atl)
         {
             let daily_loads = estimate_daily_loads(max_hours, weeks);
             let projection = project_tsb(current_ctl, current_atl, &daily_loads);
@@ -553,8 +570,8 @@ impl IntentHandler for PlanTrainingHandler {
             "Volume progression: max +7-10% per week".into(),
         ];
 
-        if let Some(f) = &fitness
-            && let Some(tsb) = f.get("tsb").and_then(|x| x.as_f64())
+        if let Some(ref fm) = fitness_metrics
+            && let Some(tsb) = fm.tsb
         {
             if tsb > 10.0 {
                 suggestions.push("TSB positive - good base for training load.".into());
@@ -1754,6 +1771,44 @@ mod tests {
         assert!(output.suggestions.iter().any(|s| s.contains("Readiness")));
         assert!(!output.suggestions.iter().any(|s| s.contains("HRV")));
         assert!(!output.suggestions.iter().any(|s| s.contains("Sleep")));
+    }
+
+    #[tokio::test]
+    async fn test_execute_header_includes_ctl_atl_ramp_rate() {
+        let handler = PlanTrainingHandler::new();
+        let client = Arc::new(
+            MockIntervalsClient::builder()
+                .with_fitness_summary(json!({
+                    "fitness": 65.0,
+                    "fatigue": 45.0,
+                    "form": 10.0,
+                    "rampRate": 2.5
+                }))
+                .with_wellness(json!([{"readiness": 7.0, "hrv": 65.0, "sleep": 7.5}])),
+        );
+        let input = json!({
+            "period_start": "2026-03-01",
+            "period_end": "2026-03-14",
+            "idempotency_token": "test-token-ctl"
+        });
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let content_str = format!("{:?}", result.unwrap().content);
+        assert!(
+            content_str.contains("Current CTL"),
+            "header should contain CTL"
+        );
+        assert!(content_str.contains("65"), "CTL value should be 65");
+        assert!(
+            content_str.contains("Current ATL"),
+            "header should contain ATL"
+        );
+        assert!(content_str.contains("45"), "ATL value should be 45");
+        assert!(
+            content_str.contains("Ramp Rate"),
+            "header should contain Ramp Rate"
+        );
+        assert!(content_str.contains("2.5"), "ramp rate value should be 2.5");
     }
 
     #[tokio::test]
