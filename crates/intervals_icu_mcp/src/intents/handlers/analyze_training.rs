@@ -119,7 +119,9 @@ impl IntentHandler for AnalyzeTrainingHandler {
          context, TID model (pyramidal/threshold/polarized), NDLI (neural density load), \
          power curve comparison (2-window deltas), ultra-specific tokens (back-to-back \
          load, vert/week), and load management (ACWR, monotony, strain). Also retrieves \
-         calendar events (races, sick days, injuries, notes, planned workouts).
+         calendar events (races, sick days, injuries, notes, planned workouts). \
+         Includes a Fitness Snapshot with current CTL, ATL, TSB, and ramp rate when \
+         athlete-summary data is available.
          
          Use this tool when: you need to review a completed workout's quality, assess \
          aerobic/neural fatigue, check pacing distribution, examine period trends, or \

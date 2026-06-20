@@ -125,12 +125,23 @@ pub struct VolumeMetrics {
     pub activities_per_week: f64,
 }
 
+/// Current fitness state derived from the athlete-summary API.
+///
+/// Parsed from the Intervals.icu `athlete-summary.json` response, which
+/// returns fields like `fitness`, `fatigue`, `form`, and `rampRate`.
+/// Use [`parse_fitness_metrics`](crate::engines::coach_metrics::parse_fitness_metrics)
+/// to extract this struct from the raw JSON.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct FitnessMetrics {
+    /// Chronic Training Load — long-term fitness baseline.
     pub ctl: Option<f64>,
+    /// Acute Training Load — short-term fatigue.
     pub atl: Option<f64>,
+    /// Training Stress Balance — `ctl - atl`; positive = fresh, negative = fatigued.
     pub tsb: Option<f64>,
+    /// Derived load classification (e.g. "Fresh", "Balanced", "Fatigued").
     pub load_state: Option<String>,
+    /// CTL change rate per week — positive means fitness is building.
     pub ramp_rate: Option<f64>,
 }
 
