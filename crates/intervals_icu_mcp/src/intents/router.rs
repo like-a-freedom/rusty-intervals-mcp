@@ -153,7 +153,6 @@ mod tests {
     use super::*;
     use crate::intents::types::{ContentBlock, IdempotencyCache};
     use async_trait::async_trait;
-    use intervals_icu_client::{AthleteProfile, Event, EventCategory, IntervalsError};
     use serde_json::{Value, json};
     use std::sync::Once;
 
@@ -223,384 +222,7 @@ mod tests {
         }
     }
 
-    struct MockClient;
-
-    #[async_trait]
-    impl IntervalsClient for MockClient {
-        async fn get_athlete_profile(&self) -> Result<AthleteProfile, IntervalsError> {
-            Ok(AthleteProfile {
-                id: "ath1".to_string(),
-                name: Some("Test".to_string()),
-            })
-        }
-
-        async fn get_recent_activities(
-            &self,
-            _limit: Option<u32>,
-            _days_back: Option<i32>,
-        ) -> Result<Vec<intervals_icu_client::ActivitySummary>, IntervalsError> {
-            Ok(vec![])
-        }
-
-        async fn create_event(
-            &self,
-            event: intervals_icu_client::Event,
-        ) -> Result<intervals_icu_client::Event, IntervalsError> {
-            Ok(event)
-        }
-        async fn get_event(
-            &self,
-            event_id: &str,
-        ) -> Result<intervals_icu_client::Event, IntervalsError> {
-            Ok(Event {
-                id: Some(event_id.to_string()),
-                start_date_local: "2026-03-04".to_string(),
-                name: "Mock event".to_string(),
-                category: EventCategory::Workout,
-                description: None,
-                r#type: None,
-            })
-        }
-        async fn delete_event(&self, _event_id: &str) -> Result<(), IntervalsError> {
-            Ok(())
-        }
-        async fn get_events(
-            &self,
-            _days_back: Option<i32>,
-            _limit: Option<u32>,
-        ) -> Result<Vec<intervals_icu_client::Event>, IntervalsError> {
-            Ok(vec![])
-        }
-        async fn bulk_create_events(
-            &self,
-            _events: Vec<intervals_icu_client::Event>,
-        ) -> Result<Vec<intervals_icu_client::Event>, IntervalsError> {
-            Ok(vec![])
-        }
-        async fn get_activity_streams(
-            &self,
-            _activity_id: &str,
-            _streams: Option<Vec<String>>,
-        ) -> Result<serde_json::Value, IntervalsError> {
-            Ok(serde_json::json!({}))
-        }
-        async fn get_activity_intervals(
-            &self,
-            _activity_id: &str,
-        ) -> Result<serde_json::Value, IntervalsError> {
-            Ok(serde_json::json!({}))
-        }
-        async fn get_best_efforts(
-            &self,
-            _activity_id: &str,
-            _options: Option<intervals_icu_client::BestEffortsOptions>,
-        ) -> Result<serde_json::Value, IntervalsError> {
-            Ok(serde_json::json!({}))
-        }
-        async fn get_activity_details(
-            &self,
-            _activity_id: &str,
-        ) -> Result<serde_json::Value, IntervalsError> {
-            Ok(serde_json::json!({}))
-        }
-        async fn search_activities(
-            &self,
-            _query: &str,
-            _limit: Option<u32>,
-        ) -> Result<Vec<intervals_icu_client::ActivitySummary>, IntervalsError> {
-            Ok(vec![])
-        }
-        async fn search_activities_full(
-            &self,
-            _query: &str,
-            _limit: Option<u32>,
-        ) -> Result<serde_json::Value, IntervalsError> {
-            Ok(serde_json::json!([]))
-        }
-        async fn get_activities_csv(&self) -> Result<String, IntervalsError> {
-            Ok("id,name\n1,Run".to_string())
-        }
-        async fn update_activity(
-            &self,
-            _activity_id: &str,
-            _fields: &serde_json::Value,
-        ) -> Result<serde_json::Value, IntervalsError> {
-            Ok(serde_json::json!({}))
-        }
-        async fn download_activity_file(
-            &self,
-            _activity_id: &str,
-            _output_path: Option<std::path::PathBuf>,
-        ) -> Result<Option<String>, IntervalsError> {
-            Ok(None)
-        }
-        async fn download_activity_file_with_progress(
-            &self,
-            _activity_id: &str,
-            _output_path: Option<std::path::PathBuf>,
-            _progress_tx: tokio::sync::mpsc::Sender<intervals_icu_client::DownloadProgress>,
-            _cancel_rx: tokio::sync::watch::Receiver<bool>,
-        ) -> Result<Option<String>, IntervalsError> {
-            Ok(None)
-        }
-        async fn download_fit_file(
-            &self,
-            _activity_id: &str,
-            _output_path: Option<std::path::PathBuf>,
-        ) -> Result<Option<String>, IntervalsError> {
-            Ok(None)
-        }
-        async fn download_gpx_file(
-            &self,
-            _activity_id: &str,
-            _output_path: Option<std::path::PathBuf>,
-        ) -> Result<Option<String>, IntervalsError> {
-            Ok(None)
-        }
-        async fn get_gear_list(&self) -> Result<serde_json::Value, IntervalsError> {
-            Ok(serde_json::json!([]))
-        }
-        async fn get_sport_settings(&self) -> Result<serde_json::Value, IntervalsError> {
-            Ok(serde_json::json!([]))
-        }
-        async fn get_power_curves(
-            &self,
-            _days_back: Option<i32>,
-            _sport: &str,
-        ) -> Result<serde_json::Value, IntervalsError> {
-            Ok(serde_json::json!([]))
-        }
-        async fn get_gap_histogram(
-            &self,
-            _activity_id: &str,
-        ) -> Result<serde_json::Value, IntervalsError> {
-            Ok(serde_json::json!([]))
-        }
-        async fn delete_activity(&self, _activity_id: &str) -> Result<(), IntervalsError> {
-            Ok(())
-        }
-        async fn get_activities_around(
-            &self,
-            _activity_id: &str,
-            _limit: Option<u32>,
-            _route_id: Option<i64>,
-        ) -> Result<serde_json::Value, IntervalsError> {
-            Ok(serde_json::json!([]))
-        }
-        async fn search_intervals(
-            &self,
-            _min_secs: u32,
-            _max_secs: u32,
-            _min_intensity: u32,
-            _max_intensity: u32,
-            _interval_type: Option<String>,
-            _min_reps: Option<u32>,
-            _max_reps: Option<u32>,
-            _limit: Option<u32>,
-        ) -> Result<serde_json::Value, IntervalsError> {
-            Ok(serde_json::json!([]))
-        }
-        async fn get_power_histogram(
-            &self,
-            _activity_id: &str,
-        ) -> Result<serde_json::Value, IntervalsError> {
-            Ok(serde_json::json!([]))
-        }
-        async fn get_hr_histogram(
-            &self,
-            _activity_id: &str,
-        ) -> Result<serde_json::Value, IntervalsError> {
-            Ok(serde_json::json!([]))
-        }
-        async fn get_pace_histogram(
-            &self,
-            _activity_id: &str,
-        ) -> Result<serde_json::Value, IntervalsError> {
-            Ok(serde_json::json!([]))
-        }
-        async fn get_fitness_summary(&self) -> Result<serde_json::Value, IntervalsError> {
-            Ok(serde_json::json!({}))
-        }
-        async fn get_wellness(
-            &self,
-            _days_back: Option<i32>,
-        ) -> Result<serde_json::Value, IntervalsError> {
-            Ok(serde_json::json!([]))
-        }
-        async fn get_wellness_for_date(
-            &self,
-            _date: &str,
-        ) -> Result<serde_json::Value, IntervalsError> {
-            Ok(serde_json::json!({}))
-        }
-        async fn update_wellness(
-            &self,
-            _date: &str,
-            _data: &serde_json::Value,
-        ) -> Result<serde_json::Value, IntervalsError> {
-            Ok(serde_json::json!({}))
-        }
-        async fn get_upcoming_workouts(
-            &self,
-            _days_ahead: Option<u32>,
-            _limit: Option<u32>,
-            _category: Option<String>,
-        ) -> Result<serde_json::Value, IntervalsError> {
-            Ok(serde_json::json!([]))
-        }
-        async fn update_event(
-            &self,
-            _event_id: &str,
-            _fields: &serde_json::Value,
-        ) -> Result<serde_json::Value, IntervalsError> {
-            Ok(serde_json::json!({}))
-        }
-        async fn bulk_delete_events(&self, _event_ids: Vec<String>) -> Result<(), IntervalsError> {
-            Ok(())
-        }
-        async fn duplicate_event(
-            &self,
-            _event_id: &str,
-            _num_copies: Option<u32>,
-            _weeks_between: Option<u32>,
-        ) -> Result<Vec<intervals_icu_client::Event>, IntervalsError> {
-            Ok(vec![])
-        }
-        async fn get_hr_curves(
-            &self,
-            _days_back: Option<i32>,
-            _sport: &str,
-        ) -> Result<serde_json::Value, IntervalsError> {
-            Ok(serde_json::json!([]))
-        }
-        async fn get_pace_curves(
-            &self,
-            _days_back: Option<i32>,
-            _sport: &str,
-        ) -> Result<serde_json::Value, IntervalsError> {
-            Ok(serde_json::json!([]))
-        }
-        async fn get_workout_library(&self) -> Result<serde_json::Value, IntervalsError> {
-            Ok(serde_json::json!([]))
-        }
-        async fn get_workouts_in_folder(
-            &self,
-            _folder_id: &str,
-        ) -> Result<serde_json::Value, IntervalsError> {
-            Ok(serde_json::json!([]))
-        }
-        async fn create_folder(
-            &self,
-            _folder: &serde_json::Value,
-        ) -> Result<serde_json::Value, IntervalsError> {
-            Ok(serde_json::json!({}))
-        }
-        async fn update_folder(
-            &self,
-            _folder_id: &str,
-            _fields: &serde_json::Value,
-        ) -> Result<serde_json::Value, IntervalsError> {
-            Ok(serde_json::json!({}))
-        }
-        async fn delete_folder(&self, _folder_id: &str) -> Result<(), IntervalsError> {
-            Ok(())
-        }
-        async fn create_gear(
-            &self,
-            _gear: &serde_json::Value,
-        ) -> Result<serde_json::Value, IntervalsError> {
-            Ok(serde_json::json!({}))
-        }
-        async fn update_gear(
-            &self,
-            _gear_id: &str,
-            _fields: &serde_json::Value,
-        ) -> Result<serde_json::Value, IntervalsError> {
-            Ok(serde_json::json!({}))
-        }
-        async fn delete_gear(&self, _gear_id: &str) -> Result<(), IntervalsError> {
-            Ok(())
-        }
-        async fn create_gear_reminder(
-            &self,
-            _gear_id: &str,
-            _reminder: &serde_json::Value,
-        ) -> Result<serde_json::Value, IntervalsError> {
-            Ok(serde_json::json!({}))
-        }
-        async fn update_gear_reminder(
-            &self,
-            _gear_id: &str,
-            _reminder_id: &str,
-            _reset: bool,
-            _snooze_days: u32,
-            _fields: &serde_json::Value,
-        ) -> Result<serde_json::Value, IntervalsError> {
-            Ok(serde_json::json!({}))
-        }
-        async fn update_sport_settings(
-            &self,
-            _sport_type: &str,
-            _recalc_hr_zones: bool,
-            _fields: &serde_json::Value,
-        ) -> Result<serde_json::Value, IntervalsError> {
-            Ok(serde_json::json!({}))
-        }
-        async fn apply_sport_settings(
-            &self,
-            _sport_type: &str,
-        ) -> Result<serde_json::Value, IntervalsError> {
-            Ok(serde_json::json!({}))
-        }
-        async fn create_sport_settings(
-            &self,
-            _settings: &serde_json::Value,
-        ) -> Result<serde_json::Value, IntervalsError> {
-            Ok(serde_json::json!({}))
-        }
-        async fn delete_sport_settings(&self, _sport_type: &str) -> Result<(), IntervalsError> {
-            Ok(())
-        }
-        async fn update_wellness_bulk(
-            &self,
-            _entries: &[serde_json::Value],
-        ) -> Result<(), IntervalsError> {
-            Ok(())
-        }
-        async fn get_weather_config(&self) -> Result<serde_json::Value, IntervalsError> {
-            Ok(serde_json::json!({}))
-        }
-        async fn update_weather_config(
-            &self,
-            _config: &serde_json::Value,
-        ) -> Result<serde_json::Value, IntervalsError> {
-            Ok(serde_json::json!({}))
-        }
-        async fn list_routes(&self) -> Result<serde_json::Value, IntervalsError> {
-            Ok(serde_json::json!([]))
-        }
-        async fn get_route(
-            &self,
-            _route_id: i64,
-            _include_path: bool,
-        ) -> Result<serde_json::Value, IntervalsError> {
-            Ok(serde_json::json!({}))
-        }
-        async fn update_route(
-            &self,
-            _route_id: i64,
-            _route: &serde_json::Value,
-        ) -> Result<serde_json::Value, IntervalsError> {
-            Ok(serde_json::json!({}))
-        }
-        async fn get_route_similarity(
-            &self,
-            _route_id: i64,
-            _other_id: i64,
-        ) -> Result<serde_json::Value, IntervalsError> {
-            Ok(serde_json::json!({}))
-        }
-    }
+    use crate::test_support::mock::MockIntervalsClient;
 
     #[test]
     fn fingerprint_request_is_stable_across_key_order() {
@@ -662,7 +284,7 @@ mod tests {
     fn router_new_initializes_with_handlers() {
         let handlers =
             vec![Box::new(MockIntentHandler::new("test_handler", false)) as Box<dyn IntentHandler>];
-        let client = Arc::new(MockClient);
+        let client = Arc::new(MockIntervalsClient::default());
         let idempotency = Arc::new(IdempotencyMiddleware::new());
 
         let router = IntentRouter::new(handlers, client, idempotency);
@@ -674,7 +296,7 @@ mod tests {
     async fn router_routes_to_known_handler() {
         let handlers =
             vec![Box::new(MockIntentHandler::new("test_handler", false)) as Box<dyn IntentHandler>];
-        let client = Arc::new(MockClient);
+        let client = Arc::new(MockIntervalsClient::default());
         let idempotency = Arc::new(IdempotencyMiddleware::new());
         let router = IntentRouter::new(handlers, client, idempotency);
 
@@ -690,7 +312,7 @@ mod tests {
     async fn router_returns_error_for_unknown_handler() {
         let handlers =
             vec![Box::new(MockIntentHandler::new("test_handler", false)) as Box<dyn IntentHandler>];
-        let client = Arc::new(MockClient);
+        let client = Arc::new(MockIntervalsClient::default());
         let idempotency = Arc::new(IdempotencyMiddleware::new());
         let router = IntentRouter::new(handlers, client, idempotency);
 
@@ -707,7 +329,7 @@ mod tests {
             Box::new(MockIntentHandler::new("handler1", false)) as Box<dyn IntentHandler>,
             Box::new(MockIntentHandler::new("handler2", false)) as Box<dyn IntentHandler>,
         ];
-        let client = Arc::new(MockClient);
+        let client = Arc::new(MockIntervalsClient::default());
         let idempotency = Arc::new(IdempotencyMiddleware::new());
         let router = IntentRouter::new(handlers, client, idempotency);
 
@@ -723,7 +345,7 @@ mod tests {
     fn router_get_handler_returns_some_for_known() {
         let handlers =
             vec![Box::new(MockIntentHandler::new("test_handler", false)) as Box<dyn IntentHandler>];
-        let client = Arc::new(MockClient);
+        let client = Arc::new(MockIntervalsClient::default());
         let idempotency = Arc::new(IdempotencyMiddleware::new());
         let router = IntentRouter::new(handlers, client, idempotency);
 
@@ -734,7 +356,7 @@ mod tests {
     fn router_get_handler_returns_none_for_unknown() {
         let handlers =
             vec![Box::new(MockIntentHandler::new("test_handler", false)) as Box<dyn IntentHandler>];
-        let client = Arc::new(MockClient);
+        let client = Arc::new(MockIntervalsClient::default());
         let idempotency = Arc::new(IdempotencyMiddleware::new());
         let router = IntentRouter::new(handlers, client, idempotency);
 
@@ -745,7 +367,7 @@ mod tests {
     fn router_debug_format() {
         let handlers =
             vec![Box::new(MockIntentHandler::new("test_handler", false)) as Box<dyn IntentHandler>];
-        let client = Arc::new(MockClient);
+        let client = Arc::new(MockIntervalsClient::default());
         let idempotency = Arc::new(IdempotencyMiddleware::new());
         let router = IntentRouter::new(handlers, client, idempotency);
 
@@ -759,7 +381,7 @@ mod tests {
         let handlers =
             vec![Box::new(MockIntentHandler::new("idempotent_handler", true))
                 as Box<dyn IntentHandler>];
-        let client = Arc::new(MockClient);
+        let client = Arc::new(MockIntervalsClient::default());
         let idempotency = Arc::new(IdempotencyMiddleware::new());
         let router = IntentRouter::new(handlers, client, idempotency);
 
@@ -777,7 +399,7 @@ mod tests {
         let handlers =
             vec![Box::new(MockIntentHandler::new("idempotent_handler", true))
                 as Box<dyn IntentHandler>];
-        let client = Arc::new(MockClient);
+        let client = Arc::new(MockIntervalsClient::default());
         let idempotency = Arc::new(IdempotencyMiddleware::new());
         let router = IntentRouter::new(handlers, client, idempotency);
 
@@ -842,7 +464,7 @@ mod tests {
         }
 
         let handlers = vec![Box::new(CountingHandler) as Box<dyn IntentHandler>];
-        let client = Arc::new(MockClient);
+        let client = Arc::new(MockIntervalsClient::default());
         let idempotency = Arc::new(IdempotencyMiddleware::new());
         let router = IntentRouter::new(handlers, client, idempotency);
 
@@ -864,7 +486,7 @@ mod tests {
     #[test]
     fn router_tool_definitions_with_empty_handlers() {
         let handlers: Vec<Box<dyn IntentHandler>> = vec![];
-        let client = Arc::new(MockClient);
+        let client = Arc::new(MockIntervalsClient::default());
         let idempotency = Arc::new(IdempotencyMiddleware::new());
         let router = IntentRouter::new(handlers, client, idempotency);
 
@@ -879,7 +501,7 @@ mod tests {
             Box::new(MockIntentHandler::new("handler_b", false)) as Box<dyn IntentHandler>,
             Box::new(MockIntentHandler::new("handler_c", false)) as Box<dyn IntentHandler>,
         ];
-        let client = Arc::new(MockClient);
+        let client = Arc::new(MockIntervalsClient::default());
         let idempotency = Arc::new(IdempotencyMiddleware::new());
         let router = IntentRouter::new(handlers, client, idempotency);
 
@@ -947,7 +569,7 @@ mod tests {
             .into_iter()
             .map(|name| Box::new(MockIntentHandler::new(name, false)) as Box<dyn IntentHandler>)
             .collect();
-        let client = Arc::new(MockClient);
+        let client = Arc::new(MockIntervalsClient::default());
         let idempotency = Arc::new(IdempotencyMiddleware::new());
         let router = IntentRouter::new(handlers, client, idempotency);
 
@@ -959,7 +581,7 @@ mod tests {
         let handlers = vec![
             Box::new(MockIntentHandler::new("non_idempotent", false)) as Box<dyn IntentHandler>
         ];
-        let client = Arc::new(MockClient);
+        let client = Arc::new(MockIntervalsClient::default());
         let idempotency = Arc::new(IdempotencyMiddleware::new());
         let router = IntentRouter::new(handlers, client, idempotency);
 
@@ -974,7 +596,7 @@ mod tests {
         let handlers = vec![
             Box::new(MockIntentHandler::new("requires_token", true)) as Box<dyn IntentHandler>
         ];
-        let client = Arc::new(MockClient);
+        let client = Arc::new(MockIntervalsClient::default());
         let idempotency = Arc::new(IdempotencyMiddleware::new());
         let router = IntentRouter::new(handlers, client, idempotency);
 
@@ -1021,7 +643,7 @@ mod tests {
         }
 
         let handlers = vec![Box::new(FailingHandler) as Box<dyn IntentHandler>];
-        let client = Arc::new(MockClient);
+        let client = Arc::new(MockIntervalsClient::default());
         let idempotency = Arc::new(IdempotencyMiddleware::new());
         let router = IntentRouter::new(handlers, client, idempotency);
 
@@ -1065,7 +687,7 @@ mod tests {
         }
 
         let handlers = vec![Box::new(FailingIdempotentHandler) as Box<dyn IntentHandler>];
-        let client = Arc::new(MockClient);
+        let client = Arc::new(MockIntervalsClient::default());
         let idempotency = Arc::new(IdempotencyMiddleware::new());
         let router = IntentRouter::new(handlers, client, idempotency);
 
@@ -1113,7 +735,7 @@ mod tests {
         }
 
         let handlers = vec![Box::new(FailingDryRunHandler) as Box<dyn IntentHandler>];
-        let client = Arc::new(MockClient);
+        let client = Arc::new(MockIntervalsClient::default());
         let idempotency = Arc::new(IdempotencyMiddleware::new());
         let router = IntentRouter::new(handlers, client, idempotency);
 
@@ -1133,7 +755,7 @@ mod tests {
     async fn router_route_with_athlete_id_non_idempotent() {
         let handlers =
             vec![Box::new(MockIntentHandler::new("test_handler", false)) as Box<dyn IntentHandler>];
-        let client = Arc::new(MockClient);
+        let client = Arc::new(MockIntervalsClient::default());
         let idempotency = Arc::new(IdempotencyMiddleware::new());
         let router = IntentRouter::new(handlers, client, idempotency);
 
@@ -1148,7 +770,7 @@ mod tests {
         let handlers =
             vec![Box::new(MockIntentHandler::new("idempotent_handler", true))
                 as Box<dyn IntentHandler>];
-        let client = Arc::new(MockClient);
+        let client = Arc::new(MockIntervalsClient::default());
         let idempotency = Arc::new(IdempotencyMiddleware::new());
         let router = IntentRouter::new(handlers, client, idempotency);
 
@@ -1167,7 +789,7 @@ mod tests {
         let handlers =
             vec![Box::new(MockIntentHandler::new("idempotent_handler", true))
                 as Box<dyn IntentHandler>];
-        let client = Arc::new(MockClient);
+        let client = Arc::new(MockIntervalsClient::default());
         let idempotency = Arc::new(IdempotencyMiddleware::new());
         let router = IntentRouter::new(handlers, client, idempotency);
 
@@ -1187,7 +809,7 @@ mod tests {
         let handlers =
             vec![Box::new(MockIntentHandler::new("idempotent_handler", true))
                 as Box<dyn IntentHandler>];
-        let client = Arc::new(MockClient);
+        let client = Arc::new(MockIntervalsClient::default());
         let idempotency = Arc::new(IdempotencyMiddleware::new());
         let router = IntentRouter::new(handlers, client, idempotency);
 
@@ -1219,7 +841,7 @@ mod tests {
         let handlers =
             vec![Box::new(MockIntentHandler::new("idempotent_handler", true))
                 as Box<dyn IntentHandler>];
-        let client = Arc::new(MockClient);
+        let client = Arc::new(MockIntervalsClient::default());
         let idempotency = Arc::new(IdempotencyMiddleware::new());
         let router = IntentRouter::new(handlers, client, idempotency);
 
@@ -1236,7 +858,7 @@ mod tests {
         let handlers =
             vec![Box::new(MockIntentHandler::new("idempotent_handler", true))
                 as Box<dyn IntentHandler>];
-        let client = Arc::new(MockClient);
+        let client = Arc::new(MockIntervalsClient::default());
         let idempotency = Arc::new(IdempotencyMiddleware::new());
         let router = IntentRouter::new(handlers, client, idempotency);
 
@@ -1253,7 +875,7 @@ mod tests {
         let handlers =
             vec![Box::new(MockIntentHandler::new("idempotent_handler", true))
                 as Box<dyn IntentHandler>];
-        let client = Arc::new(MockClient);
+        let client = Arc::new(MockIntervalsClient::default());
         let idempotency = Arc::new(IdempotencyMiddleware::new());
         let router = IntentRouter::new(handlers, client, idempotency);
 
@@ -1393,7 +1015,7 @@ mod tests {
         }
 
         let handlers = vec![Box::new(CountHandler) as Box<dyn IntentHandler>];
-        let client = Arc::new(MockClient);
+        let client = Arc::new(MockIntervalsClient::default());
         let idempotency = Arc::new(IdempotencyMiddleware::new());
         let router = IntentRouter::new(handlers, client, idempotency);
 
@@ -1477,7 +1099,7 @@ mod tests {
     async fn router_route_exercises_client_methods() {
         setup_tracing();
         let handlers = vec![Box::new(ClientExercisingHandler) as Box<dyn IntentHandler>];
-        let client = Arc::new(MockClient);
+        let client = Arc::new(MockIntervalsClient::default());
         let idempotency = Arc::new(IdempotencyMiddleware::new());
         let router = IntentRouter::new(handlers, client, idempotency);
 
@@ -1489,7 +1111,7 @@ mod tests {
     async fn router_route_exercises_client_methods_with_athlete_id() {
         setup_tracing();
         let handlers = vec![Box::new(ClientExercisingHandler) as Box<dyn IntentHandler>];
-        let client = Arc::new(MockClient);
+        let client = Arc::new(MockIntervalsClient::default());
         let idempotency = Arc::new(IdempotencyMiddleware::new());
         let router = IntentRouter::new(handlers, client, idempotency);
 
@@ -1543,7 +1165,7 @@ mod tests {
         }
 
         let handlers = vec![Box::new(FailOnceHandler) as Box<dyn IntentHandler>];
-        let client = Arc::new(MockClient);
+        let client = Arc::new(MockIntervalsClient::default());
         let idempotency = Arc::new(IdempotencyMiddleware::new());
         let router = IntentRouter::new(handlers, client, idempotency);
 
