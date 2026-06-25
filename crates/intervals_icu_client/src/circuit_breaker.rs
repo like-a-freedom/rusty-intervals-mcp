@@ -8,7 +8,6 @@
 
 use metrics::gauge;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,19 +17,24 @@ pub enum CircuitState {
     HalfOpen = 2,
 }
 
+struct CircuitBreakerInner {
+    state: CircuitState,
+    failure_count: u32,
+    last_failure_at: Option<Instant>,
+}
+
 pub struct CircuitBreaker {
-    state: Mutex<CircuitState>,
-    failure_count: AtomicU32,
-    last_failure_at: Mutex<Option<Instant>>,
+    inner: Mutex<CircuitBreakerInner>,
     failure_threshold: u32,
     reset_timeout: Duration,
 }
 
 impl std::fmt::Debug for CircuitBreaker {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let inner = self.inner.lock().unwrap();
         f.debug_struct("CircuitBreaker")
-            .field("state", &self.state())
-            .field("failure_count", &self.failure_count.load(Ordering::Relaxed))
+            .field("state", &inner.state)
+            .field("failure_count", &inner.failure_count)
             .field("failure_threshold", &self.failure_threshold)
             .field("reset_timeout", &self.reset_timeout)
             .finish_non_exhaustive()
@@ -41,9 +45,11 @@ impl CircuitBreaker {
     #[must_use]
     pub fn new(failure_threshold: u32, reset_timeout: Duration) -> Self {
         Self {
-            state: Mutex::new(CircuitState::Closed),
-            failure_count: AtomicU32::new(0),
-            last_failure_at: Mutex::new(None),
+            inner: Mutex::new(CircuitBreakerInner {
+                state: CircuitState::Closed,
+                failure_count: 0,
+                last_failure_at: None,
+            }),
             failure_threshold,
             reset_timeout,
         }
@@ -54,16 +60,15 @@ impl CircuitBreaker {
     /// # Panics
     /// Panics if the internal mutex is poisoned.
     pub fn state(&self) -> CircuitState {
-        let state = self.state.lock().unwrap();
-        if *state == CircuitState::Open
-            && let Some(last) = *self.last_failure_at.lock().unwrap()
+        let mut inner = self.inner.lock().unwrap();
+        if inner.state == CircuitState::Open
+            && let Some(last) = inner.last_failure_at
             && last.elapsed() >= self.reset_timeout
         {
-            drop(state);
-            *self.state.lock().unwrap() = CircuitState::HalfOpen;
+            inner.state = CircuitState::HalfOpen;
             return CircuitState::HalfOpen;
         }
-        *state
+        inner.state
     }
 
     fn record_state(state: CircuitState) {
@@ -80,8 +85,9 @@ impl CircuitBreaker {
     /// # Panics
     /// Panics if the internal mutex is poisoned.
     pub fn record_success(&self) {
-        self.failure_count.store(0, Ordering::Relaxed);
-        *self.state.lock().unwrap() = CircuitState::Closed;
+        let mut inner = self.inner.lock().unwrap();
+        inner.failure_count = 0;
+        inner.state = CircuitState::Closed;
         Self::record_state(CircuitState::Closed);
     }
 
@@ -90,11 +96,12 @@ impl CircuitBreaker {
     /// # Panics
     /// Panics if the internal mutex is poisoned.
     pub fn record_failure(&self) {
-        let count = self.failure_count.fetch_add(1, Ordering::Relaxed) + 1;
-        *self.last_failure_at.lock().unwrap() = Some(Instant::now());
+        let mut inner = self.inner.lock().unwrap();
+        inner.failure_count += 1;
+        inner.last_failure_at = Some(Instant::now());
 
-        if count >= self.failure_threshold {
-            *self.state.lock().unwrap() = CircuitState::Open;
+        if inner.failure_count >= self.failure_threshold {
+            inner.state = CircuitState::Open;
             Self::record_state(CircuitState::Open);
         }
     }
