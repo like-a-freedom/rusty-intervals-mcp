@@ -182,11 +182,11 @@ impl ReqwestIntervalsClient {
             .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
     }
 
-    /// Execute a request and expect a JSON response.
-    async fn execute_json<T: serde::de::DeserializeOwned>(
-        &self,
-        request: reqwest::RequestBuilder,
-    ) -> Result<T> {
+    /// Execute a request and return the raw response.
+    ///
+    /// Handles circuit breaker, timing, metrics, and transport errors.
+    /// The caller is responsible for interpreting the response body.
+    async fn execute_raw(&self, request: reqwest::RequestBuilder) -> Result<reqwest::Response> {
         if !self.circuit_breaker.allow_request() {
             return Err(IntervalsError::Api(crate::error::ApiError::new(
                 503,
@@ -220,6 +220,15 @@ impl ReqwestIntervalsClient {
         )
         .increment(1);
 
+        Ok(resp)
+    }
+
+    /// Execute a request and expect a JSON response.
+    async fn execute_json<T: serde::de::DeserializeOwned>(
+        &self,
+        request: reqwest::RequestBuilder,
+    ) -> Result<T> {
+        let resp = self.execute_raw(request).await?;
         self.handle_response(resp).await.inspect_err(|e| {
             Self::record_upstream_error(e);
         })
@@ -227,39 +236,7 @@ impl ReqwestIntervalsClient {
 
     /// Execute a request and expect a text response.
     async fn execute_text(&self, request: reqwest::RequestBuilder) -> Result<String> {
-        if !self.circuit_breaker.allow_request() {
-            return Err(IntervalsError::Api(crate::error::ApiError::new(
-                503,
-                "circuit breaker open — upstream is unavailable",
-                "",
-            )));
-        }
-
-        let start = std::time::Instant::now();
-        let resp = request.send().await;
-        let duration = start.elapsed().as_secs_f64();
-
-        let resp = match resp {
-            Ok(r) => {
-                self.circuit_breaker.record_success();
-                r
-            }
-            Err(e) => {
-                self.circuit_breaker.record_failure();
-                histogram!("intervals_icu_mcp_upstream_request_duration_seconds").record(duration);
-                return Err(IntervalsError::Http(e));
-            }
-        };
-
-        let status = resp.status().as_u16();
-
-        histogram!("intervals_icu_mcp_upstream_request_duration_seconds").record(duration);
-        counter!(
-            "intervals_icu_mcp_upstream_requests_total",
-            "status" => status.to_string()
-        )
-        .increment(1);
-
+        let resp = self.execute_raw(request).await?;
         if !resp.status().is_success() {
             let err = self.error_from_response(resp).await;
             Self::record_upstream_error(&err);
@@ -270,39 +247,7 @@ impl ReqwestIntervalsClient {
 
     /// Execute a request with no expected response body.
     async fn execute_empty(&self, request: reqwest::RequestBuilder) -> Result<()> {
-        if !self.circuit_breaker.allow_request() {
-            return Err(IntervalsError::Api(crate::error::ApiError::new(
-                503,
-                "circuit breaker open — upstream is unavailable",
-                "",
-            )));
-        }
-
-        let start = std::time::Instant::now();
-        let resp = request.send().await;
-        let duration = start.elapsed().as_secs_f64();
-
-        let resp = match resp {
-            Ok(r) => {
-                self.circuit_breaker.record_success();
-                r
-            }
-            Err(e) => {
-                self.circuit_breaker.record_failure();
-                histogram!("intervals_icu_mcp_upstream_request_duration_seconds").record(duration);
-                return Err(IntervalsError::Http(e));
-            }
-        };
-
-        let status = resp.status().as_u16();
-
-        histogram!("intervals_icu_mcp_upstream_request_duration_seconds").record(duration);
-        counter!(
-            "intervals_icu_mcp_upstream_requests_total",
-            "status" => status.to_string()
-        )
-        .increment(1);
-
+        let resp = self.execute_raw(request).await?;
         if !resp.status().is_success() {
             let err = self.error_from_response(resp).await;
             Self::record_upstream_error(&err);
