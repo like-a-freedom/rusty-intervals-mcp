@@ -1454,6 +1454,11 @@ impl AnalyzeTrainingHandler {
                 content.push(ContentBlock::markdown(tid_lines.join("\n")));
             }
 
+            // W′ Depletion Rollup (WDR 7-day)
+            if let Some(wdrm_text) = render_wdrm_section(&period_context.metrics.wdrm) {
+                content.push(ContentBlock::markdown(wdrm_text));
+            }
+
             // Power Curve Comparison
             if let Some(_espe) = &period_context.metrics.espe_derived {
                 let period_ids: Vec<String> = period.iter().map(|a| a.id.clone()).collect();
@@ -3514,6 +3519,100 @@ mod tests {
         let output = result.unwrap();
         let content_str = content_text(&output.content);
         assert!(content_str.contains("Requested Metrics"));
+    }
+
+    #[tokio::test]
+    async fn test_analyze_period_renders_polarisation_and_wdr() {
+        // W2 + W5 wiring test: assert that period output contains
+        // polarisation (TID) and WDR rollup sections when activity details
+        // have icu_zone_times and icu_max_wbal_depletion data.
+        let handler = AnalyzeTrainingHandler::new();
+        let client = Arc::new(
+            MockIntervalsClient::builder()
+                .with_activities(vec![
+                    ActivitySummary {
+                        id: "act1".to_string(),
+                        name: Some("Hard Ride".to_string()),
+                        start_date_local: "2026-03-01".to_string(),
+                        ..Default::default()
+                    },
+                    ActivitySummary {
+                        id: "act2".to_string(),
+                        name: Some("Easy Ride".to_string()),
+                        start_date_local: "2026-03-03".to_string(),
+                        ..Default::default()
+                    },
+                ])
+                .with_activity_detail(
+                    "act1",
+                    json!({
+                        "moving_time": 3600,
+                        "icu_training_load": 80.0,
+                        "icu_max_wbal_depletion": 35000.0,
+                        "icu_zone_times": [
+                            {"id": 1, "secs": 1800},
+                            {"id": 2, "secs": 600},
+                            {"id": 3, "secs": 300},
+                            {"id": 4, "secs": 600},
+                            {"id": 5, "secs": 300}
+                        ]
+                    }),
+                )
+                .with_activity_detail(
+                    "act2",
+                    json!({
+                        "moving_time": 5400,
+                        "icu_training_load": 40.0,
+                        "icu_max_wbal_depletion": 5000.0,
+                        "icu_zone_times": [
+                            {"id": 1, "secs": 4500},
+                            {"id": 2, "secs": 500},
+                            {"id": 3, "secs": 100},
+                            {"id": 4, "secs": 200},
+                            {"id": 5, "secs": 100}
+                        ]
+                    }),
+                )
+                .with_fitness_summary(json!({
+                    "fitness": 55,
+                    "fatigue": 30,
+                    "form": 25
+                }))
+                .with_wellness(json!({
+                    "monotony": 1.5,
+                    "strain": 500,
+                    "ctl": 55,
+                    "atl": 30,
+                    "tsb": 25,
+                    "icu_wprime": 50000
+                })),
+        );
+
+        let input = json!({
+            "target_type": "period",
+            "period_start": "2026-03-01",
+            "period_end": "2026-03-07"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok(), "handler should succeed: {:?}", result.err());
+        let output = result.unwrap();
+        let content_str = content_text(&output.content);
+
+        // W2: polarisation/TID should be rendered from the last activity's zone_times
+        assert!(
+            content_str.contains("Training Intensity Distribution"),
+            "period output should contain TID section, got: {}",
+            &content_str[..content_str.len().min(500)]
+        );
+
+        // W5: WDR rollup should be rendered (mean depletion across activities)
+        // The render_wdrm_section outputs "W' Depletion" when supported
+        assert!(
+            content_str.contains("Depletion") || content_str.contains("WDRM"),
+            "period output should contain WDR section, got: {}",
+            &content_str[..content_str.len().min(500)]
+        );
     }
 
     #[tokio::test]
