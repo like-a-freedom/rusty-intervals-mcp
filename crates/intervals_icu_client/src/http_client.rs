@@ -430,6 +430,34 @@ impl ReqwestIntervalsClient {
         crate::utils::normalize_event_start(s)
     }
 
+    /// Fetch activity curves of a given type (power, hr, pace) for a sport.
+    async fn get_curves(
+        &self,
+        days_back: Option<i32>,
+        sport: &str,
+        curve_type: &str,
+    ) -> Result<serde_json::Value> {
+        let url = format!(
+            "{}/api/v1/athlete/{}/activity-{}-curves",
+            self.base_url, self.athlete_id, curve_type
+        );
+        let today = chrono::Utc::now().date_naive();
+        let oldest = if let Some(days) = days_back {
+            today - chrono::Duration::days(i64::from(days))
+        } else {
+            today - chrono::Duration::days(90)
+        };
+
+        let pairs = crate::utils::QueryBuilder::new()
+            .add("ext", "")
+            .add("oldest", oldest.to_string())
+            .add("newest", today.to_string())
+            .add("type", sport)
+            .build_owned();
+        let qp: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        self.execute_json(self.get_request(&url).query(&qp)).await
+    }
+
     fn normalize_event_update_fields(fields: &serde_json::Value) -> Result<serde_json::Value> {
         let Some(mut object) = fields.as_object().cloned() else {
             return Ok(fields.clone());
@@ -1121,25 +1149,7 @@ impl FitnessService for ReqwestIntervalsClient {
         days_back: Option<i32>,
         sport: &str,
     ) -> Result<serde_json::Value> {
-        let url = format!(
-            "{}/api/v1/athlete/{}/activity-power-curves",
-            self.base_url, self.athlete_id
-        );
-        let today = chrono::Utc::now().date_naive();
-        let oldest = if let Some(days) = days_back {
-            today - chrono::Duration::days(i64::from(days))
-        } else {
-            today - chrono::Duration::days(90)
-        };
-
-        let pairs = crate::utils::QueryBuilder::new()
-            .add("ext", "")
-            .add("oldest", oldest.to_string())
-            .add("newest", today.to_string())
-            .add("type", sport)
-            .build_owned();
-        let qp: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (*k, v.as_str())).collect();
-        self.execute_json(self.get_request(&url).query(&qp)).await
+        self.get_curves(days_back, sport, "power").await
     }
 
     async fn get_hr_curves(
@@ -1147,25 +1157,7 @@ impl FitnessService for ReqwestIntervalsClient {
         days_back: Option<i32>,
         sport: &str,
     ) -> Result<serde_json::Value> {
-        let url = format!(
-            "{}/api/v1/athlete/{}/activity-hr-curves",
-            self.base_url, self.athlete_id
-        );
-        let today = chrono::Utc::now().date_naive();
-        let oldest = if let Some(days) = days_back {
-            today - chrono::Duration::days(i64::from(days))
-        } else {
-            today - chrono::Duration::days(90)
-        };
-
-        let pairs = crate::utils::QueryBuilder::new()
-            .add("ext", "")
-            .add("oldest", oldest.to_string())
-            .add("newest", today.to_string())
-            .add("type", sport)
-            .build_owned();
-        let qp: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (*k, v.as_str())).collect();
-        self.execute_json(self.get_request(&url).query(&qp)).await
+        self.get_curves(days_back, sport, "hr").await
     }
 
     async fn get_pace_curves(
@@ -1173,25 +1165,7 @@ impl FitnessService for ReqwestIntervalsClient {
         days_back: Option<i32>,
         sport: &str,
     ) -> Result<serde_json::Value> {
-        let url = format!(
-            "{}/api/v1/athlete/{}/activity-pace-curves",
-            self.base_url, self.athlete_id
-        );
-        let today = chrono::Utc::now().date_naive();
-        let oldest = if let Some(days) = days_back {
-            today - chrono::Duration::days(i64::from(days))
-        } else {
-            today - chrono::Duration::days(90)
-        };
-
-        let pairs = crate::utils::QueryBuilder::new()
-            .add("ext", "")
-            .add("oldest", oldest.to_string())
-            .add("newest", today.to_string())
-            .add("type", sport)
-            .build_owned();
-        let qp: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (*k, v.as_str())).collect();
-        self.execute_json(self.get_request(&url).query(&qp)).await
+        self.get_curves(days_back, sport, "pace").await
     }
 }
 
