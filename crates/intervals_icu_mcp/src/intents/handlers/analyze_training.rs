@@ -488,10 +488,14 @@ impl AnalyzeTrainingHandler {
                 fetched.workout_detail.as_ref(),
                 fetched.streams.as_ref(),
             );
-        let mut workout_metrics =
-            derive_workout_metrics_context(work_interval_count, avg_hr, avg_power, execution_notes);
-        workout_metrics.efficiency_factor = efficiency_factor;
-        workout_metrics.aerobic_decoupling = aerobic_decoupling;
+        let workout_metrics = derive_workout_metrics_context(
+            work_interval_count,
+            avg_hr,
+            avg_power,
+            efficiency_factor,
+            aerobic_decoupling,
+            execution_notes,
+        );
 
         // Grade the workout using the analysis engine
         let analysis_metrics = {
