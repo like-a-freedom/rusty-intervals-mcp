@@ -289,6 +289,9 @@ impl IntentHandler for AnalyzeRaceHandler {
                     race_context.metrics.fitness.as_ref().and_then(|f| f.ctl),
                 ),
             );
+            // Persist the readiness breakdown onto the metrics bag so downstream
+            // guidance/alert rules and rendering can consume it.
+            race_context.metrics.race_readiness = Some(race_readiness.to_metrics());
 
             race_context.metrics.race = Some(RaceMetrics {
                 race_duration_secs,
