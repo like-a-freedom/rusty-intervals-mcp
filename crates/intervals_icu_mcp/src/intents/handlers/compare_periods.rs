@@ -979,6 +979,155 @@ mod tests {
     }
 
     // ========================================================================
+    // build_period_summary() Unit Tests
+    // ========================================================================
+
+    fn make_stats(
+        activities: Vec<ActivitySummary>,
+        details: std::collections::HashMap<String, Value>,
+        window_days: i64,
+    ) -> PeriodStats {
+        PeriodStats {
+            snapshot: TrendSnapshot {
+                activity_count: activities.len(),
+                total_time_secs: activities.len() as i64 * 3600,
+                total_distance_m: activities.len() as f64 * 10000.0,
+                total_elevation_m: activities.len() as f64 * 100.0,
+            },
+            window_days,
+            activities,
+            activity_details: details,
+            planned_count: 0,
+        }
+    }
+
+    #[test]
+    fn build_period_summary_missing_training_load() {
+        let mut details = std::collections::HashMap::new();
+        details.insert("a1".to_string(), json!({"moving_time": 3600}));
+        let stats = make_stats(
+            vec![ActivitySummary {
+                id: "a1".into(),
+                ..Default::default()
+            }],
+            details,
+            7,
+        );
+        let summary = build_period_summary(&stats);
+        assert_eq!(summary.workout_count, 1);
+        assert!((summary.total_tss - 0.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn build_period_summary_string_training_load() {
+        let mut details = std::collections::HashMap::new();
+        details.insert("a1".to_string(), json!({"icu_training_load": "85.5"}));
+        let stats = make_stats(
+            vec![ActivitySummary {
+                id: "a1".into(),
+                ..Default::default()
+            }],
+            details,
+            7,
+        );
+        let summary = build_period_summary(&stats);
+        assert!((summary.total_tss - 85.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn build_period_summary_integer_training_load() {
+        let mut details = std::collections::HashMap::new();
+        details.insert("a1".to_string(), json!({"icu_training_load": 120}));
+        let stats = make_stats(
+            vec![ActivitySummary {
+                id: "a1".into(),
+                ..Default::default()
+            }],
+            details,
+            7,
+        );
+        let summary = build_period_summary(&stats);
+        assert!((summary.total_tss - 120.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn build_period_summary_zero_activities() {
+        let stats = make_stats(vec![], std::collections::HashMap::new(), 7);
+        let summary = build_period_summary(&stats);
+        assert_eq!(summary.workout_count, 0);
+        assert_eq!(summary.total_time_hours, 0.0);
+        assert!((summary.total_tss - 0.0).abs() < 0.01);
+        assert!((summary.avg_tss_per_week - 0.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn build_period_summary_negative_window_days() {
+        let stats = make_stats(
+            vec![ActivitySummary {
+                id: "a1".into(),
+                ..Default::default()
+            }],
+            std::collections::HashMap::new(),
+            -7,
+        );
+        let summary = build_period_summary(&stats);
+        assert_eq!(summary.workout_count, 1);
+    }
+
+    #[tokio::test]
+    async fn test_execute_compare_periods_table_content() {
+        let handler = ComparePeriodsHandler::new();
+        let client = Arc::new(compare_mock_client());
+        let input = json!({
+            "period_a_start": "2026-03-01",
+            "period_a_end": "2026-03-07",
+            "period_b_start": "2026-03-08",
+            "period_b_end": "2026-03-14"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+
+        let content_str = format!("{:?}", result.unwrap().content);
+        assert!(
+            content_str.contains("Workouts"),
+            "table should contain Workouts row"
+        );
+        assert!(
+            content_str.contains("Volume"),
+            "table should contain Volume row"
+        );
+        assert!(
+            content_str.contains("Distance"),
+            "table should contain Distance row"
+        );
+        assert!(content_str.contains("TSS"), "table should contain TSS row");
+    }
+
+    #[tokio::test]
+    async fn test_execute_compare_periods_suggestions_content() {
+        let handler = ComparePeriodsHandler::new();
+        let client = Arc::new(compare_mock_client());
+        let input = json!({
+            "period_a_start": "2026-03-01",
+            "period_a_end": "2026-03-07",
+            "period_b_start": "2026-03-08",
+            "period_b_end": "2026-03-14"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+
+        let output = result.unwrap();
+        assert!(!output.suggestions.is_empty(), "should have suggestions");
+        let first_suggestion = &output.suggestions[0];
+        assert!(
+            first_suggestion.contains("Volume") || first_suggestion.contains("volume"),
+            "first suggestion should be engine summary about volume: {first_suggestion}"
+        );
+    }
+
+    // ========================================================================
     // Handler Execution Tests
     // ========================================================================
 
