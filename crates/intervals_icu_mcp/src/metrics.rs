@@ -34,10 +34,13 @@ impl AthleteTracker {
     }
 
     /// Record activity for an athlete by ID.
-    fn record_activity(&self, athlete_id: &str) {
+    ///
+    /// Returns the number of active athletes after recording (post-cleanup),
+    /// so the caller can record a meaningful distributional metric.
+    fn record_activity(&self, athlete_id: &str) -> usize {
         let Ok(mut athletes) = self.athletes.lock() else {
             tracing::warn!("athlete tracker mutex poisoned");
-            return;
+            return 0;
         };
         let now = std::time::Instant::now();
 
@@ -53,6 +56,8 @@ impl AthleteTracker {
 
         // Clean up old entries and update gauge
         self.cleanup_old_entries(&mut athletes);
+
+        athletes.len()
     }
 
     /// Remove athletes whose last seen time is outside the window.
@@ -240,13 +245,14 @@ pub fn decrement_active_requests() {
 }
 
 /// Record athlete activity.
+///
+/// The `intervals_icu_mcp_athlete_activity_bucket` histogram records the number
+/// of active athletes at the time of the activity (a meaningful distributional
+/// value) rather than the previous constant `1.0` placeholder.
 pub fn record_athlete_activity(athlete_id: &str) {
     if let Some(tracker) = ATHLETE_TRACKER.get() {
-        tracker.record_activity(athlete_id);
-
-        // Record activity in histogram (bucket by request count per athlete)
-        // Simplified: just record 1.0 as placeholder
-        histogram!("intervals_icu_mcp_athlete_activity_bucket").record(1.0);
+        let active_count = tracker.record_activity(athlete_id);
+        histogram!("intervals_icu_mcp_athlete_activity_bucket").record(active_count as f64);
     }
 }
 
