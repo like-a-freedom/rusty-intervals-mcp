@@ -852,13 +852,19 @@ impl AnalyzeTrainingHandler {
             if let Some((lower, upper)) = z2_bounds
                 && lower > 0.0
                 && upper > 0.0
-                && let Some(z2_text) = render_z2_stability_section(
-                    lower,
-                    upper,
-                    compute_z2_hr_variance(&hr_vec, lower, upper),
-                )
             {
-                content.push(ContentBlock::markdown(z2_text));
+                let z2_hr_variance = compute_z2_hr_variance(&hr_vec, lower, upper);
+                // Persist the variance on the metrics bag so downstream consumers
+                // (guidance/render) can read it; previously it was computed for
+                // rendering only and dropped from the metrics struct.
+                if let Some(ref mut workout) = workout_context.metrics.workout
+                    && let Some(ref mut decoupling) = workout.aerobic_decoupling
+                {
+                    decoupling.z2_hr_variance = z2_hr_variance;
+                }
+                if let Some(z2_text) = render_z2_stability_section(lower, upper, z2_hr_variance) {
+                    content.push(ContentBlock::markdown(z2_text));
+                }
             }
         }
 
