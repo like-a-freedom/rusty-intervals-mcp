@@ -2,6 +2,8 @@
 //! Baseline 90, penalties applied for each risk factor.
 //! Source: Montis.icu Coach V5 — Race Readiness Dashboard design.
 
+use crate::domains::coach::RaceReadinessMetrics;
+
 // =============================================================================
 // Race Readiness Constants
 // =============================================================================
@@ -41,6 +43,45 @@ pub struct RaceReadinessScore {
     pub neural_modifier: i32,
     pub system_modifier: i32,
     pub taper_modifier: i32,
+}
+
+impl RaceReadinessScore {
+    /// Map this score into the metrics-bag struct so downstream guidance/alert
+    /// rules and rendering can consume it. Without this, `CoachMetrics.race_readiness`
+    /// stayed `None` even though the score was computed.
+    #[must_use]
+    pub fn to_metrics(self) -> RaceReadinessMetrics {
+        RaceReadinessMetrics {
+            supported: true,
+            readiness_score: Some(self.score),
+            tsb_tier: match self.tsb_modifier {
+                5 => "fresh",
+                _ => "neutral",
+            }
+            .to_string(),
+            durability_tier: match self.durability_modifier {
+                -15 => "drifting",
+                _ => "stable",
+            }
+            .to_string(),
+            neural_tier: match self.neural_modifier {
+                -15 => "overloaded",
+                _ => "balanced",
+            }
+            .to_string(),
+            system_alignment: match self.system_modifier {
+                -10 => "mismatch",
+                _ => "aligned",
+            }
+            .to_string(),
+            taper_quality: if self.taper_modifier < 0 {
+                "detected_drop"
+            } else {
+                "optimal"
+            }
+            .to_string(),
+        }
+    }
 }
 
 /// Compute race readiness from 5 factors.
@@ -131,16 +172,9 @@ pub fn compute_ctl_drop(ctl_values: &[f64], current_ctl: Option<f64>) -> Option<
     if ctl_values.is_empty() {
         return None;
     }
-    let peak = ctl_values
-        .iter()
-        .copied()
-        .fold(f64::NEG_INFINITY, f64::max);
+    let peak = ctl_values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
     let drop = peak - current;
-    if drop > 0.0 {
-        Some(drop)
-    } else {
-        None
-    }
+    if drop > 0.0 { Some(drop) } else { None }
 }
 
 #[cfg(test)]
@@ -218,13 +252,19 @@ mod tests {
     #[test]
     fn compute_ctl_drop_is_peak_minus_current() {
         // Series peaked at 60, current is 45 → drop of 15
-        assert_eq!(compute_ctl_drop(&[60.0, 58.0, 55.0, 50.0, 45.0], Some(45.0)), Some(15.0));
+        assert_eq!(
+            compute_ctl_drop(&[60.0, 58.0, 55.0, 50.0, 45.0], Some(45.0)),
+            Some(15.0)
+        );
     }
 
     #[test]
     fn compute_ctl_drop_none_when_current_at_or_above_peak() {
         // Improving athlete: current >= peak → no detraining
-        assert_eq!(compute_ctl_drop(&[45.0, 47.0, 50.0, 52.0, 55.0], Some(55.0)), None);
+        assert_eq!(
+            compute_ctl_drop(&[45.0, 47.0, 50.0, 52.0, 55.0], Some(55.0)),
+            None
+        );
         assert_eq!(compute_ctl_drop(&[50.0, 50.0, 50.0], Some(60.0)), None);
     }
 
@@ -233,5 +273,29 @@ mod tests {
         assert_eq!(compute_ctl_drop(&[], Some(50.0)), None);
         assert_eq!(compute_ctl_drop(&[50.0, 51.0], None), None);
         assert_eq!(compute_ctl_drop(&[], None), None);
+    }
+
+    #[test]
+    fn to_metrics_maps_modifiers_to_tiers() {
+        // Fresh, drifting, overloaded, mismatch, with a CTL drop → penalties applied
+        let score = compute_race_readiness(Some(15.0), true, true, true, Some(30.0));
+        let metrics = score.to_metrics();
+        assert_eq!(metrics.readiness_score, Some(score.score));
+        assert!(metrics.supported);
+        assert_eq!(metrics.tsb_tier, "fresh");
+        assert_eq!(metrics.durability_tier, "drifting");
+        assert_eq!(metrics.neural_tier, "overloaded");
+        assert_eq!(metrics.system_alignment, "mismatch");
+        assert_eq!(metrics.taper_quality, "detected_drop");
+    }
+
+    #[test]
+    fn to_metrics_clean_athlete_is_aligned_and_optimal() {
+        let score = compute_race_readiness(Some(15.0), false, false, false, None);
+        let metrics = score.to_metrics();
+        assert_eq!(metrics.durability_tier, "stable");
+        assert_eq!(metrics.neural_tier, "balanced");
+        assert_eq!(metrics.system_alignment, "aligned");
+        assert_eq!(metrics.taper_quality, "optimal");
     }
 }
