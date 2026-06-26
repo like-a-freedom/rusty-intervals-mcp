@@ -1331,6 +1331,69 @@ impl AnalyzeTrainingHandler {
                 )));
             }
 
+            // Linear trend analysis using AnalysisEngine::analyze_trend
+            {
+                let mut tss_series: Vec<(chrono::NaiveDate, f32)> = Vec::new();
+                let mut distance_series: Vec<(chrono::NaiveDate, f32)> = Vec::new();
+                let mut time_series: Vec<(chrono::NaiveDate, f32)> = Vec::new();
+
+                for activity in &period {
+                    if let Some(date) = parse_activity_date(&activity.start_date_local)
+                        && let Some(detail) = fetched.activity_details.get(&activity.id)
+                        && let Some(obj) = detail.as_object()
+                    {
+                        if let Some(tss) = obj
+                            .get("icu_training_load")
+                            .or_else(|| obj.get("training_load"))
+                            .or_else(|| obj.get("icuTrainingLoad"))
+                            .and_then(|v| v.as_f64().or_else(|| v.as_i64().map(|n| n as f64)))
+                        {
+                            tss_series.push((date, tss as f32));
+                        }
+                        if let Some(dist) = obj.get("distance").and_then(|v| v.as_f64()) {
+                            distance_series.push((date, dist as f32 / 1000.0));
+                        }
+                        if let Some(moving) = obj
+                            .get("moving_time")
+                            .and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|n| n as i64)))
+                        {
+                            time_series.push((date, moving as f32 / 3600.0));
+                        }
+                    }
+                }
+
+                let mut trend_insights = Vec::new();
+                if let Some(insight) = AnalysisEngine::analyze_trend(
+                    &tss_series,
+                    crate::engines::analysis::TrendWindows::MEDIUM,
+                    "TSS",
+                ) {
+                    trend_insights.push(insight);
+                }
+                if let Some(insight) = AnalysisEngine::analyze_trend(
+                    &distance_series,
+                    crate::engines::analysis::TrendWindows::MEDIUM,
+                    "Distance",
+                ) {
+                    trend_insights.push(insight);
+                }
+                if let Some(insight) = AnalysisEngine::analyze_trend(
+                    &time_series,
+                    crate::engines::analysis::TrendWindows::MEDIUM,
+                    "Duration",
+                ) {
+                    trend_insights.push(insight);
+                }
+
+                if !trend_insights.is_empty() {
+                    let mut trend_lines = vec!["Linear Trends".to_string()];
+                    for insight in &trend_insights {
+                        trend_lines.push(format!("  {}", insight.description));
+                    }
+                    content.push(ContentBlock::markdown(trend_lines.join("\n")));
+                }
+            }
+
             content.push(ContentBlock::markdown(build_load_management_text(
                 period_context.metrics.load_management.as_ref(),
             )));
@@ -3670,6 +3733,94 @@ mod tests {
             has_insights,
             "Output should contain workout insights from WorkoutInsights::generate. Got: {}",
             &content_str[..content_str.len().min(500)]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_analyze_period_includes_linear_trend_insights() {
+        let handler = AnalyzeTrainingHandler::new();
+        let client = Arc::new(
+            MockIntervalsClient::builder()
+                .with_activities(vec![
+                    ActivitySummary {
+                        id: "1".to_string(),
+                        name: Some("Run 1".to_string()),
+                        start_date_local: "2026-06-01".to_string(),
+                        ..Default::default()
+                    },
+                    ActivitySummary {
+                        id: "2".to_string(),
+                        name: Some("Run 2".to_string()),
+                        start_date_local: "2026-06-08".to_string(),
+                        ..Default::default()
+                    },
+                    ActivitySummary {
+                        id: "3".to_string(),
+                        name: Some("Run 3".to_string()),
+                        start_date_local: "2026-06-15".to_string(),
+                        ..Default::default()
+                    },
+                    ActivitySummary {
+                        id: "4".to_string(),
+                        name: Some("Run 4".to_string()),
+                        start_date_local: "2026-06-22".to_string(),
+                        ..Default::default()
+                    },
+                ])
+                .with_activity_detail(
+                    "1",
+                    json!({
+                        "distance": 5000.0,
+                        "moving_time": 1800,
+                        "icu_training_load": 40.0
+                    }),
+                )
+                .with_activity_detail(
+                    "2",
+                    json!({
+                        "distance": 6000.0,
+                        "moving_time": 2100,
+                        "icu_training_load": 50.0
+                    }),
+                )
+                .with_activity_detail(
+                    "3",
+                    json!({
+                        "distance": 7000.0,
+                        "moving_time": 2400,
+                        "icu_training_load": 60.0
+                    }),
+                )
+                .with_activity_detail(
+                    "4",
+                    json!({
+                        "distance": 8000.0,
+                        "moving_time": 2700,
+                        "icu_training_load": 70.0
+                    }),
+                ),
+        );
+
+        let input = json!({
+            "target_type": "period",
+            "period_start": "2026-06-01",
+            "period_end": "2026-06-26",
+            "analysis_type": "detailed"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = content_text(&output.content);
+
+        let content_lower = content_str.to_lowercase();
+        let has_linear_trend = content_lower.contains("increasing")
+            || content_lower.contains("decreasing")
+            || content_lower.contains("stable");
+        assert!(
+            has_linear_trend,
+            "Output should contain linear trend direction (Increasing/Decreasing/Stable) from AnalysisEngine::analyze_trend. Got: {}",
+            &content_str[..content_str.len().min(2000)]
         );
     }
 }
