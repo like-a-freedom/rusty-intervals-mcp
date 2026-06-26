@@ -12,7 +12,9 @@ use std::sync::Arc;
 use super::render::analysis::*;
 use crate::domains::coach::{AnalysisKind, AnalysisWindow, CoachContext};
 use crate::engines::adaptation::classify_curve_profile;
-use crate::engines::analysis::{AnalysisEngine, WorkoutMetrics as AnalysisWorkoutMetrics};
+use crate::engines::analysis::{
+    AnalysisEngine, WorkoutInsights, WorkoutMetrics as AnalysisWorkoutMetrics,
+};
 use crate::engines::analysis_audit::build_data_audit;
 use crate::engines::analysis_fetch::{
     PeriodFetchRequest, SingleWorkoutFetchRequest, build_daily_load_series, build_previous_window,
@@ -596,6 +598,16 @@ impl AnalyzeTrainingHandler {
             "Workout Grade: {:?}",
             workout_grade
         )));
+
+        // Generate and render workout insights
+        let insights = WorkoutInsights::generate(&analysis_metrics, &workout_grade);
+        if !insights.is_empty() {
+            let mut insight_lines = vec!["Insights".to_string()];
+            for insight in &insights {
+                insight_lines.push(format!("  {}", insight));
+            }
+            content.push(ContentBlock::markdown(insight_lines.join("\n")));
+        }
 
         // Build basic metrics table
         let rows = build_basic_workout_metric_rows(workout_detail);
@@ -3621,6 +3633,42 @@ mod tests {
         assert!(
             has_grade,
             "Output should contain grade information (A/B/C/D/F). Got: {}",
+            &content_str[..content_str.len().min(500)]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_single_workout_includes_insights() {
+        let handler = AnalyzeTrainingHandler::new();
+        let client = Arc::new(
+            MockIntervalsClient::with_activity("12345", "2026-03-01", "Test Workout")
+                .with_workout_detail(json!({
+                    "distance": 10000.0,
+                    "moving_time": 3600,
+                    "average_heartrate": 150.0,
+                    "average_watts": 250.0,
+                    "total_elevation_gain": 200.0,
+                })),
+        );
+
+        let input = json!({
+            "target_type": "single",
+            "date": "2026-03-01",
+            "analysis_type": "summary"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = content_text(&output.content);
+
+        let has_insights = content_str.contains("Insights")
+            || content_str.contains("insights")
+            || content_str.contains("Excellent")
+            || content_str.contains("Good workout");
+        assert!(
+            has_insights,
+            "Output should contain workout insights from WorkoutInsights::generate. Got: {}",
             &content_str[..content_str.len().min(500)]
         );
     }
