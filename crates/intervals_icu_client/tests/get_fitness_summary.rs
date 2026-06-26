@@ -32,7 +32,8 @@ async fn get_fitness_summary_uses_athlete_path() {
         .await;
 
     let client =
-        ReqwestIntervalsClient::new(&mock_server.uri(), athlete, SecretString::new("key".into()));
+        ReqwestIntervalsClient::new(&mock_server.uri(), athlete, SecretString::new("key".into()))
+            .expect("new");
     let res = client.get_fitness_summary().await;
     if let Err(ref e) = res {
         println!("Error: {e:?}");

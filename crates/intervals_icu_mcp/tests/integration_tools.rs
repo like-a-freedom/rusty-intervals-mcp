@@ -38,11 +38,14 @@ struct TestConfig {
 /// Create a test client from environment config
 fn create_client() -> Arc<ReqwestIntervalsClient> {
     let config = test_config();
-    Arc::new(ReqwestIntervalsClient::new(
-        &config.base_url,
-        &config.athlete_id,
-        SecretString::new(config.api_key.into()),
-    ))
+    Arc::new(
+        ReqwestIntervalsClient::new(
+            &config.base_url,
+            &config.athlete_id,
+            SecretString::new(config.api_key.into()),
+        )
+        .expect("new"),
+    )
 }
 
 // ============================================================================

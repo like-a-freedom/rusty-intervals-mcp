@@ -56,7 +56,8 @@ async fn test_handler_initialization_with_mock_client() {
         base,
         athlete.to_string(),
         api_key,
-    );
+    )
+    .expect("new");
     let handler = intervals_icu_mcp::IntervalsMcpHandler::new(Arc::new(client));
 
     assert_eq!(handler.tool_count(), 9);
@@ -68,7 +69,8 @@ async fn test_handler_preload_dynamic_registry() {
         "https://test.intervals.icu",
         "test_athlete".to_string(),
         SecretString::new("test_key".to_string().into()),
-    );
+    )
+    .expect("new");
     let handler = intervals_icu_mcp::IntervalsMcpHandler::new(Arc::new(client));
 
     let _count = handler.preload_dynamic_registry().await;

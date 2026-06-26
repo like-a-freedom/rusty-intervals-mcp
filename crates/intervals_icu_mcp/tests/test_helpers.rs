@@ -544,11 +544,14 @@ pub fn create_client(base_url: String) -> Arc<impl IntervalsClient> {
     use intervals_icu_client::http_client::ReqwestIntervalsClient;
     use secrecy::SecretString;
 
-    Arc::new(ReqwestIntervalsClient::new(
-        &base_url,
-        "test_athlete".to_string(),
-        SecretString::new("test_api_key".to_string().into()),
-    ))
+    Arc::new(
+        ReqwestIntervalsClient::new(
+            &base_url,
+            "test_athlete".to_string(),
+            SecretString::new("test_api_key".to_string().into()),
+        )
+        .expect("new"),
+    )
 }
 
 /// Builder for creating test OpenAPI specs with custom endpoints.

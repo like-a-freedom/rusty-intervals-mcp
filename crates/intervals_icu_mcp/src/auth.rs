@@ -284,7 +284,16 @@ pub async fn auth_endpoint(
         &state.base_url,
         req.athlete_id.clone(),
         SecretString::new(req.api_key.clone().into()),
-    );
+    )
+    .map_err(|e| {
+        tracing::warn!(
+            client_ip = %client_ip,
+            athlete_id = %req.athlete_id,
+            error = %e,
+            "Failed to create client at /auth"
+        );
+        AuthError::ServerConfig
+    })?;
 
     // Simple validation call - get_athlete_profile
     client.get_athlete_profile().await.map_err(|e| {

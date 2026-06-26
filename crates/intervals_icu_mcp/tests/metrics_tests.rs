@@ -62,7 +62,8 @@ async fn test_upstream_metrics_are_recorded() {
         &mock_server.uri(),
         "ath_test".to_string(),
         SecretString::new("fake_key".into()),
-    );
+    )
+    .expect("new");
 
     // Make a real HTTP call through the client (uses execute_json internally)
     let result = client.get_activity_details("act_123").await;
@@ -110,7 +111,8 @@ async fn test_upstream_error_metrics_are_recorded() {
         &mock_server.uri(),
         "ath_test".to_string(),
         SecretString::new("fake_key".into()),
-    );
+    )
+    .expect("new");
 
     // Make a call that will fail (uses execute_json internally)
     let result = client.get_activity_details("act_123").await;

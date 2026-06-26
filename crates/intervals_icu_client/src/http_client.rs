@@ -47,20 +47,23 @@ impl ReqwestIntervalsClient {
     /// * `base_url` - The base URL of the Intervals.icu API (e.g., `<https://intervals.icu>`)
     /// * `athlete_id` - The athlete ID for authentication
     /// * `api_key` - The API key for authentication
-    ///
-    /// # Panics
-    /// Panics if the reqwest client fails to build.
-    pub fn new(base_url: &str, athlete_id: impl Into<String>, api_key: SecretString) -> Self {
-        let client = reqwest::Client::builder()
-            .build()
-            .expect("reqwest client build should not fail");
-        Self {
+    pub fn new(
+        base_url: &str,
+        athlete_id: impl Into<String>,
+        api_key: SecretString,
+    ) -> Result<Self> {
+        let client = reqwest::Client::builder().build().map_err(|e| {
+            IntervalsError::Config(crate::ConfigError::Other(format!(
+                "failed to build HTTP client: {e}"
+            )))
+        })?;
+        Ok(Self {
             base_url: base_url.trim_end_matches('/').to_string(),
             athlete_id: athlete_id.into(),
             api_key,
             client,
             circuit_breaker: Arc::new(CircuitBreaker::default()),
-        }
+        })
     }
 
     /// Build an API URL from path segments.
@@ -496,7 +499,6 @@ impl AthleteService for ReqwestIntervalsClient {
 }
 
 #[async_trait]
-#[allow(clippy::too_many_lines)]
 impl ActivityService for ReqwestIntervalsClient {
     async fn get_recent_activities(
         &self,
@@ -1084,8 +1086,16 @@ impl EventService for ReqwestIntervalsClient {
         let url = self.api_url(&["athlete", &self.athlete_id, "events", "bulk-delete"]);
         let doomed: Vec<serde_json::Value> = event_ids
             .iter()
-            .map(|id| serde_json::json!({ "id": id.parse::<i32>().unwrap_or(0) }))
-            .collect();
+            .map(|id| {
+                let parsed = id.parse::<i32>().map_err(|e| {
+                    IntervalsError::Validation(ValidationError::InvalidFormat {
+                        field: "event_id".to_string(),
+                        value: format!("invalid event id '{id}': {e}"),
+                    })
+                })?;
+                Ok(serde_json::json!({ "id": parsed }))
+            })
+            .collect::<Result<Vec<_>>>()?;
         self.execute_empty(self.put_request(&url).json(&doomed))
             .await
     }

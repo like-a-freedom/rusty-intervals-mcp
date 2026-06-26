@@ -25,7 +25,8 @@ fn bench_download_activity_file(c: &mut Criterion) {
         server
     });
 
-    let client = ReqwestIntervalsClient::new(&server.uri(), "ath", SecretString::new("tok".into()));
+    let client = ReqwestIntervalsClient::new(&server.uri(), "ath", SecretString::new("tok".into()))
+        .expect("new");
     c.bench_function("download_activity_file_stream", |b| {
         b.to_async(&rt).iter(|| {
             let client = client.clone();

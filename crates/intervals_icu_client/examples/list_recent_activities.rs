@@ -3,7 +3,7 @@ use intervals_icu_client::{IntervalsClient, config::Config, http_client::Reqwest
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cfg = Config::from_env()?;
-    let client = ReqwestIntervalsClient::new(&cfg.base_url, cfg.athlete_id.clone(), cfg.api_key);
+    let client = ReqwestIntervalsClient::new(&cfg.base_url, cfg.athlete_id.clone(), cfg.api_key)?;
 
     let limit = std::env::var("INTERVALS_ICU_LIMIT")
         .ok()

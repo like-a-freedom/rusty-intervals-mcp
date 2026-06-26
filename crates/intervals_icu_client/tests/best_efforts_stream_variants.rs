@@ -36,7 +36,8 @@ async fn best_efforts_detects_top_level_streams() {
         .mount(&server)
         .await;
 
-    let client = ReqwestIntervalsClient::new(&server.uri(), "ath", SecretString::new("tok".into()));
+    let client = ReqwestIntervalsClient::new(&server.uri(), "ath", SecretString::new("tok".into()))
+        .expect("new");
     let efforts: serde_json::Value = client
         .get_best_efforts("act7", None)
         .await
@@ -75,7 +76,8 @@ async fn best_efforts_detects_streams_array_form() {
         .mount(&server)
         .await;
 
-    let client = ReqwestIntervalsClient::new(&server.uri(), "ath", SecretString::new("tok".into()));
+    let client = ReqwestIntervalsClient::new(&server.uri(), "ath", SecretString::new("tok".into()))
+        .expect("new");
     let efforts: serde_json::Value = client
         .get_best_efforts("act8", None)
         .await
@@ -112,7 +114,8 @@ async fn best_efforts_detects_top_level_array_streams_form() {
         .mount(&server)
         .await;
 
-    let client = ReqwestIntervalsClient::new(&server.uri(), "ath", SecretString::new("tok".into()));
+    let client = ReqwestIntervalsClient::new(&server.uri(), "ath", SecretString::new("tok".into()))
+        .expect("new");
     let efforts: serde_json::Value = client
         .get_best_efforts("act10", None)
         .await
@@ -159,7 +162,8 @@ async fn best_efforts_prefers_watts_over_distance_and_annotates_stream() {
         .mount(&server)
         .await;
 
-    let client = ReqwestIntervalsClient::new(&server.uri(), "ath", SecretString::new("tok".into()));
+    let client = ReqwestIntervalsClient::new(&server.uri(), "ath", SecretString::new("tok".into()))
+        .expect("new");
     let efforts: serde_json::Value = client
         .get_best_efforts("act11", None)
         .await
