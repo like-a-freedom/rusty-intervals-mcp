@@ -117,6 +117,32 @@ pub fn compute_race_readiness(
     }
 }
 
+/// Compute the CTL drop magnitude (detraining) from a CTL series.
+///
+/// Drop = (peak CTL in the series) − current CTL, floored at 0.
+/// Returns `None` when there is no data or no current value, or when the
+/// athlete is not detraining (current ≥ peak).
+///
+/// This is the value intended for `compute_race_readiness`'s `ctl_drop`
+/// parameter. Passing the raw CTL value (as the handler previously did)
+/// incorrectly penalizes every athlete by their absolute CTL.
+pub fn compute_ctl_drop(ctl_values: &[f64], current_ctl: Option<f64>) -> Option<f64> {
+    let current = current_ctl?;
+    if ctl_values.is_empty() {
+        return None;
+    }
+    let peak = ctl_values
+        .iter()
+        .copied()
+        .fold(f64::NEG_INFINITY, f64::max);
+    let drop = peak - current;
+    if drop > 0.0 {
+        Some(drop)
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -187,5 +213,25 @@ mod tests {
         assert!(with_durability.score < baseline.score);
         assert!(with_neural.score < baseline.score);
         assert!(with_system.score < baseline.score);
+    }
+
+    #[test]
+    fn compute_ctl_drop_is_peak_minus_current() {
+        // Series peaked at 60, current is 45 → drop of 15
+        assert_eq!(compute_ctl_drop(&[60.0, 58.0, 55.0, 50.0, 45.0], Some(45.0)), Some(15.0));
+    }
+
+    #[test]
+    fn compute_ctl_drop_none_when_current_at_or_above_peak() {
+        // Improving athlete: current >= peak → no detraining
+        assert_eq!(compute_ctl_drop(&[45.0, 47.0, 50.0, 52.0, 55.0], Some(55.0)), None);
+        assert_eq!(compute_ctl_drop(&[50.0, 50.0, 50.0], Some(60.0)), None);
+    }
+
+    #[test]
+    fn compute_ctl_drop_none_when_no_data() {
+        assert_eq!(compute_ctl_drop(&[], Some(50.0)), None);
+        assert_eq!(compute_ctl_drop(&[50.0, 51.0], None), None);
+        assert_eq!(compute_ctl_drop(&[], None), None);
     }
 }
