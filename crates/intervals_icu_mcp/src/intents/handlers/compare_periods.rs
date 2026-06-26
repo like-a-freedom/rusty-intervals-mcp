@@ -7,8 +7,9 @@ use serde_json::{Value, json};
 /// Compares performance between two periods (like-for-like).
 use std::sync::Arc;
 
-use crate::domains::coach::AnalysisWindow;
+use crate::domains::coach::{AnalysisWindow, CoachMetrics};
 use crate::engines::analysis_fetch::{PeriodFetchRequest, fetch_period_data};
+use crate::engines::coach_guidance::{build_alerts, build_guidance};
 use crate::engines::coach_metrics::{
     TrendSnapshot, build_trend_snapshot, compute_consistency_index, derive_trend_metrics,
     derive_volume_metrics, parse_fitness_metrics,
@@ -153,6 +154,16 @@ impl IntentHandler for ComparePeriodsHandler {
         let fitness = client.get_fitness_summary().await.ok();
         let fitness_metrics = parse_fitness_metrics(fitness.as_ref());
 
+        // Build minimal CoachMetrics for guidance engine (consistency alerts)
+        let metrics_for_guidance = CoachMetrics {
+            consistency: Some(a_consistency.clone()),
+            fitness: fitness_metrics.clone(),
+            volume: Some(a_volume.clone()),
+            ..Default::default()
+        };
+        let alerts = build_alerts(&metrics_for_guidance);
+        let guidance = build_guidance(&metrics_for_guidance, &alerts);
+
         let mut content = Vec::new();
         content.push(ContentBlock::markdown(format!(
             "# Comparison: {} vs {}",
@@ -253,6 +264,7 @@ impl IntentHandler for ComparePeriodsHandler {
 
         // Engine summary replaces ad-hoc volume analysis
         let mut suggestions = vec![comparison.summary.clone()];
+        suggestions.extend(guidance.suggestions);
 
         if let Some(elev_delta) = trend.elevation_delta_pct
             && elev_delta.abs() > 30.0
@@ -275,6 +287,7 @@ impl IntentHandler for ComparePeriodsHandler {
             "To analyze a specific period: analyze_training with target_type: period".into(),
             "To assess recovery: assess_recovery".into(),
         ];
+        next_actions.extend(guidance.next_actions);
 
         if volume_change > 15.0 {
             next_actions.insert(0, "Consider recovery week if volume spike continues".into());
