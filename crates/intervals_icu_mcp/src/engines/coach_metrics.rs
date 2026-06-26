@@ -1174,49 +1174,6 @@ pub fn compute_wdr_metrics(
     }
 }
 
-/// Aggregate WDRM metrics across a 7-day window of activities.
-pub fn aggregate_wdr_metrics_7d(
-    activity_details: &std::collections::HashMap<String, Value>,
-    intervals_map: &std::collections::HashMap<String, Value>,
-    w_prime: Option<f64>,
-    activity_ids: &[String],
-) -> crate::domains::coach::WdrMetrics {
-    use crate::domains::coach::WdrMetrics;
-
-    let mut depletion_values: Vec<f64> = Vec::new();
-    let mut high_count: usize = 0;
-    let mut total_with_data: usize = 0;
-
-    for id in activity_ids {
-        let detail = activity_details.get(id);
-        let intervals = intervals_map.get(id);
-        let single = compute_wdr_metrics(intervals, detail, w_prime);
-        if single.supported {
-            total_with_data += 1;
-            if let Some(dp) = single.depletion_pct {
-                depletion_values.push(dp);
-                if dp >= WDRM_HIGH_DEPLETION_PCT {
-                    high_count += 1;
-                }
-            }
-        }
-    }
-
-    if depletion_values.is_empty() {
-        return WdrMetrics::unsupported();
-    }
-
-    let mean_depletion = Some(depletion_values.iter().sum::<f64>() / depletion_values.len() as f64);
-
-    WdrMetrics {
-        supported: true,
-        mean_depletion_pct_7d: mean_depletion,
-        high_depletion_sessions_7d: high_count,
-        sessions_with_data_7d: total_with_data,
-        ..Default::default()
-    }
-}
-
 /// Compute NDLI from a 7-day window of activities.
 /// Classification: Green ≤2, Amber =3, Red ≥4 high-intensity days.
 pub fn compute_ndli_7d(
@@ -1308,30 +1265,6 @@ pub fn compute_ndli_7d(
         ndli_state,
         ndli_overload_flag: high_intensity_days >= NDLI_RED_DAYS,
     }
-}
-
-/// Normalize running power from different device sources (Stryd, Garmin).
-/// Stryd typically reports ~8% higher than reference; Garmin Running Power differs by algorithm.
-/// Applies a correction factor for cross-device consistency.
-pub fn normalize_running_power(power_watts: f64, source: &str) -> f64 {
-    match source {
-        "stryd" => power_watts * STRYD_POWER_CORRECTION,
-        "garmin_rp" => power_watts * GARMIN_RP_POWER_CORRECTION,
-        _ => power_watts,
-    }
-}
-
-/// Convert Grade-Adjusted Pace (GAP) from speed m/s to equivalent running power.
-/// Approximate conversion: Power (W) ≈ speed³ × 0.25 + elevation_factor.
-/// GAP data comes from `get_gap_histogram()` endpoint.
-pub fn gap_to_running_power(gap_speed_ms: f64, gradient_pct: f64) -> f64 {
-    let base_power = gap_speed_ms.powi(GAP_SPEED_EXPONENT) * GAP_POWER_COEFFICIENT;
-    let elevation_factor = if gradient_pct > 0.0 {
-        1.0 + gradient_pct * GAP_UPHILL_GRADIENT_FACTOR
-    } else {
-        1.0 + gradient_pct * GAP_DOWNHILL_GRADIENT_FACTOR
-    };
-    base_power * elevation_factor
 }
 
 // =============================================================================
@@ -2172,31 +2105,6 @@ mod tests {
         let wdrm = compute_wdr_metrics(None, Some(&detail), Some(10000.0));
         assert!(wdrm.supported);
         assert!((wdrm.depletion_pct.unwrap() - 1.5).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn aggregate_wdr_metrics_7d_counts_high_depletion_sessions() {
-        let mut details = std::collections::HashMap::new();
-        let mut intervals = std::collections::HashMap::new();
-        for i in 1..=5 {
-            let detail = json!({"icu_max_wbal_depletion": (i as f64) * 5000.0});
-            details.insert(format!("act-{i}"), detail);
-            intervals.insert(format!("act-{i}"), json!([]));
-        }
-        let ids = vec![
-            "act-1".into(),
-            "act-2".into(),
-            "act-3".into(),
-            "act-4".into(),
-            "act-5".into(),
-        ];
-        let wdrm = aggregate_wdr_metrics_7d(&details, &intervals, Some(10000.0), &ids);
-        assert!(wdrm.supported);
-        // activity depletion pct: 0.5, 1.0, 1.5, 1.5, 1.5 → mean ≈ 1.2
-        assert!(wdrm.mean_depletion_pct_7d.unwrap() > 0.5);
-        // activities with depletion >= 60%: 3-5 (pct: 1.0, 1.5, 1.5, 1.5) = 4
-        assert_eq!(wdrm.high_depletion_sessions_7d, 4);
-        assert_eq!(wdrm.sessions_with_data_7d, 5);
     }
 
     // ========================================================================
