@@ -123,6 +123,7 @@ pub struct MetricComparison {
 }
 
 /// Trend analysis windows
+#[must_use]
 pub struct TrendWindows;
 
 impl TrendWindows {
@@ -133,6 +134,7 @@ impl TrendWindows {
 }
 
 /// Analysis Engine
+#[must_use]
 pub struct AnalysisEngine;
 
 impl AnalysisEngine {
@@ -377,6 +379,7 @@ impl AnalysisEngine {
 }
 
 /// Workout analysis insights generator
+#[must_use]
 pub struct WorkoutInsights;
 
 impl WorkoutInsights {
