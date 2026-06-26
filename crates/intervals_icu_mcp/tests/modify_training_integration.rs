@@ -295,8 +295,10 @@ impl IntervalsClient for TrackingMockClient {
         Ok(json!([]))
     }
 
-    async fn get_sport_settings(&self) -> Result<Value, IntervalsError> {
-        Ok(json!([]))
+    async fn get_sport_settings(
+        &self,
+    ) -> Result<intervals_icu_client::domains::workout::SportSettings, IntervalsError> {
+        Ok(intervals_icu_client::domains::workout::SportSettings::default())
     }
 
     async fn get_power_curves(
@@ -413,16 +415,30 @@ impl IntervalsClient for TrackingMockClient {
         Ok(json!([]))
     }
 
-    async fn get_workout_library(&self) -> Result<Value, IntervalsError> {
-        Ok(json!([]))
+    async fn get_workout_library(
+        &self,
+    ) -> Result<Vec<intervals_icu_client::domains::workout::WorkoutItem>, IntervalsError> {
+        Ok(vec![])
     }
 
-    async fn get_workouts_in_folder(&self, _folder_id: &str) -> Result<Value, IntervalsError> {
-        Ok(json!([]))
+    async fn get_workouts_in_folder(
+        &self,
+        _folder_id: &str,
+    ) -> Result<Vec<intervals_icu_client::domains::workout::WorkoutItem>, IntervalsError> {
+        Ok(vec![])
     }
 
-    async fn create_folder(&self, _folder: &Value) -> Result<Value, IntervalsError> {
-        Ok(json!({}))
+    async fn create_folder(
+        &self,
+        _folder: &Value,
+    ) -> Result<intervals_icu_client::domains::workout::Folder, IntervalsError> {
+        Ok(intervals_icu_client::domains::workout::Folder {
+            id: 0,
+            name: String::new(),
+            description: None,
+            parent_id: None,
+            children: vec![],
+        })
     }
 
     async fn update_folder(

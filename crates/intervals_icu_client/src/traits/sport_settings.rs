@@ -1,12 +1,13 @@
 //! Sport settings service trait for sport configuration.
 
 use crate::Result;
+use crate::domains::workout::SportSettings;
 
 /// Service for sport settings management.
 #[async_trait::async_trait]
 pub trait SportSettingsService: Send + Sync + 'static {
     /// Get sport settings.
-    async fn get_sport_settings(&self) -> Result<serde_json::Value>;
+    async fn get_sport_settings(&self) -> Result<SportSettings>;
 
     /// Update sport settings.
     async fn update_sport_settings(

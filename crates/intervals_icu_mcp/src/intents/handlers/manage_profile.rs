@@ -197,6 +197,8 @@ impl ManageProfileHandler {
             .get_sport_settings()
             .await
             .map_err(|e| IntentError::api(format!("Failed to fetch sport settings: {}", e)))?;
+        let sport_settings_value =
+            serde_json::to_value(&sport_settings).unwrap_or_else(|_| json!([]));
         let fitness_summary = if sections.contains(&"metrics".to_string()) {
             client.get_fitness_summary().await.ok()
         } else {
@@ -212,7 +214,7 @@ impl ManageProfileHandler {
         } else {
             None
         };
-        let sport_entries = sport_settings_entries(&sport_settings);
+        let sport_entries = sport_settings_entries(&sport_settings_value);
 
         let mut content = Vec::new();
         content.push(ContentBlock::markdown(format!(
@@ -222,7 +224,7 @@ impl ManageProfileHandler {
         )));
 
         if sections.contains(&"overview".to_string()) {
-            let settings_obj = sport_settings.as_object();
+            let settings_obj = sport_settings_value.as_object();
             let wellness_obj = wellness_for_today.as_ref().and_then(Value::as_object);
             let age = settings_obj
                 .and_then(|o| o.get("age"))
@@ -394,7 +396,9 @@ impl ManageProfileHandler {
             .get_sport_settings()
             .await
             .map_err(|e| IntentError::api(format!("Failed to fetch sport settings: {}", e)))?;
-        let sport_entries = sport_settings_entries(&sport_settings);
+        let sport_settings_value =
+            serde_json::to_value(&sport_settings).unwrap_or_else(|_| json!([]));
+        let sport_entries = sport_settings_entries(&sport_settings_value);
         let primary = primary_sport_setting(&sport_entries)
             .ok_or_else(|| IntentError::api("No sport settings available".to_string()))?;
         let sport_type = primary
@@ -994,17 +998,26 @@ mod tests {
                 id: "ath1".to_string(),
                 name: Some("Test Athlete".to_string()),
             })
-            .with_sport_settings(json!([{
-                "name": "Run",
-                "types": ["Run"],
-                "hr_zones": [140, 160, 180],
-                "lthr": 170,
-                "max_hr": 190,
-                "ftp": 250,
-                "threshold_pace": 5.0,
-                "pace_units": "MINS_KM",
-                "load_order": "heart_rate"
-            }]))
+            .with_sport_settings(intervals_icu_client::domains::workout::SportSettings {
+                sports: vec![intervals_icu_client::domains::workout::SportSetting {
+                    name: Some("Run".into()),
+                    types: Some(vec!["Run".into()]),
+                    hr_zones: vec![
+                        serde_json::json!(140),
+                        serde_json::json!(160),
+                        serde_json::json!(180),
+                    ],
+                    lthr: Some(170.0),
+                    max_hr: Some(190.0),
+                    ftp: Some(250.0),
+                    threshold_pace: Some(5.0),
+                    pace_units: Some("MINS_KM".into()),
+                    load_order: Some("heart_rate".into()),
+                    ..Default::default()
+                }],
+                age: None,
+                weight: None,
+            })
             .with_fitness_summary(json!({
                 "ctl": 45.0,
                 "atl": 30.0,

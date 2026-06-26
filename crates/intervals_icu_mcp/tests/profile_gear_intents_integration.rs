@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 
 #[derive(Clone)]
 struct MutationTrackingClient {
-    sport_settings: Value,
+    sport_settings: intervals_icu_client::domains::workout::SportSettings,
     gear_list: Value,
     updated_sport_settings: Arc<Mutex<Vec<(String, bool, Value)>>>,
     applied_sport_settings: Arc<Mutex<Vec<String>>>,
@@ -21,15 +21,18 @@ struct MutationTrackingClient {
 impl MutationTrackingClient {
     fn new() -> Self {
         Self {
-            sport_settings: json!([
-                {
-                    "id": 1783043,
-                    "types": ["Run", "VirtualRun", "TrailRun"],
-                    "threshold_aet_hr": 150,
-                    "lthr": 170,
-                    "hr_zones": [144, 160, 167, 173, 180]
-                }
-            ]),
+            sport_settings: intervals_icu_client::domains::workout::SportSettings {
+                sports: vec![intervals_icu_client::domains::workout::SportSetting {
+                    id: Some(1783043),
+                    types: Some(vec!["Run".into(), "VirtualRun".into(), "TrailRun".into()]),
+                    threshold_aet_hr: Some(150.0),
+                    lthr: Some(170.0),
+                    hr_zones: vec![json!(144), json!(160), json!(167), json!(173), json!(180)],
+                    ..Default::default()
+                }],
+                age: None,
+                weight: None,
+            },
             gear_list: json!([
                 {
                     "id": "gear-1",
@@ -201,7 +204,9 @@ impl IntervalsClient for MutationTrackingClient {
         Ok(self.gear_list.clone())
     }
 
-    async fn get_sport_settings(&self) -> Result<Value, IntervalsError> {
+    async fn get_sport_settings(
+        &self,
+    ) -> Result<intervals_icu_client::domains::workout::SportSettings, IntervalsError> {
         Ok(self.sport_settings.clone())
     }
 
@@ -318,16 +323,30 @@ impl IntervalsClient for MutationTrackingClient {
         Ok(json!([]))
     }
 
-    async fn get_workout_library(&self) -> Result<Value, IntervalsError> {
-        Ok(json!([]))
+    async fn get_workout_library(
+        &self,
+    ) -> Result<Vec<intervals_icu_client::domains::workout::WorkoutItem>, IntervalsError> {
+        Ok(vec![])
     }
 
-    async fn get_workouts_in_folder(&self, _folder_id: &str) -> Result<Value, IntervalsError> {
-        Ok(json!([]))
+    async fn get_workouts_in_folder(
+        &self,
+        _folder_id: &str,
+    ) -> Result<Vec<intervals_icu_client::domains::workout::WorkoutItem>, IntervalsError> {
+        Ok(vec![])
     }
 
-    async fn create_folder(&self, _folder: &Value) -> Result<Value, IntervalsError> {
-        Ok(json!({}))
+    async fn create_folder(
+        &self,
+        _folder: &Value,
+    ) -> Result<intervals_icu_client::domains::workout::Folder, IntervalsError> {
+        Ok(intervals_icu_client::domains::workout::Folder {
+            id: 0,
+            name: String::new(),
+            description: None,
+            parent_id: None,
+            children: vec![],
+        })
     }
 
     async fn update_folder(

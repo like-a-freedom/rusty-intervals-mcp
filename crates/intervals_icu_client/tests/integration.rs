@@ -830,7 +830,7 @@ async fn download_file_create_error_returns_config() {
 }
 
 #[tokio::test]
-async fn get_workouts_in_folder_non_array_returns_original_json() {
+async fn get_workouts_in_folder_non_array_returns_error() {
     let server = MockServer::start().await;
 
     let body = serde_json::json!({ "meta": { "count": 0 } });
@@ -846,8 +846,11 @@ async fn get_workouts_in_folder_non_array_returns_original_json() {
         SecretString::new("tok".into()),
     );
 
-    let res = client.get_workouts_in_folder("123").await.expect("ok");
-    assert!(res.get("meta").is_some());
+    let res = client.get_workouts_in_folder("123").await;
+    assert!(
+        res.is_err(),
+        "non-array response should fail deserialization"
+    );
 }
 
 #[tokio::test]
@@ -871,7 +874,7 @@ async fn get_gear_list_ok() {
 #[tokio::test]
 async fn get_sport_settings_ok() {
     let server = MockServer::start().await;
-    let body = serde_json::json!({"ftp": 250});
+    let body = serde_json::json!({"sports": [{"name": "Cycling", "ftp": 250}]});
     Mock::given(method("GET"))
         .and(path("/api/v1/athlete/ath/sport-settings"))
         .respond_with(ResponseTemplate::new(200).set_body_json(&body))
@@ -884,10 +887,8 @@ async fn get_sport_settings_ok() {
         SecretString::new("tok".into()),
     );
     let settings = client.get_sport_settings().await.expect("settings");
-    assert_eq!(
-        settings.get("ftp").and_then(serde_json::Value::as_u64),
-        Some(250)
-    );
+    assert_eq!(settings.sports.len(), 1);
+    assert_eq!(settings.sports[0].ftp, Some(250.0));
 }
 
 #[tokio::test]
@@ -1158,12 +1159,11 @@ async fn workout_library_and_folder_paths_match_spec() {
     );
 
     let lib = client.get_workout_library().await.expect("library");
-    assert_eq!(lib.as_array().map(Vec::len), Some(1));
+    assert_eq!(lib.len(), 1);
 
     // get_workouts_in_folder returns the full library (API limitation)
     let filtered = client.get_workouts_in_folder("10").await.expect("workouts");
-    let arr = filtered.as_array().cloned().unwrap_or_default();
-    assert_eq!(arr.len(), 1);
+    assert_eq!(filtered.len(), 1);
 }
 
 #[tokio::test]
@@ -1526,8 +1526,8 @@ async fn get_workouts_in_folder_missing_folder_id_filters_none() {
 
     // API returns full library - client doesn't filter server-side
     let library = serde_json::json!([
-        { "id": 1 },
-        { "id": 2, "folder_id": 99 }
+        { "id": 1, "name": "Item 1" },
+        { "id": 2, "name": "Item 2", "folder_id": 99 }
     ]);
     Mock::given(method("GET"))
         .and(path("/api/v1/athlete/ath/folders"))
@@ -1543,7 +1543,7 @@ async fn get_workouts_in_folder_missing_folder_id_filters_none() {
 
     let res = client.get_workouts_in_folder("123").await.expect("ok");
     // API returns all items (no server-side filtering)
-    assert_eq!(res.as_array().map(Vec::len), Some(2));
+    assert_eq!(res.len(), 2);
 }
 
 #[tokio::test]
@@ -1571,7 +1571,7 @@ async fn get_workouts_in_folder_handles_string_folder_id() {
     let server = MockServer::start().await;
     // API returns full library
     let library = serde_json::json!([
-        { "id": 1, "folder_id": "fav" }
+        { "id": 1, "name": "Favorite", "folder_id": "fav" }
     ]);
     Mock::given(method("GET"))
         .and(path("/api/v1/athlete/ath/folders"))
@@ -1589,12 +1589,8 @@ async fn get_workouts_in_folder_handles_string_folder_id() {
         .get_workouts_in_folder("fav")
         .await
         .expect("workouts");
-    let arr = filtered.as_array().cloned().unwrap_or_default();
-    assert_eq!(arr.len(), 1);
-    assert_eq!(
-        arr[0].get("id").and_then(serde_json::Value::as_i64),
-        Some(1)
-    );
+    assert_eq!(filtered.len(), 1);
+    assert_eq!(filtered[0].id, 1);
 }
 
 #[tokio::test]
@@ -1835,8 +1831,8 @@ async fn delete_gear_handles_non_success() {
 async fn get_workouts_in_folder_empty_folder_id_returns_all() {
     let server = MockServer::start().await;
     let library = serde_json::json!([
-        { "id": 1, "folder_id": "fav" },
-        { "id": 2, "folder_id": "other" }
+        { "id": 1, "name": "Fav", "folder_id": "fav" },
+        { "id": 2, "name": "Other", "folder_id": "other" }
     ]);
     Mock::given(method("GET"))
         .and(path("/api/v1/athlete/ath/folders"))
@@ -1852,15 +1848,14 @@ async fn get_workouts_in_folder_empty_folder_id_returns_all() {
 
     // empty folder id should return all workouts (API returns full library)
     let all = client.get_workouts_in_folder("").await.expect("workouts");
-    let arr = all.as_array().cloned().unwrap_or_default();
-    assert_eq!(arr.len(), 2);
+    assert_eq!(all.len(), 2);
 }
 
 #[tokio::test]
 async fn create_folder_sends_post_request() {
     let server = MockServer::start().await;
     let new_folder = serde_json::json!({"name": "New Plan", "description": "Test"});
-    let response = serde_json::json!({"id": "f1", "name": "New Plan", "description": "Test"});
+    let response = serde_json::json!({"id": 1, "name": "New Plan", "description": "Test"});
     Mock::given(method("POST"))
         .and(path("/api/v1/athlete/ath/folders"))
         .respond_with(ResponseTemplate::new(200).set_body_json(&response))
@@ -1877,11 +1872,8 @@ async fn create_folder_sends_post_request() {
         .create_folder(&new_folder)
         .await
         .expect("create folder");
-    assert_eq!(result.get("id").and_then(|v| v.as_str()), Some("f1"));
-    assert_eq!(
-        result.get("name").and_then(|v| v.as_str()),
-        Some("New Plan")
-    );
+    assert_eq!(result.id, 1);
+    assert_eq!(result.name, "New Plan");
 }
 
 #[tokio::test]

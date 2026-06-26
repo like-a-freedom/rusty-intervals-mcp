@@ -91,58 +91,30 @@ impl ReqwestIntervalsClient {
             return Ok(sport_type_or_id.to_string());
         }
 
-        let payload = <Self as SportSettingsService>::get_sport_settings(self).await?;
+        let settings = <Self as SportSettingsService>::get_sport_settings(self).await?;
 
-        Self::resolve_sport_settings_id_from_payload(&payload, sport_type_or_id)
+        Self::resolve_sport_settings_id_from_settings(&settings, sport_type_or_id)
     }
 
-    fn resolve_sport_settings_id_from_payload(
-        payload: &serde_json::Value,
+    pub(crate) fn resolve_sport_settings_id_from_settings(
+        settings: &crate::domains::workout::SportSettings,
         sport_type_or_id: &str,
     ) -> Result<String> {
         let normalized = Self::normalize_sport(sport_type_or_id);
 
-        let matching_id = |entry: &serde_json::Map<String, serde_json::Value>| {
+        for entry in &settings.sports {
             let matches_type = entry
-                .get("types")
-                .and_then(serde_json::Value::as_array)
-                .is_some_and(|types| {
-                    types
-                        .iter()
-                        .any(|value| value.as_str() == Some(normalized.as_str()))
-                });
-            let matches_name =
-                entry.get("name").and_then(serde_json::Value::as_str) == Some(normalized.as_str());
+                .types
+                .as_ref()
+                .is_some_and(|types| types.iter().any(|t| t == &normalized));
+            let matches_name = entry.name.as_deref() == Some(&normalized);
 
             if !(matches_type || matches_name) {
-                return None;
+                continue;
             }
 
-            entry.get("id").and_then(|value| {
-                value
-                    .as_i64()
-                    .map(|id| id.to_string())
-                    .or_else(|| value.as_str().map(ToString::to_string))
-            })
-        };
-
-        if let Some(items) = payload.as_array() {
-            for entry in items.iter().filter_map(serde_json::Value::as_object) {
-                if let Some(id) = matching_id(entry) {
-                    return Ok(id);
-                }
-            }
-        } else if let Some(object) = payload.as_object() {
-            if let Some(items) = object.get("sports").and_then(serde_json::Value::as_array) {
-                for entry in items.iter().filter_map(serde_json::Value::as_object) {
-                    if let Some(id) = matching_id(entry) {
-                        return Ok(id);
-                    }
-                }
-            } else {
-                if let Some(id) = matching_id(object) {
-                    return Ok(id);
-                }
+            if let Some(id) = entry.id {
+                return Ok(id.to_string());
             }
         }
 
@@ -1325,19 +1297,25 @@ impl RouteService for ReqwestIntervalsClient {
 
 #[async_trait]
 impl WorkoutService for ReqwestIntervalsClient {
-    async fn get_workout_library(&self) -> Result<serde_json::Value> {
-        // API returns folders, plans and workouts together
+    async fn get_workout_library(&self) -> Result<Vec<crate::domains::workout::WorkoutItem>> {
+        // API returns folders, plans and workouts together as a flat array
         let url = self.api_url(&["athlete", &self.athlete_id, "folders"]);
         self.execute_json(self.get_request(&url)).await
     }
 
-    async fn get_workouts_in_folder(&self, _folder_id: &str) -> Result<serde_json::Value> {
+    async fn get_workouts_in_folder(
+        &self,
+        _folder_id: &str,
+    ) -> Result<Vec<crate::domains::workout::WorkoutItem>> {
         // API doesn't have a direct endpoint - return all folders and let client filter
         // For now, return the full library response
         self.get_workout_library().await
     }
 
-    async fn create_folder(&self, folder: &serde_json::Value) -> Result<serde_json::Value> {
+    async fn create_folder(
+        &self,
+        folder: &serde_json::Value,
+    ) -> Result<crate::domains::workout::Folder> {
         let url = self.api_url(&["athlete", &self.athlete_id, "folders"]);
         self.execute_json(self.post_request(&url).json(folder))
             .await
@@ -1360,9 +1338,14 @@ impl WorkoutService for ReqwestIntervalsClient {
 
 #[async_trait]
 impl SportSettingsService for ReqwestIntervalsClient {
-    async fn get_sport_settings(&self) -> Result<serde_json::Value> {
+    async fn get_sport_settings(&self) -> Result<crate::domains::workout::SportSettings> {
         let url = self.api_url(&["athlete", &self.athlete_id, "sport-settings"]);
-        self.execute_json(self.get_request(&url)).await
+        let value: serde_json::Value = self.execute_json(self.get_request(&url)).await?;
+        crate::domains::workout::SportSettings::from_value(&value).ok_or_else(|| {
+            IntervalsError::Config(crate::ConfigError::Other(
+                "failed to parse sport settings response".to_string(),
+            ))
+        })
     }
 
     async fn update_sport_settings(
@@ -1560,7 +1543,7 @@ impl crate::IntervalsClient for ReqwestIntervalsClient {
         <Self as GearService>::get_gear_list(self).await
     }
 
-    async fn get_sport_settings(&self) -> Result<serde_json::Value> {
+    async fn get_sport_settings(&self) -> Result<crate::domains::workout::SportSettings> {
         <Self as SportSettingsService>::get_sport_settings(self).await
     }
 
@@ -1696,15 +1679,21 @@ impl crate::IntervalsClient for ReqwestIntervalsClient {
         <Self as FitnessService>::get_pace_curves(self, days_back, sport).await
     }
 
-    async fn get_workout_library(&self) -> Result<serde_json::Value> {
+    async fn get_workout_library(&self) -> Result<Vec<crate::domains::workout::WorkoutItem>> {
         <Self as WorkoutService>::get_workout_library(self).await
     }
 
-    async fn get_workouts_in_folder(&self, folder_id: &str) -> Result<serde_json::Value> {
+    async fn get_workouts_in_folder(
+        &self,
+        folder_id: &str,
+    ) -> Result<Vec<crate::domains::workout::WorkoutItem>> {
         <Self as WorkoutService>::get_workouts_in_folder(self, folder_id).await
     }
 
-    async fn create_folder(&self, folder: &serde_json::Value) -> Result<serde_json::Value> {
+    async fn create_folder(
+        &self,
+        folder: &serde_json::Value,
+    ) -> Result<crate::domains::workout::Folder> {
         <Self as WorkoutService>::create_folder(self, folder).await
     }
 
@@ -1936,53 +1925,77 @@ mod tests {
 
     #[test]
     fn resolve_sport_settings_id_from_flat_array_matches_type() {
-        let payload = json!([
-            {"id": 1783043, "types": ["Run", "VirtualRun", "TrailRun"]}
-        ]);
+        let settings = crate::domains::workout::SportSettings {
+            sports: vec![crate::domains::workout::SportSetting {
+                id: Some(1783043),
+                types: Some(vec!["Run".into(), "VirtualRun".into(), "TrailRun".into()]),
+                ..Default::default()
+            }],
+            age: None,
+            weight: None,
+        };
 
         let resolved =
-            ReqwestIntervalsClient::resolve_sport_settings_id_from_payload(&payload, "run")
-                .expect("sport type should resolve from flat array");
+            ReqwestIntervalsClient::resolve_sport_settings_id_from_settings(&settings, "run")
+                .expect("sport type should resolve from settings");
 
         assert_eq!(resolved, "1783043");
     }
 
     #[test]
     fn resolve_sport_settings_id_from_nested_sports_matches_name() {
-        let payload = json!({
-            "sports": [
-                {"id": "bike-7", "name": "MountainBikeRide"}
-            ]
-        });
+        let settings = crate::domains::workout::SportSettings {
+            sports: vec![crate::domains::workout::SportSetting {
+                id: Some(-7),
+                name: Some("MountainBikeRide".into()),
+                ..Default::default()
+            }],
+            age: None,
+            weight: None,
+        };
 
-        let resolved = ReqwestIntervalsClient::resolve_sport_settings_id_from_payload(
-            &payload,
+        let resolved = ReqwestIntervalsClient::resolve_sport_settings_id_from_settings(
+            &settings,
             "mountainbikeride",
         )
-        .expect("sport name should resolve from nested sports array");
+        .expect("sport name should resolve from settings");
 
-        assert_eq!(resolved, "bike-7");
+        assert_eq!(resolved, "-7");
     }
 
     #[test]
     fn resolve_sport_settings_id_from_single_object_matches_name() {
-        let payload = json!({"id": 42, "name": "Swim"});
+        let settings = crate::domains::workout::SportSettings {
+            sports: vec![crate::domains::workout::SportSetting {
+                id: Some(42),
+                name: Some("Swim".into()),
+                ..Default::default()
+            }],
+            age: None,
+            weight: None,
+        };
 
         let resolved =
-            ReqwestIntervalsClient::resolve_sport_settings_id_from_payload(&payload, "swim")
+            ReqwestIntervalsClient::resolve_sport_settings_id_from_settings(&settings, "swim")
                 .expect("single sport settings object should resolve by name");
 
         assert_eq!(resolved, "42");
     }
 
     #[test]
-    fn resolve_sport_settings_id_from_payload_rejects_unknown_sport() {
-        let payload = json!([
-            {"id": 1783043, "types": ["Run", "VirtualRun", "TrailRun"]}
-        ]);
+    fn resolve_sport_settings_id_from_settings_rejects_unknown_sport() {
+        let settings = crate::domains::workout::SportSettings {
+            sports: vec![crate::domains::workout::SportSetting {
+                id: Some(1783043),
+                types: Some(vec!["Run".into(), "VirtualRun".into(), "TrailRun".into()]),
+                ..Default::default()
+            }],
+            age: None,
+            weight: None,
+        };
 
         let err =
-            ReqwestIntervalsClient::resolve_sport_settings_id_from_payload(&payload, "PogoStick")
+            ReqwestIntervalsClient::resolve_sport_settings_id_from_settings(&settings, "PogoStick")
                 .expect_err("unknown sport should fail resolution");
 
         assert!(matches!(
