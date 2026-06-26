@@ -46,16 +46,6 @@ pub struct PeriodSummary {
     pub avg_tss_per_week: f32,
 }
 
-/// Zone distribution for period
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ZoneDistribution {
-    pub z1_percent: f32,
-    pub z2_percent: f32,
-    pub z3_percent: f32,
-    pub z4_percent: f32,
-    pub z5_percent: f32,
-}
-
 /// Trend insight
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrendInsight {
