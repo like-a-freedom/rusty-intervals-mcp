@@ -239,11 +239,8 @@ pub fn compute_recovery_quality_index(
     if rhr_current <= 0.0 {
         return None;
     }
-    let rhr_component = if rhr_current > 0.0 {
-        (rhr_baseline / rhr_current).clamp(RHR_COMPONENT_MIN, RHR_COMPONENT_MAX)
-    } else {
-        1.0
-    };
+    // rhr_current > 0.0 is guaranteed by the guard above.
+    let rhr_component = (rhr_baseline / rhr_current).clamp(RHR_COMPONENT_MIN, RHR_COMPONENT_MAX);
     let sleep_component =
         (sleep_hours / IDEAL_SLEEP_HOURS).clamp(SLEEP_COMPONENT_MIN, SLEEP_COMPONENT_MAX);
     Some(
