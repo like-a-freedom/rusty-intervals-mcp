@@ -1,6 +1,6 @@
 [package]
 name = "intervals_icu_mcp"
-version = "2.11.0"
+version = "2.12.0"
 edition = "2024"
 
 [dependencies]
@@ -24,7 +24,7 @@ metrics-exporter-prometheus = "0.18.3"
 tracing = "0.1.44"
 anyhow = "1.0.103"
 tower-http = { version = "0.7.0", features = ["timeout"] }
-uuid = { version = "1.23.3", features = ["v4"] }
+uuid = { version = "1.23.4", features = ["v4"] }
 reqwest = { version = "0.13.4", features = ["json", "query"] }
 hmac = "0.13"
 sha2 = "0.11"
