@@ -26,7 +26,7 @@ use crate::engines::coach_metrics::{
     compute_load_management_metrics, compute_ndli_7d, compute_wdr_metrics, compute_z2_hr_variance,
     derive_espe_metrics, derive_trend_metrics, derive_volume_metrics,
     derive_workout_metrics_context, enrich_anchors_from_activity, extract_sportinfo_anchors,
-    parse_api_load_snapshot, parse_fitness_metrics,
+    parse_api_load_snapshot, parse_fitness_metrics, parse_polarisation_from_api,
 };
 use crate::engines::cp_regression::{fit_cp, validate_cp};
 use crate::engines::trail_execution::compute_terrain_context;
@@ -1195,6 +1195,14 @@ impl AnalyzeTrainingHandler {
             &fetched.activity_details,
             &period_ids,
         ));
+
+        // Polarisation / TID from the most recent activity's zone distribution
+        if let Some(last_id) = period_ids.last()
+            && let Some(last_detail) = fetched.activity_details.get(last_id)
+        {
+            period_context.metrics.polarisation =
+                parse_polarisation_from_api(Some(last_detail), last_detail.get("icu_zone_times"));
+        }
 
         let mut espe_anchors = extract_sportinfo_anchors(fetched.wellness.as_ref());
         if let Some(last_activity_id) = period_ids.last()
