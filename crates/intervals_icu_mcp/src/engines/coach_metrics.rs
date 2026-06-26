@@ -1173,6 +1173,60 @@ pub fn compute_wdr_metrics(
     }
 }
 
+/// Compute WDR 7-day rollup from period activities.
+///
+/// Iterates activity details and aggregates `icu_max_wbal_depletion` values
+/// into a period-level WDR summary with mean depletion percentage, count of
+/// high-depletion sessions, and total sessions with data.
+pub fn compute_wdr_7d_rollup(
+    activity_details: &HashMap<String, Value>,
+    activity_ids: &[String],
+    w_prime: Option<f64>,
+) -> crate::domains::coach::WdrMetrics {
+    use crate::domains::coach::WdrMetrics;
+    use crate::engines::coach_metrics_constants::{
+        WDRM_HIGH_DEPLETION_PCT, WDRM_MAX_DEPLETION_PCT,
+    };
+
+    let mut depletion_pcts: Vec<f64> = Vec::new();
+    let mut high_depletion_count: usize = 0;
+    let mut sessions_with_data: usize = 0;
+
+    for id in activity_ids {
+        let Some(detail) = activity_details.get(id).and_then(Value::as_object) else {
+            continue;
+        };
+
+        let max_depletion = get_number(detail, &["icu_max_wbal_depletion", "max_wbal_depletion"]);
+
+        if let Some(depletion) = max_depletion {
+            sessions_with_data += 1;
+
+            if let Some(wp) = w_prime.filter(|w| *w > 0.0) {
+                let pct = (depletion / wp).clamp(0.0, WDRM_MAX_DEPLETION_PCT);
+                depletion_pcts.push(pct);
+                if pct >= WDRM_HIGH_DEPLETION_PCT {
+                    high_depletion_count += 1;
+                }
+            }
+        }
+    }
+
+    let mean_depletion_pct_7d = if !depletion_pcts.is_empty() {
+        Some(depletion_pcts.iter().sum::<f64>() / depletion_pcts.len() as f64)
+    } else {
+        None
+    };
+
+    WdrMetrics {
+        supported: sessions_with_data > 0,
+        mean_depletion_pct_7d,
+        high_depletion_sessions_7d: high_depletion_count,
+        sessions_with_data_7d: sessions_with_data,
+        ..Default::default()
+    }
+}
+
 /// Compute NDLI from a 7-day window of activities.
 /// Classification: Green ≤2, Amber =3, Red ≥4 high-intensity days.
 pub fn compute_ndli_7d(

@@ -23,8 +23,8 @@ use crate::engines::analysis_fetch::{
 use crate::engines::coach_guidance::{build_alerts, build_guidance};
 use crate::engines::coach_metrics::{
     build_trend_snapshot, classify_tid_model, compute_heat_metrics_7d,
-    compute_load_management_metrics, compute_ndli_7d, compute_wdr_metrics, compute_z2_hr_variance,
-    derive_espe_metrics, derive_trend_metrics, derive_volume_metrics,
+    compute_load_management_metrics, compute_ndli_7d, compute_wdr_7d_rollup, compute_wdr_metrics,
+    compute_z2_hr_variance, derive_espe_metrics, derive_trend_metrics, derive_volume_metrics,
     derive_workout_metrics_context, enrich_anchors_from_activity, extract_sportinfo_anchors,
     parse_api_load_snapshot, parse_fitness_metrics, parse_polarisation_from_api,
 };
@@ -1210,9 +1210,17 @@ impl AnalyzeTrainingHandler {
         {
             enrich_anchors_from_activity(&mut espe_anchors, Some(last_detail));
         }
+        let w_prime = espe_anchors.w_prime;
         let espe_derived = derive_espe_metrics(&espe_anchors, None, None, None, None);
         period_context.metrics.espe_anchors = Some(espe_anchors);
         period_context.metrics.espe_derived = Some(espe_derived);
+
+        // W5 — WDR 7-day rollup across period activities
+        period_context.metrics.wdrm = Some(compute_wdr_7d_rollup(
+            &fetched.activity_details,
+            &period_ids,
+            w_prime,
+        ));
 
         period_context.alerts = build_alerts(&period_context.metrics);
         period_context.guidance = build_guidance(&period_context.metrics, &period_context.alerts);

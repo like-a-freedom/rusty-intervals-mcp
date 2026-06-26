@@ -202,6 +202,16 @@ impl IntervalsMcpHandler {
 }
 
 impl ServerHandler for IntervalsMcpHandler {
+    async fn initialize(
+        &self,
+        request: rmcp::model::InitializeRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<ServerInfo, ErrorData> {
+        metrics::record_mcp_session("started");
+        context.peer.set_peer_info(request);
+        Ok(self.get_info())
+    }
+
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(
             ServerCapabilities::builder()
