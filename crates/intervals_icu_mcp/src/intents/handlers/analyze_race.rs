@@ -12,8 +12,10 @@ use crate::domains::coach::{AnalysisKind, AnalysisWindow, CoachContext, RaceMetr
 use crate::engines::analysis_audit::build_data_audit;
 use crate::engines::analysis_fetch::{RaceFetchRequest, fetch_race_data};
 use crate::engines::coach_guidance::{build_alerts, build_guidance};
-use crate::engines::coach_metrics::{parse_fitness_metrics, parse_wellness_metrics};
-use crate::engines::race_readiness::compute_race_readiness;
+use crate::engines::coach_metrics::{
+    extract_ctl_series, parse_fitness_metrics, parse_wellness_metrics,
+};
+use crate::engines::race_readiness::{compute_ctl_drop, compute_race_readiness};
 use crate::intents::utils::{data_availability_block, filter_activities_by_description};
 
 pub struct AnalyzeRaceHandler;
@@ -279,7 +281,13 @@ impl IntentHandler for AnalyzeRaceHandler {
                 durability_drifting,
                 false,
                 system_mismatch,
-                race_context.metrics.fitness.as_ref().and_then(|f| f.ctl),
+                compute_ctl_drop(
+                    extract_ctl_series(fetched.wellness.as_ref())
+                        .map(|(_, values)| values)
+                        .unwrap_or_default()
+                        .as_slice(),
+                    race_context.metrics.fitness.as_ref().and_then(|f| f.ctl),
+                ),
             );
 
             race_context.metrics.race = Some(RaceMetrics {
