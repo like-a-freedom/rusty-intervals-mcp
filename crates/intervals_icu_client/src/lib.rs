@@ -220,7 +220,7 @@ pub trait IntervalsClient: Send + Sync + 'static {
         output_path: Option<std::path::PathBuf>,
     ) -> Result<Option<String>>;
     async fn get_gear_list(&self) -> Result<serde_json::Value>;
-    async fn get_sport_settings(&self) -> Result<serde_json::Value>;
+    async fn get_sport_settings(&self) -> Result<domains::workout::SportSettings>;
     async fn get_power_curves(
         &self,
         days_back: Option<i32>,
@@ -286,9 +286,12 @@ pub trait IntervalsClient: Send + Sync + 'static {
         days_back: Option<i32>,
         sport: &str,
     ) -> Result<serde_json::Value>;
-    async fn get_workout_library(&self) -> Result<serde_json::Value>;
-    async fn get_workouts_in_folder(&self, folder_id: &str) -> Result<serde_json::Value>;
-    async fn create_folder(&self, folder: &serde_json::Value) -> Result<serde_json::Value>;
+    async fn get_workout_library(&self) -> Result<Vec<domains::workout::WorkoutItem>>;
+    async fn get_workouts_in_folder(
+        &self,
+        folder_id: &str,
+    ) -> Result<Vec<domains::workout::WorkoutItem>>;
+    async fn create_folder(&self, folder: &serde_json::Value) -> Result<domains::workout::Folder>;
     async fn update_folder(
         &self,
         folder_id: &str,

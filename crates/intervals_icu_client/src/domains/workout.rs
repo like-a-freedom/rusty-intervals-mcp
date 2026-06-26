@@ -4,7 +4,20 @@
 //! workout folder/library endpoints and sport settings, replacing
 //! `serde_json::Value` with compile-time-safe structures.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+
+fn deserialize_opt_i64<'de, D>(deserializer: D) -> std::result::Result<Option<i64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value: Option<serde_json::Value> = Option::deserialize(deserializer)?;
+    match value {
+        None => Ok(None),
+        Some(serde_json::Value::Number(n)) => Ok(n.as_i64()),
+        Some(serde_json::Value::String(s)) => Ok(s.parse::<i64>().ok()),
+        _ => Ok(None),
+    }
+}
 
 /// A workout item (folder entry, plan, or individual workout) from the library.
 ///
@@ -19,7 +32,7 @@ pub struct WorkoutItem {
     pub r#type: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_opt_i64")]
     pub folder_id: Option<i64>,
     #[serde(default)]
     pub sport_type: Option<String>,
@@ -54,7 +67,7 @@ pub struct Folder {
 /// - An object with a `"sports"` key containing the array
 ///
 /// Use [`SportSettings::from_value`] to handle both shapes.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct SportSettings {
     /// Per-sport configuration entries.
     pub sports: Vec<SportSetting>,
@@ -104,8 +117,11 @@ impl SportSettings {
 ///
 /// Fields are optional because not every sport has all thresholds,
 /// zones, or units configured.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct SportSetting {
+    /// Sport ID (numeric or string).
+    #[serde(default)]
+    pub id: Option<i64>,
     /// Sport display name (e.g., `"Cycling"`, `"Running"`).
     #[serde(default)]
     pub name: Option<String>,
@@ -281,6 +297,7 @@ mod tests {
     fn sport_settings_roundtrip() {
         let original = SportSettings {
             sports: vec![SportSetting {
+                id: Some(42),
                 name: Some("Run".into()),
                 types: Some(vec!["Run".into()]),
                 sport_type: None,

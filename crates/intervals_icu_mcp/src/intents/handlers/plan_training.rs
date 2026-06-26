@@ -208,7 +208,7 @@ impl IntentHandler for PlanTrainingHandler {
         // --- Parse extracted data ---
         let sport_info = sport_settings
             .as_ref()
-            .map(ExtractedSportSettings::from_value)
+            .map(ExtractedSportSettings::from_sport_settings)
             .unwrap_or_default();
 
         let wellness_snapshot = wellness
@@ -662,33 +662,14 @@ struct ExtractedSportSettings {
 }
 
 impl ExtractedSportSettings {
-    fn from_value(value: &Value) -> Self {
-        let sport_name = value
-            .get("sports")
-            .and_then(|s| s.as_array())
-            .and_then(|arr| arr.first())
-            .and_then(|s| s.get("name"))
-            .and_then(|n| n.as_str())
-            .map(String::from);
-
-        let ftp = value
-            .get("sports")
-            .and_then(|s| s.as_array())
-            .and_then(|arr| arr.first())
-            .and_then(|s| s.get("ftp"))
-            .and_then(|v| v.as_f64());
-
-        let lthr = value
-            .get("sports")
-            .and_then(|s| s.as_array())
-            .and_then(|arr| arr.first())
-            .and_then(|s| s.get("lthr"))
-            .and_then(|v| v.as_f64());
-
+    fn from_sport_settings(
+        settings: &intervals_icu_client::domains::workout::SportSettings,
+    ) -> Self {
+        let first = settings.sports.first();
         Self {
-            sport_name,
-            ftp,
-            lthr,
+            sport_name: first.and_then(|s| s.name.clone()),
+            ftp: first.and_then(|s| s.ftp),
+            lthr: first.and_then(|s| s.lthr),
         }
     }
 }
@@ -1295,7 +1276,10 @@ mod tests {
         let value = json!({
             "sports": [{"name": "Running", "ftp": 280.0, "lthr": 172.0}]
         });
-        let settings = ExtractedSportSettings::from_value(&value);
+        let sport_settings =
+            intervals_icu_client::domains::workout::SportSettings::from_value(&value)
+                .expect("parse sport settings");
+        let settings = ExtractedSportSettings::from_sport_settings(&sport_settings);
         assert_eq!(settings.sport_name.as_deref(), Some("Running"));
         assert_eq!(settings.ftp, Some(280.0));
         assert_eq!(settings.lthr, Some(172.0));
@@ -1304,7 +1288,10 @@ mod tests {
     #[test]
     fn test_extract_sport_settings_empty() {
         let value = json!({});
-        let settings = ExtractedSportSettings::from_value(&value);
+        let sport_settings =
+            intervals_icu_client::domains::workout::SportSettings::from_value(&value)
+                .expect("parse sport settings");
+        let settings = ExtractedSportSettings::from_sport_settings(&sport_settings);
         assert!(settings.sport_name.is_none());
         assert!(settings.ftp.is_none());
         assert!(settings.lthr.is_none());
@@ -1315,7 +1302,10 @@ mod tests {
         let value = json!({
             "sports": [{"name": "Cycling"}]
         });
-        let settings = ExtractedSportSettings::from_value(&value);
+        let sport_settings =
+            intervals_icu_client::domains::workout::SportSettings::from_value(&value)
+                .expect("parse sport settings");
+        let settings = ExtractedSportSettings::from_sport_settings(&sport_settings);
         assert_eq!(settings.sport_name.as_deref(), Some("Cycling"));
         assert!(settings.ftp.is_none());
         assert!(settings.lthr.is_none());
@@ -1726,9 +1716,17 @@ mod tests {
     #[tokio::test]
     async fn test_execute_with_sport_settings() {
         let handler = PlanTrainingHandler::new();
-        let client = Arc::new(MockIntervalsClient::builder().with_sport_settings(json!({
-            "sports": [{"name": "Running", "ftp": 280.0, "lthr": 172.0}]
-        })));
+        let settings = intervals_icu_client::domains::workout::SportSettings {
+            sports: vec![intervals_icu_client::domains::workout::SportSetting {
+                name: Some("Running".into()),
+                ftp: Some(280.0),
+                lthr: Some(172.0),
+                ..Default::default()
+            }],
+            age: None,
+            weight: None,
+        };
+        let client = Arc::new(MockIntervalsClient::builder().with_sport_settings(settings));
         let input = json!({
             "period_start": "2026-03-01",
             "period_end": "2026-03-28",

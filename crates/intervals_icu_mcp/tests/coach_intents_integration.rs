@@ -28,7 +28,7 @@ struct MockCoachClient {
     intervals: Value,
     streams: Value,
     best_efforts: Value,
-    sport_settings: Value,
+    sport_settings: intervals_icu_client::domains::workout::SportSettings,
     hr_histogram: Value,
     power_histogram: Value,
     pace_histogram: Value,
@@ -47,7 +47,7 @@ impl Default for MockCoachClient {
             intervals: json!([]),
             streams: json!({}),
             best_efforts: json!([]),
-            sport_settings: json!([]),
+            sport_settings: intervals_icu_client::domains::workout::SportSettings::default(),
             hr_histogram: json!({}),
             power_histogram: json!({}),
             pace_histogram: json!({}),
@@ -371,21 +371,21 @@ impl MockCoachClient {
                     "form": 14.0
                 }
             ]),
-            sport_settings: json!([
-                {
-                    "id": 1783043,
-                    "types": ["Run", "VirtualRun", "TrailRun"],
-                    "lthr": 171,
-                    "max_hr": 180,
-                    "hr_zones": [144, 160, 167, 173, 180],
-                    "hr_zone_names": ["Recovery", "Endurance", "Tempo", "Threshold", "VO2"],
-                    "threshold_pace": 3.7037036,
-                    "pace_units": "MINS_KM",
-                    "pace_zones": [77.5, 87.7, 94.3, 100.0, 103.4, 111.5, 999.0],
-                    "pace_zone_names": ["Zone 1", "Zone 2", "Zone 3", "Zone 4", "Zone 5a", "Zone 5b", "Zone 5c"],
-                    "load_order": "HR_PACE_POWER"
-                }
-            ]),
+            sport_settings: intervals_icu_client::domains::workout::SportSettings {
+                sports: vec![intervals_icu_client::domains::workout::SportSetting {
+                    id: Some(1783043),
+                    types: Some(vec!["Run".into(), "VirtualRun".into(), "TrailRun".into()]),
+                    lthr: Some(171.0),
+                    max_hr: Some(180.0),
+                    hr_zones: vec![json!(144), json!(160), json!(167), json!(173), json!(180)],
+                    threshold_pace: Some(3.7037036),
+                    pace_units: Some("MINS_KM".into()),
+                    load_order: Some("HR_PACE_POWER".into()),
+                    ..Default::default()
+                }],
+                age: None,
+                weight: None,
+            },
             ..Self::default()
         }
     }
@@ -1198,7 +1198,9 @@ impl IntervalsClient for MockCoachClient {
     async fn get_gear_list(&self) -> Result<Value, IntervalsError> {
         Ok(json!([]))
     }
-    async fn get_sport_settings(&self) -> Result<Value, IntervalsError> {
+    async fn get_sport_settings(
+        &self,
+    ) -> Result<intervals_icu_client::domains::workout::SportSettings, IntervalsError> {
         Ok(self.sport_settings.clone())
     }
     async fn get_power_curves(
@@ -1284,14 +1286,28 @@ impl IntervalsClient for MockCoachClient {
     ) -> Result<Value, IntervalsError> {
         Ok(json!([]))
     }
-    async fn get_workout_library(&self) -> Result<Value, IntervalsError> {
-        Ok(json!([]))
+    async fn get_workout_library(
+        &self,
+    ) -> Result<Vec<intervals_icu_client::domains::workout::WorkoutItem>, IntervalsError> {
+        Ok(vec![])
     }
-    async fn get_workouts_in_folder(&self, _folder_id: &str) -> Result<Value, IntervalsError> {
-        Ok(json!([]))
+    async fn get_workouts_in_folder(
+        &self,
+        _folder_id: &str,
+    ) -> Result<Vec<intervals_icu_client::domains::workout::WorkoutItem>, IntervalsError> {
+        Ok(vec![])
     }
-    async fn create_folder(&self, _folder: &Value) -> Result<Value, IntervalsError> {
-        Ok(json!({}))
+    async fn create_folder(
+        &self,
+        _folder: &Value,
+    ) -> Result<intervals_icu_client::domains::workout::Folder, IntervalsError> {
+        Ok(intervals_icu_client::domains::workout::Folder {
+            id: 0,
+            name: String::new(),
+            description: None,
+            parent_id: None,
+            children: vec![],
+        })
     }
     async fn update_folder(
         &self,

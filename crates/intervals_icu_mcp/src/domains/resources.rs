@@ -396,7 +396,15 @@ mod tests {
                 name: Some("Test Athlete".into()),
             })
             .with_fitness_summary(json!({"ctl": 80, "atl": 60, "tsb": 20}))
-            .with_sport_settings(json!([{"sport": "cycling", "ftp": 250}]));
+            .with_sport_settings(intervals_icu_client::domains::workout::SportSettings {
+                sports: vec![intervals_icu_client::domains::workout::SportSetting {
+                    name: Some("cycling".into()),
+                    ftp: Some(250.0),
+                    ..Default::default()
+                }],
+                age: None,
+                weight: None,
+            });
         let text = build_athlete_profile_text(&client).await.unwrap();
         assert!(text.contains("athlete-1"), "should contain athlete id");
         assert!(text.contains("Test Athlete"), "should contain athlete name");
@@ -412,7 +420,7 @@ mod tests {
                 name: None,
             })
             .with_fitness_summary(json!({"ctl": 50}))
-            .with_sport_settings(json!([]));
+            .with_sport_settings(intervals_icu_client::domains::workout::SportSettings::default());
         let text = build_athlete_profile_text(&client).await.unwrap();
         assert!(text.contains("athlete-2"));
         assert!(text.contains("null"), "name should be null when None");
@@ -426,7 +434,7 @@ mod tests {
                 name: None,
             })
             .with_fitness_summary(json!(null))
-            .with_sport_settings(json!([]));
+            .with_sport_settings(intervals_icu_client::domains::workout::SportSettings::default());
         let text = build_athlete_profile_text(&client).await.unwrap();
         assert!(text.contains("athlete-3"));
     }

@@ -111,6 +111,7 @@ fn clone_intervals_error(
 #[cfg(test)]
 pub(crate) mod mock {
     use async_trait::async_trait;
+    use intervals_icu_client::domains::workout::{Folder, SportSettings, WorkoutItem};
     use intervals_icu_client::{
         ActivityMessage, ActivitySummary, AthleteProfile, BestEffortsOptions, DownloadProgress,
         Event, EventCategory, IntervalsClient, IntervalsError,
@@ -168,7 +169,7 @@ pub(crate) mod mock {
         pub wellness: Option<Value>,
         pub activity_details: HashMap<String, Value>,
         pub athlete_profile: Option<AthleteProfile>,
-        pub sport_settings: Option<Value>,
+        pub sport_settings: Option<SportSettings>,
         pub gear_list: Option<Value>,
         pub update_error: Option<String>,
         pub upcoming_workouts: Option<Value>,
@@ -268,7 +269,7 @@ pub(crate) mod mock {
             self
         }
 
-        pub fn with_sport_settings(mut self, settings: Value) -> Self {
+        pub fn with_sport_settings(mut self, settings: SportSettings) -> Self {
             self.sport_settings = Some(settings);
             self
         }
@@ -490,8 +491,8 @@ pub(crate) mod mock {
             Ok(self.gear_list.clone().unwrap_or_else(|| json!([])))
         }
 
-        async fn get_sport_settings(&self) -> Result<Value, IntervalsError> {
-            Ok(self.sport_settings.clone().unwrap_or_else(|| json!([])))
+        async fn get_sport_settings(&self) -> Result<SportSettings, IntervalsError> {
+            Ok(self.sport_settings.clone().unwrap_or_default())
         }
 
         async fn get_power_curves(
@@ -608,16 +609,25 @@ pub(crate) mod mock {
             Ok(json!([]))
         }
 
-        async fn get_workout_library(&self) -> Result<Value, IntervalsError> {
-            Ok(json!([]))
+        async fn get_workout_library(&self) -> Result<Vec<WorkoutItem>, IntervalsError> {
+            Ok(vec![])
         }
 
-        async fn get_workouts_in_folder(&self, _folder_id: &str) -> Result<Value, IntervalsError> {
-            Ok(json!([]))
+        async fn get_workouts_in_folder(
+            &self,
+            _folder_id: &str,
+        ) -> Result<Vec<WorkoutItem>, IntervalsError> {
+            Ok(vec![])
         }
 
-        async fn create_folder(&self, _folder: &Value) -> Result<Value, IntervalsError> {
-            Ok(json!({}))
+        async fn create_folder(&self, _folder: &Value) -> Result<Folder, IntervalsError> {
+            Ok(Folder {
+                id: 0,
+                name: String::new(),
+                description: None,
+                parent_id: None,
+                children: vec![],
+            })
         }
 
         async fn update_folder(
@@ -734,6 +744,7 @@ pub(crate) mod mock {
 mod tests {
     use super::mock::MockIntervalsClient;
     use super::*;
+    use intervals_icu_client::domains::workout::SportSettings;
     use intervals_icu_client::{
         ActivityMessage, ActivitySummary, ApiError, AthleteProfile, ConfigError, Event,
         EventCategory, IntervalsClient, IntervalsError, ValidationError,
@@ -1045,9 +1056,16 @@ mod tests {
 
     #[test]
     fn test_mock_with_sport_settings() {
-        let client =
-            MockIntervalsClient::builder().with_sport_settings(json!([{"sport": "cycling"}]));
-        assert_eq!(client.sport_settings, Some(json!([{"sport": "cycling"}])));
+        let settings = SportSettings {
+            sports: vec![intervals_icu_client::domains::workout::SportSetting {
+                name: Some("cycling".into()),
+                ..Default::default()
+            }],
+            age: None,
+            weight: None,
+        };
+        let client = MockIntervalsClient::builder().with_sport_settings(settings);
+        assert!(client.sport_settings.is_some());
     }
 
     #[test]
@@ -1199,16 +1217,25 @@ mod tests {
 
     #[tokio::test]
     async fn test_mock_get_sport_settings_some() {
-        let client = MockIntervalsClient::builder().with_sport_settings(json!([{"sport": "run"}]));
+        let settings = SportSettings {
+            sports: vec![intervals_icu_client::domains::workout::SportSetting {
+                name: Some("run".into()),
+                ..Default::default()
+            }],
+            age: None,
+            weight: None,
+        };
+        let client = MockIntervalsClient::builder().with_sport_settings(settings);
         let result = client.get_sport_settings().await.unwrap();
-        assert_eq!(result, json!([{"sport": "run"}]));
+        assert_eq!(result.sports.len(), 1);
+        assert_eq!(result.sports[0].name.as_deref(), Some("run"));
     }
 
     #[tokio::test]
     async fn test_mock_get_sport_settings_none() {
         let client = MockIntervalsClient::default();
         let result = client.get_sport_settings().await.unwrap();
-        assert_eq!(result, json!([]));
+        assert!(result.sports.is_empty());
     }
 
     #[tokio::test]
@@ -1591,21 +1618,21 @@ mod tests {
     async fn test_mock_get_workout_library() {
         let client = MockIntervalsClient::default();
         let result = client.get_workout_library().await.unwrap();
-        assert_eq!(result, json!([]));
+        assert!(result.is_empty());
     }
 
     #[tokio::test]
     async fn test_mock_get_workouts_in_folder() {
         let client = MockIntervalsClient::default();
         let result = client.get_workouts_in_folder("folder-1").await.unwrap();
-        assert_eq!(result, json!([]));
+        assert!(result.is_empty());
     }
 
     #[tokio::test]
     async fn test_mock_create_folder() {
         let client = MockIntervalsClient::default();
         let result = client.create_folder(&json!({})).await.unwrap();
-        assert_eq!(result, json!({}));
+        assert_eq!(result.id, 0);
     }
 
     #[tokio::test]

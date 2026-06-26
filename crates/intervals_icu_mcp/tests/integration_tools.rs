@@ -362,7 +362,7 @@ async fn integration_get_sport_settings() {
     );
     let settings = result.unwrap();
 
-    println!("Sport settings: {}", settings);
+    println!("Sport settings: {:?}", settings);
 }
 
 // ============================================================================
@@ -511,7 +511,7 @@ async fn integration_get_workout_library() {
     );
     let library = result.unwrap();
 
-    println!("Workout library: {}", library);
+    println!("Workout library: {:?}", library);
 }
 
 #[tokio::test]
@@ -524,7 +524,7 @@ async fn integration_get_workouts_in_folder() {
 
     // This might fail if folder doesn't exist, which is OK
     match result {
-        Ok(workouts) => println!("Workouts in folder: {}", workouts),
+        Ok(workouts) => println!("Workouts in folder: {:?}", workouts),
         Err(e) => println!("Folder not found or error (expected): {}", e),
     }
 }

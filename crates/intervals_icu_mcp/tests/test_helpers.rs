@@ -6,6 +6,7 @@
 //! - Test fixtures and builders
 
 use async_trait::async_trait;
+use intervals_icu_client::domains::workout::{Folder, SportSettings, WorkoutItem};
 use intervals_icu_client::{
     ActivitySummary, AthleteProfile, BestEffortsOptions, DownloadProgress, Event, EventCategory,
     IntervalsClient, IntervalsError,
@@ -190,8 +191,8 @@ impl IntervalsClient for MockClient {
         Ok(serde_json::json!([]))
     }
 
-    async fn get_sport_settings(&self) -> Result<Value, IntervalsError> {
-        Ok(serde_json::json!([]))
+    async fn get_sport_settings(&self) -> Result<SportSettings, IntervalsError> {
+        Ok(SportSettings::default())
     }
 
     async fn get_power_curves(
@@ -318,19 +319,25 @@ impl IntervalsClient for MockClient {
         Ok(serde_json::json!([]))
     }
 
-    async fn get_workout_library(&self) -> Result<Value, IntervalsError> {
-        Ok(serde_json::json!([]))
+    async fn get_workout_library(&self) -> Result<Vec<WorkoutItem>, IntervalsError> {
+        Ok(vec![])
     }
 
-    async fn get_workouts_in_folder(&self, _folder_id: &str) -> Result<Value, IntervalsError> {
-        Ok(serde_json::json!([]))
+    async fn get_workouts_in_folder(
+        &self,
+        _folder_id: &str,
+    ) -> Result<Vec<WorkoutItem>, IntervalsError> {
+        Ok(vec![])
     }
 
-    async fn create_folder(&self, _folder: &Value) -> Result<Value, IntervalsError> {
-        Ok(serde_json::json!({
-            "id": "test_folder",
-            "name": "Test Folder"
-        }))
+    async fn create_folder(&self, _folder: &Value) -> Result<Folder, IntervalsError> {
+        Ok(Folder {
+            id: 0,
+            name: "Test Folder".to_string(),
+            description: None,
+            parent_id: None,
+            children: vec![],
+        })
     }
 
     async fn update_folder(
