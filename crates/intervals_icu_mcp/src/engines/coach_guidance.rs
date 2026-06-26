@@ -66,6 +66,11 @@ const FATIGUE_INDEX_ALERT: f64 = 2.5;
 /// Durability Index: low durability alert threshold (< this value)
 const DURABILITY_INDEX_ALERT: f64 = 0.85;
 
+/// Race readiness: alert threshold for suboptimal preparation (< this score)
+const RACE_READINESS_ALERT: i32 = 60;
+/// Race readiness: below this score the alert is Priority, otherwise Caution
+const RACE_READINESS_CRITICAL: i32 = 40;
+
 // =============================================================================
 // Alert Generation
 // =============================================================================
@@ -448,6 +453,28 @@ pub fn build_alerts(metrics: &CoachMetrics) -> Vec<CoachAlert> {
         });
     }
 
+    // Low race-readiness alert (score < 60 indicates suboptimal preparation)
+    if let Some(race) = &metrics.race_readiness
+        && race.supported
+        && let Some(score) = race.readiness_score
+        && score < RACE_READINESS_ALERT
+    {
+        alerts.push(CoachAlert {
+            severity: if score < RACE_READINESS_CRITICAL {
+                CoachAlertSeverity::Priority
+            } else {
+                CoachAlertSeverity::Caution
+            },
+            code: "low_race_readiness".to_string(),
+            title: "Suboptimal race readiness".to_string(),
+            evidence: vec![format!(
+                "Readiness score {:.0}/100 (threshold: {:.0})",
+                score, RACE_READINESS_ALERT
+            )],
+            section: "readiness".to_string(),
+        });
+    }
+
     alerts
 }
 
@@ -604,6 +631,18 @@ pub fn build_guidance(metrics: &CoachMetrics, alerts: &[CoachAlert]) -> CoachGui
             .push("Review schedule constraints or adjust the training plan.".to_string());
     }
 
+    // Race readiness guidance
+    if has_alert_code(alerts, "low_race_readiness") {
+        guidance.findings.push(
+            "Race readiness score is suboptimal — review TSB, durability, and neural load."
+                .to_string(),
+        );
+        guidance.suggestions.push(
+            "Focus on taper quality: ensure TSB is positive, durability is stable, and neural load is balanced."
+                .to_string(),
+        );
+    }
+
     // NDLI guidance
     if has_alert_code(alerts, "ndli_overload") {
         guidance
@@ -692,8 +731,8 @@ mod tests {
     use super::*;
     use crate::domains::coach::{
         AcwrMetrics, CoachMetrics, ConsistencyMetrics, DecouplingMetrics, FitnessMetrics,
-        HeatMetrics, LoadManagementMetrics, NdliMetrics, PolarisationMetrics, VolumeMetrics,
-        WdrMetrics, WellnessMetrics, WorkoutMetricsContext,
+        HeatMetrics, LoadManagementMetrics, NdliMetrics, PolarisationMetrics, RaceReadinessMetrics,
+        VolumeMetrics, WdrMetrics, WellnessMetrics, WorkoutMetricsContext,
     };
 
     #[test]
@@ -1179,6 +1218,54 @@ mod tests {
 
         let alerts = build_alerts(&metrics);
         assert!(!alerts.iter().any(|a| a.code == "low_consistency"));
+    }
+
+    #[test]
+    fn low_race_readiness_creates_alert_and_guidance() {
+        let metrics = CoachMetrics {
+            race_readiness: Some(RaceReadinessMetrics {
+                supported: true,
+                readiness_score: Some(35),
+                tsb_tier: "neutral".into(),
+                durability_tier: "stable".into(),
+                neural_tier: "balanced".into(),
+                system_alignment: "aligned".into(),
+                taper_quality: "detected_drop".into(),
+            }),
+            ..Default::default()
+        };
+
+        let alerts = build_alerts(&metrics);
+        let guidance = build_guidance(&metrics, &alerts);
+
+        assert!(alerts.iter().any(|a| a.code == "low_race_readiness"));
+        // Score 35 < 40 → Priority severity
+        assert!(
+            alerts
+                .iter()
+                .any(|a| a.code == "low_race_readiness"
+                    && a.severity == CoachAlertSeverity::Priority)
+        );
+        assert!(guidance.suggestions.iter().any(|s| s.contains("taper")));
+    }
+
+    #[test]
+    fn high_race_readiness_does_not_create_alert() {
+        let metrics = CoachMetrics {
+            race_readiness: Some(RaceReadinessMetrics {
+                supported: true,
+                readiness_score: Some(85),
+                tsb_tier: "fresh".into(),
+                durability_tier: "stable".into(),
+                neural_tier: "balanced".into(),
+                system_alignment: "aligned".into(),
+                taper_quality: "optimal".into(),
+            }),
+            ..Default::default()
+        };
+
+        let alerts = build_alerts(&metrics);
+        assert!(!alerts.iter().any(|a| a.code == "low_race_readiness"));
     }
 
     #[test]
