@@ -493,14 +493,16 @@ pub fn derive_workout_metrics_context(
     interval_count: Option<usize>,
     avg_hr: Option<f64>,
     avg_power: Option<f64>,
+    efficiency_factor: Option<f64>,
+    aerobic_decoupling: Option<DecouplingMetrics>,
     execution_notes: Vec<String>,
 ) -> WorkoutMetricsContext {
     WorkoutMetricsContext {
         interval_count,
         avg_hr,
         avg_power,
-        efficiency_factor: None,
-        aerobic_decoupling: None,
+        efficiency_factor,
+        aerobic_decoupling,
         execution_notes,
     }
 }
