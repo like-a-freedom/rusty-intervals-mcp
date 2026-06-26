@@ -279,7 +279,12 @@ impl AnalysisEngine {
             (TrendDirection::Stable, slope.abs())
         };
 
-        let description = Self::trend_description(metric_name, &direction, magnitude);
+        // Baseline = mean of recent values, used to express the slope as a
+        // baseline-relative percentage per period instead of raw magnitude*100.
+        let baseline: f32 =
+            recent_vec.iter().map(|(_, v)| *v).sum::<f32>() / recent_vec.len() as f32;
+
+        let description = Self::trend_description(metric_name, &direction, magnitude, baseline);
 
         Some(TrendInsight {
             metric: metric_name.into(),
@@ -324,22 +329,29 @@ impl AnalysisEngine {
         (slope, intercept)
     }
 
-    /// Generate trend description
-    fn trend_description(metric: &str, direction: &TrendDirection, magnitude: f32) -> String {
+    /// Generate trend description.
+    ///
+    /// `magnitude` is the absolute slope (change per data point). `baseline` is
+    /// the mean of the window's values. The percentage is computed relative to
+    /// that baseline so the description reads e.g. "8.7% per period" rather than
+    /// the nonsensical raw `magnitude * 100`.
+    fn trend_description(
+        metric: &str,
+        direction: &TrendDirection,
+        magnitude: f32,
+        baseline: f32,
+    ) -> String {
+        let pct = if baseline.abs() > 0.0 {
+            (magnitude / baseline) * 100.0
+        } else {
+            0.0
+        };
         match direction {
             TrendDirection::Increasing => {
-                format!(
-                    "{} increasing by {:.1}% per period",
-                    metric,
-                    magnitude * 100.0
-                )
+                format!("{} increasing by {:.1}% per period", metric, pct)
             }
             TrendDirection::Decreasing => {
-                format!(
-                    "{} decreasing by {:.1}% per period",
-                    metric,
-                    magnitude * 100.0
-                )
+                format!("{} decreasing by {:.1}% per period", metric, pct)
             }
             TrendDirection::Stable => {
                 format!("{} stable (no significant change)", metric)
@@ -745,6 +757,33 @@ mod tests {
         let trend = AnalysisEngine::analyze_trend(&stable_data, 30, "Test");
         assert!(trend.is_some());
         assert!(matches!(trend.unwrap().direction, TrendDirection::Stable));
+    }
+
+    #[test]
+    fn test_trend_description_uses_baseline_relative_percentage() {
+        use chrono::Duration;
+
+        // [100, 110, 120, 130]: slope = 10/step, mean baseline = 115
+        // Correct percentage per period = 10/115*100 ≈ 8.7%
+        // Buggy behavior printed magnitude*100 = 1000%.
+        let now = chrono::Utc::now().date_naive();
+        let data = vec![
+            (now - Duration::days(21), 100.0),
+            (now - Duration::days(14), 110.0),
+            (now - Duration::days(7), 120.0),
+            (now, 130.0),
+        ];
+        let trend = AnalysisEngine::analyze_trend(&data, 30, "Volume").unwrap();
+        assert!(
+            trend.description.contains("8.7%"),
+            "expected baseline-relative percentage, got: {}",
+            trend.description
+        );
+        assert!(
+            !trend.description.contains("1000%"),
+            "description should not contain nonsensical magnitude*100, got: {}",
+            trend.description
+        );
     }
 
     #[test]
