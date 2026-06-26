@@ -506,10 +506,53 @@ impl AnalyzeTrainingHandler {
                 .and_then(|o| o.get("total_elevation_gain"))
                 .and_then(Value::as_f64)
                 .unwrap_or(0.0);
-            let hr_drift = workout_metrics
-                .aerobic_decoupling
-                .as_ref()
-                .map(|d| d.decoupling_pct as f32);
+
+            // Compute HR drift from stream data when available
+            let hr_drift_from_streams = fetched.streams.as_ref().and_then(|s| {
+                let hr_vec = s
+                    .get("heartrate")
+                    .and_then(Value::as_array)
+                    .map(|arr| arr.iter().filter_map(|v| v.as_f64()).collect::<Vec<_>>())?;
+                if hr_vec.len() < 2 {
+                    return None;
+                }
+                let mid = hr_vec.len() / 2;
+                let first_half_avg = hr_vec[..mid].iter().sum::<f64>() / mid as f64;
+                let second_half_avg =
+                    hr_vec[mid..].iter().sum::<f64>() / (hr_vec.len() - mid) as f64;
+                let avg = hr_vec.iter().sum::<f64>() / hr_vec.len() as f64;
+                Some(AnalysisEngine::calculate_hr_drift(
+                    avg as u32,
+                    first_half_avg as u32,
+                    second_half_avg as u32,
+                ))
+            });
+
+            // Compute pace variance from stream data when available
+            let pace_variance = fetched.streams.as_ref().and_then(|s| {
+                let paces: Vec<f32> =
+                    s.get("velocity_smooth")
+                        .and_then(Value::as_array)
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|v| v.as_f64())
+                                .filter(|&v| v > 0.0)
+                                .map(|v| (60.0 / (v * 60.0 / 1000.0)) as f32)
+                                .collect()
+                        })?;
+                if paces.len() < 2 {
+                    return None;
+                }
+                Some(AnalysisEngine::calculate_pace_variance(&paces))
+            });
+
+            let hr_drift = hr_drift_from_streams.or_else(|| {
+                workout_metrics
+                    .aerobic_decoupling
+                    .as_ref()
+                    .map(|d| d.decoupling_pct as f32)
+            });
+
             AnalysisWorkoutMetrics {
                 duration_minutes: (duration_secs / 60) as u32,
                 distance_km: (distance_m / 1000.0) as f32,
@@ -517,6 +560,7 @@ impl AnalyzeTrainingHandler {
                 avg_hr: avg_hr.map(|v| v as u32),
                 avg_power: avg_power.map(|v| v as f32),
                 hr_drift_percent: hr_drift,
+                pace_variance_percent: pace_variance,
                 ..Default::default()
             }
         };
@@ -622,6 +666,23 @@ impl AnalyzeTrainingHandler {
                 "Execution Context\n  {}",
                 lines.join("\n  ")
             )));
+        }
+
+        // HR Drift and Pace Variance (computed from stream data)
+        if analysis_mode.show_execution_context() {
+            let mut stream_metrics = Vec::new();
+            if let Some(drift) = analysis_metrics.hr_drift_percent {
+                stream_metrics.push(format!("HR Drift: {:.1}%", drift));
+            }
+            if let Some(variance) = analysis_metrics.pace_variance_percent {
+                stream_metrics.push(format!("Pace Variance: {:.1}%", variance));
+            }
+            if !stream_metrics.is_empty() {
+                content.push(ContentBlock::markdown(format!(
+                    "Stream Metrics\n  {}",
+                    stream_metrics.join("\n  ")
+                )));
+            }
         }
 
         if let Some(espe_text) = render_espe_section(

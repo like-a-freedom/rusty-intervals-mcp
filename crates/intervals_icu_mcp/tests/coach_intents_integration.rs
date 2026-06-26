@@ -2874,6 +2874,91 @@ fn with_p0_performance_intelligence_client() -> MockCoachClient {
 }
 
 #[tokio::test]
+async fn analyze_training_single_includes_hr_drift_and_pace_variance_from_streams() {
+    let client = Arc::new(MockCoachClient {
+        activities: vec![MockCoachClient::activity(
+            "drift-1",
+            "Long Steady Run",
+            "2026-03-04",
+        )],
+        activity_details: json!({
+            "distance": 20000.0,
+            "moving_time": 5400,
+            "average_heartrate": 150.0,
+            "average_watts": 220.0,
+            "total_elevation_gain": 100.0
+        }),
+        streams: json!({
+            "heartrate": [140.0, 141.0, 142.0, 143.0, 144.0, 145.0, 155.0, 156.0, 157.0, 158.0],
+            "velocity_smooth": [4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0],
+            "watts": [220.0, 220.0, 220.0, 220.0, 220.0, 220.0, 220.0, 220.0, 220.0, 220.0]
+        }),
+        ..MockCoachClient::default()
+    });
+    let handler = AnalyzeTrainingHandler::new();
+
+    let output = handler
+        .execute(
+            json!({
+                "target_type": "single",
+                "date": "2026-03-04",
+                "analysis_type": "detailed"
+            }),
+            client,
+            None,
+        )
+        .await
+        .unwrap();
+
+    let markdown = markdown_text(&output);
+    assert!(
+        markdown.contains("HR Drift"),
+        "Expected 'HR Drift' in output:\n{}",
+        markdown
+    );
+}
+
+#[tokio::test]
+async fn analyze_training_single_hr_drift_absent_when_no_streams() {
+    let client = Arc::new(MockCoachClient {
+        activities: vec![MockCoachClient::activity(
+            "nodrift-1",
+            "Short Session",
+            "2026-03-04",
+        )],
+        activity_details: json!({
+            "distance": 5000.0,
+            "moving_time": 1800,
+            "average_heartrate": 145.0,
+            "total_elevation_gain": 30.0
+        }),
+        streams: json!({}),
+        ..MockCoachClient::default()
+    });
+    let handler = AnalyzeTrainingHandler::new();
+
+    let output = handler
+        .execute(
+            json!({
+                "target_type": "single",
+                "date": "2026-03-04",
+                "analysis_type": "detailed"
+            }),
+            client,
+            None,
+        )
+        .await
+        .unwrap();
+
+    let markdown = markdown_text(&output);
+    assert!(
+        !markdown.contains("HR Drift"),
+        "HR Drift should not appear without stream data:\n{}",
+        markdown
+    );
+}
+
+#[tokio::test]
 async fn p0_performance_intelligence_full_pipeline() {
     let client = Arc::new(with_p0_performance_intelligence_client());
     let handler = AnalyzeTrainingHandler::new();
