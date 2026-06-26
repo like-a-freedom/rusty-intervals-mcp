@@ -12,6 +12,7 @@ use std::sync::Arc;
 use super::render::analysis::*;
 use crate::domains::coach::{AnalysisKind, AnalysisWindow, CoachContext};
 use crate::engines::adaptation::classify_curve_profile;
+use crate::engines::analysis::{AnalysisEngine, WorkoutMetrics as AnalysisWorkoutMetrics};
 use crate::engines::analysis_audit::build_data_audit;
 use crate::engines::analysis_fetch::{
     PeriodFetchRequest, SingleWorkoutFetchRequest, build_daily_load_series, build_previous_window,
@@ -489,6 +490,37 @@ impl AnalyzeTrainingHandler {
             derive_workout_metrics_context(work_interval_count, avg_hr, avg_power, execution_notes);
         workout_metrics.efficiency_factor = efficiency_factor;
         workout_metrics.aerobic_decoupling = aerobic_decoupling;
+
+        // Grade the workout using the analysis engine
+        let analysis_metrics = {
+            let obj = workout_detail.and_then(Value::as_object);
+            let duration_secs = obj
+                .and_then(|o| o.get("moving_time"))
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            let distance_m = obj
+                .and_then(|o| o.get("distance"))
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0);
+            let elevation = obj
+                .and_then(|o| o.get("total_elevation_gain"))
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0);
+            let hr_drift = workout_metrics
+                .aerobic_decoupling
+                .as_ref()
+                .map(|d| d.decoupling_pct as f32);
+            AnalysisWorkoutMetrics {
+                duration_minutes: (duration_secs / 60) as u32,
+                distance_km: (distance_m / 1000.0) as f32,
+                elevation_gain_m: elevation as f32,
+                avg_hr: avg_hr.map(|v| v as u32),
+                avg_power: avg_power.map(|v| v as f32),
+                hr_drift_percent: hr_drift,
+                ..Default::default()
+            }
+        };
+        let workout_grade = AnalysisEngine::grade_workout(&analysis_metrics, None);
         workout_context.metrics.workout = Some(workout_metrics);
 
         // P0 — Performance Intelligence
@@ -515,6 +547,10 @@ impl AnalyzeTrainingHandler {
             date,
             activity_id,
             analysis_mode.as_str()
+        )));
+        content.push(ContentBlock::markdown(format!(
+            "Workout Grade: {:?}",
+            workout_grade
         )));
 
         // Build basic metrics table
@@ -3489,6 +3525,42 @@ mod tests {
             desc.contains("single"),
             "Description should mention 'single', got: {}",
             desc
+        );
+    }
+
+    #[tokio::test]
+    async fn test_single_workout_includes_grade() {
+        let handler = AnalyzeTrainingHandler::new();
+        let client = Arc::new(
+            MockIntervalsClient::with_activity("12345", "2026-03-01", "Test Workout")
+                .with_workout_detail(json!({
+                    "distance": 10000.0,
+                    "moving_time": 3600,
+                    "average_heartrate": 150.0,
+                    "average_watts": 250.0,
+                    "total_elevation_gain": 200.0,
+                })),
+        );
+
+        let input = json!({
+            "target_type": "single",
+            "date": "2026-03-01",
+            "analysis_type": "summary"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = content_text(&output.content);
+
+        let has_grade = content_str.contains("Grade")
+            || content_str.contains("grade")
+            || content_str.contains("Grade:")
+            || content_str.contains("Workout Grade");
+        assert!(
+            has_grade,
+            "Output should contain grade information (A/B/C/D/F). Got: {}",
+            &content_str[..content_str.len().min(500)]
         );
     }
 }
