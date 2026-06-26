@@ -387,8 +387,11 @@ mod tests {
 
     #[test]
     fn record_mcp_session_does_not_panic() {
-        // Structural test: the function exists and handles calls gracefully
-        // without a Prometheus handle (no-op in test environment).
+        // Exercises the metrics function that the ServerHandler::initialize
+        // override calls. The override itself can't be invoked in a unit test
+        // because rmcp's Peer::new is pub(crate), making RequestContext
+        // impossible to construct without a live transport. This test verifies
+        // the function is callable and handles the no-Prometheus-handle case.
         record_mcp_session("started");
         record_mcp_session("stopped");
     }
