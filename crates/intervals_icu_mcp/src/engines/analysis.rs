@@ -255,7 +255,7 @@ impl AnalysisEngine {
             return None;
         }
 
-        let now = chrono::Local::now().date_naive();
+        let now = chrono::Utc::now().date_naive();
         let cutoff = now - Duration::days(window_days as i64);
 
         let recent: Vec<&(NaiveDate, f32)> = data_points
