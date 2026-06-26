@@ -1,32 +1,12 @@
 /// Analysis Engine - Training performance analysis
 ///
 /// Implements:
-/// - Single workout analysis
+/// - Single workout analysis (grade_workout, HR drift, pace variance)
 /// - Period summary
-/// - Like-for-like comparison
-/// - Trend analysis (7d, 30d, 90d, 365d)
+/// - Like-for-like comparison (compare_periods)
+/// - Trend analysis (analyze_trend with 7d, 30d, 90d, 365d windows)
 use chrono::{Duration, NaiveDate};
 use serde::{Deserialize, Serialize};
-
-/// Analysis types
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum AnalysisType {
-    SingleWorkout,
-    PeriodSummary,
-    LikeForLike,
-    TrendAnalysis,
-}
-
-/// Single workout analysis result
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkoutAnalysis {
-    pub workout_id: String,
-    pub name: String,
-    pub date: NaiveDate,
-    pub metrics: WorkoutMetrics,
-    pub grade: WorkoutGrade,
-    pub insights: Vec<String>,
-}
 
 /// Workout metrics
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -52,16 +32,6 @@ pub enum WorkoutGrade {
     C,
     D,
     F,
-}
-
-/// Period analysis result
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PeriodAnalysis {
-    pub start_date: NaiveDate,
-    pub end_date: NaiveDate,
-    pub summary: PeriodSummary,
-    pub zone_distribution: ZoneDistribution,
-    pub trends: Vec<TrendInsight>,
 }
 
 /// Period summary metrics
