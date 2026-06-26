@@ -20,7 +20,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let output_path = std::env::var("INTERVALS_ICU_OUTPUT")
         .map_or_else(|_| PathBuf::from("activity.bin"), PathBuf::from);
 
-    let client = ReqwestIntervalsClient::new(&cfg.base_url, cfg.athlete_id.clone(), cfg.api_key);
+    let client = ReqwestIntervalsClient::new(&cfg.base_url, cfg.athlete_id.clone(), cfg.api_key)?;
 
     // Stream to disk to keep memory usage predictable
     client

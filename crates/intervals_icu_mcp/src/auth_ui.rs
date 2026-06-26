@@ -504,11 +504,16 @@ pub async fn ui_create_token(
         return redirect_with_session("/ui?error=Missing+credentials", &session.session_id);
     };
 
-    let client = intervals_icu_client::http_client::ReqwestIntervalsClient::new(
+    let client = match intervals_icu_client::http_client::ReqwestIntervalsClient::new(
         &ui.app_state.base_url,
         token_request.athlete_id.clone(),
         secrecy::SecretString::new(token_request.api_key.clone().into()),
-    );
+    ) {
+        Ok(c) => c,
+        Err(_e) => {
+            return redirect_with_session("/ui?error=Client+init+failed", &session.session_id);
+        }
+    };
 
     let ttl_seconds = token_request.ttl_seconds();
 

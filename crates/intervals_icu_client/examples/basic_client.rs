@@ -10,7 +10,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             return Ok(());
         }
     };
-    let client = ReqwestIntervalsClient::new(&cfg.base_url, cfg.athlete_id.clone(), cfg.api_key);
+    let client = ReqwestIntervalsClient::new(&cfg.base_url, cfg.athlete_id.clone(), cfg.api_key)?;
     let profile = client.get_athlete_profile().await?;
     println!(
         "Athlete: {} ({})",

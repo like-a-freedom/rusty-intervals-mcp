@@ -68,7 +68,8 @@ async fn get_activities_around_uses_activities_around_path() {
         .await;
 
     let client =
-        ReqwestIntervalsClient::new(&mock_server.uri(), athlete, SecretString::new("key".into()));
+        ReqwestIntervalsClient::new(&mock_server.uri(), athlete, SecretString::new("key".into()))
+            .expect("new");
     let res = client
         .get_activities_around("a1", Some(5), None)
         .await
@@ -97,7 +98,8 @@ async fn apply_sport_settings_uses_put() {
         .await;
 
     let client =
-        ReqwestIntervalsClient::new(&mock_server.uri(), athlete, SecretString::new("key".into()));
+        ReqwestIntervalsClient::new(&mock_server.uri(), athlete, SecretString::new("key".into()))
+            .expect("new");
     let res = client.apply_sport_settings(sport).await;
     assert!(res.is_ok());
     let v = res.unwrap();
@@ -117,7 +119,8 @@ async fn get_wellness_translates_days_back_to_oldest_and_newest() {
         .await;
 
     let client =
-        ReqwestIntervalsClient::new(&mock_server.uri(), athlete, SecretString::new("key".into()));
+        ReqwestIntervalsClient::new(&mock_server.uri(), athlete, SecretString::new("key".into()))
+            .expect("new");
     let res = client
         .get_wellness(Some(5))
         .await
@@ -175,7 +178,8 @@ async fn get_events_translates_days_back_to_oldest_and_newest() {
         .await;
 
     let client =
-        ReqwestIntervalsClient::new(&mock_server.uri(), athlete, SecretString::new("key".into()));
+        ReqwestIntervalsClient::new(&mock_server.uri(), athlete, SecretString::new("key".into()))
+            .expect("new");
     let res = client
         .get_events(Some(7), Some(3))
         .await
@@ -224,7 +228,8 @@ async fn download_fit_file_uses_fit_file_endpoint() {
         .await;
 
     let client =
-        ReqwestIntervalsClient::new(&mock_server.uri(), "ath", SecretString::new("key".into()));
+        ReqwestIntervalsClient::new(&mock_server.uri(), "ath", SecretString::new("key".into()))
+            .expect("new");
 
     let res = client
         .download_fit_file("a1", None)
@@ -245,7 +250,8 @@ async fn download_gpx_file_uses_gpx_file_endpoint() {
         .await;
 
     let client =
-        ReqwestIntervalsClient::new(&mock_server.uri(), "ath", SecretString::new("key".into()));
+        ReqwestIntervalsClient::new(&mock_server.uri(), "ath", SecretString::new("key".into()))
+            .expect("new");
 
     let res = client
         .download_gpx_file("a1", None)
@@ -266,7 +272,8 @@ async fn create_gear_reminder_uses_singular_reminder_endpoint() {
         .await;
 
     let client =
-        ReqwestIntervalsClient::new(&mock_server.uri(), "ath", SecretString::new("key".into()));
+        ReqwestIntervalsClient::new(&mock_server.uri(), "ath", SecretString::new("key".into()))
+            .expect("new");
 
     let res = client
         .create_gear_reminder("g1", &serde_json::json!({"note":"check chain"}))
@@ -286,7 +293,8 @@ async fn update_wellness_bulk_uses_bulk_endpoint() {
         .await;
 
     let client =
-        ReqwestIntervalsClient::new(&mock_server.uri(), "ath", SecretString::new("key".into()));
+        ReqwestIntervalsClient::new(&mock_server.uri(), "ath", SecretString::new("key".into()))
+            .expect("new");
     let res = client
         .update_wellness_bulk(&[serde_json::json!({"id": "2026-03-01", "sleepSecs": 28800})])
         .await;
@@ -314,7 +322,8 @@ async fn weather_config_uses_spec_endpoints() {
         .await;
 
     let client =
-        ReqwestIntervalsClient::new(&mock_server.uri(), "ath", SecretString::new("key".into()));
+        ReqwestIntervalsClient::new(&mock_server.uri(), "ath", SecretString::new("key".into()))
+            .expect("new");
 
     let current = client.get_weather_config().await.expect("weather config");
     assert_eq!(
@@ -372,7 +381,8 @@ async fn routes_use_current_spec_paths() {
         .await;
 
     let client =
-        ReqwestIntervalsClient::new(&mock_server.uri(), "ath", SecretString::new("key".into()));
+        ReqwestIntervalsClient::new(&mock_server.uri(), "ath", SecretString::new("key".into()))
+            .expect("new");
 
     let routes = client.list_routes().await.expect("list routes");
     assert_eq!(routes.as_array().map(Vec::len), Some(1));

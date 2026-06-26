@@ -78,8 +78,7 @@ impl IntervalsMcpHandler {
     /// In this mode, credentials are extracted from JWT tokens per-request,
     /// and a new client is created for each request.
     /// The client field is initialized with a placeholder that will be ignored.
-    #[must_use]
-    pub fn new_multi_tenant() -> Self {
+    pub fn new_multi_tenant() -> Result<Self, Box<dyn std::error::Error>> {
         // Create a minimal placeholder client - it won't be used in multi-tenant mode
         // because we create per-request clients from JWT credentials
         let placeholder_client = Arc::new(
@@ -87,9 +86,12 @@ impl IntervalsMcpHandler {
                 "https://intervals.icu",
                 "placeholder".to_string(),
                 SecretString::new("placeholder".into()),
-            ),
+            )?,
         );
-        Self::with_dynamic_runtime(placeholder_client, dynamic::DynamicRuntime::from_env())
+        Ok(Self::with_dynamic_runtime(
+            placeholder_client,
+            dynamic::DynamicRuntime::from_env(),
+        ))
     }
 
     #[must_use]
@@ -193,7 +195,8 @@ impl IntervalsMcpHandler {
                 &base_url,
                 credentials.athlete_id,
                 credentials.api_key,
-            ),
+            )
+            .ok()?,
         ) as Arc<dyn IntervalsClient>)
     }
 }
@@ -412,7 +415,8 @@ pub async fn initialize_handler_single_user() -> Result<IntervalsMcpHandler, Str
 
     let api_key = secrecy::SecretString::new(api_key.into());
     let client =
-        intervals_icu_client::http_client::ReqwestIntervalsClient::new(&base, athlete, api_key);
+        intervals_icu_client::http_client::ReqwestIntervalsClient::new(&base, athlete, api_key)
+            .map_err(|e| format!("failed to create client: {e}"))?;
     let handler = IntervalsMcpHandler::new(std::sync::Arc::new(client));
 
     let dynamic_tools = if let Ok(count) = tokio::time::timeout(
@@ -477,7 +481,7 @@ pub async fn run_http_server(
         base_url: base_url.clone(),
     });
 
-    let handler = IntervalsMcpHandler::new_multi_tenant();
+    let handler = IntervalsMcpHandler::new_multi_tenant().expect("new_multi_tenant");
 
     let registry_path = std::env::var("MCP_TOKEN_REGISTRY_PATH")
         .ok()
@@ -898,7 +902,7 @@ mod tests {
 
     #[test]
     fn new_multi_tenant_creates_placeholder_client() {
-        let handler = IntervalsMcpHandler::new_multi_tenant();
+        let handler = IntervalsMcpHandler::new_multi_tenant().expect("new_multi_tenant");
         assert_eq!(handler.tool_count(), 9);
     }
 

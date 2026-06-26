@@ -908,7 +908,8 @@ async fn test_mcp_route_requires_bearer_token_and_accepts_valid_jwt() {
         .issue_token("i777777", "test_api_key", 3600)
         .expect("token should issue");
 
-    let handler = intervals_icu_mcp::IntervalsMcpHandler::new_multi_tenant();
+    let handler =
+        intervals_icu_mcp::IntervalsMcpHandler::new_multi_tenant().expect("new_multi_tenant");
     let session = Arc::new(
         rmcp::transport::streamable_http_server::session::local::LocalSessionManager::default(),
     );

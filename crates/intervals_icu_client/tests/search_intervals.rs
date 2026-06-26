@@ -16,7 +16,8 @@ async fn search_intervals_calls_interval_search_path() {
         .await;
 
     let client =
-        ReqwestIntervalsClient::new(&mock_server.uri(), athlete, SecretString::new("key".into()));
+        ReqwestIntervalsClient::new(&mock_server.uri(), athlete, SecretString::new("key".into()))
+            .expect("new");
     let res = client
         .search_intervals(30, 120, 70, 90, None, None, None, None)
         .await;

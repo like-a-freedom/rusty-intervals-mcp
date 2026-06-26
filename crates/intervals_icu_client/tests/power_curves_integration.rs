@@ -20,7 +20,8 @@ async fn get_power_curves_normalizes_type_and_sends_curves() {
         &mock_server.uri(),
         "test_ath",
         SecretString::new("key".into()),
-    );
+    )
+    .expect("new");
     let res: serde_json::Value = client.get_power_curves(Some(7), "run").await.unwrap();
     assert_eq!(res, serde_json::json!({"ok": true}));
 }

@@ -35,7 +35,8 @@ async fn best_efforts_uses_nonstandard_stream_name_if_present() {
         .mount(&server)
         .await;
 
-    let client = ReqwestIntervalsClient::new(&server.uri(), "ath", SecretString::new("tok".into()));
+    let client = ReqwestIntervalsClient::new(&server.uri(), "ath", SecretString::new("tok".into()))
+        .expect("new");
     let res: serde_json::Value = client
         .get_best_efforts("act9", None)
         .await

@@ -21,7 +21,8 @@ async fn get_athlete_profile_passes_basic_auth_and_parses() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
 
     // (no debug fetch) — keep this test focused on the stream-to-file behavior
     let profile = client.get_athlete_profile().await.expect("profile");
@@ -62,7 +63,8 @@ async fn get_recent_activities_parses_list() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
     let acts = client
         .get_recent_activities(Some(2), None)
         .await
@@ -92,7 +94,8 @@ async fn streams_and_intervals_endpoints_return_json() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
     let streams = client
         .get_activity_streams("act1", None)
         .await
@@ -139,7 +142,8 @@ async fn get_activity_messages_reads_activity_comments() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
 
     let messages = client
         .get_activity_messages("act-comments-1")
@@ -173,7 +177,8 @@ async fn best_efforts_returns_payload() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
 
     let efforts = client
         .get_best_efforts("act1", None)
@@ -209,7 +214,8 @@ async fn best_efforts_fallback_to_distance_when_duration_unaccepted() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
 
     let efforts = client
         .get_best_efforts("act2", None)
@@ -244,7 +250,8 @@ async fn best_efforts_all_fallbacks_422_returns_error() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
 
     let err = client.get_best_efforts("act3", None).await.unwrap_err();
     // After exhausting fallbacks and finding no available streams, returns InvalidInput
@@ -289,7 +296,8 @@ async fn best_efforts_detects_available_stream_and_uses_it() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
 
     let efforts = client
         .get_best_efforts("act4", None)
@@ -352,7 +360,8 @@ async fn best_efforts_stream_lookup_without_candidates_returns_error() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
 
     let err = client.get_best_efforts("act5", None).await.unwrap_err();
     // After exhausting fallbacks and finding no suitable streams, returns InvalidInput
@@ -381,7 +390,8 @@ async fn create_event_validates_date_and_posts() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
     let ev = intervals_icu_client::Event {
         id: None,
         start_date_local: "2025-12-15".into(),
@@ -432,7 +442,8 @@ async fn create_event_accepts_iso_and_preserves_time() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
 
     let ev2 = intervals_icu_client::Event {
         id: None,
@@ -472,7 +483,8 @@ async fn create_event_accepts_date_and_sets_midnight() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
 
     let ev = intervals_icu_client::Event {
         id: None,
@@ -507,7 +519,8 @@ async fn get_event_fetches_by_id() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
 
     let ev = client.get_event("evt1").await.expect("event");
     assert_eq!(ev.id.as_deref(), Some("evt1"));
@@ -537,7 +550,8 @@ async fn get_event_returns_helpful_error_on_unexpected_body() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
 
     let res = client.get_event("82024749").await;
     assert!(res.is_err());
@@ -569,7 +583,8 @@ async fn base_url_trailing_slash_is_handled() {
         &base,
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
 
     let p = client.get_athlete_profile().await.expect("profile");
     assert_eq!(p.id, "t1");
@@ -593,7 +608,8 @@ async fn get_activities_around_includes_route_and_limit_query() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
 
     let res = client
         .get_activities_around("a1", Some(5), Some(42))
@@ -617,7 +633,8 @@ async fn get_wellness_with_days_back_adds_oldest_query() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
 
     let _ = client.get_wellness(Some(5)).await.expect("ok");
 }
@@ -638,7 +655,8 @@ async fn download_activity_file_in_memory_sends_progress_and_returns_base64() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
 
     let (tx, mut rx) = tokio::sync::mpsc::channel(2);
     let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
@@ -675,7 +693,8 @@ async fn get_event_non_success_returns_error() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
 
     let res = client.get_event("bad").await;
     assert!(res.is_err());
@@ -695,7 +714,8 @@ async fn delete_event_returns_ok() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
 
     client.delete_event("evt1").await.expect("delete");
 }
@@ -719,7 +739,8 @@ async fn download_activity_file_returns_base64_and_writes_file() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
     // Stream-to-file: verify streaming writes the expected bytes
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("out.bin");
@@ -759,7 +780,8 @@ async fn download_activity_file_with_progress_writes_file_and_sends_progress() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
 
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("file_out.bin");
@@ -815,7 +837,8 @@ async fn download_file_create_error_returns_config() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
 
     // Pass a directory path (exists) instead of a file path to induce create error
     let dir = tempfile::tempdir().unwrap();
@@ -844,7 +867,8 @@ async fn get_workouts_in_folder_non_array_returns_error() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
 
     let res = client.get_workouts_in_folder("123").await;
     assert!(
@@ -866,7 +890,8 @@ async fn get_gear_list_ok() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
     let list = client.get_gear_list().await.expect("gear");
     assert!(list.get(0).is_some());
 }
@@ -885,7 +910,8 @@ async fn get_sport_settings_ok() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
     let settings = client.get_sport_settings().await.expect("settings");
     assert_eq!(settings.sports.len(), 1);
     assert_eq!(settings.sports[0].ftp, Some(250.0));
@@ -915,7 +941,8 @@ async fn power_curves_and_histogram_ok() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
     let c = client
         .get_power_curves(Some(30), "Ride")
         .await
@@ -950,7 +977,8 @@ async fn search_activities_uses_search_endpoints() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
 
     let res = client
         .search_activities("run", None)
@@ -985,7 +1013,8 @@ async fn search_activities_rejects_empty_query() {
         &mock_server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
 
     let err = client.search_activities("", None).await;
     assert!(err.is_err());
@@ -1012,7 +1041,8 @@ async fn search_intervals_sends_required_params() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
 
     let res = client
         .search_intervals(
@@ -1049,7 +1079,8 @@ async fn bulk_delete_events_hits_bulk_endpoint() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
 
     client
         .bulk_delete_events(vec!["1".into()])
@@ -1082,7 +1113,8 @@ async fn bulk_create_events_propagates_error_body() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
 
     let ev = intervals_icu_client::Event {
         id: None,
@@ -1131,7 +1163,8 @@ async fn duplicate_event_uses_duplicate_events_api() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
 
     let out = client
         .duplicate_event("1", Some(2), Some(1))
@@ -1156,7 +1189,8 @@ async fn workout_library_and_folder_paths_match_spec() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
 
     let lib = client.get_workout_library().await.expect("library");
     assert_eq!(lib.len(), 1);
@@ -1184,7 +1218,8 @@ async fn gear_reminder_update_sends_required_query() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
 
     let out = client
         .update_gear_reminder("g1", "5", true, 7, &serde_json::json!({"note": "hi"}))
@@ -1223,7 +1258,8 @@ async fn sport_settings_update_includes_recalc_flag() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
 
     let v = client
         .update_sport_settings("Run", true, &serde_json::json!({"ftp": 250}))
@@ -1259,7 +1295,8 @@ async fn delete_sport_settings_handles_non_success() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
 
     let res = client.delete_sport_settings("Run").await;
     assert!(res.is_err());
@@ -1278,7 +1315,8 @@ async fn get_athlete_profile_handles_non_success() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
     let res = client.get_athlete_profile().await;
     assert!(res.is_err());
     match res.err().unwrap() {
@@ -1303,7 +1341,8 @@ async fn create_event_handles_non_success() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
     let event = intervals_icu_client::Event {
         id: None,
         start_date_local: "2025-12-15".into(),
@@ -1337,7 +1376,8 @@ async fn download_activity_file_with_progress_sends_progress() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
     let (tx, mut rx) = tokio::sync::mpsc::channel(2);
     let (_cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
 
@@ -1369,7 +1409,8 @@ async fn download_activity_file_stream_missing_content_length_progress_total_non
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
 
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("out.bin");
@@ -1422,7 +1463,8 @@ async fn download_activity_file_stream_invalid_content_length_progress_total_non
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
 
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("out_invalid_len.bin");
@@ -1453,7 +1495,8 @@ async fn download_activity_file_large_body_returns_base64() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
 
     let res = client
         .download_activity_file("a1", None)
@@ -1479,7 +1522,8 @@ async fn download_activity_file_small_body_returns_base64() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
 
     let res = client
         .download_activity_file("a1", None)
@@ -1511,7 +1555,8 @@ async fn get_upcoming_workouts_includes_oldest_and_newest() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
 
     let res = client
         .get_upcoming_workouts(Some(3), Some(100), Some("WORKOUT".to_string()))
@@ -1539,7 +1584,8 @@ async fn get_workouts_in_folder_missing_folder_id_filters_none() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
 
     let res = client.get_workouts_in_folder("123").await.expect("ok");
     // API returns all items (no server-side filtering)
@@ -1560,7 +1606,8 @@ async fn download_activity_file_handles_non_success() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
 
     let res = client.download_activity_file("a1", None).await;
     assert!(res.is_err());
@@ -1583,7 +1630,8 @@ async fn get_workouts_in_folder_handles_string_folder_id() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
 
     let filtered = client
         .get_workouts_in_folder("fav")
@@ -1607,7 +1655,8 @@ async fn download_activity_file_zero_length_creates_empty_file_no_progress() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
 
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("out_empty.bin");
@@ -1643,7 +1692,8 @@ async fn delete_event_handles_non_success() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
     let res = client.delete_event("evt1").await;
     assert!(res.is_err());
 }
@@ -1696,7 +1746,8 @@ async fn download_activity_file_with_progress_can_be_cancelled() {
         &server_url,
         "ath",
         secrecy::SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
 
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("cancelled.bin");
@@ -1745,7 +1796,8 @@ async fn get_activities_around_handles_non_success() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
     let res = client.get_activities_around("act1", None, None).await;
     assert!(res.is_err());
 }
@@ -1763,7 +1815,8 @@ async fn delete_activity_handles_non_success() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
 
     let res = client.delete_activity("a1").await;
     assert!(res.is_err());
@@ -1782,7 +1835,8 @@ async fn get_wellness_for_date_handles_non_success() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
 
     let res = client.get_wellness_for_date("2025-01-01").await;
     assert!(res.is_err());
@@ -1801,7 +1855,8 @@ async fn update_wellness_handles_non_success() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
 
     let body = serde_json::json!({"sleep": 7});
     let res = client.update_wellness("2025-01-02", &body).await;
@@ -1821,7 +1876,8 @@ async fn delete_gear_handles_non_success() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
 
     let res = client.delete_gear("g1").await;
     assert!(res.is_err());
@@ -1844,7 +1900,8 @@ async fn get_workouts_in_folder_empty_folder_id_returns_all() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
 
     // empty folder id should return all workouts (API returns full library)
     let all = client.get_workouts_in_folder("").await.expect("workouts");
@@ -1866,7 +1923,8 @@ async fn create_folder_sends_post_request() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
 
     let result = client
         .create_folder(&new_folder)
@@ -1891,7 +1949,8 @@ async fn update_folder_sends_put_request() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
 
     let result = client
         .update_folder("f1", &updates)
@@ -1916,7 +1975,8 @@ async fn delete_folder_sends_delete_request() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
 
     let result = client.delete_folder("f1").await;
     assert!(result.is_ok());
@@ -1935,7 +1995,8 @@ async fn delete_folder_handles_non_success() {
         &server.uri(),
         "ath",
         SecretString::new("tok".into()),
-    );
+    )
+    .expect("new");
 
     let result = client.delete_folder("f1").await;
     assert!(result.is_err());
