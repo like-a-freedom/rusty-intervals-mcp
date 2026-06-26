@@ -2330,4 +2330,59 @@ mod tests {
         let entropy = compute_tid_entropy(0.33, 0.34, 0.33).unwrap();
         assert!(entropy > 1.5);
     }
+
+    // ========================================================================
+    // W5 — WDR 7-day rollup
+    // ========================================================================
+
+    #[test]
+    fn compute_wdr_7d_rollup_aggregates_across_activities() {
+        let mut details = HashMap::new();
+        details.insert("act1".into(), json!({"icu_max_wbal_depletion": 35000.0}));
+        details.insert("act2".into(), json!({"icu_max_wbal_depletion": 12000.0}));
+        details.insert("act3".into(), json!({"icu_max_wbal_depletion": 48000.0}));
+        let ids: Vec<String> = vec!["act1".into(), "act2".into(), "act3".into()];
+
+        let wdr = compute_wdr_7d_rollup(&details, &ids, Some(50000.0));
+
+        assert!(wdr.supported);
+        assert_eq!(wdr.sessions_with_data_7d, 3);
+        // depletion_pct = depletion / w_prime
+        // 35000/50000=0.70, 12000/50000=0.24, 48000/50000=0.96
+        // mean = (0.70 + 0.24 + 0.96) / 3 = 0.6333...
+        let expected_mean = (0.70 + 0.24 + 0.96) / 3.0;
+        let actual_mean = wdr.mean_depletion_pct_7d.unwrap();
+        assert!((actual_mean - expected_mean).abs() < 0.01);
+        // high depletion: 0.70 >= 0.60, 0.96 >= 0.60 → 2 sessions
+        assert_eq!(wdr.high_depletion_sessions_7d, 2);
+    }
+
+    #[test]
+    fn compute_wdr_7d_rollup_empty_ids_returns_unsupported() {
+        let details = HashMap::new();
+        let wdr = compute_wdr_7d_rollup(&details, &[], Some(50000.0));
+        assert!(!wdr.supported);
+        assert!(wdr.mean_depletion_pct_7d.is_none());
+        assert_eq!(wdr.sessions_with_data_7d, 0);
+    }
+
+    #[test]
+    fn compute_wdr_7d_rollup_no_depletion_data_returns_unsupported() {
+        let mut details = HashMap::new();
+        details.insert("act1".into(), json!({"some_field": 42}));
+        let wdr = compute_wdr_7d_rollup(&details, &["act1".into()], Some(50000.0));
+        assert!(!wdr.supported);
+        assert_eq!(wdr.sessions_with_data_7d, 0);
+    }
+
+    #[test]
+    fn compute_wdr_7d_rollup_without_w_prime_counts_sessions() {
+        let mut details = HashMap::new();
+        details.insert("act1".into(), json!({"icu_max_wbal_depletion": 35000.0}));
+        let wdr = compute_wdr_7d_rollup(&details, &["act1".into()], None);
+        assert!(wdr.supported);
+        assert_eq!(wdr.sessions_with_data_7d, 1);
+        assert!(wdr.mean_depletion_pct_7d.is_none());
+        assert_eq!(wdr.high_depletion_sessions_7d, 0);
+    }
 }

@@ -349,7 +349,7 @@ pub async fn metrics_middleware(
 
 #[cfg(test)]
 mod tests {
-    use super::validate_metrics_token;
+    use super::{record_mcp_session, validate_metrics_token};
 
     #[test]
     fn validate_metrics_token_fails_without_header_when_token_required() {
@@ -383,5 +383,13 @@ mod tests {
     #[test]
     fn validate_metrics_token_accepts_missing_token_when_not_configured() {
         assert!(validate_metrics_token(None, None));
+    }
+
+    #[test]
+    fn record_mcp_session_does_not_panic() {
+        // Structural test: the function exists and handles calls gracefully
+        // without a Prometheus handle (no-op in test environment).
+        record_mcp_session("started");
+        record_mcp_session("stopped");
     }
 }
