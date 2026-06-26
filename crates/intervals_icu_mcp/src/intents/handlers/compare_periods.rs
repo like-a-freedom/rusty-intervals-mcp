@@ -15,6 +15,40 @@ use crate::engines::coach_metrics::{
 };
 use crate::intents::utils::{filter_activities_by_range, parse_date};
 
+use crate::engines::analysis::{AnalysisEngine, PeriodSummary};
+
+fn build_period_summary(stats: &PeriodStats) -> PeriodSummary {
+    let total_tss: f32 = stats
+        .activities
+        .iter()
+        .filter_map(|activity| {
+            stats
+                .activity_details
+                .get(&activity.id)
+                .and_then(|detail| detail.get("icu_training_load"))
+                .and_then(|value| {
+                    value
+                        .as_f64()
+                        .or_else(|| value.as_i64().map(|n| n as f64))
+                        .or_else(|| value.as_str().and_then(|s| s.parse::<f64>().ok()))
+                })
+        })
+        .sum::<f64>() as f32;
+
+    let total_time_hours = stats.snapshot.total_time_secs as f32 / 3600.0;
+    let weeks = (stats.window_days.max(1) as f32 / 7.0).max(1.0);
+
+    PeriodSummary {
+        workout_count: stats.snapshot.activity_count as u32,
+        total_time_hours,
+        total_distance_km: stats.snapshot.total_distance_m as f32 / 1000.0,
+        total_elevation_m: stats.snapshot.total_elevation_m as f32,
+        avg_weekly_hours: total_time_hours / weeks,
+        total_tss,
+        avg_tss_per_week: total_tss / weeks,
+    }
+}
+
 pub struct ComparePeriodsHandler;
 impl ComparePeriodsHandler {
     pub fn new() -> Self {
@@ -112,6 +146,10 @@ impl IntentHandler for ComparePeriodsHandler {
         let b_consistency =
             compute_consistency_index(b_stats.snapshot.activity_count, b_stats.planned_count);
 
+        let a_summary = build_period_summary(&a_stats);
+        let b_summary = build_period_summary(&b_stats);
+        let comparison = AnalysisEngine::compare_periods(&a_summary, &b_summary, a_label, b_label);
+
         let fitness = client.get_fitness_summary().await.ok();
         let fitness_metrics = parse_fitness_metrics(fitness.as_ref());
 
@@ -121,63 +159,32 @@ impl IntentHandler for ComparePeriodsHandler {
             a_label, b_label
         )));
 
-        // Build comparison table
+        // Build comparison table from engine output
         let mut rows = vec![vec![
             "Metric".into(),
             a_label.into(),
             b_label.into(),
             "Δ".into(),
         ]];
-
-        let count_delta =
-            a_stats.snapshot.activity_count as i32 - b_stats.snapshot.activity_count as i32;
-        rows.push(vec![
-            "Activities".into(),
-            a_stats.snapshot.activity_count.to_string(),
-            b_stats.snapshot.activity_count.to_string(),
-            if count_delta >= 0 {
-                format!("+{}", count_delta)
+        for m in &comparison.metrics {
+            let (formatted_a, formatted_b) = if m.name == "Workouts" {
+                (
+                    format!("{:.0}", m.period_a_value),
+                    format!("{:.0}", m.period_b_value),
+                )
             } else {
-                count_delta.to_string()
-            },
-        ]);
-
-        let time_delta = a_stats.snapshot.total_time_secs - b_stats.snapshot.total_time_secs;
-        rows.push(vec![
-            "Total Time".into(),
-            format_duration(a_stats.snapshot.total_time_secs),
-            format_duration(b_stats.snapshot.total_time_secs),
-            if time_delta >= 0 {
-                format!("+{} min", time_delta / 60)
-            } else {
-                format!("{} min", time_delta / 60)
-            },
-        ]);
-
-        let dist_delta = a_stats.snapshot.total_distance_m - b_stats.snapshot.total_distance_m;
-        rows.push(vec![
-            "Distance (km)".into(),
-            format!("{:.1}", a_stats.snapshot.total_distance_m / 1000.0),
-            format!("{:.1}", b_stats.snapshot.total_distance_m / 1000.0),
-            if dist_delta >= 0.0 {
-                format!("+{:.1}", dist_delta / 1000.0)
-            } else {
-                format!("{:.1}", dist_delta / 1000.0)
-            },
-        ]);
-
-        let elev_delta = a_stats.snapshot.total_elevation_m - b_stats.snapshot.total_elevation_m;
-        rows.push(vec![
-            "Elevation (m)".into(),
-            format!("{:.0}", a_stats.snapshot.total_elevation_m),
-            format!("{:.0}", b_stats.snapshot.total_elevation_m),
-            if elev_delta >= 0.0 {
-                format!("+{:.0}", elev_delta)
-            } else {
-                format!("{:.0}", elev_delta)
-            },
-        ]);
-
+                (
+                    format!("{:.1}", m.period_a_value),
+                    format!("{:.1}", m.period_b_value),
+                )
+            };
+            rows.push(vec![
+                m.name.clone(),
+                formatted_a,
+                formatted_b,
+                format!("{:+.1} ({:+.0}%)", m.delta_absolute, m.delta_percent),
+            ]);
+        }
         content.push(ContentBlock::table(rows[0].clone(), rows[1..].to_vec()));
 
         if let Some(ref fm) = fitness_metrics {
@@ -244,32 +251,8 @@ impl IntentHandler for ComparePeriodsHandler {
             b_stats.planned_count,
         )));
 
-        // Analysis
-        let volume_change = if let Some(time_delta_pct) = trend.time_delta_pct {
-            time_delta_pct as f32
-        } else if let Some(distance_delta_pct) = trend.distance_delta_pct {
-            distance_delta_pct as f32
-        } else {
-            0.0
-        };
-
-        let mut suggestions = Vec::new();
-        if volume_change.abs() <= 10.0 {
-            suggestions.push(format!(
-                "Volume change: {:+.0}% - within normal range (+7-10%/week)",
-                volume_change
-            ));
-        } else if volume_change > 10.0 {
-            suggestions.push(format!(
-                "Volume increased by {:.0}% - monitor for overtraining",
-                volume_change
-            ));
-        } else {
-            suggestions.push(format!(
-                "Volume decreased by {:.0}% - may indicate recovery or illness",
-                volume_change.abs()
-            ));
-        }
+        // Engine summary replaces ad-hoc volume analysis
+        let mut suggestions = vec![comparison.summary.clone()];
 
         if let Some(elev_delta) = trend.elevation_delta_pct
             && elev_delta.abs() > 30.0
@@ -279,6 +262,14 @@ impl IntentHandler for ComparePeriodsHandler {
                 elev_delta
             ));
         }
+
+        let volume_change = if let Some(time_delta_pct) = trend.time_delta_pct {
+            time_delta_pct as f32
+        } else if let Some(distance_delta_pct) = trend.distance_delta_pct {
+            distance_delta_pct as f32
+        } else {
+            0.0
+        };
 
         let mut next_actions = vec![
             "To analyze a specific period: analyze_training with target_type: period".into(),
@@ -537,14 +528,6 @@ impl ComparePeriodsHandler {
             planned_count,
         })
     }
-}
-
-fn format_duration(total_time_secs: i64) -> String {
-    format!(
-        "{}:{:02}",
-        total_time_secs / 3600,
-        (total_time_secs % 3600) / 60
-    )
 }
 
 fn format_pct(value: Option<f64>) -> String {
@@ -935,18 +918,6 @@ mod tests {
     }
 
     // ========================================================================
-    // format_duration() Tests
-    // ========================================================================
-
-    #[test]
-    fn test_format_duration() {
-        assert_eq!(format_duration(3600), "1:00");
-        assert_eq!(format_duration(9000), "2:30");
-        assert_eq!(format_duration(0), "0:00");
-        assert_eq!(format_duration(1800), "0:30");
-        assert_eq!(format_duration(3659), "1:00"); // Seconds are truncated
-    }
-
     // ========================================================================
     // format_pct() Tests
     // ========================================================================
