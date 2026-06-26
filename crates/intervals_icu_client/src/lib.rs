@@ -25,6 +25,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 pub mod circuit_breaker;
 pub mod config;
+pub mod domains;
 pub mod error;
 pub mod http_client;
 pub mod observability;
