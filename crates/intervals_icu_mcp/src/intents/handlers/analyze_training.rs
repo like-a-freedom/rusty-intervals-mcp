@@ -132,6 +132,10 @@ impl IntentHandler for AnalyzeTrainingHandler {
          plan_training), assess recovery readiness (use assess_recovery), or perform \
          post-race debrief (use analyze_race).
          
+         For a single workout call target_type=\"single\" with a date. \
+         For a date range call target_type=\"period\" with period_start=\"2025-04-01\" \
+         and period_end=\"2025-06-30\". Do not use start_date/end_date.
+         
          analysis_type controls depth: summary (basic metrics), detailed (+execution \
          context, Z2, terrain, nutrition, profile), intervals (+interval breakdown), \
          streams (+stream insights)."
@@ -185,21 +189,34 @@ impl IntentHandler for AnalyzeTrainingHandler {
                 }
             },
             "required": ["target_type"],
-            "oneOf": [
-                {"required": ["target_type", "date"]},
-                {"required": ["target_type", "period_start", "period_end"]}
-            ],
-            "if": {
-                "properties": {
-                    "target_type": { "const": "period" }
+            "allOf": [
+                {
+                    "if": {
+                        "properties": {
+                            "target_type": { "const": "single" }
+                        }
+                    },
+                    "then": {
+                        "required": ["date"]
+                    },
+                    "else": {
+                        "required": ["period_start", "period_end"]
+                    }
+                },
+                {
+                    "if": {
+                        "properties": {
+                            "target_type": { "const": "period" }
+                        }
+                    },
+                    "then": {
+                        "properties": {
+                            "include_histograms": { "const": false },
+                            "description_contains": false
+                        }
+                    }
                 }
-            },
-            "then": {
-                "properties": {
-                    "include_histograms": { "const": false },
-                    "description_contains": false
-                }
-            }
+            ]
         })
     }
 
@@ -968,11 +985,19 @@ impl AnalyzeTrainingHandler {
         let start = input
             .get("period_start")
             .and_then(Value::as_str)
-            .ok_or_else(|| IntentError::validation("Missing required field: period_start"))?;
+            .ok_or_else(|| {
+                IntentError::validation(
+                    "target_type=\"period\" requires period_start and period_end; do not use start_date/end_date".to_string(),
+                )
+            })?;
         let end = input
             .get("period_end")
             .and_then(Value::as_str)
-            .ok_or_else(|| IntentError::validation("Missing required field: period_end"))?;
+            .ok_or_else(|| {
+                IntentError::validation(
+                    "target_type=\"period\" requires period_start and period_end; do not use start_date/end_date".to_string(),
+                )
+            })?;
         let requested_metrics = requested_metrics(input);
         let analysis_type = input
             .get("analysis_type")
@@ -1739,9 +1764,9 @@ mod tests {
         let required = schema.get("required").unwrap().as_array().unwrap();
         assert!(required.contains(&json!("target_type")));
 
-        // Check oneOf constraint for date vs period
-        let one_of = schema.get("oneOf").unwrap().as_array().unwrap();
-        assert_eq!(one_of.len(), 2);
+        // Check allOf conditional constraint for date vs period
+        let all_of = schema.get("allOf").unwrap().as_array().unwrap();
+        assert!(all_of.len() >= 2, "allOf should have at least 2 elements");
     }
 
     #[test]
@@ -3716,14 +3741,19 @@ mod tests {
         let handler = AnalyzeTrainingHandler::new();
         let schema = IntentHandler::input_schema(&handler);
 
-        assert!(schema.get("if").is_some(), "Schema should have 'if' clause");
-        assert!(
-            schema.get("then").is_some(),
-            "Schema should have 'then' clause"
-        );
+        let all_of = schema
+            .get("allOf")
+            .expect("Schema should have 'allOf' clause");
+        let all_of_arr = all_of.as_array().expect("allOf should be an array");
 
-        let if_clause = schema.get("if").unwrap();
-        let then_clause = schema.get("then").unwrap();
+        // Second element has the period-specific if/then constraints
+        let period_constraints = &all_of_arr[1];
+        let if_clause = period_constraints
+            .get("if")
+            .expect("Schema allOf[1] should have 'if' clause");
+        let then_clause = period_constraints
+            .get("then")
+            .expect("Schema allOf[1] should have 'then' clause");
 
         assert_eq!(
             if_clause
@@ -3981,6 +4011,132 @@ mod tests {
         assert!(
             !rendered.contains("Device sync status"),
             "Should not claim device-sync problem without upstream error"
+        );
+    }
+
+    // ========================================================================
+    // Schema Contract Tests (Task 3)
+    // ========================================================================
+
+    #[test]
+    fn test_schema_has_all_of_conditional_not_one_of() {
+        let handler = AnalyzeTrainingHandler::new();
+        let schema = IntentHandler::input_schema(&handler);
+
+        assert!(
+            schema.get("allOf").is_some(),
+            "Schema should use allOf, not oneOf"
+        );
+        assert!(
+            schema.get("oneOf").is_none(),
+            "Schema should NOT contain oneOf"
+        );
+    }
+
+    #[test]
+    fn test_schema_all_of_requires_date_for_single() {
+        let handler = AnalyzeTrainingHandler::new();
+        let schema = IntentHandler::input_schema(&handler);
+        let all_of = schema.get("allOf").unwrap().as_array().unwrap();
+
+        // First element has the if/then/else for required fields
+        let conditional = &all_of[0];
+        let if_clause = conditional.get("if").unwrap();
+        assert_eq!(
+            if_clause
+                .get("properties")
+                .and_then(|p| p.get("target_type"))
+                .and_then(|t| t.get("const"))
+                .and_then(|c| c.as_str()),
+            Some("single"),
+        );
+
+        let then_clause = conditional.get("then").unwrap();
+        let required = then_clause.get("required").unwrap().as_array().unwrap();
+        assert!(required.contains(&json!("date")));
+
+        let else_clause = conditional.get("else").unwrap();
+        let required = else_clause.get("required").unwrap().as_array().unwrap();
+        assert!(required.contains(&json!("period_start")));
+        assert!(required.contains(&json!("period_end")));
+    }
+
+    #[test]
+    fn test_schema_all_of_requires_period_start_end_for_period() {
+        let handler = AnalyzeTrainingHandler::new();
+        let schema = IntentHandler::input_schema(&handler);
+        let all_of = schema.get("allOf").unwrap().as_array().unwrap();
+
+        // Second element has the period-specific constraints
+        let period_constraints = &all_of[1];
+        let if_clause = period_constraints.get("if").unwrap();
+        assert_eq!(
+            if_clause
+                .get("properties")
+                .and_then(|p| p.get("target_type"))
+                .and_then(|t| t.get("const"))
+                .and_then(|c| c.as_str()),
+            Some("period"),
+        );
+    }
+
+    #[test]
+    fn test_schema_has_top_level_required_target_type() {
+        let handler = AnalyzeTrainingHandler::new();
+        let schema = IntentHandler::input_schema(&handler);
+        let required = schema.get("required").unwrap().as_array().unwrap();
+        assert!(required.contains(&json!("target_type")));
+    }
+
+    #[tokio::test]
+    async fn test_execute_period_with_start_date_end_date_rejected() {
+        let handler = AnalyzeTrainingHandler::new();
+        let client = Arc::new(MockIntervalsClient {
+            activities: vec![],
+            ..Default::default()
+        });
+
+        let error = handler
+            .execute(
+                json!({
+                    "target_type": "period",
+                    "start_date": "2026-01-01",
+                    "end_date": "2026-07-04"
+                }),
+                client,
+                None,
+            )
+            .await
+            .unwrap_err();
+
+        let err_msg = error.to_string();
+        assert!(
+            err_msg.contains("period_start and period_end"),
+            "Error should mention period_start and period_end, got: {}",
+            err_msg
+        );
+        assert!(
+            err_msg.contains("do not use start_date/end_date"),
+            "Error should mention not using start_date/end_date, got: {}",
+            err_msg
+        );
+    }
+
+    #[test]
+    fn test_description_mentions_period_example() {
+        let handler = AnalyzeTrainingHandler::new();
+        let desc = IntentHandler::description(&handler);
+        assert!(
+            desc.contains("period_start=\"2025-04-01\""),
+            "Description should contain period_start example"
+        );
+        assert!(
+            desc.contains("period_end=\"2025-06-30\""),
+            "Description should contain period_end example"
+        );
+        assert!(
+            desc.contains("Do not use start_date/end_date"),
+            "Description should warn against start_date/end_date"
         );
     }
 
