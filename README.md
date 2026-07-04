@@ -407,9 +407,12 @@ The best way to use this MCP server is to ask for **outcomes**, not API mechanic
 
 - “How is my recovery looking over the last 7 days?”
 - “Am I ready for intensity tomorrow?”
-- “Compare this month with last month”
-- “Why have I stopped improving?” — `track_progress` detects training plateaus from CTL history, surfaces load context, TID drift, HRV trend, and ranks possible root causes
+- “Compare this month with last month” — `compare_periods` supports arbitrary like-for-like windows, including YoY and quarter-over-quarter comparisons
+- “Why have I stopped improving?” — `track_progress` detects trailing plateau over 4–24 weeks, surfaces load context, TID drift, HRV trend, and ranks possible root causes
 - “Is my training volume stalled?” — `track_progress` identifies plateau onset date, duration, and trailing slope, with recommendations for gradual volume increase
+- “Analyze my last workout” — `analyze_training` with `target_type: "single"` for one workout; use `target_type: "period"` with `period_start` and `period_end` for an explicit period
+
+Historical period fetches are uncapped at the MCP layer. Detail-derived metrics (HR, zones, TSS, load) may report partial availability if upstream detail calls fail for some activities.
 
 ### Calendar changes
 
@@ -452,10 +455,19 @@ Fetch → Audit → Compute → Interpret → Render
 - TID drift analysis: weekly 3-zone distributions grouped by ISO week, Shannon entropy delta (recent 4w vs prior 4w), drift classification (stable/converging/polarizing), dominant zone identification
 - evidence-weighted coaching hypotheses: volume hypothesis with ACWR and monotony signals, intensity distribution hypothesis with TID drift and monotony, recovery hypothesis with HRV suppression and ACWR state
 - explicit warnings when data is insufficient for specific sub-analyses
+- trailing plateau detection over 4–24 weeks; directs YoY analysis to `compare_periods`
+
+#### `compare_periods`
+
+- arbitrary like-for-like window comparisons including YoY and quarter-over-quarter
+- uncapped historical activity fetches at the MCP layer
+- detail-derived metrics (HR, zones, TSS, load) may report partial availability if upstream detail calls fail
+- requested metrics rendered per-period with delta summaries
 
 #### `analyze_training`
 
 - single-workout deep dives: ESPE anchors (eFTP, W′, pMax), WDRM, ISDM with durability state, Z2 HR stability, terrain context (index, VAM), nutrition demand (carb/protein), curve profile classification (endurance/punchy/speed)
+- one workout or one explicit period; period calls use `period_start` and `period_end`
 - period analysis: heat stress context, TID model (pyramidal/threshold/polarized), NDLI (green/amber/red), power curve comparison (2-window deltas with rotation index), ultra-specific tokens (back-to-back load, vert/week), load management (ACWR, monotony, strain)
 - interval-aware, stream-aware, and histogram analysis modes
 - planned workout and calendar event visibility in period windows

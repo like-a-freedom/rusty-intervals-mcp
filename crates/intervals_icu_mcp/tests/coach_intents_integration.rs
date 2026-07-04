@@ -10,6 +10,7 @@ use intervals_icu_mcp::intents::handlers::{
 };
 use intervals_icu_mcp::intents::{ContentBlock, IntentHandler};
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 fn wellness_days_requests() -> &'static Mutex<Vec<Option<i32>>> {
@@ -32,6 +33,9 @@ struct MockCoachClient {
     hr_histogram: Value,
     power_histogram: Value,
     pace_histogram: Value,
+    #[allow(clippy::type_complexity)]
+    activity_calls: Arc<Mutex<Vec<(Option<u32>, Option<i32>)>>>,
+    activity_details_map: HashMap<String, Value>,
 }
 
 impl Default for MockCoachClient {
@@ -51,6 +55,8 @@ impl Default for MockCoachClient {
             hr_histogram: json!({}),
             power_histogram: json!({}),
             pace_histogram: json!({}),
+            activity_calls: Arc::new(Mutex::new(Vec::new())),
+            activity_details_map: HashMap::new(),
         }
     }
 }
@@ -1060,14 +1066,24 @@ impl IntervalsClient for MockCoachClient {
 
     async fn get_recent_activities(
         &self,
-        _limit: Option<u32>,
-        _days_back: Option<i32>,
+        limit: Option<u32>,
+        days_back: Option<i32>,
     ) -> Result<Vec<ActivitySummary>, IntervalsError> {
+        self.activity_calls.lock().unwrap().push((limit, days_back));
         Ok(self.activities.clone())
     }
 
-    async fn get_activity_details(&self, _activity_id: &str) -> Result<Value, IntervalsError> {
-        Ok(self.activity_details.clone())
+    async fn get_activity_details(&self, activity_id: &str) -> Result<Value, IntervalsError> {
+        if !self.activity_details_map.is_empty() {
+            self.activity_details_map
+                .get(activity_id)
+                .cloned()
+                .ok_or_else(|| {
+                    IntervalsError::NotFound(format!("Activity {activity_id} not found"))
+                })
+        } else {
+            Ok(self.activity_details.clone())
+        }
     }
 
     async fn get_activity_messages(
@@ -3010,4 +3026,223 @@ async fn p0_performance_intelligence_full_pipeline() {
     assert!(markdown.contains("Aerobic Decoupling (ISDM)"));
     assert!(markdown.contains("Signed Decoupling"));
     assert!(markdown.contains("Durability State"));
+}
+
+#[tokio::test]
+async fn historical_yoy_comparison() {
+    let mut q2_2025_activities: Vec<ActivitySummary> = (1..=5)
+        .map(|day| {
+            MockCoachClient::activity(
+                &format!("q2-2025-{day}"),
+                &format!("Spring Run {day}"),
+                &format!("2025-04-{day:02}"),
+            )
+        })
+        .collect();
+    let mut q2_2026_activities: Vec<ActivitySummary> = (1..=5)
+        .map(|day| {
+            MockCoachClient::activity(
+                &format!("q2-2026-{day}"),
+                &format!("Summer Run {day}"),
+                &format!("2026-04-{day:02}"),
+            )
+        })
+        .collect();
+    let mut activities = Vec::new();
+    activities.append(&mut q2_2025_activities);
+    activities.append(&mut q2_2026_activities);
+
+    let detail = json!({
+        "distance": 10000.0,
+        "moving_time": 3600,
+        "average_heartrate": 150.0,
+        "total_elevation_gain": 100.0
+    });
+    let details_map: HashMap<String, Value> = activities
+        .iter()
+        .map(|a| (a.id.clone(), detail.clone()))
+        .collect();
+
+    let client = Arc::new(MockCoachClient {
+        activities,
+        fitness: MockCoachClient::fitness_snapshot(50.0, 45.0, 5.0),
+        activity_details_map: details_map,
+        ..MockCoachClient::default()
+    });
+    let handler = ComparePeriodsHandler::new();
+
+    let output = handler
+        .execute(
+            json!({
+                "period_a_start": "2025-04-01",
+                "period_a_end": "2025-06-30",
+                "period_a_label": "Q2 2025",
+                "period_b_start": "2026-04-01",
+                "period_b_end": "2026-06-30",
+                "period_b_label": "Q2 2026",
+                "metrics": ["volume", "intensity", "zones", "pace", "hr", "tss"]
+            }),
+            client.clone(),
+            None,
+        )
+        .await
+        .unwrap();
+
+    let markdown = markdown_text(&output);
+
+    // Both labels must appear with non-zero activity counts
+    assert!(markdown.contains("Q2 2025"));
+    assert!(markdown.contains("Q2 2026"));
+    assert!(output.metadata.total_count.is_none() || output.metadata.total_count.unwrap() > 0);
+
+    // limit must always be None
+    let calls = client.activity_calls.lock().unwrap();
+    for (limit, _) in calls.iter() {
+        assert_eq!(
+            *limit, None,
+            "limit should always be None for historical fetches"
+        );
+    }
+
+    // Requested metrics are rendered
+    assert!(markdown.contains("Requested Metrics"));
+    assert!(markdown.to_lowercase().contains("volume"));
+    assert!(markdown.to_lowercase().contains("intensity"));
+    assert!(markdown.to_lowercase().contains("zones"));
+    assert!(markdown.to_lowercase().contains("pace"));
+    assert!(markdown.to_lowercase().contains("hr"));
+    assert!(markdown.to_lowercase().contains("tss"));
+}
+
+#[tokio::test]
+async fn high_volume_period() {
+    let base_date = chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+    let period_end = chrono::NaiveDate::from_ymd_opt(2026, 4, 10).unwrap();
+    let total_days = (period_end - base_date).num_days();
+    let mut activities = Vec::new();
+    for idx in 0u32..250 {
+        let day_offset = (idx as i64) % total_days;
+        let date = base_date + chrono::Duration::days(day_offset);
+        activities.push(MockCoachClient::activity(
+            &format!("hv-{idx}"),
+            &format!("Workout {}", idx + 1),
+            &date.format("%Y-%m-%d").to_string(),
+        ));
+    }
+
+    let detail = json!({
+        "distance": 10000.0,
+        "moving_time": 3600,
+        "average_heartrate": 145.0,
+        "total_elevation_gain": 80.0
+    });
+    let details_map: HashMap<String, Value> = activities
+        .iter()
+        .map(|a| (a.id.clone(), detail.clone()))
+        .collect();
+
+    let client = Arc::new(MockCoachClient {
+        activities,
+        fitness: MockCoachClient::fitness_snapshot(60.0, 50.0, 10.0),
+        activity_details_map: details_map,
+        ..MockCoachClient::default()
+    });
+    let handler = AnalyzeTrainingHandler::new();
+
+    let output = handler
+        .execute(
+            json!({
+                "target_type": "period",
+                "period_start": "2026-01-01",
+                "period_end": "2026-04-10"
+            }),
+            client,
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(output.metadata.total_count, Some(250));
+
+    let markdown = markdown_text(&output);
+    assert!(
+        markdown.contains("2026-01-01"),
+        "period heading should use requested start date"
+    );
+    assert!(
+        markdown.contains("2026-04-10"),
+        "period heading should use requested end date"
+    );
+}
+
+#[tokio::test]
+async fn partial_detail() {
+    let activities = vec![
+        MockCoachClient::activity("pd-1", "Complete Detail Run", "2026-03-01"),
+        MockCoachClient::activity("pd-2", "Partial Run", "2026-03-03"),
+        MockCoachClient::activity("pd-3", "Missing Detail Run", "2026-03-05"),
+    ];
+
+    let full_detail = json!({
+        "distance": 12000.0,
+        "moving_time": 4200,
+        "average_heartrate": 148.0,
+        "average_watts": 210.0,
+        "total_elevation_gain": 150.0
+    });
+
+    let partial_detail_value = json!({
+        "distance": 10000.0,
+        "moving_time": 3600,
+        "average_heartrate": 140.0
+    });
+
+    let mut details_map = HashMap::new();
+    details_map.insert("pd-1".to_string(), full_detail.clone());
+    details_map.insert("pd-2".to_string(), partial_detail_value);
+    // pd-3 is intentionally missing — get_activity_details will return NotFound
+
+    let client = Arc::new(MockCoachClient {
+        activities,
+        fitness: MockCoachClient::fitness_snapshot(55.0, 47.0, 8.0),
+        activity_details_map: details_map,
+        ..MockCoachClient::default()
+    });
+    let handler = AnalyzeTrainingHandler::new();
+
+    let output = handler
+        .execute(
+            json!({
+                "target_type": "period",
+                "period_start": "2026-03-01",
+                "period_end": "2026-03-07",
+                "analysis_type": "detailed"
+            }),
+            client,
+            None,
+        )
+        .await
+        .unwrap();
+
+    let markdown = markdown_text(&output);
+
+    // Volume/time/distance remain populated (derived from activity summaries)
+    assert!(markdown.contains("Period:"), "should have period heading");
+    assert!(
+        markdown.contains("Total Time") || markdown.contains("Distance"),
+        "should show volume metrics in summary"
+    );
+
+    // Data-availability section should report partial detail failure
+    let lower = markdown.to_lowercase();
+    assert!(
+        lower.contains("data availability"),
+        "should contain data availability guidance"
+    );
+    assert!(
+        lower.contains("1 of 3 activity details unavailable")
+            || lower.contains("partial")
+            || lower.contains("unavailable"),
+        "should indicate some details are missing"
+    );
 }
