@@ -55,6 +55,8 @@ impl IntentHandler for TrackProgressHandler {
 
 Use this tool when: you need to understand whether training is stalled, identify why progress has flattened, and get evidence-backed coaching hypotheses with recommended actions. Helps answer 'why am I not improving?' or 'is my training working?'.
 
+Use only for one trailing 4–24 week window. Do NOT use for YoY or two non-contiguous periods; use `compare_periods`.
+
 Do NOT use when: you need to analyze a specific workout in detail (use analyze_training), or assess current recovery readiness (use assess_recovery), or plan future training (use plan_training).
 
 Arguments:
@@ -399,6 +401,37 @@ mod tests {
         assert!(
             rendered.contains("lnRMSSD") || rendered.contains("Plateau"),
             "rendered output should contain actionable data-availability warnings; got: {rendered}"
+        );
+    }
+
+    // ========================================================================
+    // Task 3: Description Routing Constraint Tests
+    // ========================================================================
+
+    #[test]
+    fn test_description_mentions_trailing_window_only() {
+        let handler = TrackProgressHandler::new();
+        let desc = IntentHandler::description(&handler);
+        assert!(
+            desc.contains("one trailing"),
+            "Description should specify single trailing window, got: {}",
+            desc
+        );
+    }
+
+    #[test]
+    fn test_description_mentions_compare_periods_for_yoy() {
+        let handler = TrackProgressHandler::new();
+        let desc = IntentHandler::description(&handler);
+        assert!(
+            desc.contains("compare_periods"),
+            "Description should route YoY/two non-contiguous periods to compare_periods, got: {}",
+            desc
+        );
+        assert!(
+            desc.contains("Do NOT use for YoY"),
+            "Description should explicitly forbid YoY usage, got: {}",
+            desc
         );
     }
 }

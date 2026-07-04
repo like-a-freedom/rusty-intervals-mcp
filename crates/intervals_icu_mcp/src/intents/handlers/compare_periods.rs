@@ -68,8 +68,10 @@ impl IntentHandler for ComparePeriodsHandler {
          Returns activity count, time, distance, elevation deltas, requested metric \
          comparisons, trend context, and a Fitness Snapshot with current CTL, ATL, \
          TSB, and ramp rate. \
-         Use for comparing similar workouts or periods, assessing progress, and \
-         identifying trends."
+         Use for year-over-year (YoY), quarter-over-quarter (QoQ), or \
+         any other side-by-side comparison. All four boundary fields \
+         (period_a_start, period_a_end, period_b_start, period_b_end) are required. \
+         Assess progress, identify trends, and compare similar workouts or periods."
     }
 
     fn input_schema(&self) -> Value {
@@ -127,12 +129,30 @@ impl IntentHandler for ComparePeriodsHandler {
             .map(|items| items.iter().filter_map(Value::as_str).collect::<Vec<_>>())
             .unwrap_or_default();
 
-        let a_stats = self
-            .get_period_stats(client.as_ref(), a_start, a_end, workout_type)
-            .await?;
-        let b_stats = self
-            .get_period_stats(client.as_ref(), b_start, b_end, workout_type)
-            .await?;
+        // Validate both windows before any network I/O
+        let a_start_date = parse_date(a_start, "period_a_start")?;
+        let a_end_date = parse_date(a_end, "period_a_end")?;
+        let b_start_date = parse_date(b_start, "period_b_start")?;
+        let b_end_date = parse_date(b_end, "period_b_end")?;
+
+        if a_start_date > a_end_date {
+            return Err(IntentError::validation(
+                "period_a_start must be on or before period_a_end".to_string(),
+            ));
+        }
+        if b_start_date > b_end_date {
+            return Err(IntentError::validation(
+                "period_b_start must be on or before period_b_end".to_string(),
+            ));
+        }
+
+        let a_window = AnalysisWindow::new(a_start_date, a_end_date);
+        let b_window = AnalysisWindow::new(b_start_date, b_end_date);
+
+        let (a_stats, b_stats) = tokio::try_join!(
+            self.get_period_stats(client.as_ref(), a_window, workout_type),
+            self.get_period_stats(client.as_ref(), b_window, workout_type),
+        )?;
         let trend = derive_trend_metrics(a_stats.snapshot, b_stats.snapshot);
         let a_volume = derive_volume_metrics(
             a_stats.window_days,
@@ -453,14 +473,11 @@ impl ComparePeriodsHandler {
     async fn get_period_stats(
         &self,
         client: &dyn IntervalsClient,
-        start: &str,
-        end: &str,
+        window: AnalysisWindow,
         workout_type: Option<&str>,
     ) -> Result<PeriodStats, IntentError> {
-        let start_date = parse_date(start, "start")?;
-        let end_date = parse_date(end, "end")?;
-
-        let window = AnalysisWindow::new(start_date, end_date);
+        let start_date = window.start_date;
+        let end_date = window.end_date;
 
         let fetched = fetch_period_data(
             client,
@@ -1322,6 +1339,97 @@ mod tests {
                 .next_actions
                 .iter()
                 .any(|a| a.contains("analyze_training"))
+        );
+    }
+
+    // ========================================================================
+    // Task 3: Reversed Date Range Validation
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_reversed_period_a_range_rejected_before_network_io() {
+        let handler = ComparePeriodsHandler::new();
+        let client = Arc::new(compare_mock_client());
+        let input = json!({
+            "period_a_start": "2026-03-07",
+            "period_a_end": "2026-03-01",
+            "period_b_start": "2026-03-08",
+            "period_b_end": "2026-03-14"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("period_a_start must be on or before period_a_end"),
+            "Error should mention period_a_start and period_a_end, got: {}",
+            msg
+        );
+    }
+
+    #[tokio::test]
+    async fn test_reversed_period_b_range_rejected_before_network_io() {
+        let handler = ComparePeriodsHandler::new();
+        let client = Arc::new(compare_mock_client());
+        let input = json!({
+            "period_a_start": "2026-03-01",
+            "period_a_end": "2026-03-07",
+            "period_b_start": "2026-03-14",
+            "period_b_end": "2026-03-08"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("period_b_start must be on or before period_b_end"),
+            "Error should mention period_b_start and period_b_end, got: {}",
+            msg
+        );
+    }
+
+    #[tokio::test]
+    async fn test_reversed_window_causes_zero_client_calls() {
+        let handler = ComparePeriodsHandler::new();
+        let mock = compare_mock_client();
+        let observations = mock.observations();
+        let client = Arc::new(mock);
+
+        let input = json!({
+            "period_a_start": "2026-03-07",
+            "period_a_end": "2026-03-01",
+            "period_b_start": "2026-03-08",
+            "period_b_end": "2026-03-14"
+        });
+
+        let result = handler.execute(input, client, None).await;
+        assert!(result.is_err());
+
+        // Reversed range should fail before any wellness calls
+        assert_eq!(
+            observations.wellness_call_count(),
+            0,
+            "reversed range must not trigger any client calls"
+        );
+    }
+
+    #[test]
+    fn test_description_mentions_yoy_and_quarter() {
+        let handler = ComparePeriodsHandler::new();
+        let desc = IntentHandler::description(&handler);
+        assert!(
+            desc.contains("year-over-year") || desc.contains("YoY"),
+            "Description should mention YoY/year-over-year comparisons"
+        );
+        assert!(
+            desc.contains("quarter-over-quarter") || desc.contains("QoQ"),
+            "Description should mention quarter-over-quarter comparisons"
+        );
+        assert!(
+            desc.contains("period_a_start") && desc.contains("period_b_start"),
+            "Description should mention all four boundary fields"
         );
     }
 }
