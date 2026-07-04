@@ -1,9 +1,9 @@
-use rmcp::model::RawResource;
+use rmcp::model::Resource;
 
-/// Return a `RawResource` descriptor for the athlete profile resource.
+/// Return a `Resource` descriptor for the athlete profile resource.
 /// Kept small so `lib.rs` can delegate to it.
-pub fn athlete_profile_resource() -> RawResource {
-    let mut resource = RawResource::new("intervals-icu://athlete/profile", "Athlete Profile");
+pub fn athlete_profile_resource() -> Resource {
+    let mut resource = Resource::new("intervals-icu://athlete/profile", "Athlete Profile");
     resource.description = Some(
         "Athlete profile data including: profile (id, name), fitness metrics (ctl, atl, tsb, rampRate), \
          sport settings (ftp, lthr, max_hr, power_zones, hr_zones, pace_zones). \
@@ -54,10 +54,10 @@ pub async fn build_athlete_profile_text(
 const MAX_DOWNSAMPLE_POINTS: usize = 200;
 
 /// Return resource descriptors for activity stream resources.
-pub fn activity_stream_resources() -> Vec<RawResource> {
+pub fn activity_stream_resources() -> Vec<Resource> {
     let mut resources = Vec::new();
 
-    let mut power = RawResource::new(
+    let mut power = Resource::new(
         "activity://{activity_id}/streams/power",
         "Activity Power Stream",
     );
@@ -69,7 +69,7 @@ pub fn activity_stream_resources() -> Vec<RawResource> {
     power.mime_type = Some("application/json".to_string());
     resources.push(power);
 
-    let mut hr = RawResource::new(
+    let mut hr = Resource::new(
         "activity://{activity_id}/streams/hr",
         "Activity Heart Rate Stream",
     );
@@ -81,7 +81,7 @@ pub fn activity_stream_resources() -> Vec<RawResource> {
     hr.mime_type = Some("application/json".to_string());
     resources.push(hr);
 
-    let mut pace = RawResource::new(
+    let mut pace = Resource::new(
         "activity://{activity_id}/streams/pace",
         "Activity Pace Stream",
     );
