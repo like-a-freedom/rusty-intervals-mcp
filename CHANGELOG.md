@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.14.0] - 2026-07-04
+
+### Changed
+- Migrate `rmcp` from 1.8.0 to 2.1.0 (major version bump).
+- Replace `RawResource` with `Resource` (renamed in rmcp 2.0).
+- Remove unused `AnnotateAble` trait import and `.no_annotation()` calls (removed in rmcp 2.0).
+- Update all workspace dependencies to latest compatible versions via `cargo update`.
+
 ## [0.2.0] - 2025-12-16
 - Add release checklist and container packaging docs.
 - Add GitHub Actions CI: run `cargo fmt`, `cargo clippy` (fail on warnings), and `cargo test` on PRs and pushes; add release build job that produces cross-platform binaries and checksums for Linux, macOS, and Windows.
