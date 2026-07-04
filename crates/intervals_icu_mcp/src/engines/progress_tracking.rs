@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 
-use chrono::{Datelike, NaiveDate, NaiveDateTime};
+use chrono::{Datelike, NaiveDate};
 use intervals_icu_client::ActivitySummary;
 use serde_json::Value;
 
@@ -14,6 +14,7 @@ use crate::engines::coach_metrics::{
     compute_acwr, compute_lnrmssd_rollup, compute_monotony, compute_strain, compute_tid_entropy,
     extract_ctl_series, extract_hrv_series, parse_wellness_metrics,
 };
+use crate::engines::shared::{compute_zone_distribution, parse_activity_date};
 
 const DEFAULT_TID_DRIFT_DELTA_THRESHOLD: f64 = 0.15;
 const MIN_WEEKS_FOR_TID_DRIFT: usize = 4;
@@ -51,41 +52,6 @@ pub fn count_ctl_points(wellness: &Value) -> usize {
         .count()
 }
 
-fn parse_activity_date(value: &str) -> Option<NaiveDate> {
-    NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S")
-        .ok()
-        .map(|dt| dt.date())
-        .or_else(|| NaiveDate::parse_from_str(value, "%Y-%m-%d").ok())
-}
-
-fn extract_zone_distribution(detail: &Value) -> Option<(f64, f64, f64)> {
-    let zone_times = detail.get("icu_zone_times")?.as_array()?;
-    let mut z1 = 0.0;
-    let mut z2 = 0.0;
-    let mut z3 = 0.0;
-
-    for entry in zone_times {
-        let id = entry.get("id")?.as_str()?;
-        let secs = entry
-            .get("secs")
-            .and_then(|value| value.as_f64().or_else(|| value.as_i64().map(|n| n as f64)))
-            .unwrap_or(0.0);
-        match id {
-            "Z1" | "Z2" => z1 += secs,
-            "Z3" => z2 += secs,
-            "Z4" | "Z5" | "Z6" | "Z7" => z3 += secs,
-            _ => {}
-        }
-    }
-
-    let total = z1 + z2 + z3;
-    if total <= f64::EPSILON {
-        return None;
-    }
-
-    Some((z1 / total, z2 / total, z3 / total))
-}
-
 type ZonePct = (f64, f64, f64);
 
 type WeekKey = (i32, u32);
@@ -109,7 +75,10 @@ pub fn build_weekly_zone_distributions(
             continue;
         };
 
-        let Some((z1, z2, z3)) = extract_zone_distribution(detail) else {
+        let Some((z1, z2, z3)) = detail
+            .get("icu_zone_times")
+            .and_then(compute_zone_distribution)
+        else {
             continue;
         };
 

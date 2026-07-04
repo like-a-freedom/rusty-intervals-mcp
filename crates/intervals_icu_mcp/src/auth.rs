@@ -1,14 +1,12 @@
 //! JWT Authentication and Encryption Module
 //!
-//! # Revocation scope
+//! # Revocation
 //!
-//! JWT tokens are stateless — once issued they remain valid until they expire,
-//! regardless of the web UI revocation list. The [`crate::auth_ui::ui_revoke_token`]
-//! handler only marks entries in the web UI token registry, and that registry does
-//! **not** propagate to the JWT verification path in [`JwtManager::verify_token`]
-//! or the MCP authentication middleware.
-//! Full JWT revocation would require a persistent blacklist checked on every
-//! verification — that is out of scope for the current architecture.
+//! Tokens issued via the web UI carry a `jti` (JWT ID) claim that is recorded in
+//! both the UI token registry and a lightweight `TokenRevocationSet`. When a token
+//! is revoked through the UI, its `jti` is added to this set, and the auth middleware
+//! rejects any request bearing a revoked token. Tokens issued via the `/auth` API
+//! endpoint carry `jti: None` and are not subject to revocation.
 
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -22,6 +20,7 @@ use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use thiserror::Error;
+use tokio::sync::RwLock;
 
 use crate::metrics;
 
@@ -38,6 +37,8 @@ fn fill_random(buf: &mut [u8]) -> Result<(), AuthError> {
 pub struct IntervalsClaims {
     pub athlete_id: String,
     pub encrypted_api_key: String,
+    /// JWT ID — set only for UI-issued tokens; `None` for `/auth` tokens.
+    pub jti: Option<String>,
 }
 
 /// Decrypted credentials after JWT verification
@@ -46,6 +47,10 @@ pub struct DecryptedCredentials {
     pub athlete_id: String,
     pub api_key: SecretString,
 }
+
+/// Thread-safe set of revoked JWT IDs.
+/// Shared between [`AppState`] and the UI token registry.
+pub type TokenRevocationSet = Arc<RwLock<HashSet<String>>>;
 
 /// Base URL injected into HTTP requests so rmcp handlers can build per-request clients.
 #[derive(Clone, Debug)]
@@ -65,6 +70,9 @@ pub struct AppState {
     pub jwt_manager: Arc<JwtManager>,
     pub jwt_ttl_seconds: u64,
     pub base_url: String,
+    /// Set of revoked JWT IDs — shared with the UI token registry.
+    /// Tokens without a `jti` (issued via `/auth`) are not tracked here.
+    pub revoked_jtis: TokenRevocationSet,
 }
 
 /// Master key configuration with HKDF-derived keys
@@ -119,6 +127,8 @@ pub enum AuthError {
     InvalidKeyLength,
     #[error("Key derivation error")]
     KeyDerivationError,
+    #[error("Token revoked")]
+    TokenRevoked,
     #[error("JWT error: {0}")]
     JwtError(#[from] jwt_simple::Error),
 }
@@ -142,17 +152,24 @@ impl JwtManager {
         }
     }
 
+    /// Issue a JWT token.
+    ///
+    /// When `jti` is `Some`, the value is embedded in custom claims so the
+    /// auth middleware can check it against the revocation set.  Tokens issued
+    /// via `/auth` pass `None` and are not revocable.
     pub fn issue_token(
         &self,
         athlete_id: &str,
         api_key: &str,
         ttl_secs: u64,
+        jti: Option<&str>,
     ) -> Result<String, AuthError> {
         let encrypted = self.encrypt_api_key(api_key)?;
 
         let custom = IntervalsClaims {
             athlete_id: athlete_id.to_string(),
             encrypted_api_key: encrypted,
+            jti: jti.map(|s| s.to_string()),
         };
 
         let claims = Claims::with_custom_claims(custom, Duration::from_secs(ttl_secs))
@@ -165,7 +182,16 @@ impl JwtManager {
             .map_err(|_| AuthError::EncryptionError)
     }
 
-    pub fn verify_token(&self, token: &str) -> Result<DecryptedCredentials, AuthError> {
+    /// Verify a JWT token.
+    ///
+    /// When `revoked_jtis` is `Some`, the token's `jti` claim (if present) is
+    /// checked against the set of revoked IDs.  Tokens without a `jti` are
+    /// accepted regardless of the revocation set.
+    pub fn verify_token(
+        &self,
+        token: &str,
+        revoked_jtis: Option<&HashSet<String>>,
+    ) -> Result<DecryptedCredentials, AuthError> {
         let verification_options = VerificationOptions {
             allowed_issuers: Some(HashSet::from([self.issuer.clone()])),
             allowed_audiences: Some(HashSet::from([self.audience.clone()])),
@@ -183,6 +209,15 @@ impl JwtManager {
                     AuthError::InvalidToken
                 }
             })?;
+
+        // Check revocation if the token carries a jti
+        if let Some(ref jti) = claims.custom.jti
+            && let Some(revoked) = revoked_jtis
+            && revoked.contains(jti)
+        {
+            tracing::warn!(jti = %jti, "Rejected revoked token");
+            return Err(AuthError::TokenRevoked);
+        }
 
         let api_key = self.decrypt_api_key(&claims.custom.encrypted_api_key)?;
 
@@ -254,20 +289,25 @@ pub struct AuthResponse {
 
 impl IntoResponse for AuthError {
     fn into_response(self) -> Response {
-        let status = match self {
-            AuthError::MissingCredentials => StatusCode::UNAUTHORIZED,
-            AuthError::InvalidToken => StatusCode::UNAUTHORIZED,
-            AuthError::TokenExpired => StatusCode::UNAUTHORIZED,
-            AuthError::InvalidCredentials => StatusCode::UNAUTHORIZED,
-            AuthError::EncryptionError => StatusCode::INTERNAL_SERVER_ERROR,
-            AuthError::ServerConfig => StatusCode::INTERNAL_SERVER_ERROR,
-            AuthError::InvalidKeyFormat => StatusCode::INTERNAL_SERVER_ERROR,
-            AuthError::InvalidKeyLength => StatusCode::INTERNAL_SERVER_ERROR,
-            AuthError::KeyDerivationError => StatusCode::INTERNAL_SERVER_ERROR,
-            AuthError::JwtError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        let (status, message): (StatusCode, &str) = match self {
+            AuthError::MissingCredentials => (StatusCode::UNAUTHORIZED, "Missing credentials"),
+            AuthError::InvalidToken => (StatusCode::UNAUTHORIZED, "Invalid token"),
+            AuthError::TokenExpired => (StatusCode::UNAUTHORIZED, "Token expired"),
+            AuthError::InvalidCredentials => (StatusCode::UNAUTHORIZED, "Invalid credentials"),
+            AuthError::TokenRevoked => (StatusCode::UNAUTHORIZED, "Token revoked"),
+            // Internal errors: return a generic message instead of leaking details.
+            AuthError::EncryptionError
+            | AuthError::ServerConfig
+            | AuthError::InvalidKeyFormat
+            | AuthError::InvalidKeyLength
+            | AuthError::KeyDerivationError
+            | AuthError::JwtError(_) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "auth configuration error",
+            ),
         };
 
-        (status, self.to_string()).into_response()
+        (status, message).into_response()
     }
 }
 
@@ -307,10 +347,12 @@ pub async fn auth_endpoint(
     })?;
 
     // Validation successful - issue JWT
-    let token =
-        state
-            .jwt_manager
-            .issue_token(&req.athlete_id, &req.api_key, state.jwt_ttl_seconds)?;
+    let token = state.jwt_manager.issue_token(
+        &req.athlete_id,
+        &req.api_key,
+        state.jwt_ttl_seconds,
+        None,
+    )?;
 
     // Record token issuance metric
     metrics::record_token_issued();
@@ -330,7 +372,7 @@ pub async fn auth_endpoint(
 
 /// Axum middleware for extracting JWT from Authorization header
 pub async fn auth_middleware(
-    State(jwt_manager): State<Arc<JwtManager>>,
+    State(app_state): State<Arc<AppState>>,
     mut request: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
@@ -353,7 +395,10 @@ pub async fn auth_middleware(
         .unwrap_or_else(|| "unknown".to_string());
 
     let credentials = if let Some(token) = auth_header {
-        match jwt_manager.verify_token(token) {
+        match app_state
+            .jwt_manager
+            .verify_token(token, Some(&*app_state.revoked_jtis.read().await))
+        {
             Ok(creds) => {
                 // Record successful verification
                 metrics::record_token_verification("valid");
@@ -368,6 +413,7 @@ pub async fn auth_middleware(
                 // Record failed verification with status
                 let status = match &e {
                     AuthError::TokenExpired => "expired",
+                    AuthError::TokenRevoked => "revoked",
                     _ => "invalid",
                 };
                 metrics::record_token_verification(status);
@@ -452,7 +498,7 @@ mod tests {
     fn test_issue_token_success() {
         let manager = create_test_manager();
         let token = manager
-            .issue_token("i123456", "test_api_key", 3600)
+            .issue_token("i123456", "test_api_key", 3600, None)
             .unwrap();
         let parts: Vec<&str> = token.split('.').collect();
         assert_eq!(parts.len(), 3);
@@ -462,9 +508,9 @@ mod tests {
     fn test_verify_token_success() {
         let manager = create_test_manager();
         let token = manager
-            .issue_token("i123456", "test_api_key", 3600)
+            .issue_token("i123456", "test_api_key", 3600, None)
             .unwrap();
-        let credentials = manager.verify_token(&token).unwrap();
+        let credentials = manager.verify_token(&token, None).unwrap();
         assert_eq!(credentials.athlete_id, "i123456");
         assert_eq!(credentials.api_key.expose_secret(), "test_api_key");
     }
@@ -472,7 +518,7 @@ mod tests {
     #[test]
     fn test_verify_invalid_token_fails() {
         let manager = create_test_manager();
-        let result = manager.verify_token("invalid.token.here");
+        let result = manager.verify_token("invalid.token.here", None);
         assert!(matches!(result, Err(AuthError::InvalidToken)));
     }
 
@@ -480,12 +526,12 @@ mod tests {
     fn test_verify_tampered_token_fails() {
         let manager = create_test_manager();
         let token = manager
-            .issue_token("i123456", "test_api_key", 3600)
+            .issue_token("i123456", "test_api_key", 3600, None)
             .unwrap();
         let mut tampered = token.chars().collect::<Vec<_>>();
         tampered[10] = 'X';
         let tampered_token: String = tampered.into_iter().collect();
-        let result = manager.verify_token(&tampered_token);
+        let result = manager.verify_token(&tampered_token, None);
         assert!(matches!(result, Err(AuthError::InvalidToken)));
     }
 
@@ -494,8 +540,10 @@ mod tests {
         let manager = create_test_manager();
         let athlete_id = "i999999";
         let api_key = "round_trip_test_key";
-        let token = manager.issue_token(athlete_id, api_key, 3600).unwrap();
-        let credentials = manager.verify_token(&token).unwrap();
+        let token = manager
+            .issue_token(athlete_id, api_key, 3600, None)
+            .unwrap();
+        let credentials = manager.verify_token(&token, None).unwrap();
         assert_eq!(credentials.athlete_id, athlete_id);
         assert_eq!(credentials.api_key.expose_secret(), api_key);
     }
@@ -507,6 +555,7 @@ mod tests {
             IntervalsClaims {
                 athlete_id: "i123456".to_string(),
                 encrypted_api_key: manager.encrypt_api_key("test_api_key").unwrap(),
+                jti: None,
             },
             Duration::from_secs(3600),
         )
@@ -515,7 +564,7 @@ mod tests {
         .with_subject("i123456".to_string());
 
         let token = manager.signing_key.authenticate(claims).unwrap();
-        let result = manager.verify_token(&token);
+        let result = manager.verify_token(&token, None);
 
         assert!(matches!(result, Err(AuthError::InvalidToken)));
     }
@@ -527,6 +576,7 @@ mod tests {
             IntervalsClaims {
                 athlete_id: "i123456".to_string(),
                 encrypted_api_key: manager.encrypt_api_key("test_api_key").unwrap(),
+                jti: None,
             },
             Duration::from_secs(3600),
         )
@@ -535,7 +585,7 @@ mod tests {
         .with_subject("i123456".to_string());
 
         let token = manager.signing_key.authenticate(claims).unwrap();
-        let result = manager.verify_token(&token);
+        let result = manager.verify_token(&token, None);
 
         assert!(matches!(result, Err(AuthError::InvalidToken)));
     }
@@ -543,10 +593,10 @@ mod tests {
     #[test]
     fn test_multiple_tokens_independent() {
         let manager = create_test_manager();
-        let token1 = manager.issue_token("athlete1", "key1", 3600).unwrap();
-        let token2 = manager.issue_token("athlete2", "key2", 3600).unwrap();
-        let creds1 = manager.verify_token(&token1).unwrap();
-        let creds2 = manager.verify_token(&token2).unwrap();
+        let token1 = manager.issue_token("athlete1", "key1", 3600, None).unwrap();
+        let token2 = manager.issue_token("athlete2", "key2", 3600, None).unwrap();
+        let creds1 = manager.verify_token(&token1, None).unwrap();
+        let creds2 = manager.verify_token(&token2, None).unwrap();
         assert_ne!(creds1.athlete_id, creds2.athlete_id);
         assert_ne!(
             creds1.api_key.expose_secret(),
@@ -558,8 +608,8 @@ mod tests {
     fn test_special_characters_in_api_key() {
         let manager = create_test_manager();
         let api_key = "special!@#$%^&*()_+-=[]{}|;':\",./<>?";
-        let token = manager.issue_token("i123456", api_key, 3600).unwrap();
-        let credentials = manager.verify_token(&token).unwrap();
+        let token = manager.issue_token("i123456", api_key, 3600, None).unwrap();
+        let credentials = manager.verify_token(&token, None).unwrap();
         assert_eq!(credentials.api_key.expose_secret(), api_key);
     }
 
@@ -614,6 +664,7 @@ mod tests {
             jwt_manager: jwt_manager.clone(),
             jwt_ttl_seconds: 3600,
             base_url: "https://intervals.icu".to_string(),
+            revoked_jtis: Arc::new(tokio::sync::RwLock::new(HashSet::new())),
         };
 
         let cloned = state.clone();
@@ -642,6 +693,7 @@ mod tests {
             jwt_manager,
             jwt_ttl_seconds: 3600,
             base_url: "https://intervals.icu".to_string(),
+            revoked_jtis: Arc::new(tokio::sync::RwLock::new(HashSet::new())),
         });
 
         let req = AuthRequest {
@@ -741,10 +793,12 @@ mod tests {
         let api_key = "test_api_key_123";
 
         // Issue token
-        let token = manager.issue_token(athlete_id, api_key, 3600).unwrap();
+        let token = manager
+            .issue_token(athlete_id, api_key, 3600, None)
+            .unwrap();
 
         // Verify token
-        let credentials = manager.verify_token(&token).unwrap();
+        let credentials = manager.verify_token(&token, None).unwrap();
 
         assert_eq!(credentials.athlete_id, athlete_id);
         assert_eq!(credentials.api_key.expose_secret(), api_key);
@@ -765,13 +819,17 @@ mod tests {
         let athlete_id = "i123456";
         let api_key = "test_api_key_123";
 
-        let token1 = manager1.issue_token(athlete_id, api_key, 3600).unwrap();
-        let token2 = manager2.issue_token(athlete_id, api_key, 3600).unwrap();
+        let token1 = manager1
+            .issue_token(athlete_id, api_key, 3600, None)
+            .unwrap();
+        let token2 = manager2
+            .issue_token(athlete_id, api_key, 3600, None)
+            .unwrap();
 
         // Tokens should be different
         assert_ne!(token1, token2);
 
         // Token from manager1 should NOT be verifiable by manager2
-        assert!(manager2.verify_token(&token1).is_err());
+        assert!(manager2.verify_token(&token1, None).is_err());
     }
 }

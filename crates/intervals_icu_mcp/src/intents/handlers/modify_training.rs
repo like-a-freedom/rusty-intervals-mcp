@@ -54,6 +54,7 @@ impl ModifyTrainingHandler {
     ) -> Result<Vec<Event>, IntentError> {
         fetch_calendar_events_between(client, start_date, end_date, limit)
             .await
+            .map_err(|e| IntentError::api(e.to_string()))
             .map(Self::dedupe_events)
     }
 

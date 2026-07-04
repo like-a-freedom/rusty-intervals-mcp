@@ -10,10 +10,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
-use crate::auth::AppState;
+use crate::auth::{AppState, TokenRevocationSet};
 
 const MAUD_UI_CSS: &str = include_str!("../static/maud-ui.css");
 const DEFAULT_TOKEN_TTL_DAYS: u64 = 30;
@@ -21,6 +22,7 @@ const MAX_TOKEN_TTL_DAYS: u64 = 3650;
 const SECONDS_PER_DAY: u64 = 86_400;
 const SESSION_COOKIE_NAME: &str = "mcp_session";
 const SESSION_COOKIE_MAX_AGE_SECONDS: u64 = 3600;
+const MAX_SESSIONS: usize = 1000;
 
 // ── Session types ────────────────────────────────────────────────────────
 
@@ -28,6 +30,7 @@ const SESSION_COOKIE_MAX_AGE_SECONDS: u64 = 3600;
 pub struct SessionData {
     pub csrf_token: String,
     pub athlete_id: Option<String>,
+    created_at: Instant,
 }
 
 pub type SessionStore = Arc<RwLock<HashMap<String, SessionData>>>;
@@ -104,10 +107,16 @@ pub struct UiState {
     pub sessions: SessionStore,
     pub tokens: TokenRegistry,
     pub registry_path: Option<PathBuf>,
+    /// Shared revocation set — same instance as in AppState.
+    pub revoked_jtis: TokenRevocationSet,
 }
 
 impl UiState {
-    pub fn new(app_state: Arc<AppState>, registry_path: Option<PathBuf>) -> Self {
+    pub fn new(
+        app_state: Arc<AppState>,
+        revoked_jtis: TokenRevocationSet,
+        registry_path: Option<PathBuf>,
+    ) -> Self {
         let tokens = Arc::new(RwLock::new(
             registry_path
                 .as_ref()
@@ -115,11 +124,24 @@ impl UiState {
                 .and_then(|s| serde_json::from_str(&s).ok())
                 .unwrap_or_default(),
         ));
+        // Pre-populate revocation set from existing registry
+        if let Some(path) = registry_path.as_ref()
+            && let Ok(content) = std::fs::read_to_string(path)
+            && let Ok(records) = serde_json::from_str::<Vec<TokenRecord>>(&content)
+        {
+            let mut guard = revoked_jtis.blocking_write();
+            for record in &records {
+                if record.revoked {
+                    guard.insert(record.jti.clone());
+                }
+            }
+        }
         Self {
             app_state,
             sessions: Arc::new(RwLock::new(HashMap::new())),
             tokens,
             registry_path,
+            revoked_jtis,
         }
     }
 
@@ -144,6 +166,8 @@ impl UiState {
             return session_id;
         }
 
+        self.evict_stale_sessions().await;
+
         let session_id = generate_session_id();
         let csrf = generate_csrf_token();
         self.sessions.write().await.insert(
@@ -151,9 +175,32 @@ impl UiState {
             SessionData {
                 csrf_token: csrf,
                 athlete_id: None,
+                created_at: Instant::now(),
             },
         );
         session_id
+    }
+
+    /// Remove expired sessions and, if still over capacity, the oldest ones.
+    async fn evict_stale_sessions(&self) {
+        let mut sessions = self.sessions.write().await;
+        // Remove sessions older than the cookie max age.
+        let cutoff =
+            Instant::now() - std::time::Duration::from_secs(SESSION_COOKIE_MAX_AGE_SECONDS);
+        sessions.retain(|_, s| s.created_at > cutoff);
+
+        // If still over capacity, remove the oldest entries.
+        if sessions.len() > MAX_SESSIONS {
+            let mut entries: Vec<(String, Instant)> = sessions
+                .iter()
+                .map(|(k, v)| (k.clone(), v.created_at))
+                .collect();
+            entries.sort_by_key(|(_, t)| *t);
+            let to_remove: usize = sessions.len() - MAX_SESSIONS;
+            for (key, _) in entries.iter().take(to_remove) {
+                sessions.remove(key);
+            }
+        }
     }
 
     async fn session(&self, session_id: &str) -> Option<SessionData> {
@@ -200,6 +247,8 @@ impl UiState {
         };
 
         if revoked {
+            // Also add to the shared revocation set so middleware can reject it.
+            self.revoked_jtis.write().await.insert(jti.to_string());
             self.persist_registry().await;
         }
 
@@ -464,7 +513,7 @@ pub async fn ui_home(
 fn set_session_cookie(resp: &mut axum::response::Response, session_id: &str) {
     use axum::http::header::SET_COOKIE;
     let cookie = format!(
-        "{}={}; HttpOnly; SameSite=Strict; Path=/ui; Max-Age={}",
+        "{}={}; HttpOnly; SameSite=Strict; Path=/ui; Max-Age={}; Secure",
         SESSION_COOKIE_NAME, session_id, SESSION_COOKIE_MAX_AGE_SECONDS
     );
     resp.headers_mut()
@@ -518,53 +567,57 @@ pub async fn ui_create_token(
     let ttl_seconds = token_request.ttl_seconds();
 
     match client.get_athlete_profile().await {
-        Ok(_) => match ui.app_state.jwt_manager.issue_token(
-            &token_request.athlete_id,
-            &token_request.api_key,
-            ttl_seconds,
-        ) {
-            Ok(token) => {
-                let now = chrono::Utc::now();
-                let expires = now + chrono::TimeDelta::seconds(ttl_seconds as i64);
-                let expires_at = expires.to_rfc3339();
-                let expiry_formatted = format_datetime(&expires_at);
+        Ok(_) => {
+            let jti = Uuid::new_v4().to_string();
+            match ui.app_state.jwt_manager.issue_token(
+                &token_request.athlete_id,
+                &token_request.api_key,
+                ttl_seconds,
+                Some(&jti),
+            ) {
+                Ok(token) => {
+                    let now = chrono::Utc::now();
+                    let expires = now + chrono::TimeDelta::seconds(ttl_seconds as i64);
+                    let expires_at = expires.to_rfc3339();
+                    let expiry_formatted = format_datetime(&expires_at);
 
-                ui.record_token(TokenRecord {
-                    jti: Uuid::new_v4().to_string(),
-                    athlete_id: token_request.athlete_id.clone(),
-                    issued_at: now.to_rfc3339(),
-                    expires_at,
-                    revoked: false,
-                })
-                .await;
-
-                ui.remember_athlete(&session.session_id, &token_request.athlete_id)
+                    ui.record_token(TokenRecord {
+                        jti: jti.clone(),
+                        athlete_id: token_request.athlete_id.clone(),
+                        issued_at: now.to_rfc3339(),
+                        expires_at,
+                        revoked: false,
+                    })
                     .await;
 
-                crate::metrics::record_token_issued_with_source("ui");
-                crate::metrics::record_ui_action("token_created");
-                tracing::info!(
-                    athlete_id = %token_request.athlete_id,
-                    ui_action = "token_created",
-                    "Token created via web UI"
-                );
+                    ui.remember_athlete(&session.session_id, &token_request.athlete_id)
+                        .await;
 
-                let body = render_token_success(
-                    &token,
-                    &token_request.athlete_id,
-                    &expiry_formatted,
-                    &token_request.ttl_label(),
-                );
-                let html = page_shell("Token Generated", "/ui", body, None, None);
-                let mut resp = html.into_response();
-                set_session_cookie(&mut resp, &session.session_id);
-                resp
+                    crate::metrics::record_token_issued_with_source("ui");
+                    crate::metrics::record_ui_action("token_created");
+                    tracing::info!(
+                        athlete_id = %token_request.athlete_id,
+                        ui_action = "token_created",
+                        "Token created via web UI"
+                    );
+
+                    let body = render_token_success(
+                        &token,
+                        &token_request.athlete_id,
+                        &expiry_formatted,
+                        &token_request.ttl_label(),
+                    );
+                    let html = page_shell("Token Generated", "/ui", body, None, None);
+                    let mut resp = html.into_response();
+                    set_session_cookie(&mut resp, &session.session_id);
+                    resp
+                }
+                Err(e) => redirect_with_session(
+                    &format!("/ui?error=Token+generation+failed%3A+{e}"),
+                    &session.session_id,
+                ),
             }
-            Err(e) => redirect_with_session(
-                &format!("/ui?error=Token+generation+failed%3A+{e}"),
-                &session.session_id,
-            ),
-        },
+        }
         Err(_) => redirect_with_session("/ui?error=Invalid+credentials", &session.session_id),
     }
 }
@@ -861,15 +914,18 @@ mod tests {
     use axum::http::HeaderValue;
 
     fn test_ui_state() -> UiState {
+        use std::collections::HashSet;
         let secret = b"test_secret_key_for_jwt_signing_12345678901234567890123456789012";
         let jwt_manager = Arc::new(crate::auth::JwtManager::new(secret, [0u8; 32]));
+        let revoked_jtis = Arc::new(tokio::sync::RwLock::new(HashSet::new()));
         let app_state = Arc::new(AppState {
             jwt_manager,
             jwt_ttl_seconds: 3600,
             base_url: "https://intervals.icu".to_string(),
+            revoked_jtis: revoked_jtis.clone(),
         });
 
-        UiState::new(app_state, None)
+        UiState::new(app_state, revoked_jtis, None)
     }
 
     fn headers_with_cookie(cookie: &str) -> HeaderMap {

@@ -1,4 +1,18 @@
-use std::collections::HashMap;
+//! # Intervals.icu MCP Server
+//!
+//! Model Context Protocol server that exposes Intervals.icu training data
+//! as AI-agent tools (intents).  Built on top of `intervals_icu_client`.
+//!
+//! ## Layout
+//!
+//! - [`engines`] — domain logic: analysis, metrics, fetch orchestration
+//! - [`intents`] — MCP tool handlers (intents) and routing
+//! - [`auth`] — JWT-based authentication for multi-tenant HTTP mode
+//! - [`domains`] — domain types and value objects
+//! - [`metrics`] — Prometheus metrics recording
+//! - [`dynamic`] — dynamic OpenAPI-driven tool registry
+
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -485,10 +499,13 @@ pub async fn run_http_server(
     let base_url = std::env::var("INTERVALS_ICU_BASE_URL")
         .unwrap_or_else(|_| "https://intervals.icu".to_string());
 
+    let revoked_jtis: auth::TokenRevocationSet = Arc::new(tokio::sync::RwLock::new(HashSet::new()));
+
     let app_state = std::sync::Arc::new(auth::AppState {
         jwt_manager: jwt_manager.clone(),
         jwt_ttl_seconds,
         base_url: base_url.clone(),
+        revoked_jtis: revoked_jtis.clone(),
     });
 
     let handler = IntervalsMcpHandler::new_multi_tenant().expect("new_multi_tenant");
@@ -496,7 +513,7 @@ pub async fn run_http_server(
     let registry_path = std::env::var("MCP_TOKEN_REGISTRY_PATH")
         .ok()
         .map(PathBuf::from);
-    let ui_state = auth_ui::UiState::new(app_state.clone(), registry_path);
+    let ui_state = auth_ui::UiState::new(app_state.clone(), revoked_jtis.clone(), registry_path);
 
     let ui_config = tower_governor::governor::GovernorConfigBuilder::default()
         .per_second(2)
@@ -561,7 +578,7 @@ pub async fn run_http_server(
         .layer(axum::Extension(auth::HttpBaseUrl(base_url.clone())))
         .layer(mcp_governor)
         .layer(axum::middleware::from_fn_with_state(
-            jwt_manager.clone(),
+            app_state.clone(),
             auth::auth_middleware,
         ))
         .layer(axum::extract::DefaultBodyLimit::max(max_body_size))

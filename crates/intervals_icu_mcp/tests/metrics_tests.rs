@@ -75,12 +75,12 @@ async fn test_upstream_metrics_are_recorded() {
     eprintln!("Prometheus output:\n{}", output);
 
     assert!(
-        output.contains("intervals_icu_mcp_upstream_requests_total"),
+        output.contains("intervals_icu_client_upstream_requests_total"),
         "Should contain upstream requests counter: {}",
         output
     );
     assert!(
-        output.contains("intervals_icu_mcp_upstream_request_duration_seconds"),
+        output.contains("intervals_icu_client_upstream_request_duration_seconds"),
         "Should contain upstream request duration histogram: {}",
         output
     );
@@ -124,7 +124,7 @@ async fn test_upstream_error_metrics_are_recorded() {
         .render();
 
     assert!(
-        output.contains("intervals_icu_mcp_upstream_errors_total"),
+        output.contains("intervals_icu_client_upstream_errors_total"),
         "Should contain upstream errors counter: {}",
         output
     );

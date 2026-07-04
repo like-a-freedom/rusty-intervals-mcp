@@ -3,6 +3,7 @@ use sha2::Sha256;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
+use subtle::ConstantTimeEq;
 use tokio::sync::Mutex;
 
 use crate::{ObjectResult, WebhookEvent};
@@ -74,7 +75,7 @@ fn verify_signature(
     mac.update(&body);
     let expected = mac.finalize().into_bytes();
     let sig_bytes = hex::decode(signature).map_err(|e| e.to_string())?;
-    if expected.as_slice() != sig_bytes.as_slice() {
+    if expected.as_slice().ct_eq(&sig_bytes).unwrap_u8() == 0 {
         return Err("signature mismatch".into());
     }
     Ok(())

@@ -4,6 +4,7 @@ use crate::domains::coach::{
     WorkoutMetricsContext,
 };
 use crate::engines::coach_metrics_constants::*;
+use crate::engines::shared::compute_zone_distribution;
 use intervals_icu_client::ActivitySummary;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -861,28 +862,11 @@ pub fn parse_polarisation_from_api(
     }
 
     // Priority 2: Aggregate from icu_zone_times
-    // API returns zone times as [{id, secs}, ...] — typically 5 zones.
-    // Seiler mapping: zones 1+2 → Z1, zone 3 → Z2, zones 4+5 → Z3
-    if let Some(zt) = zone_times.and_then(|v| v.as_array()) {
-        let zone_secs: Vec<f64> = zt
-            .iter()
-            .filter_map(|entry| entry.get("secs").and_then(|s| s.as_f64()))
-            .collect();
-        let total: f64 = zone_secs.iter().sum();
-
-        if zone_secs.len() >= 5 && total > 0.0 {
-            // 5-zone model: [0,1]=easy, [2]=threshold, [3,4]=high
-            let z1_pct = (zone_secs[0] + zone_secs[1]) / total;
-            let z2_pct = zone_secs[2] / total;
-            let z3_pct = (zone_secs[3] + zone_secs[4]) / total;
-            return compute_polarisation(z1_pct, z2_pct, z3_pct);
-        } else if zone_secs.len() >= 3 && total > 0.0 {
-            // 3-zone model or unknown: map directly
-            let z1_pct = zone_secs[0] / total;
-            let z2_pct = zone_secs[1] / total;
-            let z3_pct: f64 = zone_secs[2..].iter().sum::<f64>() / total;
-            return compute_polarisation(z1_pct, z2_pct, z3_pct);
-        }
+    // Uses canonical name-based Seiler mapping (Z1+Z2→easy, Z3→threshold, Z4+→high)
+    if let Some(zt) = zone_times
+        && let Some((z1_pct, z2_pct, z3_pct)) = compute_zone_distribution(zt)
+    {
+        return compute_polarisation(z1_pct, z2_pct, z3_pct);
     }
 
     None
@@ -1810,11 +1794,11 @@ mod tests {
         // total = 8000, z1_pct=0.825, z2_pct=0.075, z3_pct=0.10
         // ratio = (0.825 + 0.10) / (2 * 0.075) = 0.925 / 0.15 = 6.17 -> high_intensity_dominant
         let zone_times = json!([
-            {"id": "z1", "secs": 3600},
-            {"id": "z2", "secs": 3000},
-            {"id": "z3", "secs": 600},
-            {"id": "z4", "secs": 500},
-            {"id": "z5", "secs": 300}
+            {"id": "Z1", "secs": 3600},
+            {"id": "Z2", "secs": 3000},
+            {"id": "Z3", "secs": 600},
+            {"id": "Z4", "secs": 500},
+            {"id": "Z5", "secs": 300}
         ]);
         let m = parse_polarisation_from_api(None, Some(&zone_times)).unwrap();
         assert!(m.ratio.unwrap() > 1.0);
@@ -1824,16 +1808,16 @@ mod tests {
     #[test]
     fn parse_polarisation_from_api_aggregates_5_zone_polarised() {
         // Seiler mapping: zones 1+2 → Z1 (easy), zone 3 → Z2 (threshold), zones 4+5 → Z3 (high)
-        // Zone times: z1=3000, z2=2000, z3=3500, z4=1000, z5=500 → total=10000
+        // Zone times: Z1=3000, Z2=2000, Z3=3500, Z4=1000, Z5=500 → total=10000
         // Macro zones: Z1=5000, Z2=3500, Z3=1500
         // z1_pct=0.50, z2_pct=0.35, z3_pct=0.15
         // ratio = (0.50 + 0.15) / (2 * 0.35) = 0.65 / 0.70 ≈ 0.93 → polarised
         let zone_times = json!([
-            {"id": "z1", "secs": 3000},
-            {"id": "z2", "secs": 2000},
-            {"id": "z3", "secs": 3500},
-            {"id": "z4", "secs": 1000},
-            {"id": "z5", "secs": 500}
+            {"id": "Z1", "secs": 3000},
+            {"id": "Z2", "secs": 2000},
+            {"id": "Z3", "secs": 3500},
+            {"id": "Z4", "secs": 1000},
+            {"id": "Z5", "secs": 500}
         ]);
         let m = parse_polarisation_from_api(None, Some(&zone_times)).unwrap();
         assert!(m.ratio.unwrap() > 0.75);

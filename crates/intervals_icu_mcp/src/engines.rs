@@ -8,11 +8,11 @@ pub mod coach_guidance;
 pub mod coach_metrics;
 pub mod coach_metrics_constants;
 pub mod cp_regression;
+pub mod fetch_error;
 pub mod forecast;
-pub mod planning;
 pub mod progress_tracking;
 pub mod race_readiness;
+pub mod shared;
 pub mod trail_execution;
 
 pub use analysis::{AnalysisEngine, WorkoutInsights};
-pub use planning::PeriodizationRules;

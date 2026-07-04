@@ -1,4 +1,3 @@
-use chrono::NaiveDate;
 use serde_json::Value;
 
 use crate::domains::coach::{
@@ -68,13 +67,6 @@ pub(crate) fn build_load_management_text(
     }
 
     lines.join("\n")
-}
-
-pub(crate) fn parse_activity_date(value: &str) -> Option<NaiveDate> {
-    chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S")
-        .ok()
-        .map(|dt| dt.date())
-        .or_else(|| NaiveDate::parse_from_str(value, "%Y-%m-%d").ok())
 }
 
 pub(crate) fn requested_metrics(input: &Value) -> Vec<String> {

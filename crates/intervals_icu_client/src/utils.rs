@@ -9,13 +9,13 @@ use std::fmt::Display;
 /// the codebase.
 ///
 /// # Example
-/// ```rust,ignore
-/// use crate::utils::QueryBuilder;
+/// ```rust
+/// use intervals_icu_client::utils::QueryBuilder;
 ///
 /// let query = QueryBuilder::new()
-///     .add("oldest", &oldest.to_string())
-///     .add("newest", &today.to_string())
-///     .add_opt("limit", limit.as_ref())
+///     .add("oldest", &"2024-01-01".to_string())
+///     .add("newest", &"2024-01-31".to_string())
+///     .add_opt("limit", Some(&"50".to_string()))
 ///     .build();
 /// ```
 #[derive(Debug, Default)]

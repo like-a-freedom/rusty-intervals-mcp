@@ -487,7 +487,8 @@ impl ComparePeriodsHandler {
                 include_comparison_window: false,
             },
         )
-        .await?;
+        .await
+        .map_err(|e| IntentError::api(e.to_string()))?;
 
         let period = filter_activities_by_range(&fetched.activities, &start_date, &end_date);
 

@@ -1,11 +1,12 @@
 use std::{collections::HashMap, collections::HashSet};
 
-use chrono::{Duration, NaiveDate, NaiveDateTime};
+use chrono::{Duration, NaiveDate};
 use intervals_icu_client::{ActivityMessage, ActivitySummary, Event, IntervalsClient};
 use serde_json::Value;
 
+use super::fetch_error::FetchError;
 use crate::domains::coach::AnalysisWindow;
-use crate::intents::IntentError;
+use crate::engines::shared::{parse_activity_date, parse_event_date};
 
 const ADAPTIVE_HRV_LOOKBACK_DAYS: i32 = 35;
 
@@ -75,10 +76,11 @@ pub fn required_activity_window(request: &PeriodFetchRequest) -> (NaiveDate, Nai
     (start, request.window.end_date)
 }
 
-pub fn activity_lookback_days(start: NaiveDate, today: NaiveDate) -> Result<i32, IntentError> {
+pub fn activity_lookback_days(start: NaiveDate, today: NaiveDate) -> Result<i32, FetchError> {
     let days = (today - start).num_days().max(0);
-    i32::try_from(days)
-        .map_err(|_| IntentError::validation("Requested activity window is too large"))
+    i32::try_from(days).map_err(|_| {
+        FetchError::InvalidDateRange("Requested activity window is too large".to_string())
+    })
 }
 
 pub fn extract_activity_load(detail: Option<&Value>) -> Option<f64> {
@@ -124,20 +126,6 @@ pub fn build_daily_load_series(
     }
 
     series
-}
-
-fn parse_activity_date(value: &str) -> Option<NaiveDate> {
-    NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S")
-        .ok()
-        .map(|dt| dt.date())
-        .or_else(|| NaiveDate::parse_from_str(value, "%Y-%m-%d").ok())
-}
-
-fn parse_event_date(value: &str) -> Option<NaiveDate> {
-    NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S")
-        .ok()
-        .map(|dt| dt.date())
-        .or_else(|| NaiveDate::parse_from_str(value, "%Y-%m-%d").ok())
 }
 
 fn dedupe_and_sort_events(mut events: Vec<Event>) -> Vec<Event> {
@@ -215,7 +203,7 @@ pub async fn fetch_calendar_events_between(
     start_date: &NaiveDate,
     end_date: &NaiveDate,
     limit: u32,
-) -> Result<Vec<Event>, IntentError> {
+) -> Result<Vec<Event>, FetchError> {
     let today = chrono::Utc::now().date_naive();
     let mut events = Vec::new();
 
@@ -224,7 +212,7 @@ pub async fn fetch_calendar_events_between(
         let mut historical = client
             .get_events(Some(days_back), Some(limit))
             .await
-            .map_err(|e| IntentError::api(format!("Failed to fetch events: {}", e)))?;
+            .map_err(|e| FetchError::ClientError(format!("Failed to fetch events: {}", e)))?;
         events.append(&mut historical);
     }
 
@@ -233,11 +221,14 @@ pub async fn fetch_calendar_events_between(
         let upcoming = client
             .get_upcoming_workouts(Some(days_ahead), Some(limit), None)
             .await
-            .map_err(|e| IntentError::api(format!("Failed to fetch upcoming events: {}", e)))?;
+            .map_err(|e| {
+                FetchError::ClientError(format!("Failed to fetch upcoming events: {}", e))
+            })?;
 
         let normalized_upcoming = normalize_upcoming_events_payload(upcoming);
-        let mut parsed: Vec<Event> = serde_json::from_value(normalized_upcoming)
-            .map_err(|e| IntentError::api(format!("Failed to decode upcoming events: {}", e)))?;
+        let mut parsed: Vec<Event> = serde_json::from_value(normalized_upcoming).map_err(|e| {
+            FetchError::ClientError(format!("Failed to decode upcoming events: {}", e))
+        })?;
         events.append(&mut parsed);
     }
 
@@ -353,14 +344,14 @@ fn normalize_streams_payload(payload: Value) -> Value {
 pub async fn fetch_period_data(
     client: &dyn IntervalsClient,
     request: &PeriodFetchRequest,
-) -> Result<FetchedAnalysisData, IntentError> {
+) -> Result<FetchedAnalysisData, FetchError> {
     let (required_start, required_end) = required_activity_window(request);
     let today = chrono::Utc::now().date_naive();
     let days_back = activity_lookback_days(required_start, today)?;
     let mut activities = client
         .get_recent_activities(None, Some(days_back))
         .await
-        .map_err(|error| IntentError::api(format!("Failed to fetch activities: {error}")))?;
+        .map_err(|error| FetchError::ClientError(format!("Failed to fetch activities: {error}")))?;
 
     activities.retain(|activity| {
         parse_activity_date(&activity.start_date_local)
@@ -386,7 +377,7 @@ pub async fn fetch_period_data(
         let mut historical = client
             .get_events(Some(days_back), Some(500))
             .await
-            .map_err(|e| IntentError::api(format!("Failed to fetch events: {}", e)))?;
+            .map_err(|e| FetchError::ClientError(format!("Failed to fetch events: {}", e)))?;
         calendar_events.append(&mut historical);
     }
 
@@ -400,7 +391,7 @@ pub async fn fetch_period_data(
                 let normalized_upcoming = normalize_upcoming_events_payload(upcoming.clone());
                 let mut parsed: Vec<Event> =
                     serde_json::from_value(normalized_upcoming).map_err(|e| {
-                        IntentError::api(format!("Failed to decode upcoming events: {}", e))
+                        FetchError::ClientError(format!("Failed to decode upcoming events: {}", e))
                     })?;
                 calendar_events.append(&mut parsed);
                 upcoming_workouts_payload = Some(upcoming);
@@ -409,7 +400,7 @@ pub async fn fetch_period_data(
                 fetched.fetch_warnings.push(upcoming_rate_limit_warning());
             }
             Err(e) => {
-                return Err(IntentError::api(format!(
+                return Err(FetchError::ClientError(format!(
                     "Failed to fetch upcoming events: {}",
                     e
                 )));
@@ -469,14 +460,14 @@ pub async fn fetch_period_data(
 pub async fn fetch_recovery_data(
     client: &dyn IntervalsClient,
     request: &RecoveryFetchRequest,
-) -> Result<FetchedAnalysisData, IntentError> {
+) -> Result<FetchedAnalysisData, FetchError> {
     let wellness = if request.include_wellness {
         let wellness_lookback_days = request.period_days.max(ADAPTIVE_HRV_LOOKBACK_DAYS);
         Some(
             client
                 .get_wellness(Some(wellness_lookback_days))
                 .await
-                .map_err(|e| IntentError::api(format!("Failed to fetch wellness: {}", e)))?,
+                .map_err(|e| FetchError::ClientError(format!("Failed to fetch wellness: {}", e)))?,
         )
     } else {
         None
@@ -486,13 +477,13 @@ pub async fn fetch_recovery_data(
         client
             .get_fitness_summary()
             .await
-            .map_err(|e| IntentError::api(format!("Failed to fetch fitness: {}", e)))?,
+            .map_err(|e| FetchError::ClientError(format!("Failed to fetch fitness: {}", e)))?,
     );
 
     let activities = client
         .get_recent_activities(Some(20), Some(request.period_days))
         .await
-        .map_err(|e| IntentError::api(format!("Failed to fetch activities: {}", e)))?;
+        .map_err(|e| FetchError::ClientError(format!("Failed to fetch activities: {}", e)))?;
 
     Ok(FetchedAnalysisData {
         activities,
@@ -505,12 +496,14 @@ pub async fn fetch_recovery_data(
 pub async fn fetch_single_workout_data(
     client: &dyn IntervalsClient,
     request: &SingleWorkoutFetchRequest,
-) -> Result<FetchedAnalysisData, IntentError> {
+) -> Result<FetchedAnalysisData, FetchError> {
     let workout_detail = Some(
         client
             .get_activity_details(&request.activity_id)
             .await
-            .map_err(|e| IntentError::api(format!("Failed to fetch activity details: {}", e)))?,
+            .map_err(|e| {
+                FetchError::ClientError(format!("Failed to fetch activity details: {}", e))
+            })?,
     );
 
     let intervals = if request.include_intervals {
@@ -638,7 +631,7 @@ pub async fn fetch_single_workout_data(
 pub async fn fetch_race_data(
     client: &dyn IntervalsClient,
     request: &RaceFetchRequest,
-) -> Result<FetchedAnalysisData, IntentError> {
+) -> Result<FetchedAnalysisData, FetchError> {
     let single_request = SingleWorkoutFetchRequest {
         activity_id: request.activity_id.clone(),
         include_intervals: request.include_intervals,

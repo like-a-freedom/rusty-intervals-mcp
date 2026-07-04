@@ -1,6 +1,6 @@
 use crate::intents::{ContentBlock, IdempotencyCache, IntentError, IntentHandler, IntentOutput};
 use async_trait::async_trait;
-use chrono::{NaiveDate, NaiveDateTime};
+use chrono::NaiveDate;
 use intervals_icu_client::IntervalsClient;
 use serde_json::{Value, json};
 /// Analyze Race Intent Handler
@@ -16,6 +16,7 @@ use crate::engines::coach_metrics::{
     extract_ctl_series, parse_fitness_metrics, parse_wellness_metrics,
 };
 use crate::engines::race_readiness::{compute_ctl_drop, compute_race_readiness};
+use crate::engines::shared::parse_activity_date;
 use crate::intents::utils::{data_availability_block, filter_activities_by_description};
 
 pub struct AnalyzeRaceHandler;
@@ -31,16 +32,6 @@ impl AnalyzeRaceHandler {
 
         NaiveDate::parse_from_str(value, "%Y-%m-%d")
             .map_err(|_| IntentError::validation(format!("Invalid race date: {}", value)))
-    }
-
-    fn parse_activity_date(value: &str) -> Option<NaiveDate> {
-        NaiveDate::parse_from_str(value, "%Y-%m-%d")
-            .ok()
-            .or_else(|| {
-                NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S")
-                    .ok()
-                    .map(|dt| dt.date())
-            })
     }
 
     fn looks_like_race(name: Option<&str>) -> bool {
@@ -97,7 +88,7 @@ impl IntentHandler for AnalyzeRaceHandler {
          with tier: ready/monitor/caution/not_ready). Three modes: performance \
          (race execution), strategy (pacing, fueling, terrain), recovery (post-race \
          recovery outlook).
-         
+
          Use this tool when: you need a post-race debrief, evaluate race execution \
          vs plan, check recovery needs, or assess readiness for a next race. \
          Do NOT use when: you need ongoing training analysis (use analyze_training) \
@@ -145,11 +136,11 @@ impl IntentHandler for AnalyzeRaceHandler {
             activities
                 .iter()
                 .filter(|activity| Self::looks_like_race(activity.name.as_deref()))
-                .max_by_key(|activity| Self::parse_activity_date(&activity.start_date_local))
+                .max_by_key(|activity| parse_activity_date(&activity.start_date_local))
         } else if let Some(date) = date {
             let target_date = Self::parse_requested_date(date)?;
             activities.iter().find(|activity| {
-                Self::parse_activity_date(&activity.start_date_local) == Some(target_date)
+                parse_activity_date(&activity.start_date_local) == Some(target_date)
                     && desc_filter
                         .map(|desc| {
                             activity
@@ -220,7 +211,8 @@ impl IntentHandler for AnalyzeRaceHandler {
                     include_streams: true,
                 },
             )
-            .await?;
+            .await
+            .map_err(|e| IntentError::api(e.to_string()))?;
             fetched.activities = vec![race.clone()];
             fetched.fitness = client.get_fitness_summary().await.ok();
             fetched.wellness = client.get_wellness(Some(7)).await.ok();
@@ -481,7 +473,7 @@ impl IntentHandler for AnalyzeRaceHandler {
                             .collect()
                     })
                     .unwrap_or_default();
-                let race_day = Self::parse_activity_date(&race.start_date_local);
+                let race_day = parse_activity_date(&race.start_date_local);
                 let matching_plan = planned_events.iter().find(|event| {
                     race_day
                         .map(|day| event.start_date_local.starts_with(&day.to_string()))
@@ -806,7 +798,7 @@ mod tests {
     #[test]
     fn test_parse_activity_date_date_only() {
         assert_eq!(
-            AnalyzeRaceHandler::parse_activity_date("2026-05-24"),
+            parse_activity_date("2026-05-24"),
             Some(NaiveDate::from_ymd_opt(2026, 5, 24).unwrap())
         );
     }
@@ -814,14 +806,14 @@ mod tests {
     #[test]
     fn test_parse_activity_date_datetime() {
         assert_eq!(
-            AnalyzeRaceHandler::parse_activity_date("2026-05-24T10:30:00"),
+            parse_activity_date("2026-05-24T10:30:00"),
             Some(NaiveDate::from_ymd_opt(2026, 5, 24).unwrap())
         );
     }
 
     #[test]
     fn test_parse_activity_date_invalid() {
-        assert_eq!(AnalyzeRaceHandler::parse_activity_date("garbage"), None);
+        assert_eq!(parse_activity_date("garbage"), None);
     }
 
     #[test]
