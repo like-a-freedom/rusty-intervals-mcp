@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use rmcp::ErrorData;
 use rmcp::model::{
-    AnnotateAble, CallToolRequestParams, CallToolResult, ListResourcesResult, ListToolsResult,
+    CallToolRequestParams, CallToolResult, ListResourcesResult, ListToolsResult,
     PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResult, ResourceContents,
     ServerCapabilities, ServerInfo,
 };
@@ -335,11 +335,11 @@ impl ServerHandler for IntervalsMcpHandler {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, ErrorData> {
         metrics::record_mcp_method_call("resources/list");
-        let mut resources = vec![domains::resources::athlete_profile_resource().no_annotation()];
+        let mut resources = vec![domains::resources::athlete_profile_resource()];
 
         // P4.3 — streaming resources
         for stream_res in domains::resources::activity_stream_resources() {
-            resources.push(stream_res.no_annotation());
+            resources.push(stream_res);
         }
 
         Ok(ListResourcesResult {
