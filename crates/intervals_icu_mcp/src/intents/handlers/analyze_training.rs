@@ -1056,9 +1056,10 @@ impl AnalyzeTrainingHandler {
 
             let summary = [
                 format!(
-                    "  No completed or planned workouts were found between {} and {}",
+                    "  No completed activities returned for {} to {}",
                     start, end
                 ),
+                "  The uncapped activity query completed for the full requested range".into(),
                 if calendar_events.is_empty() {
                     "  No calendar events were found in this period either".into()
                 } else {
@@ -1067,11 +1068,9 @@ impl AnalyzeTrainingHandler {
                         calendar_events.len()
                     )
                 },
-                "  This is unusual - consider checking:".into(),
-                "    Device sync status".into(),
-                "    Date range correctness".into(),
-                "    Training calendar / planned workout availability".into(),
-                "    Account connection".into(),
+                "  Consider checking:".into(),
+                "    Whether this period genuinely has no completed activities".into(),
+                "    Adjusting period_start/period_end or using compare_periods to contrast with a nearby range".into(),
             ]
             .join("\n");
 
@@ -1094,15 +1093,14 @@ impl AnalyzeTrainingHandler {
             }
 
             let suggestions = vec![
-                "Check if your fitness device is syncing properly".into(),
-                "Verify the date range - did you train or schedule workouts during this period?"
-                    .into(),
+                "Verify the date range - did you train during this period?".into(),
                 "Try a wider date range to capture recent or upcoming workouts".into(),
+                "Use compare_periods to contrast with a nearby range that has activity".into(),
             ];
 
             let next_actions = vec![
-                "To check athlete profile and sync status: manage_profile with action: get".into(),
                 "To analyze a different period: analyze_training with wider period_start/period_end".into(),
+                "To compare with another period: compare_periods".into(),
             ];
 
             return Ok(IntentOutput::new(content)
@@ -1664,6 +1662,7 @@ impl Default for AnalyzeTrainingHandler {
 mod tests {
     use super::*;
     use crate::domains::coach::{AcwrMetrics, LoadManagementMetrics};
+    use crate::engines::analysis_fetch::FetchedAnalysisData;
     use chrono::NaiveDate;
     use serde_json::json;
 
@@ -3946,6 +3945,76 @@ mod tests {
             has_linear_trend,
             "Output should contain linear trend direction (Increasing/Decreasing/Stable) from AnalysisEngine::analyze_trend. Got: {}",
             &content_str[..content_str.len().min(2000)]
+        );
+    }
+
+    // ========================================================================
+    // Empty-Period Guidance Tests
+    // ========================================================================
+
+    #[tokio::test]
+    async fn empty_period_guidance_states_query_succeeded() {
+        use crate::test_support::mock::MockIntervalsClient;
+        use std::sync::Arc;
+
+        let handler = AnalyzeTrainingHandler::new();
+        let client: Arc<dyn IntervalsClient> = Arc::new(MockIntervalsClient::default());
+        let input = json!({
+            "target_type": "period",
+            "period_start": "2025-04-01",
+            "period_end": "2025-06-30"
+        });
+
+        let output = handler.execute(input, client, None).await.unwrap();
+        let rendered = content_text(&output.content);
+
+        assert!(
+            rendered.contains("No completed activities returned for 2025-04-01 to 2025-06-30"),
+            "Expected exact range mention. Got: {}",
+            &rendered[..rendered.len().min(500)]
+        );
+        assert!(
+            rendered.contains("uncapped activity query completed"),
+            "Expected fetch-grounded guidance. Got: {}",
+            &rendered[..rendered.len().min(500)]
+        );
+        assert!(
+            !rendered.contains("Device sync status"),
+            "Should not claim device-sync problem without upstream error"
+        );
+    }
+
+    // ========================================================================
+    // Audit Propagation Tests
+    // ========================================================================
+
+    #[test]
+    fn partial_detail_warning_propagates_through_build_data_audit() {
+        use crate::engines::analysis_audit::build_data_audit;
+        use intervals_icu_client::ActivitySummary;
+
+        let fetched = FetchedAnalysisData {
+            activities: vec![ActivitySummary {
+                id: "a1".to_string(),
+                name: Some("Run".to_string()),
+                start_date_local: "2026-03-01".to_string(),
+                ..Default::default()
+            }],
+            fetch_warnings: vec![
+                "1 of 2 activity details unavailable; period totals remain available, but HR, zones, TSS, and load-derived metrics may be partial".to_string()
+            ],
+            fitness: Some(json!({"ctl": 50})),
+            ..Default::default()
+        };
+
+        let audit = build_data_audit(&fetched);
+        assert!(
+            audit
+                .degraded_mode_reasons
+                .iter()
+                .any(|reason| reason.contains("activity details unavailable")),
+            "Partial-detail warning should appear in degraded_mode_reasons. Got: {:?}",
+            audit.degraded_mode_reasons
         );
     }
 }
