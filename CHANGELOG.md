@@ -63,6 +63,19 @@ All notable changes to this project will be documented in this file.
 ### Breaking changes
 - `get_activity_details` defaults to a compact summary (previously returned the full details by default). If your integrations rely on the full payload, update calls to `get_activity_details` to pass `{"expand": true}`.
 
+## [2.13.0] - 2026-07-04
+
+### Fixed
+- Corrected historical activity fetch bounds: `fetch_period_data` now anchors lookback to today (not window width), removes the internal 200-activity cap, and filters summaries to the requested date window before fetching details.
+- Detail requests are now scoped to the required current/previous windows; partial failures produce explicit `fetch_warnings` with exact failed/succeeded counts.
+- `analyze_training` period calls with `target_type="period"` now reject mistaken `start_date`/`end_date` usage with actionable guidance naming `period_start`/`period_end`.
+- `compare_periods` validates both date ranges before network I/O and fetches independent periods concurrently via `tokio::try_join!`.
+- Empty-period guidance in `analyze_training` now states the uncapped query succeeded and recommends checking the range or using `compare_periods`, instead of speculative device-sync advice.
+
+### Added
+- Integration regressions for historical YoY comparison (Q2 2025 vs Q2 2026), high-volume period (250 activities), and partial-detail failure scenarios.
+- Intent-routing documentation: `track_progress` limited to trailing 4–24 weeks; `compare_periods` handles YoY and quarter-over-quarter; `analyze_training` reserves `period_start`/`period_end` for `target_type="period"`.
+
 ## [Unreleased]
 
 ### Added
