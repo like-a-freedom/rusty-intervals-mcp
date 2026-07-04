@@ -9,6 +9,7 @@
 /// - Error handling
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use reqwest::Client;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -842,10 +843,12 @@ async fn test_auth_endpoint_issues_jwt_for_valid_credentials() {
     let master_key_config =
         intervals_icu_mcp::auth::MasterKeyConfig::from_hex(&master_key_hex).unwrap();
     let jwt_manager = Arc::new(JwtManager::from_master_key(&master_key_config));
+    let revoked_jtis = Arc::new(tokio::sync::RwLock::new(HashSet::new()));
     let app_state = Arc::new(AppState {
         jwt_manager: jwt_manager.clone(),
         jwt_ttl_seconds: 3600,
         base_url: mock_server.uri(),
+        revoked_jtis: revoked_jtis.clone(),
     });
 
     let app = axum::Router::new()
@@ -893,7 +896,9 @@ async fn test_auth_endpoint_issues_jwt_for_valid_credentials() {
     assert_eq!(expires_in, 3600);
     assert_eq!(athlete_id, "i123456");
 
-    let credentials = jwt_manager.verify_token(token).expect("jwt should verify");
+    let credentials = jwt_manager
+        .verify_token(token, None)
+        .expect("jwt should verify");
     assert_eq!(credentials.athlete_id, "i123456");
     assert_eq!(credentials.api_key.expose_secret(), "test_api_key");
 }
@@ -904,8 +909,16 @@ async fn test_mcp_route_requires_bearer_token_and_accepts_valid_jwt() {
     let master_key_config =
         intervals_icu_mcp::auth::MasterKeyConfig::from_hex(&master_key_hex).unwrap();
     let jwt_manager = Arc::new(JwtManager::from_master_key(&master_key_config));
+    let revoked_jtis: Arc<tokio::sync::RwLock<HashSet<String>>> =
+        Arc::new(tokio::sync::RwLock::new(HashSet::new()));
+    let app_state = Arc::new(AppState {
+        jwt_manager: jwt_manager.clone(),
+        jwt_ttl_seconds: 3600,
+        base_url: "https://intervals.icu".to_string(),
+        revoked_jtis: revoked_jtis.clone(),
+    });
     let token = jwt_manager
-        .issue_token("i777777", "test_api_key", 3600)
+        .issue_token("i777777", "test_api_key", 3600, None)
         .expect("token should issue");
 
     let handler =
@@ -925,7 +938,7 @@ async fn test_mcp_route_requires_bearer_token_and_accepts_valid_jwt() {
             "https://intervals.icu".to_string(),
         )))
         .layer(axum::middleware::from_fn_with_state(
-            jwt_manager.clone(),
+            app_state,
             auth_middleware,
         ));
 

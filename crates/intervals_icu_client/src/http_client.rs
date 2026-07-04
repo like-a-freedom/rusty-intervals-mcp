@@ -18,6 +18,11 @@ use futures_util::StreamExt;
 use secrecy::{ExposeSecret, SecretString};
 use std::path::PathBuf;
 use std::sync::Arc;
+
+/// Maximum number of characters to keep in error body snippets.
+const ERROR_BODY_MAX: usize = 256;
+/// Maximum number of characters to keep when decoding an unexpected response body.
+const DECODE_BODY_SNIPPET_MAX: usize = 512;
 use tokio::io::AsyncWriteExt;
 
 /// Client for the Intervals.icu API using reqwest.
@@ -181,16 +186,17 @@ impl ReqwestIntervalsClient {
             }
             Err(e) => {
                 self.circuit_breaker.record_failure();
-                histogram!("intervals_icu_mcp_upstream_request_duration_seconds").record(duration);
+                histogram!("intervals_icu_client_upstream_request_duration_seconds")
+                    .record(duration);
                 return Err(IntervalsError::Http(e));
             }
         };
 
         let status = resp.status().as_u16();
 
-        histogram!("intervals_icu_mcp_upstream_request_duration_seconds").record(duration);
+        histogram!("intervals_icu_client_upstream_request_duration_seconds").record(duration);
         counter!(
-            "intervals_icu_mcp_upstream_requests_total",
+            "intervals_icu_client_upstream_requests_total",
             "status" => status.to_string()
         )
         .increment(1);
@@ -235,7 +241,7 @@ impl ReqwestIntervalsClient {
     fn record_upstream_error(err: &IntervalsError) {
         let error_type = Self::upstream_error_type(err);
         counter!(
-            "intervals_icu_mcp_upstream_errors_total",
+            "intervals_icu_client_upstream_errors_total",
             "error_type" => error_type
         )
         .increment(1);
@@ -279,7 +285,7 @@ impl ReqwestIntervalsClient {
     }
 
     fn truncate_error_body(body: &str) -> String {
-        body.chars().take(256).collect()
+        body.chars().take(ERROR_BODY_MAX).collect()
     }
 
     /// Download a file from a URL, optionally saving to disk.
@@ -1008,7 +1014,7 @@ impl EventService for ReqwestIntervalsClient {
         }
         let text = resp.text().await?;
         serde_json::from_str::<crate::Event>(&text).map_err(|e| {
-            let body_snippet: String = text.chars().take(512).collect();
+            let body_snippet: String = text.chars().take(DECODE_BODY_SNIPPET_MAX).collect();
             IntervalsError::Config(crate::ConfigError::Other(format!(
                 "decoding event: {e} - body: {body_snippet}"
             )))
@@ -1885,6 +1891,7 @@ fn annotate_best_efforts_payload(
 
 #[cfg(test)]
 mod tests {
+    use crate::traits::{ActivityService, EventService};
     use crate::{IntervalsError, ValidationError, http_client::ReqwestIntervalsClient};
     use serde_json::json;
 
@@ -2048,10 +2055,10 @@ mod tests {
         match err {
             IntervalsError::Api(api) => {
                 assert_eq!(api.status, 500);
-                assert_eq!(api.message.chars().count(), 256);
-                assert_eq!(api.raw_body.chars().count(), 256);
-                assert_eq!(api.message, "é".repeat(256));
-                assert_eq!(api.raw_body, "é".repeat(256));
+                assert_eq!(api.message.chars().count(), super::ERROR_BODY_MAX);
+                assert_eq!(api.raw_body.chars().count(), super::ERROR_BODY_MAX);
+                assert_eq!(api.message, "é".repeat(super::ERROR_BODY_MAX));
+                assert_eq!(api.raw_body, "é".repeat(super::ERROR_BODY_MAX));
             }
             other => panic!("expected API error, got {other:?}"),
         }
@@ -2183,5 +2190,112 @@ mod tests {
             annotated.get("stream").and_then(serde_json::Value::as_str),
             Some("distance")
         );
+    }
+
+    #[tokio::test]
+    async fn circuit_breaker_open_returns_synthetic_503() {
+        use crate::circuit_breaker::CircuitBreaker;
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        let cb = Arc::new(CircuitBreaker::new(1, Duration::from_secs(60)));
+        cb.record_failure();
+        assert!(!cb.allow_request());
+
+        let inner: reqwest::Client = reqwest::Client::builder().build().unwrap();
+        let client = super::ReqwestIntervalsClient {
+            base_url: "http://localhost".into(),
+            athlete_id: "999".into(),
+            api_key: secrecy::SecretString::new("test-key".to_string().into_boxed_str()),
+            client: inner,
+            circuit_breaker: cb,
+        };
+
+        let request = client.client.get("http://localhost/events");
+        let result = client.execute_raw(request).await;
+        match result {
+            Err(IntervalsError::Api(api_err)) => {
+                assert_eq!(api_err.status, 503);
+            }
+            other => panic!("expected 503 Api error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn get_best_efforts_rejects_missing_stream() {
+        use crate::BestEffortsOptions;
+        use crate::circuit_breaker::CircuitBreaker;
+        use std::sync::Arc;
+
+        let inner: reqwest::Client = reqwest::Client::builder().build().unwrap();
+        let client = super::ReqwestIntervalsClient {
+            base_url: "http://localhost".into(),
+            athlete_id: "999".into(),
+            api_key: secrecy::SecretString::new("test-key".to_string().into_boxed_str()),
+            client: inner,
+            circuit_breaker: Arc::new(CircuitBreaker::default()),
+        };
+
+        // Missing stream should fail before any HTTP request.
+        let opts = BestEffortsOptions {
+            stream: None,
+            duration: Some(120),
+            distance: None,
+            count: None,
+            min_value: None,
+            exclude_intervals: None,
+            start_index: None,
+            end_index: None,
+        };
+        let result = client.get_best_efforts("act_1", Some(opts)).await;
+        match result {
+            Err(IntervalsError::Validation(ValidationError::InvalidFormat { field, .. })) => {
+                assert_eq!(field, "stream");
+            }
+            other => panic!("expected Validation error for stream, got: {other:?}"),
+        }
+
+        // Missing duration AND distance should fail before any HTTP request.
+        let opts = BestEffortsOptions {
+            stream: Some("watts".to_string()),
+            duration: None,
+            distance: None,
+            count: None,
+            min_value: None,
+            exclude_intervals: None,
+            start_index: None,
+            end_index: None,
+        };
+        let result = client.get_best_efforts("act_1", Some(opts)).await;
+        match result {
+            Err(IntervalsError::Validation(ValidationError::InvalidFormat { field, .. })) => {
+                assert_eq!(field, "duration/distance");
+            }
+            other => panic!("expected Validation error for duration/distance, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn bulk_delete_events_rejects_invalid_id() {
+        use crate::circuit_breaker::CircuitBreaker;
+        use std::sync::Arc;
+
+        let inner: reqwest::Client = reqwest::Client::builder().build().unwrap();
+        let client = super::ReqwestIntervalsClient {
+            base_url: "http://localhost".into(),
+            athlete_id: "999".into(),
+            api_key: secrecy::SecretString::new("test-key".to_string().into_boxed_str()),
+            client: inner,
+            circuit_breaker: Arc::new(CircuitBreaker::default()),
+        };
+
+        // Non-numeric ID should fail during parsing before any HTTP request.
+        let result = client.bulk_delete_events(vec!["abc".to_string()]).await;
+        match result {
+            Err(IntervalsError::Validation(ValidationError::InvalidFormat { field, .. })) => {
+                assert_eq!(field, "event_id");
+            }
+            other => panic!("expected Validation error for event_id, got: {other:?}"),
+        }
     }
 }

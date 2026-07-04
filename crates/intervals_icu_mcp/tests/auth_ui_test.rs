@@ -7,15 +7,18 @@ use intervals_icu_mcp::auth_ui::{self, UiState};
 use std::sync::Arc;
 
 fn test_ui_state() -> UiState {
+    use std::collections::HashSet;
     let secret = b"test_secret_key_for_jwt_signing_12345678901234567890123456789012";
     let jwt_manager = Arc::new(auth::JwtManager::new(secret, [0u8; 32]));
+    let revoked_jtis = Arc::new(tokio::sync::RwLock::new(HashSet::new()));
     let app_state = Arc::new(AppState {
         jwt_manager,
         jwt_ttl_seconds: 3600,
         base_url: "https://intervals.icu".to_string(),
+        revoked_jtis: revoked_jtis.clone(),
     });
 
-    UiState::new(app_state, None)
+    UiState::new(app_state, revoked_jtis, None)
 }
 
 #[tokio::test]

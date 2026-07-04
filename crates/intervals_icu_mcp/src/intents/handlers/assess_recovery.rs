@@ -351,7 +351,7 @@ impl IntentHandler for AssessRecoveryHandler {
          fitness metrics (TSB, CTL, ATL), and ADE system state assessment \
          (LoadAccepting/RecoveryPriority with risk level and active flags). \
          Activity-specific readiness verdict for easy/intensity/long/race sessions.
-         
+
          Use this tool when: you need to check if today is safe for a key workout, \
          evaluate post-race recovery status, or detect overtraining signs. \
          Do NOT use when: you need to analyze a specific workout (use analyze_training) \
@@ -402,7 +402,8 @@ impl IntentHandler for AssessRecoveryHandler {
                 include_wellness,
             },
         )
-        .await?;
+        .await
+        .map_err(|e| IntentError::api(e.to_string()))?;
 
         // Look-ahead: check upcoming workouts for key sessions
         let upcoming = client

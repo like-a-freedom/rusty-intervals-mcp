@@ -18,11 +18,9 @@ rmcp = { version = "2.1.0", features = [
 ] }
 intervals_icu_client = { path = "../intervals_icu_client" }
 axum = { version = "0.8.9", features = ["macros"] }
-hyper = "1.10.1"
 metrics = "0.24.6"
 metrics-exporter-prometheus = "0.18.3"
 tracing = "0.1.44"
-anyhow = "1.0.103"
 tower-http = { version = "0.7.0", features = ["timeout"] }
 uuid = { version = "1.23.4", features = ["v4"] }
 reqwest = { version = "0.13.4", features = ["json", "query"] }
@@ -30,6 +28,7 @@ hmac = "0.13"
 sha2 = "0.11"
 hkdf = "0.13"
 hex = "0.4.3"
+subtle = "2.6"
 chrono = "0.4.45"
 async-trait = "0.1.89"
 thiserror = "2.0.18"
@@ -38,8 +37,6 @@ jwt-simple = "0.12.16"
 # Server-rendered HTML UI
 maud = { version = "0.27", features = ["axum"] }
 maud-ui = "0.2.1"
-# URL parsing for query parameter encoding
-url = "2.5.8"
 # AES-256-GCM for api_key encryption
 aes-gcm = "0.10.3"
 # Rate limiting for multi-tenant mode
@@ -48,12 +45,11 @@ tower_governor = "0.8.0"
 base64 = "0.22.1"
 # GetRandom for nonce generation
 getrandom = "0.4.3"
-# HTTP body utilities
-http-body-util = "0.1.3"
 # TCP keepalive configuration
 socket2 = "0.6.4"
 
 [dev-dependencies]
+anyhow = "1.0.103"
 tokio = { version = "1.52.3", features = ["full"] }
 wiremock = "0.6.5"
 rmcp = { version = "2.1.0", features = [

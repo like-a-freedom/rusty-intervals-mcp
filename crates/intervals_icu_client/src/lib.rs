@@ -29,7 +29,6 @@ pub mod domains;
 pub mod error;
 pub mod http_client;
 pub mod observability;
-pub mod retry;
 pub mod traits;
 pub mod utils;
 

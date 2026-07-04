@@ -18,7 +18,7 @@ use crate::engines::analysis::{
 use crate::engines::analysis_audit::build_data_audit;
 use crate::engines::analysis_fetch::{
     PeriodFetchRequest, SingleWorkoutFetchRequest, build_daily_load_series, build_previous_window,
-    fetch_period_data, fetch_single_workout_data,
+    extract_activity_load, fetch_period_data, fetch_single_workout_data,
 };
 use crate::engines::coach_guidance::{build_alerts, build_guidance};
 use crate::engines::coach_metrics::{
@@ -29,6 +29,7 @@ use crate::engines::coach_metrics::{
     parse_api_load_snapshot, parse_fitness_metrics, parse_polarisation_from_api,
 };
 use crate::engines::cp_regression::{fit_cp, validate_cp};
+use crate::engines::shared::parse_activity_date;
 use crate::engines::trail_execution::compute_terrain_context;
 
 use crate::domains::activity_analysis::{back_to_back_load, vert_per_week};
@@ -125,17 +126,17 @@ impl IntentHandler for AnalyzeTrainingHandler {
          calendar events (races, sick days, injuries, notes, planned workouts). \
          Includes a Fitness Snapshot with current CTL, ATL, TSB, and ramp rate when \
          athlete-summary data is available.
-         
+
          Use this tool when: you need to review a completed workout's quality, assess \
          aerobic/neural fatigue, check pacing distribution, examine period trends, or \
          compare evolution. Do NOT use when: you need to plan future training (use \
          plan_training), assess recovery readiness (use assess_recovery), or perform \
          post-race debrief (use analyze_race).
-         
+
          For a single workout call target_type=\"single\" with a date. \
          For a date range call target_type=\"period\" with period_start=\"2025-04-01\" \
          and period_end=\"2025-06-30\". Do not use start_date/end_date.
-         
+
          analysis_type controls depth: summary (basic metrics), detailed (+execution \
          context, Z2, terrain, nutrition, profile), intervals (+interval breakdown), \
          streams (+stream insights)."
@@ -454,7 +455,8 @@ impl AnalyzeTrainingHandler {
                 include_pace_histogram: include_hist,
             },
         )
-        .await?;
+        .await
+        .map_err(|e| IntentError::api(e.to_string()))?;
         fetched.activities = vec![(*activity).clone()];
         fetched.fitness = client.get_fitness_summary().await.ok();
 
@@ -1038,7 +1040,8 @@ impl AnalyzeTrainingHandler {
                 include_comparison_window: true,
             },
         )
-        .await?;
+        .await
+        .map_err(|e| IntentError::api(e.to_string()))?;
         fetched.fitness = client.get_fitness_summary().await.ok();
 
         let period =
@@ -1292,10 +1295,7 @@ impl AnalyzeTrainingHandler {
                         (None, None) => "n/a".to_string(),
                     };
                     let load = detail
-                        .and_then(|value| value.get("icu_training_load"))
-                        .and_then(|value| {
-                            value.as_f64().or_else(|| value.as_i64().map(|n| n as f64))
-                        })
+                        .and_then(|d| extract_activity_load(Some(d)))
                         .map(|value| format!("{value:.1}"))
                         .unwrap_or_else(|| "n/a".to_string());
                     let date = activity
@@ -1391,12 +1391,7 @@ impl AnalyzeTrainingHandler {
                         && let Some(detail) = fetched.activity_details.get(&activity.id)
                         && let Some(obj) = detail.as_object()
                     {
-                        if let Some(tss) = obj
-                            .get("icu_training_load")
-                            .or_else(|| obj.get("training_load"))
-                            .or_else(|| obj.get("icuTrainingLoad"))
-                            .and_then(|v| v.as_f64().or_else(|| v.as_i64().map(|n| n as f64)))
-                        {
+                        if let Some(tss) = extract_activity_load(Some(detail)) {
                             tss_series.push((date, tss as f32));
                         }
                         if let Some(dist) = obj.get("distance").and_then(|v| v.as_f64()) {
@@ -3574,11 +3569,11 @@ mod tests {
                         "icu_training_load": 80.0,
                         "icu_max_wbal_depletion": 35000.0,
                         "icu_zone_times": [
-                            {"id": 1, "secs": 1800},
-                            {"id": 2, "secs": 600},
-                            {"id": 3, "secs": 300},
-                            {"id": 4, "secs": 600},
-                            {"id": 5, "secs": 300}
+                            {"id": "Z1", "secs": 1800},
+                            {"id": "Z2", "secs": 600},
+                            {"id": "Z3", "secs": 300},
+                            {"id": "Z4", "secs": 600},
+                            {"id": "Z5", "secs": 300}
                         ]
                     }),
                 )
@@ -3589,11 +3584,11 @@ mod tests {
                         "icu_training_load": 40.0,
                         "icu_max_wbal_depletion": 5000.0,
                         "icu_zone_times": [
-                            {"id": 1, "secs": 4500},
-                            {"id": 2, "secs": 500},
-                            {"id": 3, "secs": 100},
-                            {"id": 4, "secs": 200},
-                            {"id": 5, "secs": 100}
+                            {"id": "Z1", "secs": 4500},
+                            {"id": "Z2", "secs": 500},
+                            {"id": "Z3", "secs": 100},
+                            {"id": "Z4", "secs": 200},
+                            {"id": "Z5", "secs": 100}
                         ]
                     }),
                 )
