@@ -66,6 +66,21 @@ pub fn build_previous_window(current: &AnalysisWindow) -> AnalysisWindow {
     AnalysisWindow::new(previous_start, previous_end)
 }
 
+pub fn required_activity_window(request: &PeriodFetchRequest) -> (NaiveDate, NaiveDate) {
+    let start = if request.include_comparison_window {
+        build_previous_window(&request.window).start_date
+    } else {
+        request.window.start_date
+    };
+    (start, request.window.end_date)
+}
+
+pub fn activity_lookback_days(start: NaiveDate, today: NaiveDate) -> Result<i32, IntentError> {
+    let days = (today - start).num_days().max(0);
+    i32::try_from(days)
+        .map_err(|_| IntentError::validation("Requested activity window is too large"))
+}
+
 pub fn extract_activity_load(detail: Option<&Value>) -> Option<f64> {
     let object = detail?.as_object()?;
 
@@ -339,11 +354,18 @@ pub async fn fetch_period_data(
     client: &dyn IntervalsClient,
     request: &PeriodFetchRequest,
 ) -> Result<FetchedAnalysisData, IntentError> {
-    let days_back = ((request.window.end_date - request.window.start_date).num_days() as i32) + 30;
-    let activities = client
-        .get_recent_activities(Some(200), Some(days_back))
+    let (required_start, required_end) = required_activity_window(request);
+    let today = chrono::Utc::now().date_naive();
+    let days_back = activity_lookback_days(required_start, today)?;
+    let mut activities = client
+        .get_recent_activities(None, Some(days_back))
         .await
-        .map_err(|e| IntentError::api(format!("Failed to fetch activities: {}", e)))?;
+        .map_err(|error| IntentError::api(format!("Failed to fetch activities: {error}")))?;
+
+    activities.retain(|activity| {
+        parse_activity_date(&activity.start_date_local)
+            .is_some_and(|date| date >= required_start && date <= required_end)
+    });
 
     let known_activity_ids = activities
         .iter()
@@ -627,6 +649,385 @@ mod tests {
     use chrono::NaiveDate;
     use intervals_icu_client::{EventCategory, IntervalsClient, IntervalsError};
     use serde_json::json;
+    use std::sync::{Arc, Mutex};
+
+    type ActivityCallRecord = Vec<(Option<u32>, Option<i32>)>;
+
+    /// Recording mock that captures `get_recent_activities` arguments for assertions.
+    struct RecordingPeriodClient {
+        activities: Vec<ActivitySummary>,
+        activity_calls: Arc<Mutex<ActivityCallRecord>>,
+    }
+
+    impl RecordingPeriodClient {
+        fn with_activities(activities: Vec<ActivitySummary>) -> Self {
+            Self {
+                activities,
+                activity_calls: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+
+        fn activity_calls(&self) -> ActivityCallRecord {
+            self.activity_calls.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl IntervalsClient for RecordingPeriodClient {
+        async fn get_recent_activities(
+            &self,
+            limit: Option<u32>,
+            days_back: Option<i32>,
+        ) -> Result<Vec<ActivitySummary>, IntervalsError> {
+            self.activity_calls.lock().unwrap().push((limit, days_back));
+            Ok(self.activities.clone())
+        }
+
+        // Stub all other methods with empty defaults
+        async fn get_athlete_profile(
+            &self,
+        ) -> Result<intervals_icu_client::AthleteProfile, IntervalsError> {
+            Ok(intervals_icu_client::AthleteProfile {
+                id: "test".into(),
+                name: None,
+            })
+        }
+        async fn get_fitness_summary(&self) -> Result<serde_json::Value, IntervalsError> {
+            Err(IntervalsError::NotFound("not needed".into()))
+        }
+        async fn get_activity_details(&self, _: &str) -> Result<serde_json::Value, IntervalsError> {
+            Ok(serde_json::json!({}))
+        }
+        async fn get_activity_streams(
+            &self,
+            _: &str,
+            _: Option<Vec<String>>,
+        ) -> Result<serde_json::Value, IntervalsError> {
+            Ok(serde_json::json!({}))
+        }
+        async fn get_activity_intervals(
+            &self,
+            _: &str,
+        ) -> Result<serde_json::Value, IntervalsError> {
+            Ok(serde_json::json!({}))
+        }
+        async fn get_best_efforts(
+            &self,
+            _: &str,
+            _: Option<intervals_icu_client::BestEffortsOptions>,
+        ) -> Result<serde_json::Value, IntervalsError> {
+            Ok(serde_json::json!({}))
+        }
+        async fn get_hr_histogram(&self, _: &str) -> Result<serde_json::Value, IntervalsError> {
+            Ok(serde_json::json!({}))
+        }
+        async fn get_power_histogram(&self, _: &str) -> Result<serde_json::Value, IntervalsError> {
+            Ok(serde_json::json!({}))
+        }
+        async fn get_pace_histogram(&self, _: &str) -> Result<serde_json::Value, IntervalsError> {
+            Ok(serde_json::json!({}))
+        }
+        async fn get_activity_messages(
+            &self,
+            _: &str,
+        ) -> Result<Vec<ActivityMessage>, IntervalsError> {
+            Ok(vec![])
+        }
+        async fn get_events(
+            &self,
+            _: Option<i32>,
+            _: Option<u32>,
+        ) -> Result<Vec<Event>, IntervalsError> {
+            Ok(vec![])
+        }
+        async fn get_wellness_for_date(
+            &self,
+            _: &str,
+        ) -> Result<serde_json::Value, IntervalsError> {
+            Err(IntervalsError::NotFound("not needed".into()))
+        }
+        async fn create_event(&self, _: Event) -> Result<Event, IntervalsError> {
+            Err(IntervalsError::NotFound("not needed".into()))
+        }
+        async fn get_event(&self, _: &str) -> Result<Event, IntervalsError> {
+            Err(IntervalsError::NotFound("not needed".into()))
+        }
+        async fn delete_event(&self, _: &str) -> Result<(), IntervalsError> {
+            Ok(())
+        }
+        async fn bulk_create_events(&self, _: Vec<Event>) -> Result<Vec<Event>, IntervalsError> {
+            Ok(vec![])
+        }
+        async fn search_activities(
+            &self,
+            _: &str,
+            _: Option<u32>,
+        ) -> Result<Vec<ActivitySummary>, IntervalsError> {
+            Ok(vec![])
+        }
+        async fn search_activities_full(
+            &self,
+            _: &str,
+            _: Option<u32>,
+        ) -> Result<serde_json::Value, IntervalsError> {
+            Ok(serde_json::json!([]))
+        }
+        async fn get_activities_csv(&self) -> Result<String, IntervalsError> {
+            Ok(String::new())
+        }
+        async fn update_activity(
+            &self,
+            _: &str,
+            _: &serde_json::Value,
+        ) -> Result<serde_json::Value, IntervalsError> {
+            Ok(serde_json::json!({}))
+        }
+        async fn download_activity_file(
+            &self,
+            _: &str,
+            _: Option<std::path::PathBuf>,
+        ) -> Result<Option<String>, IntervalsError> {
+            Ok(None)
+        }
+        async fn download_activity_file_with_progress(
+            &self,
+            _: &str,
+            _: Option<std::path::PathBuf>,
+            _: tokio::sync::mpsc::Sender<intervals_icu_client::DownloadProgress>,
+            _: tokio::sync::watch::Receiver<bool>,
+        ) -> Result<Option<String>, IntervalsError> {
+            Ok(None)
+        }
+        async fn download_fit_file(
+            &self,
+            _: &str,
+            _: Option<std::path::PathBuf>,
+        ) -> Result<Option<String>, IntervalsError> {
+            Ok(None)
+        }
+        async fn download_gpx_file(
+            &self,
+            _: &str,
+            _: Option<std::path::PathBuf>,
+        ) -> Result<Option<String>, IntervalsError> {
+            Ok(None)
+        }
+        async fn get_gear_list(&self) -> Result<serde_json::Value, IntervalsError> {
+            Ok(serde_json::json!([]))
+        }
+        async fn get_sport_settings(
+            &self,
+        ) -> Result<intervals_icu_client::domains::workout::SportSettings, IntervalsError> {
+            Ok(Default::default())
+        }
+        async fn get_power_curves(
+            &self,
+            _: Option<i32>,
+            _: &str,
+        ) -> Result<serde_json::Value, IntervalsError> {
+            Ok(serde_json::json!([]))
+        }
+        async fn get_gap_histogram(&self, _: &str) -> Result<serde_json::Value, IntervalsError> {
+            Ok(serde_json::json!([]))
+        }
+        async fn delete_activity(&self, _: &str) -> Result<(), IntervalsError> {
+            Ok(())
+        }
+        async fn get_activities_around(
+            &self,
+            _: &str,
+            _: Option<u32>,
+            _: Option<i64>,
+        ) -> Result<serde_json::Value, IntervalsError> {
+            Ok(serde_json::json!([]))
+        }
+        async fn search_intervals(
+            &self,
+            _: u32,
+            _: u32,
+            _: u32,
+            _: u32,
+            _: Option<String>,
+            _: Option<u32>,
+            _: Option<u32>,
+            _: Option<u32>,
+        ) -> Result<serde_json::Value, IntervalsError> {
+            Ok(serde_json::json!([]))
+        }
+        async fn get_wellness(&self, _: Option<i32>) -> Result<serde_json::Value, IntervalsError> {
+            Ok(serde_json::json!([]))
+        }
+        async fn update_wellness(
+            &self,
+            _: &str,
+            _: &serde_json::Value,
+        ) -> Result<serde_json::Value, IntervalsError> {
+            Ok(serde_json::json!({}))
+        }
+        async fn get_upcoming_workouts(
+            &self,
+            _: Option<u32>,
+            _: Option<u32>,
+            _: Option<String>,
+        ) -> Result<serde_json::Value, IntervalsError> {
+            Ok(serde_json::json!([]))
+        }
+        async fn update_event(
+            &self,
+            _: &str,
+            _: &serde_json::Value,
+        ) -> Result<serde_json::Value, IntervalsError> {
+            Ok(serde_json::json!({}))
+        }
+        async fn bulk_delete_events(&self, _: Vec<String>) -> Result<(), IntervalsError> {
+            Ok(())
+        }
+        async fn duplicate_event(
+            &self,
+            _: &str,
+            _: Option<u32>,
+            _: Option<u32>,
+        ) -> Result<Vec<Event>, IntervalsError> {
+            Ok(vec![])
+        }
+        async fn get_hr_curves(
+            &self,
+            _: Option<i32>,
+            _: &str,
+        ) -> Result<serde_json::Value, IntervalsError> {
+            Ok(serde_json::json!([]))
+        }
+        async fn get_pace_curves(
+            &self,
+            _: Option<i32>,
+            _: &str,
+        ) -> Result<serde_json::Value, IntervalsError> {
+            Ok(serde_json::json!([]))
+        }
+        async fn get_workout_library(
+            &self,
+        ) -> Result<Vec<intervals_icu_client::domains::workout::WorkoutItem>, IntervalsError>
+        {
+            Ok(vec![])
+        }
+        async fn get_workouts_in_folder(
+            &self,
+            _: &str,
+        ) -> Result<Vec<intervals_icu_client::domains::workout::WorkoutItem>, IntervalsError>
+        {
+            Ok(vec![])
+        }
+        async fn create_folder(
+            &self,
+            _: &serde_json::Value,
+        ) -> Result<intervals_icu_client::domains::workout::Folder, IntervalsError> {
+            Ok(intervals_icu_client::domains::workout::Folder {
+                id: 0,
+                name: String::new(),
+                description: None,
+                parent_id: None,
+                children: vec![],
+            })
+        }
+        async fn update_folder(
+            &self,
+            _: &str,
+            _: &serde_json::Value,
+        ) -> Result<serde_json::Value, IntervalsError> {
+            Ok(serde_json::json!({}))
+        }
+        async fn delete_folder(&self, _: &str) -> Result<(), IntervalsError> {
+            Ok(())
+        }
+        async fn create_gear(
+            &self,
+            _: &serde_json::Value,
+        ) -> Result<serde_json::Value, IntervalsError> {
+            Ok(serde_json::json!({}))
+        }
+        async fn update_gear(
+            &self,
+            _: &str,
+            _: &serde_json::Value,
+        ) -> Result<serde_json::Value, IntervalsError> {
+            Ok(serde_json::json!({}))
+        }
+        async fn delete_gear(&self, _: &str) -> Result<(), IntervalsError> {
+            Ok(())
+        }
+        async fn create_gear_reminder(
+            &self,
+            _: &str,
+            _: &serde_json::Value,
+        ) -> Result<serde_json::Value, IntervalsError> {
+            Ok(serde_json::json!({}))
+        }
+        async fn update_gear_reminder(
+            &self,
+            _: &str,
+            _: &str,
+            _: bool,
+            _: u32,
+            _: &serde_json::Value,
+        ) -> Result<serde_json::Value, IntervalsError> {
+            Ok(serde_json::json!({}))
+        }
+        async fn update_sport_settings(
+            &self,
+            _: &str,
+            _: bool,
+            _: &serde_json::Value,
+        ) -> Result<serde_json::Value, IntervalsError> {
+            Ok(serde_json::json!({}))
+        }
+        async fn apply_sport_settings(&self, _: &str) -> Result<serde_json::Value, IntervalsError> {
+            Ok(serde_json::json!({}))
+        }
+        async fn create_sport_settings(
+            &self,
+            _: &serde_json::Value,
+        ) -> Result<serde_json::Value, IntervalsError> {
+            Ok(serde_json::json!({}))
+        }
+        async fn delete_sport_settings(&self, _: &str) -> Result<(), IntervalsError> {
+            Ok(())
+        }
+        async fn update_wellness_bulk(
+            &self,
+            _: &[serde_json::Value],
+        ) -> Result<(), IntervalsError> {
+            Ok(())
+        }
+        async fn get_weather_config(&self) -> Result<serde_json::Value, IntervalsError> {
+            Ok(serde_json::json!({}))
+        }
+        async fn update_weather_config(
+            &self,
+            _: &serde_json::Value,
+        ) -> Result<serde_json::Value, IntervalsError> {
+            Ok(serde_json::json!({}))
+        }
+        async fn list_routes(&self) -> Result<serde_json::Value, IntervalsError> {
+            Ok(serde_json::json!([]))
+        }
+        async fn get_route(&self, _: i64, _: bool) -> Result<serde_json::Value, IntervalsError> {
+            Ok(serde_json::json!({}))
+        }
+        async fn update_route(
+            &self,
+            _: i64,
+            _: &serde_json::Value,
+        ) -> Result<serde_json::Value, IntervalsError> {
+            Ok(serde_json::json!({}))
+        }
+        async fn get_route_similarity(
+            &self,
+            _: i64,
+            _: i64,
+        ) -> Result<serde_json::Value, IntervalsError> {
+            Ok(serde_json::json!({}))
+        }
+    }
 
     #[test]
     fn previous_window_matches_current_window_length() {
@@ -856,6 +1257,44 @@ mod tests {
             object.get("watts").and_then(Value::as_array).map(Vec::len),
             Some(3)
         );
+    }
+
+    // ========================================================================
+    // required_activity_window / activity_lookback_days Tests
+    // ========================================================================
+
+    #[test]
+    fn historical_period_lookback_is_anchored_to_today() {
+        let today = NaiveDate::from_ymd_opt(2026, 7, 4).unwrap();
+        let request = PeriodFetchRequest {
+            window: AnalysisWindow::new(
+                NaiveDate::from_ymd_opt(2025, 4, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2025, 6, 30).unwrap(),
+            ),
+            include_activity_details: false,
+            include_comparison_window: false,
+        };
+
+        let (start, end) = required_activity_window(&request);
+        assert_eq!(start, NaiveDate::from_ymd_opt(2025, 4, 1).unwrap());
+        assert_eq!(end, NaiveDate::from_ymd_opt(2025, 6, 30).unwrap());
+        assert_eq!(activity_lookback_days(start, today).unwrap(), 459);
+    }
+
+    #[test]
+    fn comparison_fetch_includes_the_full_previous_window() {
+        let request = PeriodFetchRequest {
+            window: AnalysisWindow::new(
+                NaiveDate::from_ymd_opt(2026, 4, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2026, 6, 30).unwrap(),
+            ),
+            include_activity_details: false,
+            include_comparison_window: true,
+        };
+
+        let (start, end) = required_activity_window(&request);
+        assert_eq!(start, NaiveDate::from_ymd_opt(2025, 12, 31).unwrap());
+        assert_eq!(end, NaiveDate::from_ymd_opt(2026, 6, 30).unwrap());
     }
 
     // ========================================================================
@@ -1504,6 +1943,60 @@ mod tests {
                 .iter()
                 .any(|activity| activity.id == "event:11")
         );
+    }
+
+    #[tokio::test]
+    async fn period_fetch_retains_all_in_window_activities() {
+        let today = chrono::Utc::now().date_naive();
+        let required_start = today - Duration::days(459);
+        let required_end = required_start + Duration::days(90);
+
+        // 250 activities inside the 90-day window (multiple per day), 10 outside
+        let mut activities_in_window = (0..250)
+            .map(|i| {
+                let day_offset = (i as i64) % 91;
+                let date = required_start + Duration::days(day_offset);
+                activity(&format!("in_{i}"), &date.to_string())
+            })
+            .collect::<Vec<_>>();
+        let activities_outside = (0..10)
+            .map(|i| {
+                let date = required_start - Duration::days(i + 1);
+                activity(&format!("out_{i}"), &date.to_string())
+            })
+            .collect::<Vec<_>>();
+        activities_in_window.extend(activities_outside);
+
+        let client = RecordingPeriodClient::with_activities(activities_in_window);
+        let request = PeriodFetchRequest {
+            window: AnalysisWindow::new(required_start, required_end),
+            include_activity_details: false,
+            include_comparison_window: false,
+        };
+
+        let fetched = fetch_period_data(&client, &request).await.unwrap();
+
+        assert_eq!(fetched.activities.len(), 250);
+        assert!(fetched.activities.iter().all(|a| {
+            parse_activity_date(&a.start_date_local)
+                .is_some_and(|date| date >= required_start && date <= required_end)
+        }));
+    }
+
+    #[tokio::test]
+    async fn period_fetch_requests_complete_historical_activity_list() {
+        let today = chrono::Utc::now().date_naive();
+        let start = today - Duration::days(459);
+        let client = RecordingPeriodClient::with_activities(Vec::new());
+        let request = PeriodFetchRequest {
+            window: AnalysisWindow::new(start, start + Duration::days(90)),
+            include_activity_details: false,
+            include_comparison_window: false,
+        };
+
+        fetch_period_data(&client, &request).await.unwrap();
+
+        assert_eq!(client.activity_calls(), vec![(None, Some(459))]);
     }
 
     #[tokio::test]
