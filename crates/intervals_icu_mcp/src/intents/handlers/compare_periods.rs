@@ -14,7 +14,7 @@ use crate::engines::coach_metrics::{
     TrendSnapshot, build_trend_snapshot, compute_consistency_index, derive_trend_metrics,
     derive_volume_metrics, parse_fitness_metrics,
 };
-use crate::intents::utils::{filter_activities_by_range, parse_date};
+use crate::intents::utils::{filter_activities_by_range, format_pct, parse_date};
 
 use crate::engines::analysis::{AnalysisEngine, PeriodSummary};
 
@@ -561,12 +561,6 @@ impl ComparePeriodsHandler {
     }
 }
 
-fn format_pct(value: Option<f64>) -> String {
-    value
-        .map(|delta| format!("{:+.1}%", delta))
-        .unwrap_or_else(|| "n/a".into())
-}
-
 impl Default for ComparePeriodsHandler {
     fn default() -> Self {
         Self::new()
@@ -946,19 +940,6 @@ mod tests {
         assert!(value.contains("Z1: 60m"), "value: {value}");
         assert!(value.contains("Z2: 30m"), "value: {value}");
         assert_eq!(note, "aggregated from icu_zone_times");
-    }
-
-    // ========================================================================
-    // ========================================================================
-    // format_pct() Tests
-    // ========================================================================
-
-    #[test]
-    fn test_format_pct() {
-        assert_eq!(format_pct(Some(10.5)), "+10.5%");
-        assert_eq!(format_pct(Some(-5.25)), "-5.2%");
-        assert_eq!(format_pct(Some(0.0)), "+0.0%");
-        assert_eq!(format_pct(None), "n/a");
     }
 
     // ========================================================================

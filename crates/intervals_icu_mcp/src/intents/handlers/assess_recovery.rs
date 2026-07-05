@@ -466,7 +466,6 @@ impl IntentHandler for AssessRecoveryHandler {
                 .and_then(|w| w.hrv_ratio),
             false,
             false,
-            false,
             recovery_context
                 .metrics
                 .fitness
@@ -636,27 +635,10 @@ impl Default for AssessRecoveryHandler {
 mod tests {
     use super::*;
     use crate::domains::coach::FitnessMetrics;
+    use crate::test_support::content_text;
     use crate::test_support::mock::MockIntervalsClient;
     use intervals_icu_client::{ActivitySummary, IntervalsError};
     use std::sync::Arc;
-
-    fn content_text(content: &[ContentBlock]) -> String {
-        content
-            .iter()
-            .flat_map(|b| match b {
-                ContentBlock::Text { text } => vec![text.clone()],
-                ContentBlock::Markdown { markdown } => vec![markdown.clone()],
-                ContentBlock::Table { headers, rows } => {
-                    let mut parts: Vec<String> = headers.clone();
-                    for row in rows {
-                        parts.extend(row.clone());
-                    }
-                    parts
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
 
     #[test]
     fn test_new_handler() {

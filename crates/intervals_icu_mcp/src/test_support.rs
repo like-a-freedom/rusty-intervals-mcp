@@ -740,6 +740,25 @@ pub(crate) mod mock {
     }
 }
 
+/// Test helper: flatten `ContentBlock` items into a single String for assertions.
+pub fn content_text(content: &[crate::intents::ContentBlock]) -> String {
+    content
+        .iter()
+        .flat_map(|b| match b {
+            crate::intents::ContentBlock::Text { text } => vec![text.clone()],
+            crate::intents::ContentBlock::Markdown { markdown } => vec![markdown.clone()],
+            crate::intents::ContentBlock::Table { headers, rows } => {
+                let mut parts: Vec<String> = headers.clone();
+                for row in rows {
+                    parts.extend(row.clone());
+                }
+                parts
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::mock::MockIntervalsClient;

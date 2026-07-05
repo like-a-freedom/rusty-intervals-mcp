@@ -36,7 +36,7 @@ use crate::domains::activity_analysis::{back_to_back_load, vert_per_week};
 use crate::domains::nutrition::{compute_carb_demand, compute_protein_demand};
 use crate::intents::utils::{
     data_availability_block, filter_activities_by_date, filter_activities_by_range,
-    filter_events_by_range, parse_date,
+    filter_events_by_range, format_pct, parse_date,
 };
 use intervals_icu_client::EventCategory;
 
@@ -1666,12 +1666,6 @@ impl AnalyzeTrainingHandler {
     }
 }
 
-fn format_pct(value: Option<f64>) -> String {
-    value
-        .map(|delta| format!("{:+.1}%", delta))
-        .unwrap_or_else(|| "n/a".into())
-}
-
 impl Default for AnalyzeTrainingHandler {
     fn default() -> Self {
         Self::new()
@@ -1685,28 +1679,6 @@ mod tests {
     use crate::engines::analysis_fetch::FetchedAnalysisData;
     use chrono::NaiveDate;
     use serde_json::json;
-
-    fn content_text(content: &[ContentBlock]) -> String {
-        content
-            .iter()
-            .flat_map(|b| match b {
-                ContentBlock::Text { text } => vec![text.clone()],
-                ContentBlock::Markdown { markdown } => vec![markdown.clone()],
-                ContentBlock::Table { headers, rows } => {
-                    let mut parts: Vec<String> = headers.clone();
-                    for row in rows {
-                        parts.extend(row.clone());
-                    }
-                    parts
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-
-    // ========================================================================
-    // Constructor Tests
-    // ========================================================================
 
     #[test]
     fn test_new_handler() {
@@ -2816,6 +2788,7 @@ mod tests {
     // Execute() Path Tests - analyze_single()
     // ========================================================================
 
+    use crate::test_support::content_text;
     use crate::test_support::mock::MockIntervalsClient;
     use intervals_icu_client::{ActivitySummary, Event};
 
