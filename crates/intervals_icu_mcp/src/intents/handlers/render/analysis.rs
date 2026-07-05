@@ -1097,6 +1097,9 @@ pub(crate) fn render_espe_section(
         if let Some(val) = derived.vo2_reserve_ratio {
             lines.push(format!("  VO2 Reserve Ratio (P5/eFTP): {:.2}", val));
         }
+        if let Some(ref state) = derived.adaptation_state {
+            lines.push(format!("  Adaptation State: {}", state));
+        }
     }
     Some(lines.join("\n"))
 }
