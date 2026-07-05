@@ -3029,6 +3029,130 @@ async fn p0_performance_intelligence_full_pipeline() {
 }
 
 #[tokio::test]
+async fn period_analysis_shows_adaptation_state() {
+    let mut details_map = HashMap::new();
+    details_map.insert(
+        "adapt-1".into(),
+        json!({
+            "distance": 32000.0,
+            "moving_time": 5400,
+            "average_heartrate": 148.0,
+            "average_watts": 235.0,
+            "total_elevation_gain": 320.0,
+            "icu_efficiency_factor": 1.59,
+            "icu_pm_ftp": 260.0,
+            "icu_pm_w_prime": 20000.0,
+            "icu_pm_p_max": 850.0,
+            "icu_pm_1m": 850.0,
+            "icu_pm_5m": 500.0,
+            "icu_pm_20m": 265.0,
+            "icu_pm_60m": 245.0
+        }),
+    );
+    details_map.insert(
+        "adapt-2".into(),
+        json!({
+            "distance": 35000.0,
+            "moving_time": 6000,
+            "average_heartrate": 150.0,
+            "average_watts": 245.0,
+            "total_elevation_gain": 350.0,
+            "icu_efficiency_factor": 1.62,
+            "icu_pm_ftp": 265.0,
+            "icu_pm_w_prime": 19500.0,
+            "icu_pm_p_max": 860.0,
+            "icu_pm_1m": 860.0,
+            "icu_pm_5m": 510.0,
+            "icu_pm_20m": 270.0,
+            "icu_pm_60m": 250.0
+        }),
+    );
+
+    let client = Arc::new(MockCoachClient {
+        activities: vec![
+            MockCoachClient::activity("adapt-1", "Week 1 Ride", "2026-04-01"),
+            MockCoachClient::activity("adapt-2", "Week 4 Ride", "2026-04-28"),
+        ],
+        fitness: MockCoachClient::fitness_snapshot(55.0, 47.0, 8.0),
+        wellness: json!([
+            {"type": "Ride", "eftp": 260.0, "wPrime": 20000.0, "pMax": 850.0}
+        ]),
+        activity_details_map: details_map,
+        ..MockCoachClient::default()
+    });
+
+    let handler = AnalyzeTrainingHandler::new();
+    let output = handler
+        .execute(
+            json!({
+                "target_type": "period",
+                "period_start": "2026-04-01",
+                "period_end": "2026-05-15",
+                "analysis_type": "detailed"
+            }),
+            client,
+            None,
+        )
+        .await
+        .unwrap();
+
+    let markdown = markdown_text(&output);
+    assert!(
+        markdown.contains("Adaptation State:"),
+        "Period analysis should show Adaptation State:\n{}",
+        markdown
+    );
+}
+
+#[tokio::test]
+async fn single_activity_analysis_does_not_show_adaptation_state() {
+    let client = Arc::new(MockCoachClient {
+        activities: vec![MockCoachClient::activity(
+            "single-1",
+            "Single Ride",
+            "2026-05-01",
+        )],
+        fitness: MockCoachClient::fitness_snapshot(55.0, 47.0, 8.0),
+        wellness: json!([
+            {"type": "Ride", "eftp": 260.0, "wPrime": 20000.0, "pMax": 850.0}
+        ]),
+        activity_details: json!({
+            "distance": 32000.0,
+            "moving_time": 5400,
+            "average_heartrate": 148.0,
+            "average_watts": 235.0,
+            "total_elevation_gain": 320.0,
+            "icu_efficiency_factor": 1.59,
+            "icu_pm_ftp": 260.0,
+            "icu_pm_w_prime": 20000.0,
+            "icu_pm_p_max": 850.0
+        }),
+        ..MockCoachClient::default()
+    });
+
+    let handler = AnalyzeTrainingHandler::new();
+    let output = handler
+        .execute(
+            json!({
+                "target_type": "single",
+                "date": "2026-05-01",
+                "analysis_type": "detailed"
+            }),
+            client,
+            None,
+        )
+        .await
+        .unwrap();
+
+    let markdown = markdown_text(&output);
+    assert!(
+        !markdown.contains("Adaptation State:"),
+        "Single analysis should NOT show Adaptation State:\n{}",
+        markdown
+    );
+}
+
+#[tokio::test]
 async fn historical_yoy_comparison() {
     let mut q2_2025_activities: Vec<ActivitySummary> = (1..=5)
         .map(|day| {
