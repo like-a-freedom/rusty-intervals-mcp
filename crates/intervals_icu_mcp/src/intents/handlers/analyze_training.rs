@@ -1451,6 +1451,14 @@ impl AnalyzeTrainingHandler {
                 content.push(ContentBlock::markdown(heat_text));
             }
 
+            // ESPE Power-Duration Anchors
+            if let Some(espe_text) = render_espe_section(
+                &period_context.metrics.espe_anchors,
+                &period_context.metrics.espe_derived,
+            ) {
+                content.push(ContentBlock::markdown(espe_text));
+            }
+
             if let Some(fit_text) = render_fitness_snapshot(&period_context.metrics.fitness) {
                 content.push(ContentBlock::markdown(fit_text));
             }
@@ -1470,6 +1478,22 @@ impl AnalyzeTrainingHandler {
                     tid_lines.push(format!("  Classification: {}", tid_model_str));
                 }
                 content.push(ContentBlock::markdown(tid_lines.join("\n")));
+            }
+
+            // Zone Distribution
+            if let Some(last_id) = period_ids.last()
+                && let Some(last_detail) = fetched.activity_details.get(last_id)
+                && let Some(zones_obj) =
+                    last_detail.get("icu_zone_times").and_then(Value::as_object)
+            {
+                let zone_rows = build_zone_distribution_rows(zones_obj);
+                if !zone_rows.is_empty() {
+                    content.push(ContentBlock::markdown("Time in Zones".to_string()));
+                    content.push(ContentBlock::table(
+                        vec!["Zone".into(), "Time".into(), "%".into()],
+                        zone_rows,
+                    ));
+                }
             }
 
             // W′ Depletion Rollup (WDR 7-day)
