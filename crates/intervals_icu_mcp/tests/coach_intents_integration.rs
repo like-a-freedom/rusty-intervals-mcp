@@ -1559,6 +1559,20 @@ async fn analyze_race_adds_post_race_recovery_guidance() {
             .iter()
             .any(|a| a.contains("assess_recovery"))
     );
+
+    let markdown = markdown_text(&output);
+
+    // Race Readiness Score must appear in output
+    assert!(
+        markdown.contains("Race Readiness"),
+        "Race Readiness section should appear:\n{}",
+        markdown
+    );
+    assert!(
+        markdown.contains("Score:"),
+        "Race Readiness Score should appear:\n{}",
+        markdown
+    );
 }
 
 #[tokio::test]
@@ -2862,6 +2876,13 @@ async fn plan_training_focus_modes_do_not_collapse() {
     let specific_md = markdown_text(&specific);
     let recovery_md = markdown_text(&recovery);
 
+    // TSB Forecast table must appear for all plan focuses
+    assert!(
+        intensity_md.contains("TSB Forecast"),
+        "TSB Forecast should appear in intensity plan:\n{}",
+        intensity_md
+    );
+
     assert!(intensity_md.contains("Intensity") || intensity_md.contains("threshold"));
     assert!(specific_md.contains("race-specific") || specific_md.contains("Specific"));
     assert!(recovery_md.contains("Recovery") || recovery_md.contains("down week"));
@@ -2946,6 +2967,141 @@ async fn analyze_training_single_includes_hr_drift_and_pace_variance_from_stream
     assert!(
         markdown.contains("HR Drift"),
         "Expected 'HR Drift' in output:\n{}",
+        markdown
+    );
+}
+
+fn with_full_period_analysis_client() -> MockCoachClient {
+    let mut details_map = HashMap::new();
+    details_map.insert(
+        "pa-1".into(),
+        json!({
+            "distance": 30000.0,
+            "moving_time": 5400,
+            "average_heartrate": 148.0,
+            "average_watts": 235.0,
+            "total_elevation_gain": 300.0,
+            "icu_efficiency_factor": 1.55,
+            "icu_pm_ftp": 260.0,
+            "icu_pm_w_prime": 20000.0,
+            "icu_pm_p_max": 850.0,
+            "icu_pm_1m": 500.0,
+            "icu_pm_5m": 380.0,
+            "icu_pm_20m": 320.0,
+            "icu_pm_60m": 280.0,
+            "icu_training_load": 80.0,
+            "icu_max_wbal_depletion": 4000.0,
+            "icu_joules_above_ftp": 25000.0
+        }),
+    );
+    details_map.insert(
+        "pa-2".into(),
+        json!({
+            "distance": 32000.0,
+            "moving_time": 6000,
+            "average_heartrate": 150.0,
+            "average_watts": 245.0,
+            "total_elevation_gain": 350.0,
+            "icu_efficiency_factor": 1.62,
+            "icu_pm_ftp": 265.0,
+            "icu_pm_w_prime": 19500.0,
+            "icu_pm_p_max": 860.0,
+            "icu_pm_1m": 510.0,
+            "icu_pm_5m": 390.0,
+            "icu_pm_20m": 325.0,
+            "icu_pm_60m": 285.0,
+            "icu_training_load": 85.0,
+            "icu_max_wbal_depletion": 4500.0,
+            "icu_joules_above_ftp": 28000.0
+        }),
+    );
+
+    MockCoachClient {
+        activities: vec![
+            MockCoachClient::activity("pa-1", "Week 1 Ride", "2026-04-01"),
+            MockCoachClient::activity("pa-2", "Week 4 Ride", "2026-04-28"),
+        ],
+        fitness: MockCoachClient::fitness_snapshot(55.0, 47.0, 8.0),
+        wellness: json!([
+            {"type": "Ride", "eftp": 260.0, "wPrime": 20000.0, "pMax": 850.0}
+        ]),
+        activity_details_map: details_map,
+        ..MockCoachClient::default()
+    }
+}
+
+#[tokio::test]
+async fn analyze_training_period_renders_full_performance_pipeline() {
+    let client = Arc::new(with_full_period_analysis_client());
+    let handler = AnalyzeTrainingHandler::new();
+
+    let output = handler
+        .execute(
+            json!({
+                "target_type": "period",
+                "period_start": "2026-04-01",
+                "period_end": "2026-05-15",
+                "analysis_type": "detailed"
+            }),
+            client,
+            None,
+        )
+        .await
+        .unwrap();
+
+    let markdown = markdown_text(&output);
+
+    // Trend Context should appear
+    assert!(
+        markdown.contains("Trend Context"),
+        "Trend Context should appear:\n{}",
+        markdown
+    );
+
+    // Load Context (ACWR) should appear
+    assert!(
+        markdown.contains("ACWR"),
+        "ACWR should appear in period analysis:\n{}",
+        markdown
+    );
+
+    // NDLI should appear
+    assert!(
+        markdown.contains("NDLI") || markdown.contains("Neural Density"),
+        "NDLI should appear:\n{}",
+        markdown
+    );
+
+    // W′ Depletion should appear
+    assert!(
+        markdown.contains("W′ Depletion"),
+        "W′ Depletion should appear:\n{}",
+        markdown
+    );
+
+    // Power Curve Comparison with adaptation state
+    assert!(
+        markdown.contains("Power Curve Comparison"),
+        "Power Curve Comparison should appear:\n{}",
+        markdown
+    );
+    assert!(
+        markdown.contains("Adaptation State"),
+        "Adaptation State should appear:\n{}",
+        markdown
+    );
+
+    // Load Patterns should appear
+    assert!(
+        markdown.contains("Load Patterns"),
+        "Load Patterns should appear:\n{}",
+        markdown
+    );
+
+    // Terrain Specificity should appear
+    assert!(
+        markdown.contains("Terrain Specificity"),
+        "Terrain Specificity should appear:\n{}",
         markdown
     );
 }
