@@ -4,6 +4,7 @@
 //! All suggestions are derived from metric/alert states, not ad-hoc prose.
 
 use crate::domains::coach::{CoachAlert, CoachAlertSeverity, CoachGuidance, CoachMetrics};
+use crate::engines::adaptation::AdaptationState;
 use crate::engines::coach_metrics_constants::WDRM_HIGH_DEPLETION_PCT;
 
 // =============================================================================
@@ -475,11 +476,12 @@ pub fn build_alerts(metrics: &CoachMetrics) -> Vec<CoachAlert> {
         });
     }
 
-    // Adaptation state alerts
+    // Adaptation state alerts — type-safe matching via parse_adaptation_state
     if let Some(espe) = &metrics.espe_derived
-        && let Some(ref state) = espe.adaptation_state
+        && let Some(ref state_str) = espe.adaptation_state
+        && let Some(state) = parse_adaptation_state(state_str)
     {
-        if state == "Plateau" {
+        if state == AdaptationState::Plateau {
             alerts.push(CoachAlert {
                 severity: CoachAlertSeverity::Caution,
                 code: "adaptation_stalled".to_string(),
@@ -488,7 +490,7 @@ pub fn build_alerts(metrics: &CoachMetrics) -> Vec<CoachAlert> {
                 section: "adaptation".to_string(),
             });
         }
-        if state == "FatigueState" {
+        if state == AdaptationState::FatigueState {
             alerts.push(CoachAlert {
                 severity: CoachAlertSeverity::Priority,
                 code: "adaptation_fatigue".to_string(),
@@ -500,6 +502,22 @@ pub fn build_alerts(metrics: &CoachMetrics) -> Vec<CoachAlert> {
     }
 
     alerts
+}
+
+/// Parse an adaptation state string into an `AdaptationState` enum variant.
+///
+/// Returns `None` for unknown or empty strings.
+pub(crate) fn parse_adaptation_state(s: &str) -> Option<AdaptationState> {
+    match s {
+        "Baseline" => Some(AdaptationState::Baseline),
+        "FatigueState" => Some(AdaptationState::FatigueState),
+        "Vo2Expansion" => Some(AdaptationState::Vo2Expansion),
+        "AerobicConsolidation" => Some(AdaptationState::AerobicConsolidation),
+        "AnaerobicBuild" => Some(AdaptationState::AnaerobicBuild),
+        "MixedAdaptation" => Some(AdaptationState::MixedAdaptation),
+        "Plateau" => Some(AdaptationState::Plateau),
+        _ => None,
+    }
 }
 
 fn has_alert_code(alerts: &[CoachAlert], code: &str) -> bool {
@@ -758,6 +776,79 @@ mod tests {
         HeatMetrics, LoadManagementMetrics, NdliMetrics, PolarisationMetrics, RaceReadinessMetrics,
         VolumeMetrics, WdrMetrics, WellnessMetrics, WorkoutMetricsContext,
     };
+    use crate::engines::adaptation::AdaptationState;
+
+    // -------------------------------------------------------------------------
+    // parse_adaptation_state
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn parse_adaptation_state_baseline() {
+        assert_eq!(
+            parse_adaptation_state("Baseline"),
+            Some(AdaptationState::Baseline)
+        );
+    }
+
+    #[test]
+    fn parse_adaptation_state_fatigue_state() {
+        assert_eq!(
+            parse_adaptation_state("FatigueState"),
+            Some(AdaptationState::FatigueState)
+        );
+    }
+
+    #[test]
+    fn parse_adaptation_state_vo2_expansion() {
+        assert_eq!(
+            parse_adaptation_state("Vo2Expansion"),
+            Some(AdaptationState::Vo2Expansion)
+        );
+    }
+
+    #[test]
+    fn parse_adaptation_state_aerobic_consolidation() {
+        assert_eq!(
+            parse_adaptation_state("AerobicConsolidation"),
+            Some(AdaptationState::AerobicConsolidation)
+        );
+    }
+
+    #[test]
+    fn parse_adaptation_state_anaerobic_build() {
+        assert_eq!(
+            parse_adaptation_state("AnaerobicBuild"),
+            Some(AdaptationState::AnaerobicBuild)
+        );
+    }
+
+    #[test]
+    fn parse_adaptation_state_mixed_adaptation() {
+        assert_eq!(
+            parse_adaptation_state("MixedAdaptation"),
+            Some(AdaptationState::MixedAdaptation)
+        );
+    }
+
+    #[test]
+    fn parse_adaptation_state_plateau() {
+        assert_eq!(
+            parse_adaptation_state("Plateau"),
+            Some(AdaptationState::Plateau)
+        );
+    }
+
+    #[test]
+    fn parse_adaptation_state_unknown_returns_none() {
+        assert_eq!(parse_adaptation_state("Unknown"), None);
+    }
+
+    #[test]
+    fn parse_adaptation_state_empty_string_returns_none() {
+        assert_eq!(parse_adaptation_state(""), None);
+    }
+
+    // -------------------------------------------------------------------------
 
     #[test]
     fn tsb_below_minus_20_creates_deep_fatigue_alert() {
