@@ -1478,12 +1478,12 @@ impl AnalyzeTrainingHandler {
             }
 
             // Power Curve Comparison
-            if let Some(_espe) = &period_context.metrics.espe_derived {
+            if period_context.metrics.espe_derived.is_some() {
                 let period_ids: Vec<String> = period.iter().map(|a| a.id.clone()).collect();
                 if let Some(_last_id) = period_ids.last() {
                     let anchors = extract_sportinfo_anchors(fetched.wellness.as_ref());
                     let espe = derive_espe_metrics(&anchors, None, None, None, None);
-                    let (deltas, rotation, statuses, _adaptation_state) =
+                    let (deltas, rotation, statuses, adaptation_state) =
                         crate::engines::coach_metrics::compare_power_curves(&espe, &espe);
                     if !deltas.is_empty() {
                         let mut pc_lines = vec!["Power Curve Comparison".to_string()];
@@ -1495,6 +1495,10 @@ impl AnalyzeTrainingHandler {
                         }
                         pc_lines.push(format!("  Rotation Index: {:.3}", rotation));
                         content.push(ContentBlock::markdown(pc_lines.join("\n")));
+                    }
+                    // Store adaptation_state back into period_context
+                    if let Some(ref mut espe_mut) = period_context.metrics.espe_derived {
+                        espe_mut.adaptation_state = adaptation_state;
                     }
                 }
             }
