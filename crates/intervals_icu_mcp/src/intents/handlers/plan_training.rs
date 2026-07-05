@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use crate::domains::events::validate_and_prepare_event;
 use crate::engines::coach_metrics::parse_fitness_metrics;
-use crate::engines::forecast::project_tsb;
+use crate::engines::forecast::{parameterized_load, project_tsb};
 use crate::intents::utils::parse_date;
 
 pub struct PlanTrainingHandler;
@@ -44,6 +44,15 @@ impl TrainingFocus {
         }
     }
 
+    fn to_load_label(self) -> &'static str {
+        match self {
+            Self::AerobicBase | Self::Recovery => "easy",
+            Self::Intensity => "tempo",
+            Self::Specific => "hard",
+            Self::Taper => "easy",
+        }
+    }
+
     #[must_use]
     fn as_str(self) -> &'static str {
         match self {
@@ -69,7 +78,7 @@ impl IntentHandler for PlanTrainingHandler {
          Banister TSB forecast (CTL/ATL/TSB projection with fatigue class per \
          milestone). Adaptive mode uses current fitness (TSB, CTL, ATL) and \
          wellness (readiness, HRV, sleep) to calibrate volume and detect overshoot.
-         
+
          Use this tool when: you need to create a race preparation plan, periodize \
          training for a target event, or generate structured weekly workouts. \
          Implements +7-10% weekly progression, recovery weeks every 3-4 weeks. \
@@ -500,7 +509,9 @@ impl IntentHandler for PlanTrainingHandler {
         if let Some(ref f) = fitness_metrics
             && let (Some(current_ctl), Some(current_atl)) = (f.ctl, f.atl)
         {
-            let daily_loads = estimate_daily_loads(max_hours, weeks);
+            let daily_tss = parameterized_load(focus.to_load_label());
+            let daily_loads =
+                std::iter::repeat_n(daily_tss, (weeks as usize) * 7).collect::<Vec<_>>();
             let projection = project_tsb(current_ctl, current_atl, &daily_loads);
 
             let mut forecast_rows = vec![vec![
@@ -529,6 +540,33 @@ impl IntentHandler for PlanTrainingHandler {
                 forecast_rows[0].clone(),
                 forecast_rows[1..].to_vec(),
             ));
+
+            // Taper efficiency (only relevant when focus is taper)
+            if focus == TrainingFocus::Taper {
+                let first_tsb = projection.first().map(|p| p.tsb).unwrap_or(0.0);
+                let last_tsb = projection.last().map(|p| p.tsb).unwrap_or(0.0);
+                let tsb_gain = last_tsb - first_tsb;
+                let reduction_pct = 50.0; // ~50% reduction from pre-taper volume
+                let target_pct = 40.0; // standard taper target
+                let (efficiency, tsb_response) = crate::engines::forecast::compute_taper_efficiency(
+                    reduction_pct,
+                    target_pct,
+                    tsb_gain,
+                );
+                let efficiency_label = if efficiency >= 1.0 {
+                    "effective"
+                } else if efficiency >= 0.7 {
+                    "moderate"
+                } else {
+                    "ineffective"
+                };
+                content.push(ContentBlock::markdown(format!(
+                    "Taper Efficiency\n\
+                     ️ Efficiency Ratio: {:.2} ({})\n\
+                     ️ TSB Response: {:.1} pts per % volume reduced",
+                    efficiency, efficiency_label, tsb_response
+                )));
+            }
         }
 
         // --- Sample week with HR zones ---
@@ -923,14 +961,6 @@ impl Default for PlanTrainingHandler {
     fn default() -> Self {
         Self::new()
     }
-}
-
-#[must_use]
-fn estimate_daily_loads(weekly_hours: f64, weeks: u32) -> Vec<f64> {
-    let tss_per_hour = 50.0;
-    let weekly_tss = weekly_hours * tss_per_hour;
-    let daily = weekly_tss / 7.0;
-    std::iter::repeat_n(daily, (weeks as usize) * 7).collect()
 }
 
 #[cfg(test)]
