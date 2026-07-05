@@ -22,7 +22,7 @@ use crate::engines::analysis_fetch::{
 };
 use crate::engines::coach_guidance::{build_alerts, build_guidance};
 use crate::engines::coach_metrics::{
-    build_trend_snapshot, classify_tid_model, compute_heat_metrics_7d,
+    build_trend_snapshot, classify_tid_model, compute_consistency_index, compute_heat_metrics_7d,
     compute_load_management_metrics, compute_ndli_7d, compute_wdr_7d_rollup, compute_wdr_metrics,
     compute_z2_hr_variance, derive_espe_metrics, derive_trend_metrics, derive_volume_metrics,
     derive_workout_metrics_context, enrich_anchors_from_activity, extract_sportinfo_anchors,
@@ -1248,6 +1248,16 @@ impl AnalyzeTrainingHandler {
             w_prime,
         ));
 
+        // Consistency: planned vs completed workouts
+        let planned_count = calendar_events
+            .iter()
+            .filter(|event| matches!(event.category, EventCategory::Workout))
+            .count();
+        period_context.metrics.consistency = Some(compute_consistency_index(
+            period_snapshot.activity_count,
+            planned_count,
+        ));
+
         period_context.alerts = build_alerts(&period_context.metrics);
         period_context.guidance = build_guidance(&period_context.metrics, &period_context.alerts);
 
@@ -1499,6 +1509,22 @@ impl AnalyzeTrainingHandler {
             // W′ Depletion Rollup (WDR 7-day)
             if let Some(wdrm_text) = render_wdrm_section(&period_context.metrics.wdrm) {
                 content.push(ContentBlock::markdown(wdrm_text));
+            }
+
+            // Consistency: planned vs completed
+            if let Some(consistency) = &period_context.metrics.consistency {
+                let pct = consistency
+                    .ratio
+                    .map(|r| format!("{:.0}%", r * 100.0))
+                    .unwrap_or_else(|| "n/a".to_string());
+                let state = consistency.state.as_deref().unwrap_or("unknown");
+                content.push(ContentBlock::markdown(format!(
+                    "Training Consistency\n  Planned sessions: {}\n  Completed sessions: {}\n  Adherence: {} ({})",
+                    consistency.sessions_planned,
+                    consistency.sessions_completed,
+                    pct,
+                    state,
+                )));
             }
 
             // Power Curve Comparison
