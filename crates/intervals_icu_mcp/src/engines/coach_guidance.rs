@@ -475,6 +475,30 @@ pub fn build_alerts(metrics: &CoachMetrics) -> Vec<CoachAlert> {
         });
     }
 
+    // Adaptation state alerts
+    if let Some(espe) = &metrics.espe_derived
+        && let Some(ref state) = espe.adaptation_state
+    {
+        if state == "Plateau" {
+            alerts.push(CoachAlert {
+                severity: CoachAlertSeverity::Caution,
+                code: "adaptation_stalled".to_string(),
+                title: "Adaptation plateau detected".to_string(),
+                evidence: vec!["Power-curve deltas below threshold — no meaningful adaptation across any system.".to_string()],
+                section: "adaptation".to_string(),
+            });
+        }
+        if state == "FatigueState" {
+            alerts.push(CoachAlert {
+                severity: CoachAlertSeverity::Priority,
+                code: "adaptation_fatigue".to_string(),
+                title: "Fatigue-dominant adaptation pattern".to_string(),
+                evidence: vec!["Threshold and VO2max power declining — consider reducing load or adding recovery.".to_string()],
+                section: "adaptation".to_string(),
+            });
+        }
+    }
+
     alerts
 }
 

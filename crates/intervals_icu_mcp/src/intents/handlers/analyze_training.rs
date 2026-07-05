@@ -1483,7 +1483,7 @@ impl AnalyzeTrainingHandler {
                 if let Some(_last_id) = period_ids.last() {
                     let anchors = extract_sportinfo_anchors(fetched.wellness.as_ref());
                     let espe = derive_espe_metrics(&anchors, None, None, None, None);
-                    let (deltas, rotation, statuses) =
+                    let (deltas, rotation, statuses, _adaptation_state) =
                         crate::engines::coach_metrics::compare_power_curves(&espe, &espe);
                     if !deltas.is_empty() {
                         let mut pc_lines = vec!["Power Curve Comparison".to_string()];

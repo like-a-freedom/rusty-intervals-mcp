@@ -236,6 +236,7 @@ pub struct EspeDerivedMetrics {
     pub p20m: Option<f64>,
     pub p60m: Option<f64>,
     pub supported: bool,
+    pub adaptation_state: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]

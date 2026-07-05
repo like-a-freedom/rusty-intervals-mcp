@@ -7,6 +7,31 @@
 // into any handler or engine. `CurveProfile` / `classify_curve_profile`
 // remain in active use by `analyze_training`.
 
+/// Adaptation: Plateau threshold — all deltas below this % indicate no meaningful change.
+const ADAPTATION_PLATEAU_THRESHOLD_PCT: f64 = 1.0;
+/// Adaptation: Fatigue state — threshold % decline for threshold power.
+const ADAPTATION_FATIGUE_THR_THRESHOLD: f64 = -3.0;
+/// Adaptation: Fatigue state — threshold % decline for VO2max power.
+const ADAPTATION_FATIGUE_VO2_THRESHOLD: f64 = -3.0;
+/// Adaptation: VO2 expansion — threshold % gain.
+const ADAPTATION_VO2_EXPANSION_THRESHOLD: f64 = 3.0;
+/// Adaptation: Aerobic consolidation — threshold % gain for threshold power.
+const ADAPTATION_AEROBIC_THR_THRESHOLD: f64 = 1.0;
+/// Adaptation: Aerobic consolidation — threshold % gain for endurance power.
+const ADAPTATION_AEROBIC_DUR_THRESHOLD: f64 = 2.0;
+/// Adaptation: Anaerobic build — threshold % gain for neural/sprint power.
+const ADAPTATION_ANAEROBIC_NEURAL_THRESHOLD: f64 = 5.0;
+/// Adaptation: Anaerobic build — threshold % gain for 1-minute power.
+const ADAPTATION_ANAEROBIC_1M_THRESHOLD: f64 = 2.0;
+/// Adaptation: Mixed adaptation — neural gain threshold.
+const ADAPTATION_MIXED_NEURAL_THRESHOLD: f64 = 5.0;
+/// Adaptation: Mixed adaptation — endurance decline threshold.
+const ADAPTATION_MIXED_DUR_DECLINE: f64 = -2.0;
+/// Adaptation: Mixed adaptation — VO2 gain threshold.
+const ADAPTATION_MIXED_VO2_THRESHOLD: f64 = 3.0;
+/// Adaptation: Mixed adaptation — threshold decline.
+const ADAPTATION_MIXED_THR_DECLINE: f64 = -1.0;
+
 /// Curve Profile: duration span for endurance slope (20m to 60m = 40 min).
 const CURVE_ENDURANCE_SLOPE_SPAN_MIN: f64 = 40.0;
 
@@ -65,6 +90,17 @@ const CYCLING_TIMETRIALIST_AEROBIC: f64 = 1.2;
 const CYCLING_TIMETRIALIST_ENDURANCE: f64 = 1.1;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AdaptationState {
+    Baseline,
+    FatigueState,
+    Vo2Expansion,
+    AerobicConsolidation,
+    AnaerobicBuild,
+    MixedAdaptation,
+    Plateau,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CurveProfile {
     TimeTrialist,
     EnduranceSpecialist,
@@ -77,6 +113,72 @@ pub enum CurveProfile {
     BalancedRunner,
     PunchyRunner,
     SpeedRunner,
+}
+
+/// Classify adaptation state from 2-window power-curve deltas.
+/// `thr_delta` = % change in threshold power (≈20-60min power)
+/// `vo2_delta` = % change in VO2max power (≈5min power)
+/// `dur_delta` = % change in endurance power (≈60min+ power)
+/// `neural_delta` = % change in short sprint power (≈5s-1min)
+/// `ana_1m_delta` = % change in 1-minute anaerobic power
+pub fn classify_adaptation(
+    thr_delta: Option<f64>,
+    vo2_delta: Option<f64>,
+    dur_delta: Option<f64>,
+    neural_delta: Option<f64>,
+    ana_1m_delta: Option<f64>,
+) -> AdaptationState {
+    let all_some =
+        thr_delta.is_some() && vo2_delta.is_some() && dur_delta.is_some() && neural_delta.is_some();
+
+    if !all_some {
+        return AdaptationState::Baseline;
+    }
+
+    let thr = thr_delta.unwrap();
+    let vo2 = vo2_delta.unwrap();
+    let dur = dur_delta.unwrap();
+    let neural = neural_delta.unwrap();
+    let ana_1m = ana_1m_delta.unwrap_or(0.0);
+
+    // Plateau: all deltas < 1%
+    if thr.abs() < ADAPTATION_PLATEAU_THRESHOLD_PCT
+        && vo2.abs() < ADAPTATION_PLATEAU_THRESHOLD_PCT
+        && dur.abs() < ADAPTATION_PLATEAU_THRESHOLD_PCT
+        && neural.abs() < ADAPTATION_PLATEAU_THRESHOLD_PCT
+    {
+        return AdaptationState::Plateau;
+    }
+
+    // FatigueState: thr < -3% && vo2 < -3%
+    if thr < ADAPTATION_FATIGUE_THR_THRESHOLD && vo2 < ADAPTATION_FATIGUE_VO2_THRESHOLD {
+        return AdaptationState::FatigueState;
+    }
+
+    // Vo2Expansion: vo2_delta > 3%
+    if vo2 > ADAPTATION_VO2_EXPANSION_THRESHOLD {
+        return AdaptationState::Vo2Expansion;
+    }
+
+    // AerobicConsolidation: thr_delta > 1% && dur_delta > 2%
+    if thr > ADAPTATION_AEROBIC_THR_THRESHOLD && dur > ADAPTATION_AEROBIC_DUR_THRESHOLD {
+        return AdaptationState::AerobicConsolidation;
+    }
+
+    // AnaerobicBuild: neural_delta > 5% && ana_1m_delta > 2%
+    if neural > ADAPTATION_ANAEROBIC_NEURAL_THRESHOLD && ana_1m > ADAPTATION_ANAEROBIC_1M_THRESHOLD
+    {
+        return AdaptationState::AnaerobicBuild;
+    }
+
+    // MixedAdaptation: conflicting signals
+    if (neural > ADAPTATION_MIXED_NEURAL_THRESHOLD && dur < ADAPTATION_MIXED_DUR_DECLINE)
+        || (vo2 > ADAPTATION_MIXED_VO2_THRESHOLD && thr < ADAPTATION_MIXED_THR_DECLINE)
+    {
+        return AdaptationState::MixedAdaptation;
+    }
+
+    AdaptationState::Baseline
 }
 
 /// Classify curve profile from MMP anchor points.
@@ -219,6 +321,70 @@ mod tests {
                 false
             ),
             CurveProfile::AnaerobicSpecialist
+        );
+    }
+
+    #[test]
+    fn adaptation_baseline_when_no_data() {
+        assert_eq!(
+            classify_adaptation(None, None, None, None, None),
+            AdaptationState::Baseline
+        );
+    }
+
+    #[test]
+    fn adaptation_fatigue_state() {
+        assert_eq!(
+            classify_adaptation(Some(-5.0), Some(-4.0), Some(-2.0), Some(-1.0), None),
+            AdaptationState::FatigueState
+        );
+    }
+
+    #[test]
+    fn adaptation_vo2_expansion() {
+        assert_eq!(
+            classify_adaptation(Some(1.0), Some(5.0), Some(0.5), Some(2.0), None),
+            AdaptationState::Vo2Expansion
+        );
+    }
+
+    #[test]
+    fn adaptation_aerobic_consolidation() {
+        assert_eq!(
+            classify_adaptation(Some(2.0), Some(1.0), Some(3.0), Some(1.0), None),
+            AdaptationState::AerobicConsolidation
+        );
+    }
+
+    #[test]
+    fn adaptation_anaerobic_build() {
+        assert_eq!(
+            classify_adaptation(Some(0.5), Some(1.0), Some(0.5), Some(7.0), Some(3.0)),
+            AdaptationState::AnaerobicBuild
+        );
+    }
+
+    #[test]
+    fn adaptation_plateau() {
+        assert_eq!(
+            classify_adaptation(Some(0.5), Some(0.3), Some(0.4), Some(0.2), None),
+            AdaptationState::Plateau
+        );
+    }
+
+    #[test]
+    fn adaptation_mixed_when_conflicting() {
+        assert_eq!(
+            classify_adaptation(Some(0.5), Some(1.0), Some(-3.0), Some(6.0), None),
+            AdaptationState::MixedAdaptation
+        );
+    }
+
+    #[test]
+    fn adaptation_baseline_all_present_no_match() {
+        assert_eq!(
+            classify_adaptation(Some(0.5), Some(1.0), Some(0.5), Some(1.0), None),
+            AdaptationState::Baseline
         );
     }
 

@@ -3,6 +3,8 @@ use crate::domains::coach::{
     HeatMetrics, LoadManagementMetrics, NdliMetrics, TrendMetrics, VolumeMetrics, WellnessMetrics,
     WorkoutMetricsContext,
 };
+use crate::engines::adaptation::AdaptationState;
+use crate::engines::adaptation::classify_adaptation;
 use crate::engines::coach_metrics_constants::*;
 use crate::engines::shared::compute_zone_distribution;
 use intervals_icu_client::ActivitySummary;
@@ -1004,11 +1006,12 @@ pub fn derive_espe_metrics(
         p20m: mmp_p20m,
         p60m: mmp_p60m,
         supported: eftp.is_some() || anchors.p_max.is_some(),
+        adaptation_state: None,
     }
 }
 
 /// Compare two power curve windows and compute deltas per anchor.
-/// Returns (deltas, rotation_index, system_statuses).
+/// Returns (deltas, rotation_index, system_statuses, adaptation_state).
 pub fn compare_power_curves(
     current: &EspeDerivedMetrics,
     previous: &EspeDerivedMetrics,
@@ -1016,6 +1019,7 @@ pub fn compare_power_curves(
     std::collections::HashMap<String, f64>,
     f64,
     std::collections::HashMap<String, String>,
+    Option<String>,
 ) {
     let mut deltas = std::collections::HashMap::new();
     let mut statuses = std::collections::HashMap::new();
@@ -1058,7 +1062,20 @@ pub fn compare_power_curves(
         })
         .unwrap_or(0.0);
 
-    (deltas, rotation_index, statuses)
+    let adaptation_state = classify_adaptation(
+        deltas.get("20m").copied(),
+        deltas.get("5m").copied(),
+        deltas.get("60m").copied(),
+        deltas.get("1m").copied(),
+        deltas.get("1m").copied(),
+    );
+    let adaptation_state_str = if adaptation_state != AdaptationState::Baseline {
+        Some(format!("{:?}", adaptation_state))
+    } else {
+        None
+    };
+
+    (deltas, rotation_index, statuses, adaptation_state_str)
 }
 
 /// Primary: max(wbal_start - wbal_end) across intervals; fallback: icu_max_wbal_depletion.
