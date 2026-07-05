@@ -511,26 +511,8 @@ impl Default for ManageProfileHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::content_text;
     use crate::test_support::mock::MockIntervalsClient;
-    use std::sync::Arc;
-
-    fn content_text(content: &[ContentBlock]) -> String {
-        content
-            .iter()
-            .flat_map(|b| match b {
-                ContentBlock::Text { text } => vec![text.clone()],
-                ContentBlock::Markdown { markdown } => vec![markdown.clone()],
-                ContentBlock::Table { headers, rows } => {
-                    let mut parts: Vec<String> = headers.clone();
-                    for row in rows {
-                        parts.extend(row.clone());
-                    }
-                    parts
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
 
     // ========================================================================
     // Constructor Tests

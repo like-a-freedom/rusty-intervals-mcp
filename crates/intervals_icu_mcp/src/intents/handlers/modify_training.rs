@@ -723,28 +723,11 @@ enum TargetScope {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::content_text;
     use intervals_icu_client::EventCategory;
 
-    fn content_text(content: &[ContentBlock]) -> String {
-        content
-            .iter()
-            .flat_map(|b| match b {
-                ContentBlock::Text { text } => vec![text.clone()],
-                ContentBlock::Markdown { markdown } => vec![markdown.clone()],
-                ContentBlock::Table { headers, rows } => {
-                    let mut parts: Vec<String> = headers.clone();
-                    for row in rows {
-                        parts.extend(row.clone());
-                    }
-                    parts
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-
-    #[test]
-    fn test_new_handler() {
+    #[tokio::test]
+    async fn test_new_handler() {
         let handler = ModifyTrainingHandler::new();
         assert_eq!(handler.name(), "modify_training");
     }

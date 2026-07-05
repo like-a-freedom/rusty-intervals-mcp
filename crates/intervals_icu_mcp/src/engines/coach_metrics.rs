@@ -615,14 +615,8 @@ pub fn parse_wellness_metrics(payload: Option<&Value>) -> Option<WellnessMetrics
 }
 
 use crate::domains::progress::LnRmssdRollup;
-use chrono::{NaiveDate, NaiveDateTime};
-
-fn parse_series_date(value: &str) -> Option<NaiveDate> {
-    NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S")
-        .ok()
-        .map(|dt| dt.date())
-        .or_else(|| NaiveDate::parse_from_str(value, "%Y-%m-%d").ok())
-}
+use crate::engines::shared::parse_activity_date;
+use chrono::NaiveDate;
 
 pub fn extract_ctl_series(payload: Option<&Value>) -> Option<(Vec<String>, Vec<f64>)> {
     let entries = payload?.as_array()?;
@@ -637,7 +631,7 @@ pub fn extract_ctl_series(payload: Option<&Value>) -> Option<(Vec<String>, Vec<f
         })
         .collect::<Vec<_>>();
 
-    ordered.sort_by_key(|(date, _)| parse_series_date(date).unwrap_or(NaiveDate::MIN));
+    ordered.sort_by_key(|(date, _)| parse_activity_date(date).unwrap_or(NaiveDate::MIN));
     if ordered.is_empty() {
         return None;
     }
@@ -659,7 +653,7 @@ pub fn extract_hrv_series(payload: Option<&Value>) -> Option<Vec<f64>> {
         })
         .collect::<Vec<_>>();
 
-    ordered.sort_by_key(|(date, _)| parse_series_date(date).unwrap_or(NaiveDate::MIN));
+    ordered.sort_by_key(|(date, _)| parse_activity_date(date).unwrap_or(NaiveDate::MIN));
     if ordered.is_empty() {
         return None;
     }

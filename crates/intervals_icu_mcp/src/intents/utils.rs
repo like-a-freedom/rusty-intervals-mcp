@@ -5,8 +5,7 @@
 /// - Activity filtering
 /// - Period calculations
 use chrono::{DateTime, Duration, Local, NaiveDate, NaiveDateTime};
-use intervals_icu_client::{ActivitySummary, Event, IntervalsClient};
-use serde_json::Value;
+use intervals_icu_client::{ActivitySummary, Event};
 
 use crate::intents::{ContentBlock, IntentError};
 
@@ -88,7 +87,7 @@ pub fn filter_activities_by_range<'a>(
         .collect()
 }
 
-fn parse_activity_date(value: &str) -> Option<NaiveDate> {
+pub fn parse_activity_date(value: &str) -> Option<NaiveDate> {
     NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S")
         .ok()
         .map(|dt| dt.date())
@@ -195,43 +194,6 @@ pub fn filter_events_by_range<'a>(
         .collect()
 }
 
-/// Fetch activities for a specific date
-pub async fn fetch_activities_for_date(
-    client: &dyn IntervalsClient,
-    date: &NaiveDate,
-    limit: u32,
-    days_back: i32,
-) -> Result<Vec<ActivitySummary>, IntentError> {
-    let activities = client
-        .get_recent_activities(Some(limit), Some(days_back))
-        .await
-        .map_err(|e| IntentError::api(format!("Failed to fetch activities: {}", e)))?;
-
-    Ok(filter_activities_by_date(&activities, date)
-        .into_iter()
-        .cloned()
-        .collect())
-}
-
-/// Fetch activities for a date range
-pub async fn fetch_activities_for_range(
-    client: &dyn IntervalsClient,
-    start: &NaiveDate,
-    end: &NaiveDate,
-    limit: u32,
-) -> Result<Vec<ActivitySummary>, IntentError> {
-    let days = (*end - *start).num_days() as i32 + 30; // Buffer
-    let activities = client
-        .get_recent_activities(Some(limit), Some(days))
-        .await
-        .map_err(|e| IntentError::api(format!("Failed to fetch activities: {}", e)))?;
-
-    Ok(filter_activities_by_range(&activities, start, end)
-        .into_iter()
-        .cloned()
-        .collect())
-}
-
 /// Validate that a date range is valid (start <= end, reasonable range)
 pub fn validate_date_range(
     start: &NaiveDate,
@@ -256,58 +218,8 @@ pub fn validate_date_range(
     Ok(())
 }
 
-/// Extract idempotency token from input
-pub fn extract_idempotency_token(input: &Value) -> Option<String> {
-    input
-        .get("idempotency_token")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
-}
-
-/// Validate idempotency token is present
-pub fn validate_idempotency_token(input: &Value) -> Result<String, IntentError> {
-    extract_idempotency_token(input).ok_or_else(|| {
-        IntentError::validation(
-            "Idempotency token is required for this operation. Please generate a deterministic token from your request parameters."
-                .to_string(),
-        )
-    })
-}
-
-/// Calculate weekly average from total and date range
-pub fn calculate_weekly_average(total: f32, start: &NaiveDate, end: &NaiveDate) -> f32 {
-    let weeks = ((*end - *start).num_days() as f32 / 7.0).max(1.0);
-    total / weeks
-}
-
-/// Format duration in minutes to HH:MM string
-pub fn format_duration_minutes(minutes: u32) -> String {
-    format!("{}:{:02}", minutes / 60, minutes % 60)
-}
-
-/// Format duration in seconds to HH:MM string
-pub fn format_duration_seconds(seconds: u32) -> String {
-    format!("{}:{:02}", seconds / 3600, (seconds % 3600) / 60)
-}
-
-/// Calculate percentage change
-pub fn calculate_percent_change(old_value: f32, new_value: f32) -> f32 {
-    if old_value == 0.0 {
-        0.0
-    } else {
-        ((new_value - old_value) / old_value) * 100.0
-    }
-}
-
-/// Format delta with sign
-pub fn format_delta(value: f32, suffix: &str) -> String {
-    if value >= 0.0 {
-        format!("+{}{}", value, suffix)
-    } else {
-        format!("{}{}", value, suffix)
-    }
-}
-
+// ============================================================================
+// Compact Markdown Helpers
 /// Render a standard data-availability section for intent outputs.
 pub fn data_availability_block(
     degraded_mode_reasons: &[String],
@@ -331,17 +243,18 @@ pub fn data_availability_block(
     None
 }
 
-// ============================================================================
-// Compact Markdown Helpers
-// ============================================================================
+/// Format a percentage value, returning `"+5.2%"` or `"n/a"` when absent.
+pub fn format_pct(value: Option<f64>) -> String {
+    value
+        .map(|delta| format!("{:+.1}%", delta))
+        .unwrap_or_else(|| "n/a".into())
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::mock::MockIntervalsClient;
     use chrono::{Duration, Local, NaiveDate};
     use intervals_icu_client::{ActivitySummary, Event, EventCategory};
-    use serde_json::json;
 
     #[test]
     fn test_resolve_relative_day_today() {
@@ -763,201 +676,6 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_idempotency_token_present() {
-        assert_eq!(
-            extract_idempotency_token(&json!({"idempotency_token": "abc-123"})),
-            Some("abc-123".into())
-        );
-    }
-
-    #[test]
-    fn test_extract_idempotency_token_missing_key() {
-        assert_eq!(extract_idempotency_token(&json!({"other": "value"})), None);
-    }
-
-    #[test]
-    fn test_extract_idempotency_token_not_string() {
-        assert_eq!(
-            extract_idempotency_token(&json!({"idempotency_token": 42})),
-            None
-        );
-    }
-
-    #[test]
-    fn test_extract_idempotency_token_null_value() {
-        assert_eq!(
-            extract_idempotency_token(&json!({"idempotency_token": null})),
-            None
-        );
-    }
-
-    #[test]
-    fn test_extract_idempotency_token_empty_object() {
-        assert_eq!(extract_idempotency_token(&json!({})), None);
-    }
-
-    #[test]
-    fn test_extract_idempotency_token_empty_string() {
-        assert_eq!(
-            extract_idempotency_token(&json!({"idempotency_token": ""})),
-            Some("".into())
-        );
-    }
-
-    #[test]
-    fn test_validate_idempotency_token_ok() {
-        assert_eq!(
-            validate_idempotency_token(&json!({"idempotency_token": "tok-1"})).unwrap(),
-            "tok-1"
-        );
-    }
-
-    #[test]
-    fn test_validate_idempotency_token_missing() {
-        let err = validate_idempotency_token(&json!({})).unwrap_err();
-        assert!(matches!(err, IntentError::ValidationError(_)));
-    }
-
-    #[test]
-    fn test_validate_idempotency_token_not_string() {
-        let err = validate_idempotency_token(&json!({"idempotency_token": false})).unwrap_err();
-        assert!(matches!(err, IntentError::ValidationError(_)));
-    }
-
-    #[test]
-    fn test_calculate_weekly_average_normal() {
-        let s = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
-        let e = NaiveDate::from_ymd_opt(2026, 1, 15).unwrap();
-        assert!((calculate_weekly_average(100.0, &s, &e) - 50.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn test_calculate_weekly_average_less_than_one_week() {
-        let s = NaiveDate::from_ymd_opt(2026, 3, 21).unwrap();
-        let e = NaiveDate::from_ymd_opt(2026, 3, 23).unwrap();
-        assert!((calculate_weekly_average(50.0, &s, &e) - 50.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn test_calculate_weekly_average_zero_total() {
-        let s = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
-        let e = NaiveDate::from_ymd_opt(2026, 1, 8).unwrap();
-        assert!((calculate_weekly_average(0.0, &s, &e) - 0.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn test_calculate_weekly_average_exact_one_week() {
-        let s = NaiveDate::from_ymd_opt(2026, 3, 21).unwrap();
-        let e = NaiveDate::from_ymd_opt(2026, 3, 28).unwrap();
-        assert!((calculate_weekly_average(70.0, &s, &e) - 70.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn test_format_duration_minutes_zero() {
-        assert_eq!(format_duration_minutes(0), "0:00");
-    }
-
-    #[test]
-    fn test_format_duration_minutes_under_hour() {
-        assert_eq!(format_duration_minutes(45), "0:45");
-    }
-
-    #[test]
-    fn test_format_duration_minutes_exact_hour() {
-        assert_eq!(format_duration_minutes(60), "1:00");
-    }
-
-    #[test]
-    fn test_format_duration_minutes_hour_half() {
-        assert_eq!(format_duration_minutes(90), "1:30");
-    }
-
-    #[test]
-    fn test_format_duration_minutes_multi_hour() {
-        assert_eq!(format_duration_minutes(150), "2:30");
-    }
-
-    #[test]
-    fn test_format_duration_minutes_single_digit_minutes() {
-        assert_eq!(format_duration_minutes(61), "1:01");
-    }
-
-    #[test]
-    fn test_format_duration_seconds_zero() {
-        assert_eq!(format_duration_seconds(0), "0:00");
-    }
-
-    #[test]
-    fn test_format_duration_seconds_under_hour() {
-        assert_eq!(format_duration_seconds(1800), "0:30");
-    }
-
-    #[test]
-    fn test_format_duration_seconds_exact_hour() {
-        assert_eq!(format_duration_seconds(3600), "1:00");
-    }
-
-    #[test]
-    fn test_format_duration_seconds_hour_plus() {
-        assert_eq!(format_duration_seconds(3660), "1:01");
-    }
-
-    #[test]
-    fn test_format_duration_seconds_large() {
-        assert_eq!(format_duration_seconds(7500), "2:05");
-    }
-
-    #[test]
-    fn test_calculate_percent_change_old_zero() {
-        assert!((calculate_percent_change(0.0, 100.0) - 0.0).abs() < 0.001);
-    }
-
-    #[test]
-    fn test_calculate_percent_change_increase() {
-        assert!((calculate_percent_change(50.0, 75.0) - 50.0).abs() < 0.001);
-    }
-
-    #[test]
-    fn test_calculate_percent_change_decrease() {
-        assert!((calculate_percent_change(100.0, 75.0) + 25.0).abs() < 0.001);
-    }
-
-    #[test]
-    fn test_calculate_percent_change_no_change() {
-        assert!((calculate_percent_change(50.0, 50.0) - 0.0).abs() < 0.001);
-    }
-
-    #[test]
-    fn test_calculate_percent_change_both_zero() {
-        assert!((calculate_percent_change(0.0, 0.0) - 0.0).abs() < 0.001);
-    }
-
-    #[test]
-    fn test_format_delta_positive() {
-        assert_eq!(format_delta(10.5, "%"), "+10.5%");
-    }
-
-    #[test]
-    fn test_format_delta_negative() {
-        assert_eq!(format_delta(-5.0, "%"), "-5%");
-    }
-
-    #[test]
-    fn test_format_delta_zero() {
-        assert_eq!(format_delta(0.0, " hrs"), "+0 hrs");
-    }
-
-    #[test]
-    fn test_format_delta_positive_int() {
-        assert_eq!(format_delta(42.0, "km"), "+42km");
-    }
-
-    #[test]
-    fn test_format_delta_negative_int() {
-        assert_eq!(format_delta(-8.0, " pts"), "-8 pts");
-    }
-
-    #[test]
     fn test_data_availability_block_with_reasons() {
         let reasons = vec!["No HR data".into(), "No power".into()];
         let block = data_availability_block(&reasons, true).unwrap();
@@ -995,68 +713,5 @@ mod tests {
                 markdown: "Data availability\n  Missing data".into()
             }
         );
-    }
-
-    #[tokio::test]
-    async fn test_fetch_activities_for_date_found() {
-        let client = MockIntervalsClient::builder().with_activities(vec![
-            act("1", "2026-03-21T10:00:00"),
-            act("2", "2026-03-22T10:00:00"),
-        ]);
-        let date = NaiveDate::from_ymd_opt(2026, 3, 21).unwrap();
-        let result = fetch_activities_for_date(&client, &date, 10, 7)
-            .await
-            .unwrap();
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].id, "1");
-    }
-
-    #[tokio::test]
-    async fn test_fetch_activities_for_date_not_found() {
-        let client =
-            MockIntervalsClient::builder().with_activities(vec![act("1", "2026-03-22T10:00:00")]);
-        let date = NaiveDate::from_ymd_opt(2026, 3, 21).unwrap();
-        let result = fetch_activities_for_date(&client, &date, 10, 7)
-            .await
-            .unwrap();
-        assert!(result.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_fetch_activities_for_range_found() {
-        let client = MockIntervalsClient::builder().with_activities(vec![
-            act("1", "2026-03-21T10:00:00"),
-            act("2", "2026-04-01T10:00:00"),
-        ]);
-        let s = NaiveDate::from_ymd_opt(2026, 3, 15).unwrap();
-        let e = NaiveDate::from_ymd_opt(2026, 3, 31).unwrap();
-        let result = fetch_activities_for_range(&client, &s, &e, 10)
-            .await
-            .unwrap();
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].id, "1");
-    }
-
-    #[tokio::test]
-    async fn test_fetch_activities_for_range_not_found() {
-        let client =
-            MockIntervalsClient::builder().with_activities(vec![act("1", "2026-04-01T10:00:00")]);
-        let s = NaiveDate::from_ymd_opt(2026, 3, 15).unwrap();
-        let e = NaiveDate::from_ymd_opt(2026, 3, 31).unwrap();
-        let result = fetch_activities_for_range(&client, &s, &e, 10)
-            .await
-            .unwrap();
-        assert!(result.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_fetch_activities_for_range_empty_client() {
-        let client = MockIntervalsClient::default();
-        let s = NaiveDate::from_ymd_opt(2026, 3, 15).unwrap();
-        let e = NaiveDate::from_ymd_opt(2026, 3, 31).unwrap();
-        let result = fetch_activities_for_range(&client, &s, &e, 10)
-            .await
-            .unwrap();
-        assert!(result.is_empty());
     }
 }

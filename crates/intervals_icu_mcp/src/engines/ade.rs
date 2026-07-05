@@ -59,7 +59,6 @@ pub struct AdeOutput {
 /// - tsb: current TSB
 /// - hrv_ratio: current HRV / baseline ratio
 /// - durability_drifting: ISDM durability state is "drifting"
-/// - ndli_overload: NDLI red (≥4 high-intensity days)
 /// - heat_high: heat stress high
 /// - ramp_rate: CTL ramp rate over 7 days
 /// - acwr_ratio: ACWR ratio (0.8–1.3 = safe zone)
@@ -70,7 +69,6 @@ pub fn compute_ade(
     tsb: Option<f64>,
     hrv_ratio: Option<f64>,
     durability_drifting: bool,
-    _ndli_overload: bool,
     heat_high: bool,
     ramp_rate: Option<f64>,
     acwr_ratio: Option<f64>,
@@ -182,7 +180,6 @@ mod tests {
             Some(1.0),
             false,
             false,
-            false,
             Some(5.0),
             Some(1.0),
             1,
@@ -198,7 +195,6 @@ mod tests {
         let result = compute_ade(
             Some(-35.0),
             Some(1.0),
-            false,
             false,
             false,
             Some(5.0),
@@ -219,7 +215,6 @@ mod tests {
             Some(1.0),
             false,
             false,
-            false,
             Some(5.0),
             Some(1.5),
             1,
@@ -236,7 +231,6 @@ mod tests {
             Some(1.0),
             false,
             false,
-            false,
             Some(10.0),
             Some(1.0),
             1,
@@ -251,7 +245,6 @@ mod tests {
             Some(5.0),
             Some(1.0),
             false,
-            true,
             false,
             Some(5.0),
             Some(1.0),
@@ -259,7 +252,7 @@ mod tests {
             Some(5.0),
         );
         assert!(result.loaded_taper);
-        // ndli_overload=true, ndli_high=5 >= 4, tsb_value=5.0 > 0 → loaded_taper
+        // ndli_high=5 >= threshold, tsb_value=5.0 > 0 → loaded_taper
     }
 
     #[test]
@@ -267,7 +260,6 @@ mod tests {
         let result = compute_ade(
             Some(-25.0),
             Some(1.0),
-            false,
             false,
             false,
             Some(5.0),
@@ -286,7 +278,6 @@ mod tests {
             Some(5.0),
             Some(1.0),
             false,
-            false,
             true,
             Some(5.0),
             Some(1.0),
@@ -298,7 +289,7 @@ mod tests {
 
     #[test]
     fn ade_all_none_inputs_is_load_accepting_low_risk() {
-        let result = compute_ade(None, None, false, false, false, None, None, 0, None);
+        let result = compute_ade(None, None, false, false, None, None, 0, None);
         assert_eq!(result.operational_state, OperationalState::LoadAccepting);
         assert_eq!(result.risk_level, RiskLevel::Low);
         assert!(!result.maladaptation_risk);
@@ -310,17 +301,7 @@ mod tests {
     #[test]
     fn ade_hrv_low_without_tsb_triggers_load_pressure() {
         // TSB=None, HRV=0.85 (below 0.90 threshold) → load_pressure
-        let result = compute_ade(
-            None,
-            Some(0.85),
-            false,
-            false,
-            false,
-            None,
-            Some(1.0),
-            1,
-            None,
-        );
+        let result = compute_ade(None, Some(0.85), false, false, None, Some(1.0), 1, None);
         assert!(result.load_pressure);
         assert_eq!(result.operational_state, OperationalState::LoadAccepting);
         assert_eq!(result.risk_level, RiskLevel::Moderate);
@@ -332,7 +313,6 @@ mod tests {
         let result = compute_ade(
             None,
             Some(0.85),
-            false,
             false,
             false,
             Some(10.0),
@@ -348,17 +328,7 @@ mod tests {
     #[test]
     fn ade_hrv_normal_without_tsb_is_safe() {
         // TSB=None, HRV=0.95 (above 0.90 threshold) → no escalation
-        let result = compute_ade(
-            None,
-            Some(0.95),
-            false,
-            false,
-            false,
-            None,
-            Some(1.0),
-            1,
-            None,
-        );
+        let result = compute_ade(None, Some(0.95), false, false, None, Some(1.0), 1, None);
         assert_eq!(result.operational_state, OperationalState::LoadAccepting);
         assert_eq!(result.risk_level, RiskLevel::Low);
     }
@@ -369,7 +339,6 @@ mod tests {
         let result = compute_ade(
             Some(10.0),
             Some(1.0),
-            false,
             false,
             false,
             Some(5.0),
@@ -388,7 +357,6 @@ mod tests {
             Some(1.0),
             false,
             false,
-            false,
             Some(5.0),
             Some(1.0),
             4,
@@ -403,7 +371,6 @@ mod tests {
         let result = compute_ade(
             Some(10.0),
             Some(1.0),
-            false,
             false,
             false,
             Some(5.0),
@@ -422,7 +389,6 @@ mod tests {
             Some(1.0),
             false,
             false,
-            false,
             Some(5.0),
             Some(1.5),
             1,
@@ -437,7 +403,6 @@ mod tests {
         let result = compute_ade(
             Some(-20.0),
             Some(1.0),
-            false,
             false,
             false,
             Some(5.0),
@@ -457,7 +422,6 @@ mod tests {
             Some(1.0),
             false,
             false,
-            false,
             Some(5.0),
             Some(1.5),
             1,
@@ -474,7 +438,6 @@ mod tests {
             Some(1.0),
             false,
             false,
-            false,
             Some(8.0),
             Some(1.0),
             1,
@@ -489,7 +452,6 @@ mod tests {
         let result = compute_ade(
             Some(-35.0),
             Some(1.0),
-            false,
             false,
             false,
             Some(5.0),

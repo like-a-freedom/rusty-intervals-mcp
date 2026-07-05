@@ -1,8 +1,7 @@
 //! Minimal `IntervalsClient` trait and basic reqwest-based skeleton.
 //!
 //! This crate provides a trait-based API for interacting with the Intervals.icu service,
-//! along with a reqwest-based implementation and utilities for configuration, retry logic,
-//! and observability.
+//! along with a reqwest-based implementation and utilities for configuration.
 //!
 //! # Modular Service Traits
 //!
@@ -28,7 +27,6 @@ pub mod config;
 pub mod domains;
 pub mod error;
 pub mod http_client;
-pub mod observability;
 pub mod traits;
 pub mod utils;
 
