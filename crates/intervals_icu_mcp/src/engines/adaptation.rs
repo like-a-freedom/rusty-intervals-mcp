@@ -128,17 +128,10 @@ pub fn classify_adaptation(
     neural_delta: Option<f64>,
     ana_1m_delta: Option<f64>,
 ) -> AdaptationState {
-    let all_some =
-        thr_delta.is_some() && vo2_delta.is_some() && dur_delta.is_some() && neural_delta.is_some();
-
-    if !all_some {
-        return AdaptationState::Baseline;
-    }
-
-    let thr = thr_delta.unwrap();
-    let vo2 = vo2_delta.unwrap();
-    let dur = dur_delta.unwrap();
-    let neural = neural_delta.unwrap();
+    let (thr, vo2, dur, neural) = match (thr_delta, vo2_delta, dur_delta, neural_delta) {
+        (Some(thr), Some(vo2), Some(dur), Some(neural)) => (thr, vo2, dur, neural),
+        _ => return AdaptationState::Baseline,
+    };
     let ana_1m = ana_1m_delta.unwrap_or(0.0);
 
     // Plateau: all deltas < 1%
