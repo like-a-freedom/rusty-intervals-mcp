@@ -1484,13 +1484,45 @@ impl AnalyzeTrainingHandler {
                     && let Some(last_detail) = fetched.activity_details.get(last_id)
                 {
                     let anchors = extract_sportinfo_anchors(fetched.wellness.as_ref());
-                    let mmp_p1m = last_detail.get("icu_pm_1m").and_then(Value::as_f64);
-                    let mmp_p5m = last_detail.get("icu_pm_5m").and_then(Value::as_f64);
-                    let mmp_p20m = last_detail.get("icu_pm_20m").and_then(Value::as_f64);
-                    let mmp_p60m = last_detail.get("icu_pm_60m").and_then(Value::as_f64);
-                    let espe = derive_espe_metrics(&anchors, mmp_p1m, mmp_p5m, mmp_p20m, mmp_p60m);
+                    let cur_mmp_p1m = last_detail.get("icu_pm_1m").and_then(Value::as_f64);
+                    let cur_mmp_p5m = last_detail.get("icu_pm_5m").and_then(Value::as_f64);
+                    let cur_mmp_p20m = last_detail.get("icu_pm_20m").and_then(Value::as_f64);
+                    let cur_mmp_p60m = last_detail.get("icu_pm_60m").and_then(Value::as_f64);
+                    let espe_current = derive_espe_metrics(
+                        &anchors,
+                        cur_mmp_p1m,
+                        cur_mmp_p5m,
+                        cur_mmp_p20m,
+                        cur_mmp_p60m,
+                    );
+
+                    // Also derive ESPE from previous period's last activity
+                    let prev_ids: Vec<String> =
+                        previous_period.iter().map(|a| a.id.clone()).collect();
+                    let espe_previous = if let Some(prev_last_id) = prev_ids.last()
+                        && let Some(prev_detail) = fetched.activity_details.get(prev_last_id)
+                    {
+                        let prev_mmp_p1m = prev_detail.get("icu_pm_1m").and_then(Value::as_f64);
+                        let prev_mmp_p5m = prev_detail.get("icu_pm_5m").and_then(Value::as_f64);
+                        let prev_mmp_p20m = prev_detail.get("icu_pm_20m").and_then(Value::as_f64);
+                        let prev_mmp_p60m = prev_detail.get("icu_pm_60m").and_then(Value::as_f64);
+                        derive_espe_metrics(
+                            &anchors,
+                            prev_mmp_p1m,
+                            prev_mmp_p5m,
+                            prev_mmp_p20m,
+                            prev_mmp_p60m,
+                        )
+                    } else {
+                        // Fall back to comparing against current (no previous data = no meaningful deltas)
+                        espe_current.clone()
+                    };
+
                     let (deltas, rotation, statuses, adaptation_state) =
-                        crate::engines::coach_metrics::compare_power_curves(&espe, &espe);
+                        crate::engines::coach_metrics::compare_power_curves(
+                            &espe_current,
+                            &espe_previous,
+                        );
                     if !deltas.is_empty() {
                         let mut pc_lines = vec!["Power Curve Comparison".to_string()];
                         for d in &["1m", "5m", "20m", "60m"] {
