@@ -268,18 +268,19 @@ impl IntentHandler for AnalyzeRaceHandler {
                     ctl_positive && atl_zero
                 })
                 .unwrap_or(false);
+            let ctl_drop_val = compute_ctl_drop(
+                extract_ctl_series(fetched.wellness.as_ref())
+                    .map(|(_, values)| values)
+                    .unwrap_or_default()
+                    .as_slice(),
+                race_context.metrics.fitness.as_ref().and_then(|f| f.ctl),
+            );
             let race_readiness = compute_race_readiness(
                 race_context.metrics.fitness.as_ref().and_then(|f| f.tsb),
                 durability_drifting,
                 false,
                 system_mismatch,
-                compute_ctl_drop(
-                    extract_ctl_series(fetched.wellness.as_ref())
-                        .map(|(_, values)| values)
-                        .unwrap_or_default()
-                        .as_slice(),
-                    race_context.metrics.fitness.as_ref().and_then(|f| f.ctl),
-                ),
+                ctl_drop_val,
             );
             // Persist the readiness breakdown onto the metrics bag so downstream
             // guidance/alert rules and rendering can consume it.
@@ -407,9 +408,14 @@ impl IntentHandler for AnalyzeRaceHandler {
             } else {
                 "not_ready"
             };
+            let ctl_drop_line = if let Some(drop) = ctl_drop_val {
+                format!("  CTL Drop: {:.1} pts (taper/shedding penalty)", drop)
+            } else {
+                String::from("  CTL Drop: none (no detraining detected)")
+            };
             content.push(ContentBlock::markdown(format!(
-                "Race Readiness\n  Score: {}/100\n  Tier: {}",
-                race_readiness.score, tier
+                "Race Readiness\n  Score: {}/100\n  Tier: {}\n{}",
+                race_readiness.score, tier, ctl_drop_line
             )));
 
             if let Some(wellness) = &race_context.metrics.wellness {
@@ -1419,6 +1425,42 @@ mod tests {
         let content_str = format!("{:?}", output.content);
         assert!(content_str.contains("10K"));
         assert!(content_str.contains("165 bpm"));
+        assert!(content_str.contains("Race Readiness"));
+        assert!(content_str.contains("CTL Drop: none (no detraining detected)"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_race_readiness_shows_ctl_drop() {
+        // Wellness data with CTL series showing a drop (peak 70 → current 50)
+        let detail = json!({"distance": 10000.0, "moving_time": 2700});
+        let wellness = json!([
+            {"date": "2026-05-17", "ctl": 55.0},
+            {"date": "2026-05-18", "ctl": 60.0},
+            {"date": "2026-05-19", "ctl": 65.0},
+            {"date": "2026-05-20", "ctl": 70.0},
+            {"date": "2026-05-21", "ctl": 65.0},
+            {"date": "2026-05-22", "ctl": 58.0},
+            {"date": "2026-05-23", "ctl": 50.0}
+        ]);
+        let client = Arc::new(
+            MockIntervalsClient::builder()
+                .with_activities(vec![make_activity("race-1", "2026-05-24", "10K Race")])
+                .with_activity_detail("race-1", detail)
+                .with_streams(json!({}))
+                .with_intervals(json!({}))
+                .with_wellness(wellness)
+                .with_fitness_summary(json!({"ctl": 50.0, "atl": 60.0, "tsb": -10.0})),
+        );
+        let handler = AnalyzeRaceHandler::new();
+        let result = handler.execute(json!({}), client, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let content_str = format!("{:?}", output.content);
+        assert!(content_str.contains("Race Readiness"));
+        // Peak CTL was 70, current is 50 → drop of 20
+        assert!(content_str.contains("CTL Drop: 20.0"));
+        assert!(content_str.contains("Score:"));
+        assert!(content_str.contains("Tier:"));
     }
 
     #[tokio::test]
