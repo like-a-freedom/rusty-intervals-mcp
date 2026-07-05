@@ -1480,9 +1480,15 @@ impl AnalyzeTrainingHandler {
             // Power Curve Comparison
             if period_context.metrics.espe_derived.is_some() {
                 let period_ids: Vec<String> = period.iter().map(|a| a.id.clone()).collect();
-                if let Some(_last_id) = period_ids.last() {
+                if let Some(last_id) = period_ids.last()
+                    && let Some(last_detail) = fetched.activity_details.get(last_id)
+                {
                     let anchors = extract_sportinfo_anchors(fetched.wellness.as_ref());
-                    let espe = derive_espe_metrics(&anchors, None, None, None, None);
+                    let mmp_p1m = last_detail.get("icu_pm_1m").and_then(Value::as_f64);
+                    let mmp_p5m = last_detail.get("icu_pm_5m").and_then(Value::as_f64);
+                    let mmp_p20m = last_detail.get("icu_pm_20m").and_then(Value::as_f64);
+                    let mmp_p60m = last_detail.get("icu_pm_60m").and_then(Value::as_f64);
+                    let espe = derive_espe_metrics(&anchors, mmp_p1m, mmp_p5m, mmp_p20m, mmp_p60m);
                     let (deltas, rotation, statuses, adaptation_state) =
                         crate::engines::coach_metrics::compare_power_curves(&espe, &espe);
                     if !deltas.is_empty() {
@@ -1494,6 +1500,9 @@ impl AnalyzeTrainingHandler {
                             }
                         }
                         pc_lines.push(format!("  Rotation Index: {:.3}", rotation));
+                        if let Some(ref state) = adaptation_state {
+                            pc_lines.push(format!("  Adaptation State: {}", state));
+                        }
                         content.push(ContentBlock::markdown(pc_lines.join("\n")));
                     }
                     // Store adaptation_state back into period_context
