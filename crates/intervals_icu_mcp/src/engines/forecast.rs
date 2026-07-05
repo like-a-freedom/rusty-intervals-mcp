@@ -32,6 +32,18 @@ const TAPER_EFFICIENCY_MAX: f64 = 2.0;
 /// Fallback intensity multiplier for unrecognized labels.
 const FALLBACK_INTENSITY_MULTIPLIER: f64 = 1.5;
 
+// =============================================================================
+// Taper Constants
+// =============================================================================
+
+/// Taper target volume reduction percentage.
+/// Standard taper targets 40% volume reduction from pre-taper peak.
+pub const TAPER_TARGET_REDUCTION_PCT: f64 = 40.0;
+
+/// Taper actual volume reduction percentage.
+/// In plan_training, the taper phase volume is ~50% of pre-taper max_hours.
+pub const TAPER_ACTUAL_REDUCTION_PCT: f64 = 50.0;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TsbProjection {
     pub day: i32,

@@ -12,7 +12,9 @@ use std::sync::Arc;
 
 use crate::domains::events::validate_and_prepare_event;
 use crate::engines::coach_metrics::parse_fitness_metrics;
-use crate::engines::forecast::{parameterized_load, project_tsb};
+use crate::engines::forecast::{
+    TAPER_ACTUAL_REDUCTION_PCT, TAPER_TARGET_REDUCTION_PCT, parameterized_load, project_tsb,
+};
 use crate::intents::utils::parse_date;
 
 pub struct PlanTrainingHandler;
@@ -546,8 +548,8 @@ impl IntentHandler for PlanTrainingHandler {
                 let first_tsb = projection.first().map(|p| p.tsb).unwrap_or(0.0);
                 let last_tsb = projection.last().map(|p| p.tsb).unwrap_or(0.0);
                 let tsb_gain = last_tsb - first_tsb;
-                let reduction_pct = 50.0; // ~50% reduction from pre-taper volume
-                let target_pct = 40.0; // standard taper target
+                let reduction_pct = TAPER_ACTUAL_REDUCTION_PCT;
+                let target_pct = TAPER_TARGET_REDUCTION_PCT;
                 let (efficiency, tsb_response) = crate::engines::forecast::compute_taper_efficiency(
                     reduction_pct,
                     target_pct,
