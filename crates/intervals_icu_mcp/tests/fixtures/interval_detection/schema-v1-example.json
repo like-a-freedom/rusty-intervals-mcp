@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "annotation_version": 1,
+  "source": {
+    "id": "opaque-session-id",
+    "sha256": "source-export-hash",
+    "exporter": "Suunto GPX 1.1"
+  },
+  "groups": {
+    "athlete_group": "athlete-a",
+    "device_group": "device-a",
+    "route_group": "route-family-a"
+  },
+  "session": {
+    "intent_class": "structured_interval",
+    "label_confidence": "confirmed_by_athlete",
+    "evidence": "workout-plan-and-manual-review",
+    "split": "test"
+  },
+  "segments": [
+    {
+      "id": "set-1-rep-1",
+      "phase": "work_rep",
+      "start": { "point_index": 120, "time": "2026-07-09T17:35:00Z" },
+      "end": { "point_index": 300, "time": "2026-07-09T17:38:00Z" },
+      "set_id": "set-1",
+      "rep_index": 1,
+      "boundary_tolerance_s": 5,
+      "quality_flags": [],
+      "excluded_from_scoring": false
+    }
+  ],
+  "exclusions": [],
+  "provenance": {
+    "annotator": "athlete",
+    "reviewer": "independent-reviewer",
+    "adjudication": "agreed"
+  }
+}
