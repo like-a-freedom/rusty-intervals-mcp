@@ -1,6 +1,6 @@
 use crate::domains::coach::DataAudit;
 
-use super::analysis_fetch::FetchedAnalysisData;
+use super::analysis_fetch::{FetchedAnalysisData, SourceFetchState};
 
 pub fn build_data_audit(fetched: &FetchedAnalysisData) -> DataAudit {
     let wellness_available = fetched
@@ -34,6 +34,15 @@ pub fn build_data_audit(fetched: &FetchedAnalysisData) -> DataAudit {
     }
     if fetched.streams.is_some() && !streams_available {
         degraded_mode_reasons.push("stream data unavailable".to_string());
+    }
+    if matches!(fetched.intervals_state, SourceFetchState::Failed { .. }) {
+        degraded_mode_reasons.push(
+            "interval endpoint unavailable; local stream-based detection used when possible"
+                .to_string(),
+        );
+    }
+    if matches!(fetched.streams_state, SourceFetchState::Failed { .. }) {
+        degraded_mode_reasons.push("stream endpoint unavailable; interval detection unavailable".to_string());
     }
     degraded_mode_reasons.extend(fetched.fetch_warnings.iter().cloned());
 

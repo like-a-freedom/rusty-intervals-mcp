@@ -17,9 +17,10 @@ use crate::engines::analysis::{
 };
 use crate::engines::analysis_audit::build_data_audit;
 use crate::engines::analysis_fetch::{
-    PeriodFetchRequest, SingleWorkoutFetchRequest, build_daily_load_series, build_previous_window,
-    extract_activity_load, fetch_period_data, fetch_single_workout_data,
+    PeriodFetchRequest, SingleWorkoutFetchRequest, SourceFetchState, build_daily_load_series,
+    build_previous_window, extract_activity_load, fetch_period_data, fetch_single_workout_data,
 };
+use crate::domains::interval_detection::{self, RawStream};
 use crate::engines::coach_guidance::{build_alerts, build_guidance};
 use crate::engines::coach_metrics::{
     build_trend_snapshot, classify_tid_model, compute_consistency_index, compute_heat_metrics_7d,
@@ -45,6 +46,48 @@ impl AnalyzeTrainingHandler {
     pub fn new() -> Self {
         Self
     }
+}
+
+/// Build a [`RawStream`] from a normalized streams payload.
+///
+/// The detector expects aligned arrays under the keys `time_s`, `speed`,
+/// `heartrate`, and optional `power`. Returns `None` when the required aligned
+/// signals are missing or malformed.
+fn build_local_raw_stream(streams: &Value) -> Option<RawStream> {
+    let time_s = streams
+        .get("time_s")
+        .and_then(Value::as_array)?
+        .iter()
+        .filter_map(Value::as_f64)
+        .collect::<Vec<_>>();
+    let speed = streams
+        .get("speed")
+        .and_then(Value::as_array)?
+        .iter()
+        .filter_map(Value::as_f64)
+        .collect::<Vec<_>>();
+    let heartrate = streams
+        .get("heartrate")
+        .and_then(Value::as_array)?
+        .iter()
+        .filter_map(Value::as_f64)
+        .collect::<Vec<_>>();
+    if time_s.is_empty() || time_s.len() != speed.len() || time_s.len() != heartrate.len() {
+        return None;
+    }
+    let power = streams.get("power").and_then(Value::as_array).map(|arr| {
+        arr.iter()
+            .filter_map(Value::as_f64)
+            .collect::<Vec<_>>()
+    });
+
+    Some(RawStream {
+        time_s,
+        speed,
+        heartrate,
+        power,
+        elevation: None,
+    })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -741,10 +784,24 @@ impl AnalyzeTrainingHandler {
 
         // Add interval analysis
         if analysis_mode.show_interval_section() {
-            if let Some(ref intervals) = fetched.intervals
-                && let Some(intervals_arr) = intervals.as_array()
-                && !intervals_arr.is_empty()
-            {
+            let intervals_arr = fetched
+                .intervals
+                .as_ref()
+                .and_then(Value::as_array)
+                .filter(|items| !items.is_empty());
+
+            let streams_available =
+                fetched.streams_state == SourceFetchState::Available && fetched.streams.is_some();
+            let local_detection = if streams_available {
+                build_local_raw_stream(fetched.streams.as_ref().unwrap())
+                    .map(|raw| interval_detection::detect_intervals(&raw))
+            } else {
+                None
+            };
+
+            if let Some(intervals_arr) = intervals_arr {
+                // Upstream interval payload is present and non-empty: render the
+                // legacy interval breakdown unchanged.
                 let output_kind =
                     preferred_interval_output_kind(intervals_arr, fetched.streams.as_ref());
                 let output_header = match output_kind {
@@ -770,9 +827,48 @@ impl AnalyzeTrainingHandler {
                     ],
                     interval_rows,
                 ));
+            } else if let Some(detection) = local_detection {
+                // Upstream interval payload is missing/empty/failed, but streams
+                // are available: report the locally-computed detection result.
+                let upstream_failed =
+                    matches!(fetched.intervals_state, SourceFetchState::Failed { .. });
+
+                match detection.session_kind {
+                    interval_detection::SessionKind::StructuredIntervals => {
+                        content.push(ContentBlock::markdown(format!(
+                            "Interval Analysis\n  Structured session with {} detected work intervals.",
+                            detection.work_segments.len()
+                        )));
+                    }
+                    interval_detection::SessionKind::Fartlek => {
+                        content.push(ContentBlock::markdown(
+                            "Interval Analysis\n  Session looks like fartlek / non-structured; no structured work count claimed.".to_string(),
+                        ));
+                    }
+                    interval_detection::SessionKind::Other => {
+                        content.push(ContentBlock::markdown(
+                            "Interval Analysis\n  Session has intensity but is not structured; no structured work count claimed.".to_string(),
+                        ));
+                    }
+                    interval_detection::SessionKind::InsufficientData => {
+                        content.push(ContentBlock::markdown(
+                            "Interval Analysis\n  Stream data insufficient for local interval detection.".to_string(),
+                        ));
+                    }
+                }
+
+                if upstream_failed {
+                    content.push(ContentBlock::markdown(
+                        "  Warning: upstream interval endpoint unavailable; Local detection completed as fallback."
+                            .to_string(),
+                    ));
+                }
             } else {
+                // Streams unavailable/failed: detection cannot run at all. This
+                // is distinct from an empty upstream response or an upstream
+                // failure with usable streams.
                 content.push(ContentBlock::markdown(
-                    "Interval Analysis\n  No structured interval data available for this workout."
+                    "Interval Analysis\n  Interval detection unavailable: stream data not available for local detection."
                         .to_string(),
                 ));
             }
