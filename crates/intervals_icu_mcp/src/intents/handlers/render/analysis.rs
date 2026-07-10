@@ -1278,7 +1278,7 @@ pub(crate) fn render_z2_stability_section(
 }
 
 #[cfg(test)]
-mod legacy_work_interval_baseline;
+pub(crate) mod legacy_work_interval_baseline;
 
 #[cfg(test)]
 mod tests {
