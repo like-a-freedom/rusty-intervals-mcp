@@ -1100,9 +1100,7 @@ impl MockCoachClient {
                 "total_elevation_gain": 0.0
             }),
             intervals: json!([]),
-            intervals_error: Some(
-                "HTTP 503 from Intervals.icu interval endpoint".to_string(),
-            ),
+            intervals_error: Some("HTTP 503 from Intervals.icu interval endpoint".to_string()),
             streams: json!({
                 "time_s": time_s,
                 "speed": speed,
@@ -1131,9 +1129,7 @@ impl MockCoachClient {
                 "total_elevation_gain": 80.0
             }),
             intervals: json!([]),
-            streams_error: Some(
-                "HTTP 504 from Intervals.icu stream endpoint".to_string(),
-            ),
+            streams_error: Some("HTTP 504 from Intervals.icu stream endpoint".to_string()),
             ..Self::default()
         }
     }
@@ -1491,7 +1487,9 @@ fn output_text(output: &intervals_icu_mcp::intents::IntentOutput) -> String {
     markdown_text(output)
 }
 
-async fn execute_interval_analysis(client: MockCoachClient) -> intervals_icu_mcp::intents::IntentOutput {
+async fn execute_interval_analysis(
+    client: MockCoachClient,
+) -> intervals_icu_mcp::intents::IntentOutput {
     let handler = AnalyzeTrainingHandler::new();
     handler
         .execute(
@@ -1509,7 +1507,8 @@ async fn execute_interval_analysis(client: MockCoachClient) -> intervals_icu_mcp
 
 #[tokio::test]
 async fn streams_available_upstream_intervals_failed_reports_local_result_and_warning() {
-    let output = execute_interval_analysis(MockCoachClient::with_streams_and_interval_error()).await;
+    let output =
+        execute_interval_analysis(MockCoachClient::with_streams_and_interval_error()).await;
     assert!(output_text(&output).contains("Local detection completed"));
     assert!(output_text(&output).contains("upstream interval endpoint unavailable"));
 }
