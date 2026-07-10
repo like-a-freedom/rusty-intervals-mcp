@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "annotation_version": 1,
+  "intent_class": "steady_or_tempo",
+  "label_confidence": "confirmed_by_athlete",
+  "split": "test",
+  "source_sha256": "sha-steady-1",
+  "segments": [
+    {
+      "id": "steady-1-warmup-1",
+      "phase": "warmup",
+      "start_s": 0.0,
+      "end_s": 120.0,
+      "excluded_from_scoring": false
+    },
+    {
+      "id": "steady-1-steady-2",
+      "phase": "steady",
+      "start_s": 120.0,
+      "end_s": 720.0,
+      "excluded_from_scoring": false
+    },
+    {
+      "id": "steady-1-cooldown-3",
+      "phase": "cooldown",
+      "start_s": 720.0,
+      "end_s": 840.0,
+      "excluded_from_scoring": false
+    }
+  ],
+  "exclusions": []
+}

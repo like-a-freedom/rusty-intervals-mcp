@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "annotation_version": 1,
+  "intent_class": "structured_interval",
+  "label_confidence": "confirmed_by_athlete",
+  "split": "test",
+  "source_sha256": "sha-structured-1",
+  "segments": [
+    {
+      "id": "structured-1-work_rep-1",
+      "phase": "work_rep",
+      "start_s": 0.0,
+      "end_s": 180.0,
+      "excluded_from_scoring": false
+    },
+    {
+      "id": "structured-1-recovery-2",
+      "phase": "recovery",
+      "start_s": 180.0,
+      "end_s": 300.0,
+      "excluded_from_scoring": false
+    },
+    {
+      "id": "structured-1-work_rep-3",
+      "phase": "work_rep",
+      "start_s": 300.0,
+      "end_s": 480.0,
+      "excluded_from_scoring": false
+    },
+    {
+      "id": "structured-1-recovery-4",
+      "phase": "recovery",
+      "start_s": 480.0,
+      "end_s": 600.0,
+      "excluded_from_scoring": false
+    },
+    {
+      "id": "structured-1-work_rep-5",
+      "phase": "work_rep",
+      "start_s": 600.0,
+      "end_s": 780.0,
+      "excluded_from_scoring": false
+    },
+    {
+      "id": "structured-1-recovery-6",
+      "phase": "recovery",
+      "start_s": 780.0,
+      "end_s": 900.0,
+      "excluded_from_scoring": false
+    },
+    {
+      "id": "structured-1-work_rep-7",
+      "phase": "work_rep",
+      "start_s": 900.0,
+      "end_s": 1080.0,
+      "excluded_from_scoring": false
+    }
+  ],
+  "exclusions": []
+}
