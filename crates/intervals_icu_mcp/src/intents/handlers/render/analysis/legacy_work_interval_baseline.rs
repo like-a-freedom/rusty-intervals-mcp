@@ -114,7 +114,7 @@ fn run_legacy_work_interval_baseline_v1(
     LegacyWorkIntervalBaselineReport::from_cases(cases)
 }
 
-fn legacy_count_work_intervals_v1(intervals: &[Value]) -> usize {
+pub(crate) fn legacy_count_work_intervals_v1(intervals: &[Value]) -> usize {
     if intervals.is_empty() {
         return 0;
     }
