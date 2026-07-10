@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "benchmark_id": "legacy-work-interval-count-v1",
+  "algorithm_id": "count_work_intervals-median-v1",
+  "purpose": "synthetic-legacy-output-contract-not-accuracy",
+  "cases": [
+    {
+      "id": "empty",
+      "intervals": [],
+      "expected_legacy_work_count": 0
+    },
+    {
+      "id": "speed-and-hr-split",
+      "intervals": [
+        { "average_speed": 10.0, "average_heartrate": 150.0 },
+        { "average_speed": 12.0, "average_heartrate": 160.0 },
+        { "average_speed": 8.0, "average_heartrate": 140.0 },
+        { "average_speed": 5.0, "average_heartrate": 120.0 }
+      ],
+      "expected_legacy_work_count": 2
+    },
+    {
+      "id": "sparse-data-falls-back-to-all",
+      "intervals": [
+        { "average_speed": 5.0 },
+        { "average_speed": 6.0 },
+        {}
+      ],
+      "expected_legacy_work_count": 3
+    },
+    {
+      "id": "missing-both-signals-is-work",
+      "intervals": [
+        { "average_speed": 10.0, "average_heartrate": 150.0 },
+        { "average_speed": 8.0, "average_heartrate": 130.0 },
+        { "average_speed": 5.0, "average_heartrate": 120.0 },
+        { "average_speed": 12.0, "average_heartrate": 160.0 },
+        {}
+      ],
+      "expected_legacy_work_count": 3
+    },
+    {
+      "id": "speed-only",
+      "intervals": [
+        { "average_speed": 5.0 },
+        { "average_speed": 8.0 },
+        { "average_speed": 10.0 },
+        { "average_speed": 12.0 }
+      ],
+      "expected_legacy_work_count": 2
+    },
+    {
+      "id": "hr-only",
+      "intervals": [
+        { "average_heartrate": 150.0 },
+        { "average_heartrate": 160.0 },
+        { "average_heartrate": 140.0 },
+        { "average_heartrate": 130.0 }
+      ],
+      "expected_legacy_work_count": 2
+    }
+  ]
+}
+

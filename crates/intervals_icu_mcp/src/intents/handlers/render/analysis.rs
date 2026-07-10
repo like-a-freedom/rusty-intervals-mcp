@@ -1278,6 +1278,9 @@ pub(crate) fn render_z2_stability_section(
 }
 
 #[cfg(test)]
+mod legacy_work_interval_baseline;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::domains::coach::{
