@@ -42,7 +42,8 @@ pub fn build_data_audit(fetched: &FetchedAnalysisData) -> DataAudit {
         );
     }
     if matches!(fetched.streams_state, SourceFetchState::Failed { .. }) {
-        degraded_mode_reasons.push("stream endpoint unavailable; interval detection unavailable".to_string());
+        degraded_mode_reasons
+            .push("stream endpoint unavailable; interval detection unavailable".to_string());
     }
     degraded_mode_reasons.extend(fetched.fetch_warnings.iter().cloned());
 

@@ -185,7 +185,10 @@ pub fn normalize_streams(
         }
     }
 
-    Ok(NormalizedStream { samples, exclusions })
+    Ok(NormalizedStream {
+        samples,
+        exclusions,
+    })
 }
 
 /// Detect the session type and work/recovery structure from a raw stream.
@@ -273,7 +276,12 @@ pub fn detect_intervals(raw: &RawStream) -> IntervalDetectionResult {
             j += 1;
         }
         let end = normalized.samples[j.saturating_sub(1)].t + 1.0;
-        runs.push((is_work, start, end, if count == 0 { 0.0 } else { sum / count as f64 }));
+        runs.push((
+            is_work,
+            start,
+            end,
+            if count == 0 { 0.0 } else { sum / count as f64 },
+        ));
         i = j;
     }
 
@@ -350,20 +358,22 @@ pub fn detect_intervals(raw: &RawStream) -> IntervalDetectionResult {
             recovery_segments,
             confidence,
             reasons: vec![
-                format!("{} regular work/recovery cycles detected", work_blocks.len()),
+                format!(
+                    "{} regular work/recovery cycles detected",
+                    work_blocks.len()
+                ),
                 format!("work-duration CV={work_cv:.2}, recovery-duration CV={recovery_cv:.2}"),
             ],
         }
     } else {
         // Irregular surges, ambiguous, or weak separation -> reported as
         // Fartlek/Other, never as a structured work-set result.
-        let kind = if work_cv > config.work_cv_threshold
-            || recovery_cv > config.recovery_cv_threshold
-        {
-            SessionKind::Fartlek
-        } else {
-            SessionKind::Other
-        };
+        let kind =
+            if work_cv > config.work_cv_threshold || recovery_cv > config.recovery_cv_threshold {
+                SessionKind::Fartlek
+            } else {
+                SessionKind::Other
+            };
         let reason = if kind == SessionKind::Fartlek {
             "irregular surges detected; not a structured interval set"
         } else {

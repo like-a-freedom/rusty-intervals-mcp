@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use super::render::analysis::*;
 use crate::domains::coach::{AnalysisKind, AnalysisWindow, CoachContext};
+use crate::domains::interval_detection::{self, RawStream};
 use crate::engines::adaptation::classify_curve_profile;
 use crate::engines::analysis::{
     AnalysisEngine, WorkoutInsights, WorkoutMetrics as AnalysisWorkoutMetrics,
@@ -20,7 +21,6 @@ use crate::engines::analysis_fetch::{
     PeriodFetchRequest, SingleWorkoutFetchRequest, SourceFetchState, build_daily_load_series,
     build_previous_window, extract_activity_load, fetch_period_data, fetch_single_workout_data,
 };
-use crate::domains::interval_detection::{self, RawStream};
 use crate::engines::coach_guidance::{build_alerts, build_guidance};
 use crate::engines::coach_metrics::{
     build_trend_snapshot, classify_tid_model, compute_consistency_index, compute_heat_metrics_7d,
@@ -75,11 +75,10 @@ fn build_local_raw_stream(streams: &Value) -> Option<RawStream> {
     if time_s.is_empty() || time_s.len() != speed.len() || time_s.len() != heartrate.len() {
         return None;
     }
-    let power = streams.get("power").and_then(Value::as_array).map(|arr| {
-        arr.iter()
-            .filter_map(Value::as_f64)
-            .collect::<Vec<_>>()
-    });
+    let power = streams
+        .get("power")
+        .and_then(Value::as_array)
+        .map(|arr| arr.iter().filter_map(Value::as_f64).collect::<Vec<_>>());
 
     Some(RawStream {
         time_s,

@@ -48,7 +48,9 @@ pub enum SourceFetchState {
     NotRequested,
     Available,
     Empty,
-    Failed { reason: String },
+    Failed {
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, Default)]
@@ -530,10 +532,7 @@ pub async fn fetch_single_workout_data(
 
     let mut intervals_state = SourceFetchState::NotRequested;
     let intervals = if request.include_intervals {
-        match client
-            .get_activity_intervals(&request.activity_id)
-            .await
-        {
+        match client.get_activity_intervals(&request.activity_id).await {
             Ok(value) => {
                 let normalized = normalize_intervals_payload(value);
                 if value_is_empty(&normalized) {
