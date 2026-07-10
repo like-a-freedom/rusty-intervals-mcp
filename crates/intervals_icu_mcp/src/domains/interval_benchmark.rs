@@ -24,7 +24,6 @@ pub enum SessionClass {
 }
 
 impl SessionClass {
-    #[allow(dead_code)]
     fn from_str(value: &str) -> Option<Self> {
         match value {
             "structured_interval" => Some(Self::StructuredInterval),
@@ -53,7 +52,6 @@ pub enum SegmentPhase {
 }
 
 impl SegmentPhase {
-    #[allow(dead_code)]
     fn from_str(value: &str) -> Self {
         match value {
             "warmup" => Self::Warmup,
@@ -313,23 +311,25 @@ pub fn score_sessions(
 
         let matched_gold = used_gold.iter().filter(|x| **x).count();
         let matched_pred = used_pred.iter().filter(|x| **x).count();
-        report.segment_metrics.false_negative += gold_reps.len() - matched_gold;
-        report.segment_metrics.false_positive += pred_reps.len() - matched_pred;
+        let session_fn = gold_reps.len() - matched_gold;
+        let session_fp = pred_reps.len() - matched_pred;
+        report.segment_metrics.false_negative += session_fn;
+        report.segment_metrics.false_positive += session_fp;
+
+        let class_entry = report
+            .class_metrics
+            .entry(gold_session.session_class)
+            .or_default();
+        class_entry.session_count += 1;
+        class_entry.true_positive += matched_gold.min(matched_pred);
+        class_entry.false_positive += session_fp;
+        class_entry.false_negative += session_fn;
 
         count_abs_error_total += gold_reps.len().abs_diff(pred_reps.len());
     }
 
     let denom = gold.len().max(1) as f64;
     report.count_mae = count_abs_error_total as f64 / denom;
-
-    let class_entry = report
-        .class_metrics
-        .entry(SessionClass::StructuredInterval)
-        .or_default();
-    class_entry.session_count = gold.len();
-    class_entry.true_positive = report.segment_metrics.true_positive;
-    class_entry.false_positive = report.segment_metrics.false_positive;
-    class_entry.false_negative = report.segment_metrics.false_negative;
 
     report
 }
