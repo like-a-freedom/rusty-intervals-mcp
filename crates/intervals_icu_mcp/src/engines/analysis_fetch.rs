@@ -41,6 +41,16 @@ pub struct RaceFetchRequest {
     pub include_streams: bool,
 }
 
+/// State of a single upstream data source after a fetch attempt.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum SourceFetchState {
+    #[default]
+    NotRequested,
+    Available,
+    Empty,
+    Failed { reason: String },
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct FetchedAnalysisData {
     pub activities: Vec<ActivitySummary>,
@@ -58,6 +68,18 @@ pub struct FetchedAnalysisData {
     pub hr_histogram: Option<Value>,
     pub power_histogram: Option<Value>,
     pub pace_histogram: Option<Value>,
+    pub intervals_state: SourceFetchState,
+    pub streams_state: SourceFetchState,
+}
+
+/// Returns true when a payload has no usable content (empty array/object or null).
+fn value_is_empty(value: &Value) -> bool {
+    match value {
+        Value::Array(items) => items.is_empty(),
+        Value::Object(map) => map.is_empty(),
+        Value::Null => true,
+        _ => false,
+    }
 }
 
 pub fn build_previous_window(current: &AnalysisWindow) -> AnalysisWindow {
@@ -506,22 +528,54 @@ pub async fn fetch_single_workout_data(
             })?,
     );
 
+    let mut intervals_state = SourceFetchState::NotRequested;
     let intervals = if request.include_intervals {
-        client
+        match client
             .get_activity_intervals(&request.activity_id)
             .await
-            .map(normalize_intervals_payload)
-            .ok()
+        {
+            Ok(value) => {
+                let normalized = normalize_intervals_payload(value);
+                if value_is_empty(&normalized) {
+                    intervals_state = SourceFetchState::Empty;
+                } else {
+                    intervals_state = SourceFetchState::Available;
+                }
+                Some(normalized)
+            }
+            Err(error) => {
+                intervals_state = SourceFetchState::Failed {
+                    reason: error.to_string(),
+                };
+                None
+            }
+        }
     } else {
         None
     };
 
+    let mut streams_state = SourceFetchState::NotRequested;
     let streams = if request.include_streams {
-        client
+        match client
             .get_activity_streams(&request.activity_id, None)
             .await
-            .map(normalize_streams_payload)
-            .ok()
+        {
+            Ok(value) => {
+                let normalized = normalize_streams_payload(value);
+                if value_is_empty(&normalized) {
+                    streams_state = SourceFetchState::Empty;
+                } else {
+                    streams_state = SourceFetchState::Available;
+                }
+                Some(normalized)
+            }
+            Err(error) => {
+                streams_state = SourceFetchState::Failed {
+                    reason: error.to_string(),
+                };
+                None
+            }
+        }
     } else {
         None
     };
@@ -624,6 +678,8 @@ pub async fn fetch_single_workout_data(
         hr_histogram,
         power_histogram,
         pace_histogram,
+        intervals_state,
+        streams_state,
         ..Default::default()
     })
 }

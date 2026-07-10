@@ -33,6 +33,8 @@ struct MockCoachClient {
     hr_histogram: Value,
     power_histogram: Value,
     pace_histogram: Value,
+    intervals_error: Option<String>,
+    streams_error: Option<String>,
     #[allow(clippy::type_complexity)]
     activity_calls: Arc<Mutex<Vec<(Option<u32>, Option<i32>)>>>,
     activity_details_map: HashMap<String, Value>,
@@ -55,6 +57,8 @@ impl Default for MockCoachClient {
             hr_histogram: json!({}),
             power_histogram: json!({}),
             pace_histogram: json!({}),
+            intervals_error: None,
+            streams_error: None,
             activity_calls: Arc::new(Mutex::new(Vec::new())),
             activity_details_map: HashMap::new(),
         }
@@ -1053,6 +1057,86 @@ impl MockCoachClient {
             ..Self::default()
         }
     }
+
+    /// Streams present (structured 4x180s work / 3x120s recovery, 1 Hz) but the
+    /// upstream interval endpoint fails. Used to verify local detection runs as
+    /// a fallback when the upstream interval source is unavailable.
+    fn with_streams_and_interval_error() -> Self {
+        let mut time_s = Vec::new();
+        let mut speed = Vec::new();
+        let mut heartrate = Vec::new();
+        let mut power = Vec::new();
+        let mut t = 0.0f64;
+        for rep in 0..4 {
+            for _ in 0..180 {
+                time_s.push(t);
+                speed.push(6.0);
+                heartrate.push(175.0);
+                power.push(300.0);
+                t += 1.0;
+            }
+            if rep < 3 {
+                for _ in 0..120 {
+                    time_s.push(t);
+                    speed.push(2.5);
+                    heartrate.push(140.0);
+                    power.push(120.0);
+                    t += 1.0;
+                }
+            }
+        }
+
+        Self {
+            activities: vec![Self::activity(
+                "streams-int-1",
+                "Track Intervals",
+                "2026-02-18",
+            )],
+            fitness: Self::fitness_snapshot(54.0, 47.0, 7.0),
+            activity_details: json!({
+                "distance": 12240.0,
+                "moving_time": 4740,
+                "average_heartrate": 145.0,
+                "total_elevation_gain": 0.0
+            }),
+            intervals: json!([]),
+            intervals_error: Some(
+                "HTTP 503 from Intervals.icu interval endpoint".to_string(),
+            ),
+            streams: json!({
+                "time_s": time_s,
+                "speed": speed,
+                "heartrate": heartrate,
+                "power": power
+            }),
+            ..Self::default()
+        }
+    }
+
+    /// Streams fetch fails (and upstream intervals are empty). Used to verify
+    /// interval detection cannot run and does not claim any detected result.
+    fn with_stream_error() -> Self {
+        Self {
+            activities: vec![Self::activity(
+                "stream-err-1",
+                "Tempo Session",
+                "2026-02-18",
+            )],
+            fitness: Self::fitness_snapshot(55.0, 47.0, 8.0),
+            activity_details: json!({
+                "distance": 14000.0,
+                "moving_time": 3600,
+                "average_heartrate": 145.0,
+                "average_watts": 220.0,
+                "total_elevation_gain": 80.0
+            }),
+            intervals: json!([]),
+            streams_error: Some(
+                "HTTP 504 from Intervals.icu stream endpoint".to_string(),
+            ),
+            ..Self::default()
+        }
+    }
 }
 
 #[async_trait]
@@ -1102,6 +1186,11 @@ impl IntervalsClient for MockCoachClient {
     }
 
     async fn get_activity_intervals(&self, _activity_id: &str) -> Result<Value, IntervalsError> {
+        if let Some(reason) = &self.intervals_error {
+            return Err(IntervalsError::Config(
+                intervals_icu_client::ConfigError::Other(reason.clone()),
+            ));
+        }
         Ok(self.intervals.clone())
     }
 
@@ -1110,6 +1199,11 @@ impl IntervalsClient for MockCoachClient {
         _activity_id: &str,
         _streams: Option<Vec<String>>,
     ) -> Result<Value, IntervalsError> {
+        if let Some(reason) = &self.streams_error {
+            return Err(IntervalsError::Config(
+                intervals_icu_client::ConfigError::Other(reason.clone()),
+            ));
+        }
         Ok(self.streams.clone())
     }
 
@@ -1391,6 +1485,40 @@ fn markdown_text(output: &intervals_icu_mcp::intents::IntentOutput) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn output_text(output: &intervals_icu_mcp::intents::IntentOutput) -> String {
+    markdown_text(output)
+}
+
+async fn execute_interval_analysis(client: MockCoachClient) -> intervals_icu_mcp::intents::IntentOutput {
+    let handler = AnalyzeTrainingHandler::new();
+    handler
+        .execute(
+            json!({
+                "target_type": "single",
+                "date": "2026-02-18",
+                "analysis_type": "intervals"
+            }),
+            Arc::new(client),
+            None,
+        )
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn streams_available_upstream_intervals_failed_reports_local_result_and_warning() {
+    let output = execute_interval_analysis(MockCoachClient::with_streams_and_interval_error()).await;
+    assert!(output_text(&output).contains("Local detection completed"));
+    assert!(output_text(&output).contains("upstream interval endpoint unavailable"));
+}
+
+#[tokio::test]
+async fn unavailable_streams_do_not_claim_zero_detected_intervals() {
+    let output = execute_interval_analysis(MockCoachClient::with_stream_error()).await;
+    assert!(output_text(&output).contains("Interval detection unavailable"));
+    assert!(!output_text(&output).contains("Completed 0 work intervals"));
 }
 
 #[tokio::test]
