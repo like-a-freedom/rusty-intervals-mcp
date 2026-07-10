@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "annotation_version": 1,
+  "intent_class": "progression",
+  "label_confidence": "confirmed_by_athlete",
+  "split": "held_out",
+  "source_sha256": "sha-progression-1",
+  "segments": [
+    {
+      "id": "progression-1-warmup-1",
+      "phase": "warmup",
+      "start_s": 0.0,
+      "end_s": 90.0,
+      "excluded_from_scoring": false
+    },
+    {
+      "id": "progression-1-steady-2",
+      "phase": "steady",
+      "start_s": 90.0,
+      "end_s": 270.0,
+      "excluded_from_scoring": false
+    },
+    {
+      "id": "progression-1-steady-3",
+      "phase": "steady",
+      "start_s": 270.0,
+      "end_s": 450.0,
+      "excluded_from_scoring": false
+    },
+    {
+      "id": "progression-1-steady-4",
+      "phase": "steady",
+      "start_s": 450.0,
+      "end_s": 630.0,
+      "excluded_from_scoring": false
+    },
+    {
+      "id": "progression-1-cooldown-5",
+      "phase": "cooldown",
+      "start_s": 630.0,
+      "end_s": 720.0,
+      "excluded_from_scoring": false
+    }
+  ],
+  "exclusions": []
+}

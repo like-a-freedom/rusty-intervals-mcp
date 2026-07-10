@@ -8,6 +8,7 @@
 //!
 //! It does **not** contain the detector itself (see `interval_detection`).
 
+use serde::Deserialize;
 use std::collections::HashMap;
 
 /// Session intent class. Mirrors the `intent_class` values in the corpus
@@ -336,6 +337,116 @@ pub fn score_sessions(
     report
 }
 
+/// Parsed manifest metadata for a loaded corpus.
+#[derive(Debug, Clone)]
+pub struct CorpusManifestInfo {
+    pub corpus_version: u32,
+}
+
+/// A loaded, annotated gold corpus.
+#[derive(Debug, Clone)]
+pub struct LoadedCorpus {
+    pub sessions: Vec<GoldSession>,
+    pub stream_paths: Vec<String>,
+    pub manifest: CorpusManifestInfo,
+}
+
+#[derive(Deserialize)]
+struct RawCorpusManifest {
+    schema_version: u32,
+    corpus_version: u32,
+    sessions: Vec<RawCorpusSessionRef>,
+}
+
+#[derive(Deserialize)]
+struct RawCorpusSessionRef {
+    id: String,
+    split: String,
+    annotation: String,
+    stream: String,
+}
+
+#[derive(Deserialize)]
+struct RawAnnotation {
+    schema_version: u32,
+    intent_class: String,
+    label_confidence: String,
+    source_sha256: String,
+    segments: Vec<RawSegment>,
+}
+
+#[derive(Deserialize)]
+struct RawSegment {
+    phase: String,
+    start_s: f64,
+    end_s: f64,
+    excluded_from_scoring: bool,
+}
+
+/// Load a frozen corpus fixture from `tests/fixtures/interval_detection/`.
+///
+/// Each manifest entry references an annotation document (parsed into a
+/// [`GoldSession`]) and a derived stream fixture (consumed later by the
+/// detector). The corpus is treated as immutable; fixture hashes are frozen
+/// before any parameter tuning.
+pub fn load_corpus_fixture(name: &str) -> LoadedCorpus {
+    let dir = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/interval_detection/"
+    );
+    let manifest_path = format!("{dir}{name}");
+    let manifest_text =
+        std::fs::read_to_string(&manifest_path).expect("corpus fixture must exist");
+    let manifest: RawCorpusManifest =
+        serde_json::from_str(&manifest_text).expect("corpus manifest must be valid JSON");
+    assert_eq!(manifest.schema_version, 1, "corpus fixture schema mismatch");
+
+    let mut sessions = Vec::with_capacity(manifest.sessions.len());
+    let mut stream_paths = Vec::with_capacity(manifest.sessions.len());
+    for reference in manifest.sessions {
+        let annotation_path = format!("{dir}{}", reference.annotation);
+        let annotation_text = std::fs::read_to_string(&annotation_path)
+            .expect("annotation fixture must exist");
+        let annotation: RawAnnotation =
+            serde_json::from_str(&annotation_text).expect("annotation must be valid JSON");
+        assert_eq!(annotation.schema_version, 1, "annotation schema mismatch");
+
+        let session_class = SessionClass::from_str(&annotation.intent_class)
+            .expect("annotation must declare a valid intent_class");
+
+        let segments = annotation
+            .segments
+            .iter()
+            .map(|segment| GoldSegment {
+                phase: SegmentPhase::from_str(&segment.phase),
+                range: TimeRange {
+                    start: segment.start_s,
+                    end: segment.end_s,
+                },
+                excluded_from_scoring: segment.excluded_from_scoring,
+            })
+            .collect();
+
+        sessions.push(GoldSession {
+            id: reference.id.clone(),
+            session_class,
+            source_sha256: Some(annotation.source_sha256),
+            label_confidence: Some(annotation.label_confidence),
+            split: Some(reference.split.clone()),
+            segments,
+        });
+        stream_paths.push(reference.stream.clone());
+    }
+
+    LoadedCorpus {
+        sessions,
+        stream_paths,
+        manifest: CorpusManifestInfo {
+            corpus_version: manifest.corpus_version,
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -404,5 +515,16 @@ mod tests {
         assert_eq!(report.segment_metrics.true_positive, 1);
         assert_eq!(report.segment_metrics.false_positive, 0);
         assert_eq!(report.segment_metrics.false_negative, 0);
+    }
+
+    #[test]
+    fn locked_corpus_v1_is_accuracy_ready() {
+        let corpus = load_corpus_fixture("corpus-v1.json");
+        let readiness = validate_corpus(&corpus.sessions);
+        assert!(
+            readiness.accuracy_ready,
+            "corpus not accuracy-ready: {:?}",
+            readiness.blockers
+        );
     }
 }

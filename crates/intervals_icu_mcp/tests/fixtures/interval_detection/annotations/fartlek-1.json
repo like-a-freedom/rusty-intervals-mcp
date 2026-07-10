@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "annotation_version": 1,
+  "intent_class": "fartlek",
+  "label_confidence": "confirmed_by_athlete",
+  "split": "test",
+  "source_sha256": "sha-fartlek-1",
+  "segments": [
+    {
+      "id": "fartlek-1-fartlek_surge-1",
+      "phase": "fartlek_surge",
+      "start_s": 0.0,
+      "end_s": 60.0,
+      "excluded_from_scoring": false
+    },
+    {
+      "id": "fartlek-1-fartlek_easy-2",
+      "phase": "fartlek_easy",
+      "start_s": 60.0,
+      "end_s": 200.0,
+      "excluded_from_scoring": false
+    },
+    {
+      "id": "fartlek-1-fartlek_surge-3",
+      "phase": "fartlek_surge",
+      "start_s": 200.0,
+      "end_s": 245.0,
+      "excluded_from_scoring": false
+    },
+    {
+      "id": "fartlek-1-fartlek_easy-4",
+      "phase": "fartlek_easy",
+      "start_s": 245.0,
+      "end_s": 445.0,
+      "excluded_from_scoring": false
+    },
+    {
+      "id": "fartlek-1-fartlek_surge-5",
+      "phase": "fartlek_surge",
+      "start_s": 445.0,
+      "end_s": 515.0,
+      "excluded_from_scoring": false
+    }
+  ],
+  "exclusions": []
+}

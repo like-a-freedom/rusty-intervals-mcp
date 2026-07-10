@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "corpus_version": 1,
+  "sessions": [
+    {
+      "id": "structured-1",
+      "split": "test",
+      "annotation": "annotations/structured-1.json",
+      "stream": "streams/structured-1.json"
+    },
+    {
+      "id": "structured-2",
+      "split": "test",
+      "annotation": "annotations/structured-2.json",
+      "stream": "streams/structured-2.json"
+    },
+    {
+      "id": "fartlek-1",
+      "split": "test",
+      "annotation": "annotations/fartlek-1.json",
+      "stream": "streams/fartlek-1.json"
+    },
+    {
+      "id": "steady-1",
+      "split": "test",
+      "annotation": "annotations/steady-1.json",
+      "stream": "streams/steady-1.json"
+    },
+    {
+      "id": "progression-1",
+      "split": "held_out",
+      "annotation": "annotations/progression-1.json",
+      "stream": "streams/progression-1.json"
+    }
+  ]
+}
