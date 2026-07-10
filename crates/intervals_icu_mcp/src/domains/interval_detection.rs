@@ -22,18 +22,6 @@ pub enum SessionKind {
     InsufficientData,
 }
 
-impl SessionKind {
-    fn from_str(value: &str) -> Option<Self> {
-        match value {
-            "structured_interval" => Some(Self::StructuredIntervals),
-            "fartlek" => Some(Self::Fartlek),
-            "other" => Some(Self::Other),
-            "insufficient_data" => Some(Self::InsufficientData),
-            _ => None,
-        }
-    }
-}
-
 /// A detected temporal segment.
 #[derive(Debug, Clone)]
 pub struct DetectedSegment {
@@ -387,21 +375,6 @@ pub fn detect_intervals(raw: &RawStream) -> IntervalDetectionResult {
             reasons: vec![reason.to_string()],
         }
     }
-}
-
-/// Map a [`SessionKind`] to its corpus annotation string.
-pub fn session_kind_label(kind: SessionKind) -> &'static str {
-    match kind {
-        SessionKind::StructuredIntervals => "structured_interval",
-        SessionKind::Fartlek => "fartlek",
-        SessionKind::Other => "other",
-        SessionKind::InsufficientData => "insufficient_data",
-    }
-}
-
-/// Parse a [`SessionKind`] from its annotation string.
-pub fn parse_session_kind(value: &str) -> Option<SessionKind> {
-    SessionKind::from_str(value)
 }
 
 #[cfg(test)]
