@@ -13,10 +13,11 @@ use std::fmt::Display;
 /// use intervals_icu_client::utils::QueryBuilder;
 ///
 /// let query = QueryBuilder::new()
-///     .add("oldest", &"2024-01-01".to_string())
-///     .add("newest", &"2024-01-31".to_string())
-///     .add_opt("limit", Some(&"50".to_string()))
-///     .build();
+///     .add("oldest", "2024-01-01")
+///     .add("newest", "2024-01-31")
+///     .add_opt("limit", Some("50"))
+///     .build_owned();
+/// assert_eq!(query.len(), 3);
 /// ```
 #[derive(Debug, Default)]
 pub struct QueryBuilder<'a> {

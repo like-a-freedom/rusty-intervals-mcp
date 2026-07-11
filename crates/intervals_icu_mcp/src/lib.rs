@@ -513,7 +513,15 @@ pub async fn run_http_server(
     let registry_path = std::env::var("MCP_TOKEN_REGISTRY_PATH")
         .ok()
         .map(PathBuf::from);
-    let ui_state = auth_ui::UiState::new(app_state.clone(), revoked_jtis.clone(), registry_path);
+    let cookie_secure = std::env::var("MCP_COOKIE_SECURE")
+        .map(|v| v != "false" && v != "0")
+        .unwrap_or(true);
+    let ui_state = auth_ui::UiState::new(
+        app_state.clone(),
+        revoked_jtis.clone(),
+        registry_path,
+        cookie_secure,
+    );
 
     let ui_config = tower_governor::governor::GovernorConfigBuilder::default()
         .per_second(2)

@@ -25,7 +25,6 @@ pub enum SessionKind {
 /// A detected temporal segment.
 #[derive(Debug, Clone)]
 pub struct DetectedSegment {
-    pub phase: SegmentPhase,
     pub range: TimeRange,
     pub mean_intensity: f64,
 }
@@ -40,16 +39,14 @@ pub struct IntervalDetectionResult {
     pub reasons: Vec<String>,
 }
 
-/// Raw, aligned stream arrays as supplied by a source (intervals.icu or a
-/// derived fixture). `power` and `elevation` are optional; `speed` and
-/// `heartrate` must be present.
+/// Raw, aligned stream arrays as supplied by a source (Intervals.icu or a
+/// derived fixture). Speed and heart rate are required; power is optional.
 #[derive(Debug, Clone)]
 pub struct RawStream {
     pub time_s: Vec<f64>,
     pub speed: Vec<f64>,
     pub heartrate: Vec<f64>,
     pub power: Option<Vec<f64>>,
-    pub elevation: Option<Vec<f64>>,
 }
 
 /// A single resampled, validated sample used for detection.
@@ -57,16 +54,13 @@ pub struct RawStream {
 pub struct NormalizedSample {
     pub t: f64,
     pub speed: f64,
-    pub hr: f64,
-    pub power: Option<f64>,
 }
 
-/// Normalized, validation-checked stream. `exclusions` records recording gaps
-/// that must not be mistaken for recovery.
+/// Normalized, validation-checked stream. Recording gaps remain explicit time
+/// discontinuities and are never interpolated into recovery.
 #[derive(Debug, Clone)]
 pub struct NormalizedStream {
     pub samples: Vec<NormalizedSample>,
-    pub exclusions: Vec<TimeRange>,
 }
 
 /// Tuning for normalization and detection.
@@ -102,13 +96,6 @@ pub struct TimeRange {
     pub end: f64,
 }
 
-/// Phase of a detected segment.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SegmentPhase {
-    WorkRep,
-    Recovery,
-}
-
 fn mean(values: &[f64]) -> f64 {
     if values.is_empty() {
         0.0
@@ -133,13 +120,10 @@ fn coeff_of_variation(values: &[f64]) -> f64 {
 
 /// Normalize and validate a raw stream.
 ///
-/// Returns an error when the required aligned signals are missing or of unequal
-/// length. Recording gaps longer than `gap_tolerance_s` are recorded as
-/// exclusions rather than interpolated.
-pub fn normalize_streams(
-    raw: &RawStream,
-    config: &NormalizationConfig,
-) -> Result<NormalizedStream, String> {
+/// Returns an error when required aligned signals are missing, malformed, or
+/// have non-monotonic timestamps. The detector preserves recording gaps as
+/// discontinuities rather than interpolating them into recovery.
+pub fn normalize_streams(raw: &RawStream) -> Result<NormalizedStream, String> {
     if raw.time_s.is_empty() {
         return Err("empty stream".to_string());
     }
@@ -154,29 +138,45 @@ pub fn normalize_streams(
 
     let mut samples = Vec::with_capacity(raw.time_s.len());
     for i in 0..raw.time_s.len() {
+        if !raw.time_s[i].is_finite()
+            || !raw.speed[i].is_finite()
+            || !raw.heartrate[i].is_finite()
+            || raw
+                .power
+                .as_ref()
+                .is_some_and(|power| !power[i].is_finite())
+        {
+            return Err("stream contains non-finite samples".to_string());
+        }
+        if i > 0 && raw.time_s[i] <= raw.time_s[i - 1] {
+            return Err("stream timestamps must be strictly increasing".to_string());
+        }
         samples.push(NormalizedSample {
             t: raw.time_s[i],
             speed: raw.speed[i],
-            hr: raw.heartrate[i],
-            power: raw.power.as_ref().map(|p| p[i]),
         });
     }
 
-    let mut exclusions = Vec::new();
-    for i in 1..samples.len() {
-        let delta = samples[i].t - samples[i - 1].t;
-        if delta > config.gap_tolerance_s {
-            exclusions.push(TimeRange {
-                start: samples[i - 1].t,
-                end: samples[i].t,
-            });
-        }
-    }
+    Ok(NormalizedStream { samples })
+}
 
-    Ok(NormalizedStream {
-        samples,
-        exclusions,
-    })
+fn signal_spread(values: &[f64]) -> f64 {
+    let min = values.iter().copied().fold(f64::INFINITY, f64::min);
+    let max = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    (max - min).max(0.0)
+}
+
+fn nominal_sample_interval(samples: &[NormalizedSample], gap_tolerance_s: f64) -> f64 {
+    let mut intervals = samples
+        .windows(2)
+        .map(|pair| pair[1].t - pair[0].t)
+        .filter(|delta| *delta > 0.0 && *delta <= gap_tolerance_s)
+        .collect::<Vec<_>>();
+    if intervals.is_empty() {
+        return 1.0;
+    }
+    intervals.sort_by(|a, b| a.total_cmp(b));
+    intervals[intervals.len() / 2]
 }
 
 /// Detect the session type and work/recovery structure from a raw stream.
@@ -186,7 +186,7 @@ pub fn normalize_streams(
 /// candidates, scores repetition regularity, and classifies.
 pub fn detect_intervals(raw: &RawStream) -> IntervalDetectionResult {
     let config = NormalizationConfig::default();
-    let normalized = match normalize_streams(raw, &config) {
+    let normalized = match normalize_streams(raw) {
         Ok(n) => n,
         Err(reason) => {
             return IntervalDetectionResult {
@@ -209,21 +209,33 @@ pub fn detect_intervals(raw: &RawStream) -> IntervalDetectionResult {
         };
     }
 
-    // Select primary signal: speed if it varies, else power.
-    let primary: Vec<f64> = normalized
+    // Choose one primary signal for the whole session. Mixing speed and power
+    // sample by sample would combine incomparable units around stops.
+    let speed: Vec<f64> = normalized
         .samples
         .iter()
-        .map(|s| {
-            if s.speed > 0.0 {
-                s.speed
-            } else {
-                s.power.unwrap_or(0.0)
-            }
-        })
+        .map(|sample| sample.speed)
         .collect();
+    let primary = if signal_spread(&speed) > f64::EPSILON {
+        speed
+    } else if let Some(power) = raw
+        .power
+        .as_ref()
+        .filter(|power| signal_spread(power) > 0.0)
+    {
+        power.clone()
+    } else {
+        return IntervalDetectionResult {
+            session_kind: SessionKind::Other,
+            work_segments: Vec::new(),
+            recovery_segments: Vec::new(),
+            confidence: None,
+            reasons: vec!["no intensity variation to detect intervals".to_string()],
+        };
+    };
 
-    let max = primary.iter().cloned().fold(f64::MIN, f64::max);
-    let low = primary.iter().cloned().fold(f64::MAX, f64::min);
+    let max = primary.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let low = primary.iter().copied().fold(f64::INFINITY, f64::min);
     // Baseline is the low/easy intensity (recovery). Using the minimum rather
     // than the median avoids being skewed when work samples outnumber
     // recovery samples. Threshold sits halfway between easy and peak effort.
@@ -241,6 +253,7 @@ pub fn detect_intervals(raw: &RawStream) -> IntervalDetectionResult {
 
     // Label each sample and break runs at recording gaps.
     let gap = config.gap_tolerance_s;
+    let sample_interval = nominal_sample_interval(&normalized.samples, gap);
     let mut runs: Vec<(bool, f64, f64, f64)> = Vec::new(); // (is_work, start, end, mean_intensity)
     let mut i = 0;
     while i < normalized.samples.len() {
@@ -250,20 +263,24 @@ pub fn detect_intervals(raw: &RawStream) -> IntervalDetectionResult {
         let mut sum = 0.0;
         let mut count = 0usize;
         while j < normalized.samples.len() {
-            let is_work_j = primary[j] >= threshold;
-            if is_work_j != is_work {
+            if j > i && normalized.samples[j].t - normalized.samples[j - 1].t > gap {
                 break;
             }
-            if j + 1 < normalized.samples.len()
-                && normalized.samples[j + 1].t - normalized.samples[j].t > gap
-            {
+            let is_work_j = primary[j] >= threshold;
+            if is_work_j != is_work {
                 break;
             }
             sum += primary[j];
             count += 1;
             j += 1;
         }
-        let end = normalized.samples[j.saturating_sub(1)].t + 1.0;
+        let end = if j < normalized.samples.len()
+            && normalized.samples[j].t - normalized.samples[j - 1].t <= gap
+        {
+            normalized.samples[j].t
+        } else {
+            normalized.samples[j - 1].t + sample_interval
+        };
         runs.push((
             is_work,
             start,
@@ -319,7 +336,6 @@ pub fn detect_intervals(raw: &RawStream) -> IntervalDetectionResult {
         let work_segments = work_blocks
             .iter()
             .map(|b| DetectedSegment {
-                phase: SegmentPhase::WorkRep,
                 range: TimeRange {
                     start: b.0,
                     end: b.1,
@@ -330,7 +346,6 @@ pub fn detect_intervals(raw: &RawStream) -> IntervalDetectionResult {
         let recovery_segments = recovery_blocks
             .iter()
             .map(|b| DetectedSegment {
-                phase: SegmentPhase::Recovery,
                 range: TimeRange {
                     start: b.0,
                     end: b.1,
@@ -387,7 +402,6 @@ mod tests {
             speed,
             heartrate: hr,
             power: Some(power),
-            elevation: None,
         }
     }
 
@@ -396,8 +410,7 @@ mod tests {
     }
 
     #[test]
-    fn gap_longer_than_tolerance_becomes_an_exclusion_not_a_recovery() {
-        let config = NormalizationConfig::default();
+    fn normalization_preserves_recording_gap_without_interpolation() {
         // 60s of data, then a 30s gap, then 60s more.
         let mut time_s: Vec<f64> = (0..60).map(|t| t as f64).collect();
         time_s.extend((90..150).map(|t| t as f64));
@@ -407,8 +420,10 @@ mod tests {
         let power = constant_n(n, 150.0);
         let raw = build_raw(time_s, speed, hr, power);
 
-        let normalized = normalize_streams(&raw, &config).unwrap();
-        assert_eq!(normalized.exclusions.len(), 1);
+        let normalized = normalize_streams(&raw).unwrap();
+        assert_eq!(normalized.samples.len(), 120);
+        assert_eq!(normalized.samples[59].t, 59.0);
+        assert_eq!(normalized.samples[60].t, 90.0);
     }
 
     #[test]
@@ -471,5 +486,49 @@ mod tests {
         let result = detect_intervals(&raw);
         assert_eq!(result.session_kind, SessionKind::Fartlek);
         assert!(result.work_segments.is_empty());
+    }
+
+    #[test]
+    fn recording_gap_does_not_stall_or_join_adjacent_runs() {
+        let mut time_s: Vec<f64> = (0..30).map(|time| time as f64).collect();
+        time_s.extend((60..90).map(|time| time as f64));
+        let raw = build_raw(
+            time_s,
+            constant_n(60, 3.0),
+            constant_n(60, 140.0),
+            constant_n(60, 180.0),
+        );
+
+        let result = detect_intervals(&raw);
+        assert_eq!(result.session_kind, SessionKind::Other);
+        assert!(result.work_segments.is_empty());
+    }
+
+    #[test]
+    fn speed_and_power_are_not_mixed_at_stops() {
+        let mut time_s = Vec::new();
+        let mut speed = Vec::new();
+        let mut hr = Vec::new();
+        let mut power = Vec::new();
+        for rep in 0..3 {
+            for _ in 0..60 {
+                time_s.push(time_s.len() as f64);
+                speed.push(6.0);
+                hr.push(175.0);
+                power.push(300.0);
+            }
+            if rep < 2 {
+                for _ in 0..30 {
+                    time_s.push(time_s.len() as f64);
+                    speed.push(0.0);
+                    hr.push(140.0);
+                    power.push(120.0);
+                }
+            }
+        }
+
+        let result = detect_intervals(&build_raw(time_s, speed, hr, power));
+        assert_eq!(result.session_kind, SessionKind::StructuredIntervals);
+        assert_eq!(result.work_segments.len(), 3);
     }
 }

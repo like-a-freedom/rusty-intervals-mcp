@@ -119,6 +119,8 @@ pub struct GoldSession {
     pub source_sha256: Option<String>,
     pub label_confidence: Option<String>,
     pub split: Option<String>,
+    pub group_key: Option<String>,
+    pub independently_reviewed: bool,
     pub segments: Vec<GoldSegment>,
 }
 
@@ -207,13 +209,11 @@ pub fn validate_corpus(sessions: &[GoldSession]) -> CorpusReadiness {
     }
 
     for session in sessions {
-        if session
-            .source_sha256
-            .as_ref()
-            .map(String::is_empty)
-            .unwrap_or(true)
-        {
-            blockers.push(format!("session {} missing source sha256", session.id));
+        if !session.source_sha256.as_deref().is_some_and(is_sha256_hex) {
+            blockers.push(format!(
+                "session {} missing a valid source sha256",
+                session.id
+            ));
         }
         if session
             .label_confidence
@@ -225,6 +225,38 @@ pub fn validate_corpus(sessions: &[GoldSession]) -> CorpusReadiness {
         }
         if session.split.as_ref().map(String::is_empty).unwrap_or(true) {
             blockers.push(format!("session {} missing split assignment", session.id));
+        }
+        if session
+            .group_key
+            .as_ref()
+            .map(String::is_empty)
+            .unwrap_or(true)
+        {
+            blockers.push(format!(
+                "session {} missing leakage-control groups",
+                session.id
+            ));
+        }
+        if !session.independently_reviewed {
+            blockers.push(format!(
+                "session {} missing independent review provenance",
+                session.id
+            ));
+        }
+    }
+
+    let mut group_splits = HashMap::<&str, &str>::new();
+    for session in sessions {
+        let (Some(group), Some(split)) = (session.group_key.as_deref(), session.split.as_deref())
+        else {
+            continue;
+        };
+        if let Some(previous_split) = group_splits.insert(group, split)
+            && previous_split != split
+        {
+            blockers.push(format!(
+                "group {group} appears in more than one split ({previous_split}, {split})"
+            ));
         }
     }
 
@@ -242,6 +274,10 @@ pub fn validate_corpus(sessions: &[GoldSession]) -> CorpusReadiness {
         accuracy_ready,
         blockers,
     }
+}
+
+fn is_sha256_hex(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 /// Score detector predictions against gold sessions using one-to-one
@@ -369,7 +405,24 @@ struct RawAnnotation {
     intent_class: String,
     label_confidence: String,
     source_sha256: String,
+    #[serde(default)]
+    groups: Option<RawGroups>,
+    #[serde(default)]
+    provenance: Option<RawProvenance>,
     segments: Vec<RawSegment>,
+}
+
+#[derive(Deserialize)]
+struct RawGroups {
+    athlete_group: String,
+    device_group: String,
+    route_group: String,
+}
+
+#[derive(Deserialize)]
+struct RawProvenance {
+    reviewer: String,
+    adjudication: String,
 }
 
 #[derive(Deserialize)]
@@ -429,6 +482,15 @@ pub fn load_corpus_fixture(name: &str) -> LoadedCorpus {
             source_sha256: Some(annotation.source_sha256),
             label_confidence: Some(annotation.label_confidence),
             split: Some(reference.split.clone()),
+            group_key: annotation.groups.map(|groups| {
+                format!(
+                    "{}:{}:{}",
+                    groups.athlete_group, groups.device_group, groups.route_group
+                )
+            }),
+            independently_reviewed: annotation.provenance.is_some_and(|provenance| {
+                !provenance.reviewer.trim().is_empty() && !provenance.adjudication.trim().is_empty()
+            }),
             segments,
         });
         stream_paths.push(reference.stream.clone());
@@ -451,9 +513,11 @@ mod tests {
         GoldSession {
             id: id.to_string(),
             session_class: SessionClass::StructuredInterval,
-            source_sha256: Some(format!("sha-{id}")),
+            source_sha256: Some("a".repeat(64)),
             label_confidence: Some("confirmed".to_string()),
             split: Some("test".to_string()),
+            group_key: Some(format!("group-{id}")),
+            independently_reviewed: true,
             segments: vec![GoldSegment {
                 phase: SegmentPhase::WorkRep,
                 range: TimeRange {
@@ -469,9 +533,11 @@ mod tests {
         GoldSession {
             id: "gold-1".to_string(),
             session_class: SessionClass::StructuredInterval,
-            source_sha256: Some("sha-gold".to_string()),
+            source_sha256: Some("a".repeat(64)),
             label_confidence: Some("confirmed".to_string()),
             split: Some("test".to_string()),
+            group_key: Some("group-gold".to_string()),
+            independently_reviewed: true,
             segments: vec![GoldSegment {
                 phase: SegmentPhase::WorkRep,
                 range: TimeRange { start, end },
@@ -511,16 +577,26 @@ mod tests {
         assert_eq!(report.segment_metrics.true_positive, 1);
         assert_eq!(report.segment_metrics.false_positive, 0);
         assert_eq!(report.segment_metrics.false_negative, 0);
+        assert_eq!(report.session_count, 1);
     }
 
     #[test]
-    fn locked_corpus_v1_is_accuracy_ready() {
+    fn provisional_corpus_cannot_produce_accuracy_metrics() {
         let corpus = load_corpus_fixture("corpus-v1.json");
+        assert_eq!(corpus.manifest.corpus_version, 1);
         let readiness = validate_corpus(&corpus.sessions);
+        assert!(!readiness.accuracy_ready);
         assert!(
-            readiness.accuracy_ready,
-            "corpus not accuracy-ready: {:?}",
-            readiness.blockers
+            readiness
+                .blockers
+                .iter()
+                .any(|blocker| blocker.contains("valid source sha256"))
+        );
+        assert!(
+            readiness
+                .blockers
+                .iter()
+                .any(|blocker| blocker.contains("independent review provenance"))
         );
     }
 }
@@ -529,7 +605,6 @@ mod tests {
 mod comparison {
     use super::*;
     use crate::domains::interval_detection::{RawStream, SessionKind, detect_intervals};
-    use crate::intents::handlers::render::analysis::legacy_work_interval_baseline::legacy_count_work_intervals_v1;
     use serde_json::Value;
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
@@ -598,7 +673,6 @@ mod comparison {
             speed,
             heartrate,
             power,
-            elevation: None,
         }
     }
 
@@ -629,37 +703,6 @@ mod comparison {
                 segment.phase == SegmentPhase::WorkRep && !segment.excluded_from_scoring
             })
             .count()
-    }
-
-    /// Build one upstream-style interval object per gold segment, using the mean
-    /// speed/HR sampled from the aligned stream within the segment range.
-    fn synthetic_intervals(session: &GoldSession, streams: &[RawStream]) -> Vec<Value> {
-        let stream = &streams[0];
-        session
-            .segments
-            .iter()
-            .map(|segment| {
-                let start = segment.range.start;
-                let end = segment.range.end;
-                let mut sum_speed = 0.0;
-                let mut sum_hr = 0.0;
-                let mut n = 0usize;
-                for i in 0..stream.time_s.len() {
-                    let t = stream.time_s[i];
-                    if t >= start && t < end {
-                        sum_speed += stream.speed[i];
-                        sum_hr += stream.heartrate[i];
-                        n += 1;
-                    }
-                }
-                let (speed, hr) = if n == 0 {
-                    (0.0, 0.0)
-                } else {
-                    (sum_speed / n as f64, sum_hr / n as f64)
-                };
-                serde_json::json!({ "average_speed": speed, "average_heartrate": hr })
-            })
-            .collect()
     }
 
     fn deterministic_hash(bytes: &[u8]) -> String {
@@ -698,13 +741,35 @@ mod comparison {
         (low, high)
     }
 
-    pub fn compare_legacy_and_candidate(corpus: &LockedCorpus) -> ComparisonReport {
+    /// Compare a candidate with independently recorded legacy predictions.
+    ///
+    /// The caller must supply one legacy prediction for every session from the
+    /// actual upstream objects. Deriving them from gold boundaries would leak
+    /// the answer into the baseline and invalidate the comparison.
+    pub fn compare_legacy_and_candidate(
+        corpus: &LockedCorpus,
+        legacy_predictions: &[DetectorPrediction],
+    ) -> Result<ComparisonReport, String> {
         let readiness = validate_corpus(&corpus.sessions);
-        assert!(
-            readiness.accuracy_ready,
-            "corpus validation gate failed: {:?}",
-            readiness.blockers
-        );
+        if !readiness.accuracy_ready {
+            return Err(format!(
+                "corpus validation gate failed: {:?}",
+                readiness.blockers
+            ));
+        }
+
+        for session in &corpus.sessions {
+            let prediction_count = legacy_predictions
+                .iter()
+                .filter(|prediction| prediction.session_id == session.id)
+                .count();
+            if prediction_count != 1 {
+                return Err(format!(
+                    "legacy predictions must contain exactly one entry for session {}",
+                    session.id
+                ));
+            }
+        }
 
         let dir = concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -718,7 +783,6 @@ mod comparison {
         let mut candidate_errors = Vec::new();
         let mut legacy_session_count = 0usize;
         let mut candidate_session_count = 0usize;
-        let mut legacy_predictions: Vec<DetectorPrediction> = Vec::new();
         let mut candidate_predictions: Vec<DetectorPrediction> = Vec::new();
         let mut false_positives = 0usize;
         let mut total_hours = 0.0f64;
@@ -756,26 +820,21 @@ mod comparison {
                 segments: candidate_segs,
             });
 
-            // Legacy: median heuristic on synthetic upstream-style intervals,
-            // one per gold segment range.
-            let synthetic = synthetic_intervals(session, std::slice::from_ref(stream));
-            let legacy_work = legacy_count_work_intervals_v1(&synthetic);
+            // Legacy predictions must be supplied from actual upstream interval
+            // objects, never inferred from the annotation being scored.
+            let legacy_work = legacy_predictions
+                .iter()
+                .find(|prediction| prediction.session_id == session.id)
+                .map(|prediction| {
+                    prediction
+                        .segments
+                        .iter()
+                        .filter(|segment| segment.phase == SegmentPhase::WorkRep)
+                        .count()
+                })
+                .expect("legacy prediction cardinality was checked above");
             legacy_errors.push((legacy_work as f64 - gold_work as f64).abs());
             legacy_session_count += 1;
-
-            let legacy_segs: Vec<PredictedSegment> = session
-                .segments
-                .iter()
-                .filter(|segment| !segment.excluded_from_scoring)
-                .map(|segment| PredictedSegment {
-                    phase: SegmentPhase::WorkRep,
-                    range: segment.range,
-                })
-                .collect();
-            legacy_predictions.push(DetectorPrediction {
-                session_id: session.id.clone(),
-                segments: legacy_segs,
-            });
         }
 
         let candidate_mae =
@@ -784,7 +843,7 @@ mod comparison {
         let (low, high) = bootstrap_count_mae(&candidate_errors);
 
         let candidate_scored = score_sessions(&corpus.sessions, &candidate_predictions, 0.5);
-        let legacy_scored = score_sessions(&corpus.sessions, &legacy_predictions, 0.5);
+        let legacy_scored = score_sessions(&corpus.sessions, legacy_predictions, 0.5);
 
         let candidate = AlgorithmReport {
             algorithm: "local-detector-v1".to_string(),
@@ -807,7 +866,7 @@ mod comparison {
             false_positives_per_hour: 0.0,
         };
 
-        ComparisonReport {
+        Ok(ComparisonReport {
             schema_version: 1,
             corpus_version: 1,
             fixture_hash,
@@ -818,32 +877,125 @@ mod comparison {
                 count_mae_low: low,
                 count_mae_high: high,
             },
-        }
+        })
     }
 
     #[test]
-    fn candidate_report_contains_every_locked_test_session_once() {
+    fn comparison_rejects_provisional_corpus_before_scoring() {
         let corpus = load_locked_corpus_v1();
-        let report = compare_legacy_and_candidate(&corpus);
-        assert_eq!(report.candidate.session_count, report.locked_session_count);
-        assert_eq!(report.legacy.session_count, report.locked_session_count);
-        // Richer properties that exercise the otherwise-unused report fields.
-        assert_eq!(report.locked_session_count, 4);
+        let error = match compare_legacy_and_candidate(&corpus, &[]) {
+            Ok(_) => panic!("provisional fixtures must be rejected before scoring"),
+            Err(error) => error,
+        };
+        assert!(error.contains("corpus validation gate failed"));
+    }
+
+    #[test]
+    fn comparison_uses_independent_legacy_predictions_for_a_ready_corpus() {
+        let structured = GoldSession {
+            id: "structured".to_string(),
+            session_class: SessionClass::StructuredInterval,
+            source_sha256: Some("a".repeat(64)),
+            label_confidence: Some("confirmed".to_string()),
+            split: Some("test".to_string()),
+            group_key: Some("athlete-a:device-a:route-a".to_string()),
+            independently_reviewed: true,
+            segments: vec![
+                GoldSegment {
+                    phase: SegmentPhase::WorkRep,
+                    range: TimeRange {
+                        start: 0.0,
+                        end: 30.0,
+                    },
+                    excluded_from_scoring: false,
+                },
+                GoldSegment {
+                    phase: SegmentPhase::Recovery,
+                    range: TimeRange {
+                        start: 30.0,
+                        end: 50.0,
+                    },
+                    excluded_from_scoring: false,
+                },
+                GoldSegment {
+                    phase: SegmentPhase::WorkRep,
+                    range: TimeRange {
+                        start: 50.0,
+                        end: 80.0,
+                    },
+                    excluded_from_scoring: false,
+                },
+            ],
+        };
+        let fartlek = GoldSession {
+            id: "fartlek".to_string(),
+            session_class: SessionClass::Fartlek,
+            source_sha256: Some("b".repeat(64)),
+            label_confidence: Some("confirmed".to_string()),
+            split: Some("test".to_string()),
+            group_key: Some("athlete-b:device-b:route-b".to_string()),
+            independently_reviewed: true,
+            segments: Vec::new(),
+        };
+        let structured_stream = RawStream {
+            time_s: (0..80).map(f64::from).collect(),
+            speed: (0..80)
+                .map(|time| if (30..50).contains(&time) { 3.0 } else { 6.0 })
+                .collect(),
+            heartrate: vec![150.0; 80],
+            power: None,
+        };
+        let fartlek_stream = RawStream {
+            time_s: (0..80).map(f64::from).collect(),
+            speed: vec![3.0; 80],
+            heartrate: vec![140.0; 80],
+            power: None,
+        };
+        let corpus = LockedCorpus {
+            sessions: vec![structured, fartlek],
+            streams: vec![structured_stream, fartlek_stream],
+            locked_session_count: 2,
+        };
+        let legacy_predictions = vec![
+            DetectorPrediction {
+                session_id: "structured".to_string(),
+                segments: vec![
+                    PredictedSegment {
+                        phase: SegmentPhase::WorkRep,
+                        range: TimeRange {
+                            start: 0.0,
+                            end: 30.0,
+                        },
+                    },
+                    PredictedSegment {
+                        phase: SegmentPhase::WorkRep,
+                        range: TimeRange {
+                            start: 50.0,
+                            end: 80.0,
+                        },
+                    },
+                ],
+            },
+            DetectorPrediction {
+                session_id: "fartlek".to_string(),
+                segments: Vec::new(),
+            },
+        ];
+
+        let report = compare_legacy_and_candidate(&corpus, &legacy_predictions).unwrap();
         assert_eq!(report.schema_version, 1);
         assert_eq!(report.corpus_version, 1);
         assert!(!report.fixture_hash.is_empty());
-        assert!(report.candidate.count_mae.is_finite() && report.candidate.count_mae >= 0.0);
-        assert!(report.bootstrap.count_mae_low <= report.bootstrap.count_mae_high);
-        assert!(report.candidate.algorithm.contains("detector"));
-        assert!(report.legacy.algorithm.contains("median"));
-
-        // Exercise the report-only fields so the comparison is meaningful.
-        let seg = &report.candidate.segment_metrics;
-        assert!(
-            seg.true_positive + seg.false_negative + seg.false_positive
-                >= report.candidate.session_count.saturating_sub(1)
-        );
-        assert!(report.candidate.false_positives_per_hour >= 0.0);
+        assert_eq!(report.locked_session_count, 2);
+        assert_eq!(report.candidate.session_count, 2);
+        assert_eq!(report.legacy.session_count, 2);
+        assert_eq!(report.legacy.algorithm, "count_work_intervals-median-v1");
+        assert_eq!(report.candidate.algorithm, "local-detector-v1");
+        assert!(!report.legacy.per_class.is_empty());
         assert!(!report.candidate.per_class.is_empty());
+        assert!(report.legacy.segment_metrics.true_positive >= 2);
+        assert!(report.candidate.count_mae.is_finite());
+        assert!(report.candidate.false_positives_per_hour >= 0.0);
+        assert!(report.bootstrap.count_mae_low <= report.bootstrap.count_mae_high);
     }
 }

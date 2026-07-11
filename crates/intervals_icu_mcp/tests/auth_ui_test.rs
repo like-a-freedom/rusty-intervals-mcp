@@ -18,7 +18,7 @@ fn test_ui_state() -> UiState {
         revoked_jtis: revoked_jtis.clone(),
     });
 
-    UiState::new(app_state, revoked_jtis, None)
+    UiState::new(app_state, revoked_jtis, None, false)
 }
 
 #[tokio::test]
