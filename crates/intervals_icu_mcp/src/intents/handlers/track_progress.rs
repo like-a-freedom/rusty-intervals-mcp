@@ -10,7 +10,8 @@ use serde_json::json;
 
 use crate::domains::coach::AnalysisWindow;
 use crate::engines::progress_tracking::{
-    MAX_WELLNESS_DAYS_FALLBACK, MIN_DAYS_FOR_PLATEAU, build_progress_report, count_ctl_points,
+    MAX_WELLNESS_DAYS_FALLBACK, MIN_DAYS_FOR_PLATEAU, build_progress_report_with_ctl_fallback,
+    count_ctl_points, derive_ctl_series_from_activity_loads,
 };
 use crate::intents::{IdempotencyCache, IntentError, IntentHandler, IntentOutput, OutputMetadata};
 
@@ -19,8 +20,8 @@ use super::render::progress::render_progress_report;
 const DEFAULT_PERIOD_WEEKS: i64 = 12;
 const MIN_PERIOD_WEEKS: i64 = 4;
 const MAX_PERIOD_WEEKS: i64 = 24;
-const MAX_ACTIVITIES_TO_FETCH: u32 = 200;
 const ACTIVITY_FETCH_BUFFER_DAYS: i32 = 14;
+const CTL_WARMUP_DAYS: i32 = 42;
 const TID_SAMPLE_PER_WEEK: usize = 5;
 const TID_SAMPLE_MAX: usize = 60;
 
@@ -63,7 +64,7 @@ Arguments:
 - period_weeks (integer, 4–24, default 12): How far back to analyze.
 - hypothesis_mode (boolean, default true): Whether to compute coaching hypotheses (volume, intensity distribution, recovery) and recommendations.
 
-Returns: Progress Tracking Report with plateau detection, load context (ACWR, monotony, strain), HRV context, TID drift analysis, coaching hypotheses with confidence scores, recommendations, and warnings when data is insufficient. Includes a Fitness Snapshot with current CTL, ATL, TSB, and ramp rate when athlete-summary data is available.
+Returns: Progress Tracking Report with plateau detection, load context (ACWR, monotony, strain), HRV context, TID drift analysis, coaching hypotheses with confidence scores, recommendations, and warnings when data is insufficient. When wellness lacks enough historical CTL, plateau detection uses a clearly marked estimate from activity training-load history. Includes a Fitness Snapshot with current CTL, ATL, TSB, and ramp rate when athlete-summary data is available.
 On error: API or validation errors with descriptive messages."
     }
 
@@ -137,11 +138,10 @@ On error: API or validation errors with descriptive messages."
             })?;
         }
 
+        let activity_history_days = (period_days + ACTIVITY_FETCH_BUFFER_DAYS)
+            .max(MAX_WELLNESS_DAYS_FALLBACK + CTL_WARMUP_DAYS);
         let activities = client
-            .get_recent_activities(
-                Some(MAX_ACTIVITIES_TO_FETCH),
-                Some(period_days + ACTIVITY_FETCH_BUFFER_DAYS),
-            )
+            .get_recent_activities(None, Some(activity_history_days))
             .await
             .map_err(|error| IntentError::api(format!("Failed to fetch activities: {error}")))?;
 
@@ -156,7 +156,19 @@ On error: API or validation errors with descriptive messages."
             }
         }
 
-        let report = build_progress_report(&wellness, &activities, &activity_details, &window);
+        let ctl_window = AnalysisWindow::new(
+            end_date - Duration::days(i64::from(activity_history_days - 1)),
+            end_date,
+        );
+        let activity_ctl_fallback =
+            derive_ctl_series_from_activity_loads(&activities, &activity_details, &ctl_window);
+        let report = build_progress_report_with_ctl_fallback(
+            &wellness,
+            &activities,
+            &activity_details,
+            &window,
+            activity_ctl_fallback,
+        );
 
         let fitness = client.get_fitness_summary().await.ok();
         let fitness_metrics =
@@ -401,6 +413,45 @@ mod tests {
         assert!(
             rendered.contains("lnRMSSD") || rendered.contains("Plateau"),
             "rendered output should contain actionable data-availability warnings; got: {rendered}"
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_derives_ctl_history_from_training_load_when_wellness_is_empty() {
+        let today = Utc::now().date_naive();
+        let activities = (0..42)
+            .map(|days_ago| ActivitySummary {
+                id: format!("activity-{days_ago}"),
+                start_date_local: (today - Duration::days(days_ago)).to_string(),
+                training_load: Some(50),
+                ..Default::default()
+            })
+            .collect();
+        let client = MockIntervalsClient::builder()
+            .with_wellness(json!([]))
+            .with_activities(activities);
+
+        let output = TrackProgressHandler::new()
+            .execute(
+                json!({"period_weeks": 4, "hypothesis_mode": false}),
+                Arc::new(client),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let rendered = format!("{:?}", output.content);
+        assert!(
+            rendered.contains("activity training-load history"),
+            "expected CTL fallback provenance, got: {rendered}"
+        );
+        assert!(
+            !rendered.contains("Plateau detection unavailable because CTL history is insufficient"),
+            "activity history should make plateau detection available, got: {rendered}"
+        );
+        assert!(
+            rendered.contains("Wellness HRV history unavailable"),
+            "HRV must remain unavailable when wellness is genuinely empty, got: {rendered}"
         );
     }
 

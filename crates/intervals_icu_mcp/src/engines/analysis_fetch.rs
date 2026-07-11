@@ -125,6 +125,13 @@ pub fn extract_activity_load(detail: Option<&Value>) -> Option<f64> {
         })
 }
 
+/// Return the best available load for an activity without requiring its detail
+/// endpoint. Activity summaries carry `training_load` for historical queries;
+/// a loaded detail takes precedence when it exposes a more specific value.
+pub fn activity_load(activity: &ActivitySummary, detail: Option<&Value>) -> Option<f64> {
+    extract_activity_load(detail).or_else(|| activity.training_load.map(f64::from))
+}
+
 pub fn build_daily_load_series(
     activities: &[&ActivitySummary],
     details: &HashMap<String, Value>,
@@ -134,7 +141,7 @@ pub fn build_daily_load_series(
 
     for activity in activities {
         if let Some(activity_date) = parse_activity_date(&activity.start_date_local) {
-            let load = extract_activity_load(details.get(&activity.id)).unwrap_or(0.0);
+            let load = activity_load(activity, details.get(&activity.id)).unwrap_or(0.0);
             totals
                 .entry(activity_date)
                 .and_modify(|total| *total += load)

@@ -8,7 +8,7 @@ use crate::domains::coach::AnalysisWindow;
 use crate::domains::progress::{
     HypothesisDomain, ProgressHypothesis, ProgressReport, TidDriftMetrics, TidDriftState,
 };
-use crate::engines::analysis_fetch::build_daily_load_series;
+use crate::engines::analysis_fetch::{activity_load, build_daily_load_series};
 use crate::engines::changepoint::detect_trailing_ctl_plateau;
 use crate::engines::coach_metrics::{
     compute_acwr, compute_lnrmssd_rollup, compute_monotony, compute_strain, compute_tid_entropy,
@@ -21,6 +21,7 @@ const MIN_WEEKS_FOR_TID_DRIFT: usize = 4;
 const MONOTONY_HIGH_THRESHOLD: f64 = 1.5;
 const HYPOTHESIS_MIN_CONFIDENCE: f64 = 0.50;
 const TRAILING_LOAD_WINDOW_DAYS: usize = 7;
+const CTL_TIME_CONSTANT_DAYS: f64 = 42.0;
 
 /// Minimum daily CTL points required to compute a trailing plateau at all.
 pub const MIN_DAYS_FOR_PLATEAU: usize = 28;
@@ -50,6 +51,43 @@ pub fn count_ctl_points(wellness: &Value) -> usize {
                 || object.get("icu_ctl").and_then(Value::as_f64).is_some()
         })
         .count()
+}
+
+/// Estimate a daily chronic-load series from activity training load when the
+/// wellness endpoint has no historical CTL. The series begins on the first
+/// dated activity with a usable load, so pre-training zeroes are never treated
+/// as history.
+pub fn derive_ctl_series_from_activity_loads(
+    activities: &[ActivitySummary],
+    activity_details: &HashMap<String, Value>,
+    window: &AnalysisWindow,
+) -> Option<(Vec<String>, Vec<f64>)> {
+    let first_activity_date = activities
+        .iter()
+        .filter_map(|activity| {
+            let date = parse_activity_date(&activity.start_date_local)?;
+            let has_load = activity_load(activity, activity_details.get(&activity.id)).is_some();
+            (has_load && date >= window.start_date && date <= window.end_date).then_some(date)
+        })
+        .min()?;
+
+    let derivation_window = AnalysisWindow::new(first_activity_date, window.end_date);
+    let activity_refs = activities.iter().collect::<Vec<_>>();
+    let daily_loads = build_daily_load_series(&activity_refs, activity_details, &derivation_window);
+    if daily_loads.is_empty() {
+        return None;
+    }
+
+    let mut ctl = 0.0;
+    let mut dates = Vec::with_capacity(daily_loads.len());
+    let mut values = Vec::with_capacity(daily_loads.len());
+    for (date, load) in daily_loads {
+        ctl += (load - ctl) / CTL_TIME_CONSTANT_DAYS;
+        dates.push(date.to_string());
+        values.push(ctl);
+    }
+
+    Some((dates, values))
 }
 
 type ZonePct = (f64, f64, f64);
@@ -314,10 +352,41 @@ pub fn build_progress_report(
     activity_details: &HashMap<String, Value>,
     window: &AnalysisWindow,
 ) -> ProgressReport {
+    build_progress_report_with_ctl_fallback(wellness, activities, activity_details, window, None)
+}
+
+/// Build a report, preferring upstream wellness CTL and using a clearly marked
+/// activity-load estimate only when wellness CTL is unavailable or too short.
+pub fn build_progress_report_with_ctl_fallback(
+    wellness: &Value,
+    activities: &[ActivitySummary],
+    activity_details: &HashMap<String, Value>,
+    window: &AnalysisWindow,
+    activity_ctl_fallback: Option<(Vec<String>, Vec<f64>)>,
+) -> ProgressReport {
     let mut report = ProgressReport::default();
 
-    if let Some((dates, ctl_values)) = extract_ctl_series(Some(wellness)) {
+    let wellness_ctl = extract_ctl_series(Some(wellness));
+    let use_activity_fallback = wellness_ctl
+        .as_ref()
+        .is_none_or(|(_, values)| values.len() < MIN_DAYS_FOR_PLATEAU)
+        && activity_ctl_fallback.is_some();
+    let ctl_series = if use_activity_fallback {
+        activity_ctl_fallback
+    } else {
+        wellness_ctl
+    };
+
+    let mut available_ctl_points = 0usize;
+    if let Some((dates, ctl_values)) = ctl_series {
+        available_ctl_points = ctl_values.len();
         report.plateau = detect_trailing_ctl_plateau(&dates, &ctl_values);
+        if use_activity_fallback {
+            report.warnings.push(
+                "Wellness CTL/fitness history unavailable or too short; plateau detection is estimated from activity training-load history."
+                    .into(),
+            );
+        }
     } else {
         report.warnings.push(format!(
             "Wellness CTL/fitness history unavailable; plateau detection skipped (need {} days, have 0).",
@@ -328,7 +397,7 @@ pub fn build_progress_report(
     // If the wellness payload had some entries but fewer than the minimum for plateau,
     // report the concrete shortfall so the user knows how many days they are missing.
     if !report.plateau.supported {
-        let available = count_ctl_points(wellness);
+        let available = available_ctl_points.max(count_ctl_points(wellness));
         if available > 0 && available < MIN_DAYS_FOR_PLATEAU {
             let personalization_gap = if available < MIN_DAYS_FOR_PERSONALIZATION {
                 format!(
@@ -557,6 +626,36 @@ mod tests {
         assert!(
             joined.contains("28 days of daily CTL"),
             "expected minimum to be mentioned, got: {joined}"
+        );
+    }
+
+    #[test]
+    fn activity_derived_ctl_reports_its_actual_shortfall() {
+        use chrono::NaiveDate;
+
+        let start = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+        let end = NaiveDate::from_ymd_opt(2026, 1, 14).unwrap();
+        let window = AnalysisWindow::new(start, end);
+        let fallback = Some((
+            (0..14)
+                .map(|day| format!("2026-01-{:02}", day + 1))
+                .collect(),
+            vec![50.0; 14],
+        ));
+
+        let report = build_progress_report_with_ctl_fallback(
+            &json!([]),
+            &[],
+            &HashMap::new(),
+            &window,
+            fallback,
+        );
+        let warnings = report.warnings.join("\n");
+
+        assert!(warnings.contains("activity training-load history"));
+        assert!(
+            warnings.contains("14 day(s)"),
+            "expected actual activity-derived shortfall, got: {warnings}"
         );
     }
 
