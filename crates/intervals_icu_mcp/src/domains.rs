@@ -23,8 +23,9 @@ pub mod coach;
 pub mod events;
 pub mod fitness;
 pub mod gear;
-pub mod interval_benchmark;
-pub mod interval_detection;
+#[cfg(test)]
+pub(crate) mod interval_benchmark;
+pub(crate) mod interval_detection;
 pub mod nutrition;
 pub mod progress;
 pub mod resources;

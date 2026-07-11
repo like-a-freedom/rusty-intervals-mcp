@@ -50,42 +50,38 @@ impl AnalyzeTrainingHandler {
 
 /// Build a [`RawStream`] from a normalized streams payload.
 ///
-/// The detector expects aligned arrays under the keys `time_s`, `speed`,
-/// `heartrate`, and optional `power`. Returns `None` when the required aligned
-/// signals are missing or malformed.
+/// The detector accepts the canonical Intervals.icu stream names as well as
+/// the normalized aliases used by fixtures. Returns `None` when required
+/// aligned signals are missing or malformed.
 fn build_local_raw_stream(streams: &Value) -> Option<RawStream> {
-    let time_s = streams
-        .get("time_s")
-        .and_then(Value::as_array)?
-        .iter()
-        .filter_map(Value::as_f64)
-        .collect::<Vec<_>>();
-    let speed = streams
-        .get("speed")
-        .and_then(Value::as_array)?
-        .iter()
-        .filter_map(Value::as_f64)
-        .collect::<Vec<_>>();
-    let heartrate = streams
-        .get("heartrate")
-        .and_then(Value::as_array)?
-        .iter()
-        .filter_map(Value::as_f64)
-        .collect::<Vec<_>>();
+    fn numeric_series(streams: &Value, keys: &[&str]) -> Option<Vec<f64>> {
+        keys.iter().find_map(|key| {
+            streams
+                .get(*key)
+                .and_then(Value::as_array)
+                .and_then(|values| values.iter().map(Value::as_f64).collect::<Option<Vec<_>>>())
+        })
+    }
+
+    let time_s = numeric_series(streams, &["time", "time_s"])?;
+    let speed = numeric_series(streams, &["velocity_smooth", "speed", "pace"])?;
+    let heartrate = numeric_series(streams, &["heartrate", "hr"])?;
     if time_s.is_empty() || time_s.len() != speed.len() || time_s.len() != heartrate.len() {
         return None;
     }
-    let power = streams
-        .get("power")
-        .and_then(Value::as_array)
-        .map(|arr| arr.iter().filter_map(Value::as_f64).collect::<Vec<_>>());
+    let power = numeric_series(streams, &["watts", "power"]);
+    if power
+        .as_ref()
+        .is_some_and(|values| values.len() != time_s.len())
+    {
+        return None;
+    }
 
     Some(RawStream {
         time_s,
         speed,
         heartrate,
         power,
-        elevation: None,
     })
 }
 
@@ -798,9 +794,68 @@ impl AnalyzeTrainingHandler {
                 None
             };
 
-            if let Some(intervals_arr) = intervals_arr {
-                // Upstream interval payload is present and non-empty: render the
-                // legacy interval breakdown unchanged.
+            if let Some(detection) = local_detection {
+                // A valid local classification is authoritative for session type.
+                // Upstream interval objects remain a reference source only and
+                // must not turn a fartlek into a claimed structured set.
+                let upstream_failed =
+                    matches!(fetched.intervals_state, SourceFetchState::Failed { .. });
+                let rationale = detection
+                    .reasons
+                    .first()
+                    .map(String::as_str)
+                    .unwrap_or("n/a");
+
+                match detection.session_kind {
+                    interval_detection::SessionKind::StructuredIntervals => {
+                        let work_duration_s = detection
+                            .work_segments
+                            .iter()
+                            .map(|segment| segment.range.end - segment.range.start)
+                            .sum::<f64>();
+                        let mean_work_intensity = detection
+                            .work_segments
+                            .iter()
+                            .map(|segment| segment.mean_intensity)
+                            .sum::<f64>()
+                            / detection.work_segments.len() as f64;
+                        let confidence = detection.confidence.unwrap_or_default();
+                        content.push(ContentBlock::markdown(format!(
+                            "Interval Analysis\n  Structured session with {} detected work intervals, {} recoveries, {:.0}s work, mean intensity {:.2}, confidence {:.0}%.",
+                            detection.work_segments.len(),
+                            detection.recovery_segments.len(),
+                            work_duration_s,
+                            mean_work_intensity,
+                            confidence * 100.0,
+                        )));
+                    }
+                    interval_detection::SessionKind::Fartlek => {
+                        content.push(ContentBlock::markdown(format!(
+                            "Interval Analysis\n  Session looks like fartlek / non-structured; no structured work count claimed ({rationale})."
+                        )));
+                    }
+                    interval_detection::SessionKind::Other => {
+                        content.push(ContentBlock::markdown(format!(
+                            "Interval Analysis\n  Session has intensity but is not structured; no structured work count claimed ({rationale})."
+                        )));
+                    }
+                    interval_detection::SessionKind::InsufficientData => {
+                        content.push(ContentBlock::markdown(format!(
+                            "Interval Analysis\n  Stream data insufficient for local interval detection ({rationale})."
+                        )));
+                    }
+                }
+
+                if upstream_failed {
+                    content.push(ContentBlock::markdown(
+                        "  Warning: upstream interval endpoint unavailable; Local detection completed as fallback."
+                            .to_string(),
+                    ));
+                }
+            } else if let Some(intervals_arr) = intervals_arr {
+                // No analysable stream is available. Preserve the legacy
+                // upstream breakdown as a reference without claiming a local
+                // session classification.
                 let output_kind =
                     preferred_interval_output_kind(intervals_arr, fetched.streams.as_ref());
                 let output_header = match output_kind {
@@ -809,7 +864,7 @@ impl AnalyzeTrainingHandler {
                 };
 
                 content.push(ContentBlock::markdown(
-                    "\nInterval Analysis\nDetected Intervals:".to_string(),
+                    "\nInterval Analysis\nUpstream Interval Reference:".to_string(),
                 ));
 
                 let interval_rows = build_interval_analysis_rows(
@@ -826,42 +881,6 @@ impl AnalyzeTrainingHandler {
                     ],
                     interval_rows,
                 ));
-            } else if let Some(detection) = local_detection {
-                // Upstream interval payload is missing/empty/failed, but streams
-                // are available: report the locally-computed detection result.
-                let upstream_failed =
-                    matches!(fetched.intervals_state, SourceFetchState::Failed { .. });
-
-                match detection.session_kind {
-                    interval_detection::SessionKind::StructuredIntervals => {
-                        content.push(ContentBlock::markdown(format!(
-                            "Interval Analysis\n  Structured session with {} detected work intervals.",
-                            detection.work_segments.len()
-                        )));
-                    }
-                    interval_detection::SessionKind::Fartlek => {
-                        content.push(ContentBlock::markdown(
-                            "Interval Analysis\n  Session looks like fartlek / non-structured; no structured work count claimed.".to_string(),
-                        ));
-                    }
-                    interval_detection::SessionKind::Other => {
-                        content.push(ContentBlock::markdown(
-                            "Interval Analysis\n  Session has intensity but is not structured; no structured work count claimed.".to_string(),
-                        ));
-                    }
-                    interval_detection::SessionKind::InsufficientData => {
-                        content.push(ContentBlock::markdown(
-                            "Interval Analysis\n  Stream data insufficient for local interval detection.".to_string(),
-                        ));
-                    }
-                }
-
-                if upstream_failed {
-                    content.push(ContentBlock::markdown(
-                        "  Warning: upstream interval endpoint unavailable; Local detection completed as fallback."
-                            .to_string(),
-                    ));
-                }
             } else {
                 // Streams unavailable/failed: detection cannot run at all. This
                 // is distinct from an empty upstream response or an upstream
@@ -1879,6 +1898,21 @@ mod tests {
     #[test]
     fn test_default_handler() {
         let _handler = AnalyzeTrainingHandler;
+    }
+
+    #[test]
+    fn local_stream_builder_accepts_intervals_icu_stream_names() {
+        let streams = json!({
+            "time": [0.0, 1.0, 2.0],
+            "velocity_smooth": [3.0, 3.5, 4.0],
+            "heartrate": [140.0, 145.0, 150.0],
+            "watts": [200.0, 225.0, 250.0]
+        });
+
+        let raw = build_local_raw_stream(&streams).expect("canonical streams must be accepted");
+        assert_eq!(raw.time_s, vec![0.0, 1.0, 2.0]);
+        assert_eq!(raw.speed, vec![3.0, 3.5, 4.0]);
+        assert_eq!(raw.power, Some(vec![200.0, 225.0, 250.0]));
     }
 
     // ========================================================================
@@ -3077,7 +3111,7 @@ mod tests {
         let output = result.unwrap();
         let content_str = content_text(&output.content);
         assert!(content_str.contains("Interval Analysis"));
-        assert!(content_str.contains("Detected Intervals"));
+        assert!(content_str.contains("Upstream Interval Reference"));
     }
 
     #[tokio::test]

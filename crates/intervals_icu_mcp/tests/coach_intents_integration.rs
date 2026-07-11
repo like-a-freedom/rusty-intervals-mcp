@@ -1102,10 +1102,10 @@ impl MockCoachClient {
             intervals: json!([]),
             intervals_error: Some("HTTP 503 from Intervals.icu interval endpoint".to_string()),
             streams: json!({
-                "time_s": time_s,
-                "speed": speed,
+                "time": time_s,
+                "velocity_smooth": speed,
                 "heartrate": heartrate,
-                "power": power
+                "watts": power
             }),
             ..Self::default()
         }
@@ -1130,6 +1130,38 @@ impl MockCoachClient {
             }),
             intervals: json!([]),
             streams_error: Some("HTTP 504 from Intervals.icu stream endpoint".to_string()),
+            ..Self::default()
+        }
+    }
+
+    fn with_fartlek_streams_and_upstream_intervals() -> Self {
+        let mut time = Vec::new();
+        let mut velocity_smooth = Vec::new();
+        let mut heartrate = Vec::new();
+        let mut watts = Vec::new();
+        for (duration, speed, hr, power) in [
+            (20, 6.0, 178.0, 320.0),
+            (250, 3.0, 145.0, 150.0),
+            (90, 6.5, 182.0, 340.0),
+            (50, 2.8, 140.0, 130.0),
+            (40, 5.5, 172.0, 300.0),
+        ] {
+            for _ in 0..duration {
+                time.push(time.len() as f64);
+                velocity_smooth.push(speed);
+                heartrate.push(hr);
+                watts.push(power);
+            }
+        }
+
+        Self {
+            activities: vec![Self::activity("fartlek-1", "Fartlek", "2026-02-18")],
+            fitness: Self::fitness_snapshot(54.0, 47.0, 7.0),
+            activity_details: json!({"distance": 6000.0, "moving_time": 450}),
+            intervals: json!([
+                {"moving_time": 60, "average_heartrate": 170, "average_watts": 300}
+            ]),
+            streams: json!({"time": time, "velocity_smooth": velocity_smooth, "heartrate": heartrate, "watts": watts}),
             ..Self::default()
         }
     }
@@ -1518,6 +1550,17 @@ async fn unavailable_streams_do_not_claim_zero_detected_intervals() {
     let output = execute_interval_analysis(MockCoachClient::with_stream_error()).await;
     assert!(output_text(&output).contains("Interval detection unavailable"));
     assert!(!output_text(&output).contains("Completed 0 work intervals"));
+}
+
+#[tokio::test]
+async fn local_fartlek_classification_overrides_upstream_interval_rows() {
+    let output =
+        execute_interval_analysis(MockCoachClient::with_fartlek_streams_and_upstream_intervals())
+            .await;
+    let text = output_text(&output);
+
+    assert!(text.contains("fartlek / non-structured"));
+    assert!(!text.contains("Detected Intervals"));
 }
 
 #[tokio::test]

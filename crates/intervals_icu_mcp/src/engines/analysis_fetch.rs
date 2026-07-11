@@ -542,9 +542,9 @@ pub async fn fetch_single_workout_data(
                 }
                 Some(normalized)
             }
-            Err(error) => {
+            Err(_) => {
                 intervals_state = SourceFetchState::Failed {
-                    reason: error.to_string(),
+                    reason: "upstream interval endpoint unavailable".to_string(),
                 };
                 None
             }
@@ -568,9 +568,9 @@ pub async fn fetch_single_workout_data(
                 }
                 Some(normalized)
             }
-            Err(error) => {
+            Err(_) => {
                 streams_state = SourceFetchState::Failed {
-                    reason: error.to_string(),
+                    reason: "upstream stream endpoint unavailable".to_string(),
                 };
                 None
             }

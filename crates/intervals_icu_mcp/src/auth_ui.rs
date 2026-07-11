@@ -109,6 +109,9 @@ pub struct UiState {
     pub registry_path: Option<PathBuf>,
     /// Shared revocation set — same instance as in AppState.
     pub revoked_jtis: TokenRevocationSet,
+    /// Whether to set the `Secure` flag on session cookies.
+    /// `false` when running behind a TLS-terminating reverse proxy or on plain HTTP.
+    pub cookie_secure: bool,
 }
 
 impl UiState {
@@ -116,6 +119,7 @@ impl UiState {
         app_state: Arc<AppState>,
         revoked_jtis: TokenRevocationSet,
         registry_path: Option<PathBuf>,
+        cookie_secure: bool,
     ) -> Self {
         let tokens = Arc::new(RwLock::new(
             registry_path
@@ -142,6 +146,7 @@ impl UiState {
             tokens,
             registry_path,
             revoked_jtis,
+            cookie_secure,
         }
     }
 
@@ -506,14 +511,15 @@ pub async fn ui_home(
         query.error,
     );
     let mut resp = html.into_response();
-    set_session_cookie(&mut resp, &session.session_id);
+    set_session_cookie(&mut resp, &session.session_id, ui.cookie_secure);
     resp
 }
 
-fn set_session_cookie(resp: &mut axum::response::Response, session_id: &str) {
+fn set_session_cookie(resp: &mut axum::response::Response, session_id: &str, cookie_secure: bool) {
     use axum::http::header::SET_COOKIE;
+    let secure = if cookie_secure { "; Secure" } else { "" };
     let cookie = format!(
-        "{}={}; HttpOnly; SameSite=Strict; Path=/ui; Max-Age={}; Secure",
+        "{}={}; HttpOnly; SameSite=Strict; Path=/ui; Max-Age={}{secure}",
         SESSION_COOKIE_NAME, session_id, SESSION_COOKIE_MAX_AGE_SECONDS
     );
     resp.headers_mut()
@@ -532,9 +538,9 @@ pub struct TokenForm {
     pub ttl_days: Option<u64>,
 }
 
-fn redirect_with_session(url: &str, session_id: &str) -> Response {
+fn redirect_with_session(url: &str, session_id: &str, cookie_secure: bool) -> Response {
     let mut resp = Redirect::to(url).into_response();
-    set_session_cookie(&mut resp, session_id);
+    set_session_cookie(&mut resp, session_id, cookie_secure);
     resp
 }
 
@@ -546,11 +552,19 @@ pub async fn ui_create_token(
     let session = ui.session_context(&headers).await;
     let submitted_csrf = form._csrf.clone().unwrap_or_default();
     if !ui.csrf_matches(&session.session_id, &submitted_csrf).await {
-        return redirect_with_session("/ui?error=Invalid+session+%28CSRF%29", &session.session_id);
+        return redirect_with_session(
+            "/ui?error=Invalid+session+%28CSRF%29",
+            &session.session_id,
+            ui.cookie_secure,
+        );
     }
 
     let Some(token_request) = TokenRequestData::from_form(form) else {
-        return redirect_with_session("/ui?error=Missing+credentials", &session.session_id);
+        return redirect_with_session(
+            "/ui?error=Missing+credentials",
+            &session.session_id,
+            ui.cookie_secure,
+        );
     };
 
     let client = match intervals_icu_client::http_client::ReqwestIntervalsClient::new(
@@ -560,7 +574,11 @@ pub async fn ui_create_token(
     ) {
         Ok(c) => c,
         Err(_e) => {
-            return redirect_with_session("/ui?error=Client+init+failed", &session.session_id);
+            return redirect_with_session(
+                "/ui?error=Client+init+failed",
+                &session.session_id,
+                ui.cookie_secure,
+            );
         }
     };
 
@@ -609,16 +627,21 @@ pub async fn ui_create_token(
                     );
                     let html = page_shell("Token Generated", "/ui", body, None, None);
                     let mut resp = html.into_response();
-                    set_session_cookie(&mut resp, &session.session_id);
+                    set_session_cookie(&mut resp, &session.session_id, ui.cookie_secure);
                     resp
                 }
                 Err(e) => redirect_with_session(
                     &format!("/ui?error=Token+generation+failed%3A+{e}"),
                     &session.session_id,
+                    ui.cookie_secure,
                 ),
             }
         }
-        Err(_) => redirect_with_session("/ui?error=Invalid+credentials", &session.session_id),
+        Err(_) => redirect_with_session(
+            "/ui?error=Invalid+credentials",
+            &session.session_id,
+            ui.cookie_secure,
+        ),
     }
 }
 
@@ -753,7 +776,7 @@ pub async fn ui_list_tokens(
         query.error,
     );
     let mut resp = html.into_response();
-    set_session_cookie(&mut resp, &session.session_id);
+    set_session_cookie(&mut resp, &session.session_id, ui.cookie_secure);
     resp
 }
 
@@ -893,7 +916,11 @@ pub async fn ui_revoke_token(
     let session = ui.session_context(&headers).await;
     let submitted_csrf = form.get("_csrf").map(|value| value.as_str()).unwrap_or("");
     if !ui.csrf_matches(&session.session_id, submitted_csrf).await {
-        return redirect_with_session("/ui/tokens?error=Invalid+CSRF", &session.session_id);
+        return redirect_with_session(
+            "/ui/tokens?error=Invalid+CSRF",
+            &session.session_id,
+            ui.cookie_secure,
+        );
     }
 
     ui.revoke_token(&jti).await;
@@ -905,7 +932,11 @@ pub async fn ui_revoke_token(
         "Token revoked via web UI"
     );
 
-    redirect_with_session("/ui/tokens?success=Token+revoked", &session.session_id)
+    redirect_with_session(
+        "/ui/tokens?success=Token+revoked",
+        &session.session_id,
+        ui.cookie_secure,
+    )
 }
 
 #[cfg(test)]
@@ -925,7 +956,7 @@ mod tests {
             revoked_jtis: revoked_jtis.clone(),
         });
 
-        UiState::new(app_state, revoked_jtis, None)
+        UiState::new(app_state, revoked_jtis, None, false)
     }
 
     fn headers_with_cookie(cookie: &str) -> HeaderMap {
