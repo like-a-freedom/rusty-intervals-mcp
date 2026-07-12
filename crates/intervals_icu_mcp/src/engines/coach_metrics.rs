@@ -1,15 +1,19 @@
 use crate::domains::coach::{
-    AcwrMetrics, DecouplingMetrics, EspeDerivedMetrics, EspePowerAnchors, FitnessMetrics,
-    HeatMetrics, LoadManagementMetrics, NdliMetrics, TrendMetrics, VolumeMetrics, WellnessMetrics,
-    WorkoutMetricsContext,
+    AcwrMetrics, DecouplingMetrics, EspeDerivedMetrics, EspePowerAnchors, EtvsMetrics,
+    FitnessMetrics, HeatMetrics, LoadManagementMetrics, NdliMetrics, TrendMetrics, VolumeMetrics,
+    WellnessMetrics, WorkoutMetricsContext,
 };
 use crate::engines::adaptation::AdaptationState;
 use crate::engines::adaptation::classify_adaptation;
 use crate::engines::coach_metrics_constants::*;
-use crate::engines::shared::compute_zone_distribution;
+use crate::engines::shared::{aggregate_five_zone_seconds, compute_zone_distribution};
 use intervals_icu_client::ActivitySummary;
 use serde_json::Value;
 use std::collections::HashMap;
+
+const ETVS_ZONE_WEIGHTS: [f64; 5] = [1.0, 2.0, 3.0, 4.0, 5.0];
+const ETVS_MODEL: &str = "intervals_icu_zones_linear_1_5_cap_v1";
+const SECONDS_PER_MINUTE: f64 = 60.0;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TrendSnapshot {
@@ -1419,6 +1423,90 @@ pub fn compute_z2_hr_variance(hr_stream: &[f64], z2_lower: f64, z2_upper: f64) -
     Some(variance)
 }
 
+#[must_use]
+pub fn compute_etvs(
+    zone_times: Option<&Value>,
+    total_moving_seconds: Option<f64>,
+) -> Option<EtvsMetrics> {
+    let zone_seconds = aggregate_five_zone_seconds(zone_times?)?;
+    let zone_minutes = zone_seconds.map(|seconds| seconds / SECONDS_PER_MINUTE);
+    let score_weighted_minutes = zone_minutes
+        .iter()
+        .zip(ETVS_ZONE_WEIGHTS)
+        .map(|(minutes, weight)| minutes * weight)
+        .sum();
+    let covered_seconds = zone_seconds.iter().sum::<f64>();
+    let coverage_ratio = total_moving_seconds
+        .filter(|seconds| *seconds > 0.0)
+        .map(|seconds| covered_seconds / seconds);
+
+    Some(EtvsMetrics {
+        score_weighted_minutes,
+        zone_minutes,
+        coverage_ratio,
+        activities_with_zone_data: 1,
+        activities_total: 1,
+        model: ETVS_MODEL.into(),
+    })
+}
+
+#[must_use]
+pub fn aggregate_period_etvs(
+    activities: &[&ActivitySummary],
+    details: &HashMap<String, Value>,
+) -> Option<EtvsMetrics> {
+    let total_moving_seconds = activities
+        .iter()
+        .filter_map(|activity| {
+            activity.moving_time.map(f64::from).or_else(|| {
+                details
+                    .get(&activity.id)
+                    .and_then(|detail| detail.get("moving_time"))
+                    .and_then(|value| value.as_f64().or_else(|| value.as_i64().map(|n| n as f64)))
+            })
+        })
+        .filter(|seconds| *seconds > 0.0)
+        .sum::<f64>();
+    let mut zone_seconds = [0.0_f64; 5];
+    let mut activities_with_zone_data = 0;
+
+    for activity in activities {
+        let Some(activity_zones) = details
+            .get(&activity.id)
+            .and_then(|detail| detail.get("icu_zone_times"))
+            .and_then(aggregate_five_zone_seconds)
+        else {
+            continue;
+        };
+        activities_with_zone_data += 1;
+        for (total, seconds) in zone_seconds.iter_mut().zip(activity_zones) {
+            *total += seconds;
+        }
+    }
+
+    if activities_with_zone_data == 0 {
+        return None;
+    }
+
+    let zone_minutes = zone_seconds.map(|seconds| seconds / SECONDS_PER_MINUTE);
+    let score_weighted_minutes = zone_minutes
+        .iter()
+        .zip(ETVS_ZONE_WEIGHTS)
+        .map(|(minutes, weight)| minutes * weight)
+        .sum();
+    let covered_seconds = zone_seconds.iter().sum::<f64>();
+
+    Some(EtvsMetrics {
+        score_weighted_minutes,
+        zone_minutes,
+        coverage_ratio: (total_moving_seconds > 0.0)
+            .then_some(covered_seconds / total_moving_seconds),
+        activities_with_zone_data,
+        activities_total: activities.len(),
+        model: ETVS_MODEL.into(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2379,5 +2467,82 @@ mod tests {
         assert_eq!(wdr.sessions_with_data_7d, 1);
         assert!(wdr.mean_depletion_pct_7d.is_none());
         assert_eq!(wdr.high_depletion_sessions_7d, 0);
+    }
+
+    // ========================================================================
+    // ETVS — Effective Training Volume Score
+    // ========================================================================
+
+    #[test]
+    fn etvs_weights_zone_minutes_linearly() {
+        let zones = json!([
+            {"id": "Z1", "secs": 1800},
+            {"id": "Z2", "secs": 900},
+            {"id": "Z3", "secs": 600},
+            {"id": "Z4", "secs": 300},
+            {"id": "Z5", "secs": 0}
+        ]);
+
+        let metrics = compute_etvs(Some(&zones), Some(3600.0)).unwrap();
+        assert!((metrics.score_weighted_minutes - 110.0).abs() < 1e-12);
+        assert_eq!(metrics.zone_minutes, [30.0, 15.0, 10.0, 5.0, 0.0]);
+        assert_eq!(metrics.coverage_ratio, Some(1.0));
+        assert_eq!(metrics.activities_with_zone_data, 1);
+        assert_eq!(metrics.activities_total, 1);
+    }
+
+    #[test]
+    fn etvs_returns_none_for_missing_or_empty_zone_data() {
+        assert!(compute_etvs(None, Some(3600.0)).is_none());
+        assert!(compute_etvs(Some(&json!([])), Some(3600.0)).is_none());
+    }
+
+    #[test]
+    fn etvs_keeps_coverage_none_without_positive_moving_time() {
+        let zones = json!([{"id": "Z1", "secs": 600}]);
+        let metrics = compute_etvs(Some(&zones), None).unwrap();
+        assert_eq!(metrics.coverage_ratio, None);
+        assert!((metrics.score_weighted_minutes - 10.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn period_etvs_is_additive_and_reports_partial_coverage() {
+        let activities = [
+            ActivitySummary {
+                id: "a".into(),
+                moving_time: Some(1800),
+                ..Default::default()
+            },
+            ActivitySummary {
+                id: "b".into(),
+                moving_time: Some(1800),
+                ..Default::default()
+            },
+        ];
+        let refs = activities.iter().collect::<Vec<_>>();
+        let details = HashMap::from([
+            (
+                "a".into(),
+                json!({"icu_zone_times": [{"id": "Z1", "secs": 1800}]}),
+            ),
+            ("b".into(), json!({"moving_time": 1800})),
+        ]);
+
+        let metrics = aggregate_period_etvs(&refs, &details).unwrap();
+        assert!((metrics.score_weighted_minutes - 30.0).abs() < 1e-12);
+        assert_eq!(metrics.coverage_ratio, Some(0.5));
+        assert_eq!(metrics.activities_with_zone_data, 1);
+        assert_eq!(metrics.activities_total, 2);
+    }
+
+    #[test]
+    fn period_etvs_returns_none_when_no_activity_has_zone_data() {
+        let activities = [ActivitySummary {
+            id: "a".into(),
+            moving_time: Some(1800),
+            ..Default::default()
+        }];
+        let refs = activities.iter().collect::<Vec<_>>();
+        assert!(aggregate_period_etvs(&refs, &HashMap::new()).is_none());
     }
 }
