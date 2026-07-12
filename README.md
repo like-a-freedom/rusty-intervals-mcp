@@ -402,6 +402,15 @@ The best way to use this MCP server is to ask for **outcomes**, not API mechanic
 - “Summarize my training for February”
 - “Show interval insights from my Tuesday session”
 - “What workouts are planned later this week?”
+- “Show ETVS for yesterday’s workout”
+- “Compare ETVS between these two training blocks”
+
+`ETVS` is an additive zone-weighted volume score reported in `weighted min`.
+It uses the versioned `intervals_icu_zones_linear_1_5_cap_v1` model: configured
+Intervals.icu zones Z1–Z4 receive weights 1–4, while Z5–Z7 share weight 5.
+Responses include zone-data coverage. This product metric is not labeled Edwards
+TRIMP because Intervals.icu zone provenance does not guarantee Edwards’ original
+five HRmax zones, and it is not a replacement for training load/TSS.
 
 ### Recovery and performance management
 
