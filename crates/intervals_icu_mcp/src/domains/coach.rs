@@ -306,6 +306,21 @@ pub struct PolarisationMetrics {
     pub tid_model: Option<String>,
 }
 
+/// Effective Training Volume Score derived from configured Intervals.icu zones.
+///
+/// `score_weighted_minutes` is additive but remains model-specific. The model
+/// string and coverage fields must travel with the score to prevent false
+/// comparisons across zone systems or incomplete periods.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct EtvsMetrics {
+    pub score_weighted_minutes: f64,
+    pub zone_minutes: [f64; 5],
+    pub coverage_ratio: Option<f64>,
+    pub activities_with_zone_data: usize,
+    pub activities_total: usize,
+    pub model: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct ConsistencyMetrics {
     pub sessions_planned: usize,
@@ -346,6 +361,7 @@ pub struct CoachMetrics {
     pub workout: Option<WorkoutMetricsContext>,
     pub race: Option<RaceMetrics>,
     pub polarisation: Option<PolarisationMetrics>,
+    pub etvs: Option<EtvsMetrics>,
     pub consistency: Option<ConsistencyMetrics>,
     pub espe_anchors: Option<EspePowerAnchors>,
     pub espe_derived: Option<EspeDerivedMetrics>,
@@ -565,6 +581,32 @@ mod tests {
         };
 
         assert!(!audit.all_available());
+    }
+
+    #[test]
+    fn coach_metrics_round_trip_etvs_with_provenance() {
+        let metrics = CoachMetrics {
+            etvs: Some(EtvsMetrics {
+                score_weighted_minutes: 110.0,
+                zone_minutes: [30.0, 15.0, 10.0, 5.0, 0.0],
+                coverage_ratio: Some(1.0),
+                activities_with_zone_data: 1,
+                activities_total: 1,
+                model: "intervals_icu_zones_linear_1_5_cap_v1".into(),
+            }),
+            ..Default::default()
+        };
+
+        let json = serde_json::to_value(&metrics).unwrap();
+        assert_eq!(json["etvs"]["score_weighted_minutes"], 110.0);
+        assert_eq!(
+            json["etvs"]["model"],
+            "intervals_icu_zones_linear_1_5_cap_v1"
+        );
+        assert_eq!(
+            serde_json::from_value::<CoachMetrics>(json).unwrap(),
+            metrics
+        );
     }
 
     #[test]
