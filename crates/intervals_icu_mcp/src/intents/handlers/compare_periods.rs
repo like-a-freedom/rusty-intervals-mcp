@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 
 use crate::domains::coach::{AnalysisWindow, CoachMetrics, EtvsMetrics};
-use crate::engines::analysis_fetch::{PeriodFetchRequest, fetch_period_data};
+use crate::engines::analysis_fetch::{PeriodFetchRequest, activity_load, fetch_period_data};
 use crate::engines::coach_guidance::{build_alerts, build_guidance};
 use crate::engines::coach_metrics::{
     TrendSnapshot, aggregate_period_etvs, build_trend_snapshot, compute_consistency_index,
@@ -23,18 +23,10 @@ fn build_period_summary(stats: &PeriodStats) -> PeriodSummary {
         .activities
         .iter()
         .filter_map(|activity| {
-            stats
-                .activity_details
-                .get(&activity.id)
-                .and_then(|detail| detail.get("icu_training_load"))
-                .and_then(|value| {
-                    value
-                        .as_f64()
-                        .or_else(|| value.as_i64().map(|n| n as f64))
-                        .or_else(|| value.as_str().and_then(|s| s.parse::<f64>().ok()))
-                })
+            let detail = stats.activity_details.get(&activity.id);
+            activity_load(activity, detail).map(|obs| obs.value as f32)
         })
-        .sum::<f64>() as f32;
+        .sum::<f32>();
 
     let total_time_hours = stats.snapshot.total_time_secs as f32 / 3600.0;
     let weeks = (stats.window_days.max(1) as f32 / 7.0).max(1.0);

@@ -19,6 +19,7 @@
 //! - [`workouts`]: Workout library operations
 
 pub mod activity_analysis;
+pub mod baseline;
 pub mod coach;
 pub mod events;
 pub mod fitness;
@@ -26,6 +27,7 @@ pub mod gear;
 #[cfg(test)]
 pub(crate) mod interval_benchmark;
 pub(crate) mod interval_detection;
+pub mod load;
 pub mod nutrition;
 pub mod progress;
 pub mod resources;

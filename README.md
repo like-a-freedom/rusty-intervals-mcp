@@ -91,6 +91,37 @@ Read-only coaching intents use a deterministic pipeline to compute metrics from 
 
 **Load management:** ACWR context, monotony, strain, fatigue index, stress tolerance, durability index, recovery interpretation, stream-derived execution signals.
 
+### Evidence-Qualified Coaching Metrics
+
+All coaching metrics include provenance disclosure and use neutral statistical positions rather than medical or readiness claims.
+
+**Training Load Provenance:**
+- Load scores are extracted from `icu_training_load` → `training_load`/`icuTrainingLoad` → `tss` (in priority order)
+- Activities without API load data are excluded from totals and explicitly disclosed
+- `moving_time` is never used as a load proxy
+- Coverage percentage (loaded/total activities) is rendered in all affected responses
+
+**HRV/RHR Personal Baselines:**
+- HRV is ln-transformed (lnRMSSD) before baseline calculation
+- Baseline uses a 60-day reference window; recent value uses a 7-day window
+- Smallest Worthwhile Change (SWC) = mean × CV × 0.5
+- Positions are neutral: Below / Within / Above personal range
+- Insufficient data states exactly which requirement failed (recent samples, baseline samples, or date span)
+
+**Critical Power Diagnostics:**
+- Reports sample count, duration coverage, R², RMSE, CP standard error, and W′ standard error
+- "Valid" means mathematically identifiable and finite; it does not imply physiological validation
+- No arbitrary R² threshold is used to reject or accept a fit
+
+**Deferrals (not implemented):**
+- Submaximal response classification
+- Load-response classifier
+- W′ recovery kinetics
+- Metabolic score
+- HR-TRIMP
+- New readiness score
+- ETVS remains a separate metric
+
 ### 5. Safer mutation flows
 
 Mutating intents are designed for agents:

@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::baseline::PersonalBaselineDeviation;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum TrendState {
     Rising,
@@ -89,6 +91,8 @@ pub struct ProgressReport {
     pub hypotheses: Vec<ProgressHypothesis>,
     pub recommendations: Vec<String>,
     pub warnings: Vec<String>,
+    pub hrv_personal_baseline: Option<PersonalBaselineDeviation>,
+    pub resting_hr_personal_baseline: Option<PersonalBaselineDeviation>,
 }
 
 #[cfg(test)]

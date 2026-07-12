@@ -42,6 +42,60 @@ use crate::intents::utils::{
 };
 use intervals_icu_client::EventCategory;
 
+use crate::domains::load::{ComparableLoadSeries, LoadSource};
+
+/// Render a compact "Training Load Data Quality" section from the canonical
+/// load series. Shows API field source counts, loaded/total activities, and
+/// coverage percentage. Activities without API load are explicitly excluded.
+fn build_load_data_quality_section(series: &ComparableLoadSeries) -> ContentBlock {
+    let mut lines = vec!["Training Load Data Quality".to_string()];
+
+    if series.activities_total == 0 {
+        lines.push("  No activities in period".to_string());
+        return ContentBlock::markdown(lines.join("\n"));
+    }
+
+    let loaded = series.activities_with_load;
+    let total = series.activities_total;
+    let pct = (loaded as f64 / total as f64) * 100.0;
+
+    lines.push(format!(
+        "  Loaded: {} / {} activities ({:.0}%)",
+        loaded, total, pct
+    ));
+
+    if loaded < total {
+        lines.push(format!(
+            "  {} activities without API load excluded",
+            total - loaded
+        ));
+    }
+
+    // Source counts — neutral labels; "TSS" only when the source is TssAlias
+    for (source, count) in &series.source_counts {
+        let label = match source {
+            LoadSource::IcuTrainingLoad => "icu_training_load",
+            LoadSource::TrainingLoadAlias => "training_load",
+            LoadSource::TssAlias => "tss",
+            LoadSource::ActivitySummaryTrainingLoad => "summary training_load",
+        };
+        lines.push(format!(
+            "  {}: {} {}",
+            label,
+            count,
+            if *count == 1 {
+                "activity"
+            } else {
+                "activities"
+            }
+        ));
+    }
+
+    lines.push("  Activities without API load are excluded from load totals".to_string());
+
+    ContentBlock::markdown(lines.join("\n"))
+}
+
 pub struct AnalyzeTrainingHandler;
 impl AnalyzeTrainingHandler {
     pub fn new() -> Self {
@@ -1323,10 +1377,7 @@ impl AnalyzeTrainingHandler {
                 .collect::<Vec<_>>();
             let daily_loads =
                 build_daily_load_series(&load_activities, &fetched.activity_details, &load_window);
-            let load_values = daily_loads
-                .iter()
-                .map(|(_, load)| *load)
-                .collect::<Vec<_>>();
+            let load_values = daily_loads.values().collect::<Vec<_>>();
             let recovery_index = period_context
                 .metrics
                 .wellness
@@ -1444,7 +1495,7 @@ impl AnalyzeTrainingHandler {
                     };
                     let load = detail
                         .and_then(|d| extract_activity_load(Some(d)))
-                        .map(|value| format!("{value:.1}"))
+                        .map(|obs| format!("{:.1}", obs.value))
                         .unwrap_or_else(|| "n/a".to_string());
                     let date = activity
                         .start_date_local
@@ -1540,8 +1591,8 @@ impl AnalyzeTrainingHandler {
                         && let Some(detail) = fetched.activity_details.get(&activity.id)
                         && let Some(obj) = detail.as_object()
                     {
-                        if let Some(tss) = extract_activity_load(Some(detail)) {
-                            tss_series.push((date, tss as f32));
+                        if let Some(obs) = extract_activity_load(Some(detail)) {
+                            tss_series.push((date, obs.value as f32));
                         }
                         if let Some(dist) = obj.get("distance").and_then(|v| v.as_f64()) {
                             distance_series.push((date, dist as f32 / 1000.0));
@@ -1751,28 +1802,37 @@ impl AnalyzeTrainingHandler {
                 if cp_data.len() >= 3
                     && let Some(cp_result) = fit_cp(&cp_data)
                 {
-                    let mut cp_lines = vec!["CP Model Validation".to_string()];
+                    let mut cp_lines = vec!["CP Model Diagnostics".to_string()];
                     cp_lines.push(format!(
                         "  Fitted CP: {:.0} W | W': {:.0} J | R²: {:.3}",
                         cp_result.cp, cp_result.w_prime, cp_result.r_squared
                     ));
+                    cp_lines.push(format!(
+                        "  Samples: {} | Duration: {:.0}s – {:.0}s",
+                        cp_result.diagnostics.sample_count,
+                        cp_result.diagnostics.min_duration_secs,
+                        cp_result.diagnostics.max_duration_secs,
+                    ));
+                    cp_lines.push(format!(
+                        "  RMSE: {:.1} W | Max residual: {:.1} W",
+                        cp_result.diagnostics.rmse_watts,
+                        cp_result.diagnostics.max_abs_residual_watts,
+                    ));
+                    if let Some(cp_se) = cp_result.diagnostics.cp_standard_error_watts {
+                        cp_lines.push(format!("  CP standard error: {:.1} W", cp_se));
+                    }
+                    if let Some(wp_se) = cp_result.diagnostics.w_prime_standard_error_joules {
+                        cp_lines.push(format!("  W′ standard error: {:.0} J", wp_se));
+                    }
                     if let Some(anchors) = &period_context.metrics.espe_anchors
                         && let (Some(api_ftp), Some(api_wp)) = (anchors.eftp, anchors.w_prime)
                     {
                         let (cp_diff, wp_diff) = validate_cp(&cp_result, api_ftp, api_wp);
                         cp_lines.push(format!(
-                            "  vs API eFTP: CP Δ{:.1}%, W′ Δ{:.1}%",
+                            "  Difference from API estimate: CP Δ{:.1}%, W′ Δ{:.1}%",
                             cp_diff, wp_diff
                         ));
                     }
-                    cp_lines.push(format!(
-                        "  Fit quality: {}",
-                        if cp_result.valid {
-                            "good"
-                        } else {
-                            "poor — model may not reflect true CP"
-                        }
-                    ));
                     content.push(ContentBlock::markdown(cp_lines.join("\n")));
                 }
             }
@@ -1782,7 +1842,11 @@ impl AnalyzeTrainingHandler {
                 let period_ids: Vec<String> = period.iter().map(|a| a.id.clone()).collect();
                 let daily_loads =
                     build_daily_load_series(&period, &fetched.activity_details, &window);
-                let loads: Vec<f64> = daily_loads.iter().map(|(_, l)| *l).collect();
+
+                // Training Load Data Quality: provenance and coverage
+                content.push(build_load_data_quality_section(&daily_loads));
+
+                let loads: Vec<f64> = daily_loads.values().collect();
                 if !loads.is_empty() {
                     let b2b = back_to_back_load(&loads);
                     if b2b > 0.0 {
@@ -1821,6 +1885,7 @@ impl AnalyzeTrainingHandler {
             let daily_series =
                 build_daily_load_series(&load_activities, &fetched.activity_details, &window);
             let rows = daily_series
+                .daily
                 .iter()
                 .rev()
                 .take(7)

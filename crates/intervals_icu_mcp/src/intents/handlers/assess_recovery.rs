@@ -8,6 +8,8 @@ use serde_json::{Value, json};
 /// Assesses recovery status, readiness to train, and detects red flags.
 use std::sync::Arc;
 
+use crate::domains::baseline::{BaselineTransform, compute_personal_baseline};
+
 const READINESS_SLEEP_EASY: f64 = 6.0;
 const READINESS_SLEEP_INTENSITY: f64 = 7.0;
 const READINESS_SLEEP_LONG: f64 = 6.5;
@@ -418,6 +420,45 @@ impl IntentHandler for AssessRecoveryHandler {
         recovery_context.audit = build_data_audit(&fetched);
         recovery_context.metrics.fitness = parse_fitness_metrics(fetched.fitness.as_ref());
         recovery_context.metrics.wellness = parse_wellness_metrics(fetched.wellness.as_ref());
+
+        // Compute personal baselines from wellness history
+        if let Some(wellness) = &fetched.wellness
+            && let Some(entries) = wellness.as_array()
+        {
+            let hrv_observations: Vec<(chrono::NaiveDate, f64)> = entries
+                .iter()
+                .filter_map(|entry| {
+                    let obj = entry.as_object()?;
+                    let date_str = obj.get("date").and_then(|v| v.as_str())?;
+                    let date = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d").ok()?;
+                    let hrv = obj.get("hrv").and_then(|v| v.as_f64())?;
+                    Some((date, hrv))
+                })
+                .collect();
+
+            let rhr_observations: Vec<(chrono::NaiveDate, f64)> = entries
+                .iter()
+                .filter_map(|entry| {
+                    let obj = entry.as_object()?;
+                    let date_str = obj.get("date").and_then(|v| v.as_str())?;
+                    let date = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d").ok()?;
+                    let rhr = obj
+                        .get("resting_hr")
+                        .or_else(|| obj.get("restingHR"))
+                        .or_else(|| obj.get("resting_hr_bpm"))
+                        .or_else(|| obj.get("avgSleepingHR"))
+                        .and_then(|v| v.as_f64())?;
+                    Some((date, rhr))
+                })
+                .collect();
+
+            if let Some(ref mut wellness_metrics) = recovery_context.metrics.wellness {
+                wellness_metrics.hrv_personal_baseline =
+                    compute_personal_baseline(&hrv_observations, BaselineTransform::LogLnRmssd);
+                wellness_metrics.resting_hr_personal_baseline =
+                    compute_personal_baseline(&rhr_observations, BaselineTransform::RawBpm);
+            }
+        }
         if include_red_flags {
             recovery_context.alerts = build_alerts(&recovery_context.metrics);
         }
@@ -450,6 +491,55 @@ impl IntentHandler for AssessRecoveryHandler {
                     "Recovery Index\nRecovery Index unavailable because either HRV or resting HR is missing."
                         .to_string(),
                 ));
+        }
+
+        // Render personal baseline evidence
+        if let Some(ref hrv_baseline) = wellness.hrv_personal_baseline {
+            let position_str = match hrv_baseline.position {
+                crate::domains::baseline::BaselinePosition::Below => "Below",
+                crate::domains::baseline::BaselinePosition::Within => "Within",
+                crate::domains::baseline::BaselinePosition::Above => "Above",
+            };
+            content.push(ContentBlock::markdown(format!(
+                "Personal Baseline\n  Metric: {} ({})\n  Recent 7-day: {:.2}\n  60-day baseline: {:.2}\n  CV: {:.4}\n  SWC: {:.4}\n  Band: [{:.2}, {:.2}]\n  Position: {}\n  Samples: recent {}, baseline {} (span {} days)\n  Model: {}\n\nPosition describes a sustained statistical deviation from your own history; it is not a readiness verdict.",
+                hrv_baseline.metric,
+                hrv_baseline.unit,
+                hrv_baseline.recent_mean_7d,
+                hrv_baseline.baseline_mean_60d,
+                hrv_baseline.baseline_cv_60d,
+                hrv_baseline.swc,
+                hrv_baseline.lower_bound,
+                hrv_baseline.upper_bound,
+                position_str,
+                hrv_baseline.recent_sample_count,
+                hrv_baseline.baseline_sample_count,
+                hrv_baseline.baseline_span_days,
+                hrv_baseline.model,
+            )));
+        }
+
+        if let Some(ref rhr_baseline) = wellness.resting_hr_personal_baseline {
+            let position_str = match rhr_baseline.position {
+                crate::domains::baseline::BaselinePosition::Below => "Below",
+                crate::domains::baseline::BaselinePosition::Within => "Within",
+                crate::domains::baseline::BaselinePosition::Above => "Above",
+            };
+            content.push(ContentBlock::markdown(format!(
+                "Resting HR Personal Baseline\n  Metric: {} ({})\n  Recent 7-day: {:.1}\n  60-day baseline: {:.1}\n  CV: {:.4}\n  SWC: {:.4}\n  Band: [{:.1}, {:.1}]\n  Position: {}\n  Samples: recent {}, baseline {} (span {} days)\n  Model: {}\n\nPosition describes a sustained statistical deviation from your own history; it is not a readiness verdict.",
+                rhr_baseline.metric,
+                rhr_baseline.unit,
+                rhr_baseline.recent_mean_7d,
+                rhr_baseline.baseline_mean_60d,
+                rhr_baseline.baseline_cv_60d,
+                rhr_baseline.swc,
+                rhr_baseline.lower_bound,
+                rhr_baseline.upper_bound,
+                position_str,
+                rhr_baseline.recent_sample_count,
+                rhr_baseline.baseline_sample_count,
+                rhr_baseline.baseline_span_days,
+                rhr_baseline.model,
+            )));
         }
 
         // ADE — System State Assessment

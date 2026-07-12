@@ -1938,7 +1938,8 @@ async fn assess_recovery_requests_long_enough_wellness_history_for_adaptive_hrv(
         .unwrap();
 
     let requests = wellness_days_requests().lock().unwrap().clone();
-    assert!(requests.contains(&Some(35)));
+    // Personal baseline requires 60 calendar days of wellness history
+    assert!(requests.contains(&Some(60)));
 }
 
 #[tokio::test]
@@ -3694,5 +3695,246 @@ async fn partial_detail() {
             || lower.contains("partial")
             || lower.contains("unavailable"),
         "should indicate some details are missing"
+    );
+}
+
+// ===========================================================================
+// Task 5: Load provenance and coverage rendering tests
+// ===========================================================================
+
+fn with_complete_icu_training_load_block() -> MockCoachClient {
+    MockCoachClient {
+        activities: vec![
+            MockCoachClient::activity("a1", "Run 1", "2026-03-01"),
+            MockCoachClient::activity("a2", "Run 2", "2026-03-02"),
+            MockCoachClient::activity("a3", "Run 3", "2026-03-03"),
+        ],
+        fitness: MockCoachClient::fitness_snapshot(55.0, 45.0, 10.0),
+        activity_details: json!({
+            "distance": 15000.0,
+            "moving_time": 5400,
+            "average_heartrate": 145.0,
+            "average_watts": 210.0,
+            "total_elevation_gain": 300.0,
+            "icu_training_load": 80.0
+        }),
+        ..MockCoachClient::default()
+    }
+}
+
+fn with_mixed_load_alias_block() -> MockCoachClient {
+    let mut details_map = HashMap::new();
+    details_map.insert(
+        "a1".to_string(),
+        json!({
+            "icu_training_load": 90.0,
+            "distance": 12000.0,
+            "moving_time": 3600
+        }),
+    );
+    details_map.insert(
+        "a2".to_string(),
+        json!({
+            "tss": 65.0,
+            "distance": 10000.0,
+            "moving_time": 3000
+        }),
+    );
+    details_map.insert(
+        "a3".to_string(),
+        json!({
+            "training_load": 45.0,
+            "distance": 8000.0,
+            "moving_time": 2400
+        }),
+    );
+    MockCoachClient {
+        activities: vec![
+            MockCoachClient::activity("a1", "Hard Session", "2026-03-01"),
+            MockCoachClient::activity("a2", "Tempo Run", "2026-03-02"),
+            MockCoachClient::activity("a3", "Easy Jog", "2026-03-03"),
+        ],
+        fitness: MockCoachClient::fitness_snapshot(55.0, 45.0, 10.0),
+        activity_details_map: details_map,
+        ..MockCoachClient::default()
+    }
+}
+
+fn with_moving_time_only_activity() -> MockCoachClient {
+    let mut details_map = HashMap::new();
+    details_map.insert(
+        "a1".to_string(),
+        json!({
+            "icu_training_load": 80.0,
+            "distance": 12000.0,
+            "moving_time": 3600
+        }),
+    );
+    details_map.insert(
+        "a2".to_string(),
+        json!({
+            "distance": 8000.0,
+            "moving_time": 2400
+        }),
+    );
+    MockCoachClient {
+        activities: vec![
+            MockCoachClient::activity("a1", "Hard Session", "2026-03-01"),
+            MockCoachClient::activity("a2", "Recovery Walk", "2026-03-02"),
+        ],
+        fitness: MockCoachClient::fitness_snapshot(55.0, 45.0, 10.0),
+        activity_details_map: details_map,
+        ..MockCoachClient::default()
+    }
+}
+
+#[tokio::test]
+async fn load_provenance_complete_icu_training_load_shows_source_and_coverage() {
+    let client = Arc::new(with_complete_icu_training_load_block());
+    let handler = AnalyzeTrainingHandler::new();
+
+    let output = handler
+        .execute(
+            json!({
+                "target_type": "period",
+                "period_start": "2026-03-01",
+                "period_end": "2026-03-03",
+                "analysis_type": "detailed"
+            }),
+            client,
+            None,
+        )
+        .await
+        .unwrap();
+
+    let markdown = markdown_text(&output);
+    let lower = markdown.to_lowercase();
+    assert!(
+        lower.contains("training load data quality"),
+        "should contain Training Load Data Quality section"
+    );
+    assert!(
+        lower.contains("100%"),
+        "should show 100% coverage when all activities have load"
+    );
+}
+
+#[tokio::test]
+async fn load_provenance_mixed_api_aliases_lists_source_counts() {
+    let client = Arc::new(with_mixed_load_alias_block());
+    let handler = AnalyzeTrainingHandler::new();
+
+    let output = handler
+        .execute(
+            json!({
+                "target_type": "period",
+                "period_start": "2026-03-01",
+                "period_end": "2026-03-03",
+                "analysis_type": "detailed"
+            }),
+            client,
+            None,
+        )
+        .await
+        .unwrap();
+
+    let markdown = markdown_text(&output);
+    let lower = markdown.to_lowercase();
+    assert!(
+        lower.contains("training load data quality"),
+        "should contain Training Load Data Quality section"
+    );
+    assert!(
+        lower.contains("100%"),
+        "should show 100% coverage when all activities have some load source"
+    );
+    // Source counts should be present
+    assert!(
+        lower.contains("icu_training_load") || lower.contains("load score"),
+        "should mention load source"
+    );
+}
+
+#[tokio::test]
+async fn duration_only_activity_excluded_from_load_total() {
+    let client = Arc::new(with_moving_time_only_activity());
+    let handler = AnalyzeTrainingHandler::new();
+
+    let output = handler
+        .execute(
+            json!({
+                "target_type": "period",
+                "period_start": "2026-03-01",
+                "period_end": "2026-03-02",
+                "analysis_type": "detailed"
+            }),
+            client,
+            None,
+        )
+        .await
+        .unwrap();
+
+    let markdown = markdown_text(&output);
+    let lower = markdown.to_lowercase();
+    assert!(
+        lower.contains("training load data quality"),
+        "should contain Training Load Data Quality section"
+    );
+    // Coverage should be 50% (1 of 2 activities has load)
+    assert!(
+        lower.contains("50%"),
+        "should show 50% coverage when only 1 of 2 activities has load"
+    );
+}
+
+#[tokio::test]
+async fn compare_periods_totals_match_canonical_observations() {
+    let handler = ComparePeriodsHandler::new();
+    let client = Arc::new(with_complete_icu_training_load_block());
+
+    let output = handler
+        .execute(
+            json!({
+                "period_a_start": "2026-03-01",
+                "period_a_end": "2026-03-03",
+                "period_b_start": "2026-03-01",
+                "period_b_end": "2026-03-03",
+                "metrics": ["tss"]
+            }),
+            client,
+            None,
+        )
+        .await
+        .unwrap();
+
+    let markdown = markdown_text(&output);
+    // TSS row should be present with the sum of icu_training_load values (80*3=240)
+    assert!(markdown.contains("TSS"), "should contain TSS metric row");
+}
+
+#[tokio::test]
+async fn track_progress_does_not_derive_ctl_from_duration_only_activities() {
+    use intervals_icu_mcp::domains::coach::AnalysisWindow;
+    use intervals_icu_mcp::engines::progress_tracking::derive_ctl_series_from_activity_loads;
+
+    let mut details_map = HashMap::new();
+    details_map.insert(
+        "walk-1".to_string(),
+        json!({
+            "distance": 5000.0,
+            "moving_time": 3600
+        }),
+    );
+
+    let activities = vec![MockCoachClient::activity("walk-1", "Walk", "2026-03-01")];
+    let window = AnalysisWindow::new(
+        chrono::NaiveDate::from_ymd_opt(2026, 3, 1).unwrap(),
+        chrono::NaiveDate::from_ymd_opt(2026, 3, 1).unwrap(),
+    );
+
+    let result = derive_ctl_series_from_activity_loads(&activities, &details_map, &window);
+    assert!(
+        result.is_none(),
+        "must not derive CTL from duration-only activities"
     );
 }

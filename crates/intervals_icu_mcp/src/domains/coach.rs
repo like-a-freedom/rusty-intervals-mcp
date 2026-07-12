@@ -8,6 +8,8 @@
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 
+use super::baseline::PersonalBaselineDeviation;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum AnalysisKind {
     TrainingSingle,
@@ -165,6 +167,8 @@ pub struct WellnessMetrics {
     pub hrv_recovery_flag: bool,
     pub hrv_trend_slope: Option<f64>,
     pub recovery_quality_index: Option<f64>,
+    pub hrv_personal_baseline: Option<PersonalBaselineDeviation>,
+    pub resting_hr_personal_baseline: Option<PersonalBaselineDeviation>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]

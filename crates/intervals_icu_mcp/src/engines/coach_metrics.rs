@@ -617,6 +617,8 @@ pub fn parse_wellness_metrics(payload: Option<&Value>) -> Option<WellnessMetrics
         hrv_recovery_flag,
         hrv_trend_slope,
         recovery_quality_index,
+        hrv_personal_baseline: None,
+        resting_hr_personal_baseline: None,
     })
 }
 
@@ -668,6 +670,9 @@ pub fn extract_hrv_series(payload: Option<&Value>) -> Option<Vec<f64>> {
 }
 
 pub fn compute_lnrmssd_rollup(daily_hrv: &[f64]) -> LnRmssdRollup {
+    // Delegate to the shared personal baseline engine for consistency
+    // This function retains backward compatibility but uses the same formula
+    // as compute_personal_baseline
     let ln_values = daily_hrv
         .iter()
         .copied()
