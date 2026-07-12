@@ -23,11 +23,12 @@ use crate::engines::analysis_fetch::{
 };
 use crate::engines::coach_guidance::{build_alerts, build_guidance};
 use crate::engines::coach_metrics::{
-    build_trend_snapshot, classify_tid_model, compute_consistency_index, compute_heat_metrics_7d,
-    compute_load_management_metrics, compute_ndli_7d, compute_wdr_7d_rollup, compute_wdr_metrics,
-    compute_z2_hr_variance, derive_espe_metrics, derive_trend_metrics, derive_volume_metrics,
-    derive_workout_metrics_context, enrich_anchors_from_activity, extract_sportinfo_anchors,
-    parse_api_load_snapshot, parse_fitness_metrics, parse_polarisation_from_api,
+    aggregate_period_etvs, build_trend_snapshot, classify_tid_model, compute_consistency_index,
+    compute_etvs, compute_heat_metrics_7d, compute_load_management_metrics, compute_ndli_7d,
+    compute_wdr_7d_rollup, compute_wdr_metrics, compute_z2_hr_variance, derive_espe_metrics,
+    derive_trend_metrics, derive_volume_metrics, derive_workout_metrics_context,
+    enrich_anchors_from_activity, extract_sportinfo_anchors, parse_api_load_snapshot,
+    parse_fitness_metrics, parse_polarisation_from_api,
 };
 use crate::engines::cp_regression::{fit_cp, validate_cp};
 use crate::engines::shared::parse_activity_date;
@@ -224,7 +225,7 @@ impl IntentHandler for AnalyzeTrainingHandler {
                 "metrics": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Requested metrics: time, distance, vertical, tss, pace, hr. Results are surfaced explicitly; unavailable exact metrics are marked unavailable instead of being silently ignored."
+                    "description": "Requested metrics: time, distance, vertical, tss, pace, hr, etvs. ETVS is returned in weighted minutes with model and coverage context in the analysis body. Unavailable exact metrics are marked unavailable instead of being silently ignored."
                 }
             },
             "required": ["target_type"],
@@ -643,6 +644,17 @@ impl AnalyzeTrainingHandler {
         workout_context.metrics.espe_derived = Some(espe_derived);
         workout_context.metrics.wdrm = Some(wdrm);
 
+        // ETVS — Effective Training Volume Score
+        let moving_seconds = activity.moving_time.map(f64::from).or_else(|| {
+            workout_detail
+                .and_then(|detail| detail.get("moving_time"))
+                .and_then(|value| value.as_f64().or_else(|| value.as_i64().map(|n| n as f64)))
+        });
+        workout_context.metrics.etvs = compute_etvs(
+            workout_detail.and_then(|detail| detail.get("icu_zone_times")),
+            moving_seconds,
+        );
+
         workout_context.alerts = build_alerts(&workout_context.metrics);
         workout_context.guidance =
             build_guidance(&workout_context.metrics, &workout_context.alerts);
@@ -679,10 +691,15 @@ impl AnalyzeTrainingHandler {
             ));
         }
 
+        if let Some(etvs_text) = render_etvs_section(workout_context.metrics.etvs.as_ref()) {
+            content.push(ContentBlock::markdown(etvs_text));
+        }
+
         if !requested_metrics.is_empty() {
             let rows = build_requested_single_metric_rows(
                 workout_detail.and_then(Value::as_object),
                 &requested_metrics,
+                workout_context.metrics.etvs.as_ref(),
             );
             content.push(ContentBlock::markdown("Requested Metrics".to_string()));
             content.push(ContentBlock::table(
@@ -1362,6 +1379,9 @@ impl AnalyzeTrainingHandler {
             w_prime,
         ));
 
+        // ETVS — aggregate Effective Training Volume Score across period
+        period_context.metrics.etvs = aggregate_period_etvs(&period, &fetched.activity_details);
+
         // Consistency: planned vs completed workouts
         let planned_count = calendar_events
             .iter()
@@ -1393,6 +1413,10 @@ impl AnalyzeTrainingHandler {
             vec!["Metric".into(), "Value".into()],
             rows,
         ));
+
+        if let Some(etvs_text) = render_etvs_section(period_context.metrics.etvs.as_ref()) {
+            content.push(ContentBlock::markdown(etvs_text));
+        }
 
         let planned_workouts = period
             .iter()
@@ -1481,6 +1505,7 @@ impl AnalyzeTrainingHandler {
                 &period,
                 &period_snapshot,
                 &fetched.activity_details,
+                period_context.metrics.etvs.as_ref(),
             );
             content.push(ContentBlock::markdown("Requested Metrics".to_string()));
             content.push(ContentBlock::table(
@@ -4364,5 +4389,123 @@ mod tests {
             "Partial-detail warning should appear in degraded_mode_reasons. Got: {:?}",
             audit.degraded_mode_reasons
         );
+    }
+
+    // ── ETVS single-handler rendering ──────────────────────────────────────
+
+    #[tokio::test]
+    async fn analyze_single_summary_renders_etvs_from_activity_zones() {
+        let today = chrono::Utc::now().date_naive();
+        let date = today.format("%Y-%m-%d").to_string();
+        let client = Arc::new(
+            MockIntervalsClient::builder()
+                .with_activities(vec![ActivitySummary {
+                    id: "etvs-single".into(),
+                    name: Some("ETVS Run".into()),
+                    start_date_local: format!("{date}T08:00:00"),
+                    moving_time: Some(3600),
+                    ..Default::default()
+                }])
+                .with_activity_detail(
+                    "etvs-single",
+                    json!({
+                        "moving_time": 3600,
+                        "icu_zone_times": [
+                            {"id": "Z1", "secs": 1800},
+                            {"id": "Z2", "secs": 900},
+                            {"id": "Z3", "secs": 600},
+                            {"id": "Z4", "secs": 300}
+                        ]
+                    }),
+                ),
+        );
+
+        let output = AnalyzeTrainingHandler::new()
+            .execute(
+                json!({"target_type": "single", "date": date, "analysis_type": "summary"}),
+                client,
+                None,
+            )
+            .await
+            .unwrap();
+        let rendered = format!("{:?}", output.content);
+        assert!(rendered.contains("Effective Training Volume Score (ETVS)"));
+        assert!(rendered.contains("110.0 weighted min"));
+        assert!(rendered.contains("Coverage: 100.0% (1/1 activities)"));
+    }
+
+    #[tokio::test]
+    async fn analyze_single_does_not_render_fake_etvs_without_zone_data() {
+        let today = chrono::Utc::now().date_naive();
+        let date = today.format("%Y-%m-%d").to_string();
+        let client = Arc::new(
+            MockIntervalsClient::builder()
+                .with_activities(vec![ActivitySummary {
+                    id: "no-zones".into(),
+                    name: Some("Unzoned Run".into()),
+                    start_date_local: format!("{date}T08:00:00"),
+                    moving_time: Some(3600),
+                    ..Default::default()
+                }])
+                .with_activity_detail("no-zones", json!({"moving_time": 3600})),
+        );
+
+        let output = AnalyzeTrainingHandler::new()
+            .execute(json!({"target_type": "single", "date": date}), client, None)
+            .await
+            .unwrap();
+        assert!(!format!("{:?}", output.content).contains("ETVS"));
+    }
+
+    // ── ETVS period-handler rendering ──────────────────────────────────────
+
+    #[tokio::test]
+    async fn analyze_period_renders_aggregate_etvs_with_partial_coverage() {
+        let client = Arc::new(
+            MockIntervalsClient::builder()
+                .with_activities(vec![
+                    ActivitySummary {
+                        id: "period-a".into(),
+                        name: Some("Zoned Run".into()),
+                        start_date_local: "2026-03-02T08:00:00".into(),
+                        moving_time: Some(1800),
+                        ..Default::default()
+                    },
+                    ActivitySummary {
+                        id: "period-b".into(),
+                        name: Some("Unzoned Run".into()),
+                        start_date_local: "2026-03-03T08:00:00".into(),
+                        moving_time: Some(1800),
+                        ..Default::default()
+                    },
+                ])
+                .with_activity_detail(
+                    "period-a",
+                    json!({
+                        "moving_time": 1800,
+                        "icu_zone_times": [{"id": "Z1", "secs": 1800}]
+                    }),
+                )
+                .with_activity_detail("period-b", json!({"moving_time": 1800})),
+        );
+
+        let output = AnalyzeTrainingHandler::new()
+            .execute(
+                json!({
+                    "target_type": "period",
+                    "period_start": "2026-03-01",
+                    "period_end": "2026-03-07",
+                    "analysis_type": "summary",
+                    "metrics": ["etvs"]
+                }),
+                client,
+                None,
+            )
+            .await
+            .unwrap();
+        let rendered = format!("{:?}", output.content);
+        assert!(rendered.contains("30.0 weighted min"));
+        assert!(rendered.contains("Coverage: 50.0% (1/2 activities)"));
+        assert!(rendered.contains("Requested Metrics"));
     }
 }

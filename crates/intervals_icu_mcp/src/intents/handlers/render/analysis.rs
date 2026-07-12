@@ -1,8 +1,8 @@
 use serde_json::Value;
 
 use crate::domains::coach::{
-    DecouplingMetrics, EspeDerivedMetrics, EspePowerAnchors, FitnessMetrics, HeatMetrics,
-    NdliMetrics, WdrMetrics,
+    DecouplingMetrics, EspeDerivedMetrics, EspePowerAnchors, EtvsMetrics, FitnessMetrics,
+    HeatMetrics, NdliMetrics, WdrMetrics,
 };
 use crate::intents::ContentBlock;
 
@@ -553,11 +553,20 @@ pub(crate) fn build_period_summary_rows(
 pub(crate) fn build_requested_single_metric_rows(
     workout_detail: Option<&serde_json::Map<String, Value>>,
     requested: &[String],
+    etvs: Option<&EtvsMetrics>,
 ) -> Vec<Vec<String>> {
     let mut rows = Vec::new();
 
     for metric in requested {
         let (value, status) = match (metric.as_str(), workout_detail) {
+            ("etvs", _) => etvs
+                .map(|metrics| {
+                    (
+                        format!("{:.1} weighted min", metrics.score_weighted_minutes),
+                        "available".to_string(),
+                    )
+                })
+                .unwrap_or_else(|| ("n/a".into(), "unavailable".into())),
             ("time", Some(detail)) => detail
                 .get("moving_time")
                 .and_then(Value::as_i64)
@@ -614,6 +623,7 @@ pub(crate) fn build_requested_period_metric_rows(
     period: &[&intervals_icu_client::ActivitySummary],
     period_snapshot: &crate::engines::coach_metrics::TrendSnapshot,
     details: &std::collections::HashMap<String, Value>,
+    etvs: Option<&EtvsMetrics>,
 ) -> Vec<Vec<String>> {
     let weighted_avg_hr = || {
         let mut weighted_total = 0.0;
@@ -679,6 +689,14 @@ pub(crate) fn build_requested_period_metric_rows(
             "tss" => exact_period_tss()
                 .map(|tss| (format!("{:.1}", tss), "available".to_string()))
                 .unwrap_or_else(|| ("n/a".to_string(), "unavailable".to_string())),
+            "etvs" => etvs
+                .map(|metrics| {
+                    (
+                        format!("{:.1} weighted min", metrics.score_weighted_minutes),
+                        "available".to_string(),
+                    )
+                })
+                .unwrap_or_else(|| ("n/a".into(), "unavailable".into())),
             _ => ("n/a".to_string(), "unsupported".to_string()),
         };
 
@@ -1274,6 +1292,23 @@ pub(crate) fn render_z2_stability_section(
     Some(format!(
         "Z2 HR Stability\n  Z2 Range: {:.0}–{:.0} bpm\n  HR Variance: {:.1} bpm²\n  Assessment: {}",
         z2_lower, z2_upper, variance, stability
+    ))
+}
+
+pub(crate) fn render_etvs_section(etvs: Option<&EtvsMetrics>) -> Option<String> {
+    let metrics = etvs?;
+    let coverage = metrics
+        .coverage_ratio
+        .map(|ratio| format!("{:.1}%", ratio * 100.0))
+        .unwrap_or_else(|| "unknown".into());
+
+    Some(format!(
+        "Effective Training Volume Score (ETVS)\n  Score: {:.1} weighted min\n  Coverage: {} ({}/{} activities)\n  Model: {}",
+        metrics.score_weighted_minutes,
+        coverage,
+        metrics.activities_with_zone_data,
+        metrics.activities_total,
+        metrics.model,
     ))
 }
 
@@ -1940,7 +1975,7 @@ mod tests {
     fn build_requested_single_metric_rows_time() {
         let detail = serde_json::json!({"moving_time": 3600});
         let obj = detail.as_object();
-        let rows = build_requested_single_metric_rows(obj, &["time".to_string()]);
+        let rows = build_requested_single_metric_rows(obj, &["time".to_string()], None);
         assert_eq!(rows[0][1], "1:00:00");
         assert_eq!(rows[0][2], "available");
     }
@@ -1949,7 +1984,7 @@ mod tests {
     fn build_requested_single_metric_rows_distance() {
         let detail = serde_json::json!({"distance": 10000.0});
         let obj = detail.as_object();
-        let rows = build_requested_single_metric_rows(obj, &["distance".to_string()]);
+        let rows = build_requested_single_metric_rows(obj, &["distance".to_string()], None);
         assert_eq!(rows[0][1], "10.00 km");
         assert_eq!(rows[0][2], "available");
     }
@@ -1958,7 +1993,7 @@ mod tests {
     fn build_requested_single_metric_rows_vertical() {
         let detail = serde_json::json!({"total_elevation_gain": 350.0});
         let obj = detail.as_object();
-        let rows = build_requested_single_metric_rows(obj, &["vertical".to_string()]);
+        let rows = build_requested_single_metric_rows(obj, &["vertical".to_string()], None);
         assert_eq!(rows[0][1], "350 m");
         assert_eq!(rows[0][2], "available");
     }
@@ -1967,7 +2002,7 @@ mod tests {
     fn build_requested_single_metric_rows_hr() {
         let detail = serde_json::json!({"average_heartrate": 145.0});
         let obj = detail.as_object();
-        let rows = build_requested_single_metric_rows(obj, &["hr".to_string()]);
+        let rows = build_requested_single_metric_rows(obj, &["hr".to_string()], None);
         assert_eq!(rows[0][1], "145 bpm");
         assert_eq!(rows[0][2], "available");
     }
@@ -1979,7 +2014,7 @@ mod tests {
             "distance": 6000.0,
         });
         let obj = detail.as_object();
-        let rows = build_requested_single_metric_rows(obj, &["pace".to_string()]);
+        let rows = build_requested_single_metric_rows(obj, &["pace".to_string()], None);
         assert!(rows[0][1].contains("/km"));
         assert_eq!(rows[0][2], "available");
     }
@@ -1988,7 +2023,7 @@ mod tests {
     fn build_requested_single_metric_rows_pace_unavailable() {
         let detail = serde_json::json!({"moving_time": 0, "distance": 0.0});
         let obj = detail.as_object();
-        let rows = build_requested_single_metric_rows(obj, &["pace".to_string()]);
+        let rows = build_requested_single_metric_rows(obj, &["pace".to_string()], None);
         assert_eq!(rows[0][1], "n/a");
         assert_eq!(rows[0][2], "unavailable");
     }
@@ -1997,7 +2032,7 @@ mod tests {
     fn build_requested_single_metric_rows_tss() {
         let detail = serde_json::json!({"tss": 150.0});
         let obj = detail.as_object();
-        let rows = build_requested_single_metric_rows(obj, &["tss".to_string()]);
+        let rows = build_requested_single_metric_rows(obj, &["tss".to_string()], None);
         assert_eq!(rows[0][1], "150.0");
         assert_eq!(rows[0][2], "available");
     }
@@ -2006,14 +2041,14 @@ mod tests {
     fn build_requested_single_metric_rows_unsupported() {
         let detail = serde_json::json!({"foo": "bar"});
         let obj = detail.as_object();
-        let rows = build_requested_single_metric_rows(obj, &["cadence".to_string()]);
+        let rows = build_requested_single_metric_rows(obj, &["cadence".to_string()], None);
         assert_eq!(rows[0][1], "n/a");
         assert_eq!(rows[0][2], "unsupported");
     }
 
     #[test]
     fn build_requested_single_metric_rows_no_detail() {
-        let rows = build_requested_single_metric_rows(None, &["time".to_string()]);
+        let rows = build_requested_single_metric_rows(None, &["time".to_string()], None);
         assert_eq!(rows[0][1], "n/a");
         assert_eq!(rows[0][2], "unavailable");
     }
@@ -2022,7 +2057,7 @@ mod tests {
     fn build_requested_single_metric_rows_time_unavailable() {
         let detail = serde_json::json!({"moving_time": "not_a_number"});
         let obj = detail.as_object();
-        let rows = build_requested_single_metric_rows(obj, &["time".to_string()]);
+        let rows = build_requested_single_metric_rows(obj, &["time".to_string()], None);
         assert_eq!(rows[0][1], "n/a");
         assert_eq!(rows[0][2], "unavailable");
     }
@@ -2031,7 +2066,7 @@ mod tests {
     fn build_requested_single_metric_rows_tss_unavailable() {
         let detail = serde_json::json!({"foo": "bar"});
         let obj = detail.as_object();
-        let rows = build_requested_single_metric_rows(obj, &["tss".to_string()]);
+        let rows = build_requested_single_metric_rows(obj, &["tss".to_string()], None);
         assert_eq!(rows[0][1], "n/a");
         assert_eq!(rows[0][2], "unavailable");
     }
@@ -2056,6 +2091,7 @@ mod tests {
                 "tss".to_string(),
                 "unknown".to_string(),
             ],
+            None,
         );
         assert_eq!(rows.len(), 6);
         assert_eq!(rows[0][0], "TIME");
@@ -2088,6 +2124,7 @@ mod tests {
             &period,
             &snapshot,
             &details,
+            None,
         );
         assert_eq!(rows.len(), 3);
         assert_eq!(rows[0][1], "5:00:00");
@@ -2123,8 +2160,13 @@ mod tests {
         };
         let period = vec![&act1, &act2];
         let details = HashMap::new();
-        let rows =
-            build_requested_period_metric_rows(&["hr".to_string()], &period, &snapshot, &details);
+        let rows = build_requested_period_metric_rows(
+            &["hr".to_string()],
+            &period,
+            &snapshot,
+            &details,
+            None,
+        );
         // No details -> weighted_avg_hr returns None -> unavailable
         assert_eq!(rows[0][1], "n/a");
         assert_eq!(rows[0][2], "unavailable");
@@ -2151,8 +2193,13 @@ mod tests {
                 "average_heartrate": 150.0,
             }),
         );
-        let rows =
-            build_requested_period_metric_rows(&["hr".to_string()], &period, &snapshot, &details);
+        let rows = build_requested_period_metric_rows(
+            &["hr".to_string()],
+            &period,
+            &snapshot,
+            &details,
+            None,
+        );
         assert_eq!(rows[0][1], "150 bpm");
         assert_eq!(rows[0][2], "available");
     }
@@ -2170,6 +2217,7 @@ mod tests {
             &[],
             &snapshot,
             &HashMap::new(),
+            None,
         );
         assert!(rows[0][1].contains("/km"));
         assert_eq!(rows[0][2], "available");
@@ -2188,6 +2236,7 @@ mod tests {
             &[],
             &snapshot,
             &HashMap::new(),
+            None,
         );
         assert_eq!(rows[0][1], "n/a");
         assert_eq!(rows[0][2], "unavailable");
@@ -2208,8 +2257,13 @@ mod tests {
         let period = vec![&act1];
         let mut details = HashMap::new();
         details.insert("1".into(), serde_json::json!({"tss": 150.0}));
-        let rows =
-            build_requested_period_metric_rows(&["tss".to_string()], &period, &snapshot, &details);
+        let rows = build_requested_period_metric_rows(
+            &["tss".to_string()],
+            &period,
+            &snapshot,
+            &details,
+            None,
+        );
         assert_eq!(rows[0][1], "150.0");
         assert_eq!(rows[0][2], "available");
     }
@@ -2228,8 +2282,13 @@ mod tests {
         };
         let period = vec![&act1];
         let details = HashMap::new();
-        let rows =
-            build_requested_period_metric_rows(&["tss".to_string()], &period, &snapshot, &details);
+        let rows = build_requested_period_metric_rows(
+            &["tss".to_string()],
+            &period,
+            &snapshot,
+            &details,
+            None,
+        );
         assert_eq!(rows[0][1], "n/a");
         assert_eq!(rows[0][2], "unavailable");
     }
@@ -2247,6 +2306,7 @@ mod tests {
             &[],
             &snapshot,
             &HashMap::new(),
+            None,
         );
         assert_eq!(rows[0][1], "n/a");
         assert_eq!(rows[0][2], "unsupported");
@@ -3130,8 +3190,51 @@ mod tests {
     fn build_requested_single_metric_rows_pace_no_distance() {
         let detail = serde_json::json!({});
         let obj = detail.as_object();
-        let rows = build_requested_single_metric_rows(obj, &["pace".to_string()]);
+        let rows = build_requested_single_metric_rows(obj, &["pace".to_string()], None);
         assert_eq!(rows[0][1], "n/a");
         assert_eq!(rows[0][2], "unavailable");
+    }
+
+    // ── render_etvs_section ──────────────────────────────────────────────
+
+    fn etvs_fixture() -> EtvsMetrics {
+        EtvsMetrics {
+            score_weighted_minutes: 110.0,
+            zone_minutes: [30.0, 15.0, 10.0, 5.0, 0.0],
+            coverage_ratio: Some(0.95),
+            activities_with_zone_data: 3,
+            activities_total: 4,
+            model: "intervals_icu_zones_linear_1_5_cap_v1".into(),
+        }
+    }
+
+    #[test]
+    fn render_etvs_section_includes_value_model_and_coverage() {
+        let text = render_etvs_section(Some(&etvs_fixture())).unwrap();
+        assert!(text.contains("Effective Training Volume Score (ETVS)"));
+        assert!(text.contains("110.0 weighted min"));
+        assert!(text.contains("95.0%"));
+        assert!(text.contains("3/4 activities"));
+        assert!(text.contains("intervals_icu_zones_linear_1_5_cap_v1"));
+    }
+
+    #[test]
+    fn render_etvs_section_omits_missing_metric() {
+        assert_eq!(render_etvs_section(None), None);
+    }
+
+    // ── build_requested_single_metric_rows: ETVS ────────────────────────
+
+    #[test]
+    fn requested_single_etvs_uses_computed_metric() {
+        let rows =
+            build_requested_single_metric_rows(None, &["etvs".into()], Some(&etvs_fixture()));
+        assert_eq!(rows[0], vec!["ETVS", "110.0 weighted min", "available"]);
+    }
+
+    #[test]
+    fn requested_etvs_is_unavailable_instead_of_zero() {
+        let rows = build_requested_single_metric_rows(None, &["etvs".into()], None);
+        assert_eq!(rows[0], vec!["ETVS", "n/a", "unavailable"]);
     }
 }
