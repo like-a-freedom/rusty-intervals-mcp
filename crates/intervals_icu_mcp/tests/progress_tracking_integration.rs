@@ -126,3 +126,85 @@ fn report_degrades_gracefully_without_activity_details() {
             .any(|warning| warning.contains("TID drift unavailable"))
     );
 }
+
+#[test]
+fn personal_baselines_computed_with_enough_wellness_history() {
+    let mut entries = Vec::new();
+    for day in 1..=61 {
+        entries.push(json!({
+            "date": format!("2026-01-{:02}", day),
+            "hrv": 60.0,
+            "resting_hr": 55.0,
+            "ctl": if day <= 35 { 50.0 } else { 55.0 },
+        }));
+    }
+    let wellness = json!(entries);
+    let window = AnalysisWindow::new(
+        chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+        chrono::NaiveDate::from_ymd_opt(2026, 3, 2).unwrap(),
+    );
+
+    let report = build_progress_report(&wellness, &[], &HashMap::new(), &window);
+    assert!(
+        report.hrv_personal_baseline.is_some(),
+        "HRV baseline should be computed with 61 days of data"
+    );
+    assert!(
+        report.resting_hr_personal_baseline.is_some(),
+        "RHR baseline should be computed with 61 days of data"
+    );
+
+    let hrv = report.hrv_personal_baseline.unwrap();
+    assert_eq!(hrv.recent_sample_count, 7);
+    assert!(hrv.baseline_sample_count >= 14);
+    assert!(hrv.baseline_span_days >= 28);
+    assert_eq!(hrv.metric, "lnRMSSD");
+}
+
+#[test]
+fn personal_baselines_absent_without_wellness_history() {
+    let wellness = json!([]);
+    let window = AnalysisWindow::new(
+        chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+        chrono::NaiveDate::from_ymd_opt(2026, 2, 1).unwrap(),
+    );
+
+    let report = build_progress_report(&wellness, &[], &HashMap::new(), &window);
+    assert!(
+        report.hrv_personal_baseline.is_none(),
+        "HRV baseline should be None with no wellness data"
+    );
+    assert!(
+        report.resting_hr_personal_baseline.is_none(),
+        "RHR baseline should be None with no wellness data"
+    );
+}
+
+#[test]
+fn personal_baselines_absent_with_too_few_days() {
+    let mut entries = Vec::new();
+    // Only 10 days of data — insufficient for baseline (needs 14+ baseline days)
+    for day in 1..=10 {
+        entries.push(json!({
+            "date": format!("2026-01-{:02}", day),
+            "hrv": 60.0,
+            "resting_hr": 55.0,
+            "ctl": 50.0,
+        }));
+    }
+    let wellness = json!(entries);
+    let window = AnalysisWindow::new(
+        chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+        chrono::NaiveDate::from_ymd_opt(2026, 1, 15).unwrap(),
+    );
+
+    let report = build_progress_report(&wellness, &[], &HashMap::new(), &window);
+    assert!(
+        report.hrv_personal_baseline.is_none(),
+        "HRV baseline should be None with only 10 days of data"
+    );
+    assert!(
+        report.resting_hr_personal_baseline.is_none(),
+        "RHR baseline should be None with only 10 days of data"
+    );
+}

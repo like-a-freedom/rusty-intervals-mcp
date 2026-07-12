@@ -1,4 +1,4 @@
-use std::{collections::HashMap, collections::HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use chrono::{Duration, NaiveDate};
 use intervals_icu_client::{ActivityMessage, ActivitySummary, Event, IntervalsClient};
@@ -6,9 +6,12 @@ use serde_json::Value;
 
 use super::fetch_error::FetchError;
 use crate::domains::coach::AnalysisWindow;
+use crate::domains::load::{ComparableLoadSeries, LoadObservation, LoadSource};
 use crate::engines::shared::{parse_activity_date, parse_event_date};
 
-const ADAPTIVE_HRV_LOOKBACK_DAYS: i32 = 35;
+/// Minimum wellness history to fetch for personal baseline calculation.
+/// Requires 60 calendar days of observations to compute the reference window.
+pub const PERSONAL_BASELINE_WINDOW_DAYS: i32 = 60;
 
 #[derive(Debug, Clone)]
 pub struct PeriodFetchRequest {
@@ -107,56 +110,83 @@ pub fn activity_lookback_days(start: NaiveDate, today: NaiveDate) -> Result<i32,
     })
 }
 
-pub fn extract_activity_load(detail: Option<&Value>) -> Option<f64> {
+pub fn extract_activity_load(detail: Option<&Value>) -> Option<LoadObservation> {
     let object = detail?.as_object()?;
 
-    ["icu_training_load", "training_load", "icuTrainingLoad"]
-        .iter()
-        .find_map(|key| {
+    // Alias priority: icu_training_load → training_load/icuTrainingLoad → tss
+    let (key, source) = object
+        .get("icu_training_load")
+        .map(|_| ("icu_training_load", LoadSource::IcuTrainingLoad))
+        .or_else(|| {
             object
-                .get(*key)
-                .and_then(|value| value.as_f64().or_else(|| value.as_i64().map(|n| n as f64)))
+                .get("training_load")
+                .map(|_| ("training_load", LoadSource::TrainingLoadAlias))
         })
         .or_else(|| {
             object
-                .get("moving_time")
-                .and_then(|value| value.as_f64().or_else(|| value.as_i64().map(|n| n as f64)))
-                .map(|seconds| seconds / 60.0)
+                .get("icuTrainingLoad")
+                .map(|_| ("icuTrainingLoad", LoadSource::TrainingLoadAlias))
         })
+        .or_else(|| object.get("tss").map(|_| ("tss", LoadSource::TssAlias)))?;
+
+    let value = object.get(key).and_then(|v| {
+        v.as_f64()
+            .or_else(|| v.as_i64().map(|n| n as f64))
+            .or_else(|| v.as_str().and_then(|s| s.parse::<f64>().ok()))
+    })?;
+
+    LoadObservation::new(value, source)
 }
 
 /// Return the best available load for an activity without requiring its detail
 /// endpoint. Activity summaries carry `training_load` for historical queries;
 /// a loaded detail takes precedence when it exposes a more specific value.
-pub fn activity_load(activity: &ActivitySummary, detail: Option<&Value>) -> Option<f64> {
-    extract_activity_load(detail).or_else(|| activity.training_load.map(f64::from))
+pub fn activity_load(
+    activity: &ActivitySummary,
+    detail: Option<&Value>,
+) -> Option<LoadObservation> {
+    extract_activity_load(detail).or_else(|| {
+        activity.training_load.map(|value| LoadObservation {
+            value: f64::from(value),
+            source: LoadSource::ActivitySummaryTrainingLoad,
+        })
+    })
 }
 
 pub fn build_daily_load_series(
     activities: &[&ActivitySummary],
     details: &HashMap<String, Value>,
     window: &AnalysisWindow,
-) -> Vec<(NaiveDate, f64)> {
-    let mut totals = HashMap::<NaiveDate, f64>::new();
+) -> ComparableLoadSeries {
+    let mut daily_totals = HashMap::<NaiveDate, f64>::new();
+    let mut activities_total = 0usize;
+    let mut activities_with_load = 0usize;
+    let mut source_counts = BTreeMap::new();
 
     for activity in activities {
         if let Some(activity_date) = parse_activity_date(&activity.start_date_local) {
-            let load = activity_load(activity, details.get(&activity.id)).unwrap_or(0.0);
-            totals
-                .entry(activity_date)
-                .and_modify(|total| *total += load)
-                .or_insert(load);
+            activities_total += 1;
+            if let Some(observation) = activity_load(activity, details.get(&activity.id)) {
+                activities_with_load += 1;
+                *source_counts.entry(observation.source).or_insert(0) += 1;
+                *daily_totals.entry(activity_date).or_insert(0.0) += observation.value;
+            }
         }
     }
 
     let mut current = window.start_date;
-    let mut series = Vec::with_capacity(window.window_days().max(0) as usize);
+    let mut daily = Vec::with_capacity(window.window_days().max(0) as usize);
     while current <= window.end_date {
-        series.push((current, totals.get(&current).copied().unwrap_or(0.0)));
+        daily.push((current, daily_totals.get(&current).copied().unwrap_or(0.0)));
         current += Duration::days(1);
     }
 
-    series
+    ComparableLoadSeries {
+        daily,
+        activities_total,
+        activities_with_load,
+        source_counts,
+    }
 }
 
 fn dedupe_and_sort_events(mut events: Vec<Event>) -> Vec<Event> {
@@ -493,7 +523,7 @@ pub async fn fetch_recovery_data(
     request: &RecoveryFetchRequest,
 ) -> Result<FetchedAnalysisData, FetchError> {
     let wellness = if request.include_wellness {
-        let wellness_lookback_days = request.period_days.max(ADAPTIVE_HRV_LOOKBACK_DAYS);
+        let wellness_lookback_days = request.period_days.max(PERSONAL_BASELINE_WINDOW_DAYS);
         Some(
             client
                 .get_wellness(Some(wellness_lookback_days))
@@ -1130,28 +1160,121 @@ mod tests {
 
         let series = build_daily_load_series(&refs, &details, &window);
 
-        assert_eq!(series.len(), 4);
-        assert_eq!(series[0].1, 50.0);
-        assert_eq!(series[1].1, 0.0);
-        assert_eq!(series[2].1, 70.0);
-        assert_eq!(series[3].1, 0.0);
+        assert_eq!(series.daily.len(), 4);
+        assert_eq!(series.daily[0].1, 50.0);
+        assert_eq!(series.daily[1].1, 0.0);
+        assert_eq!(series.daily[2].1, 70.0);
+        assert_eq!(series.daily[3].1, 0.0);
+        assert_eq!(series.activities_total, 2);
+        assert_eq!(series.activities_with_load, 2);
     }
 
     #[test]
-    fn extract_activity_load_prefers_canonical_load_over_moving_time_proxy() {
+    fn load_extraction_never_uses_moving_time_as_load() {
+        let detail = json!({"moving_time": 5400});
+        assert_eq!(extract_activity_load(Some(&detail)), None);
+    }
+
+    #[test]
+    fn load_extraction_records_exact_alias_provenance() {
+        assert_eq!(
+            extract_activity_load(Some(&json!({"tss": 73.0}))),
+            Some(LoadObservation {
+                value: 73.0,
+                source: LoadSource::TssAlias
+            })
+        );
+    }
+
+    #[test]
+    fn load_extraction_records_icu_training_load_provenance() {
+        assert_eq!(
+            extract_activity_load(Some(&json!({"icu_training_load": 88.0}))),
+            Some(LoadObservation {
+                value: 88.0,
+                source: LoadSource::IcuTrainingLoad
+            })
+        );
+    }
+
+    #[test]
+    fn load_extraction_records_training_load_alias_provenance() {
+        assert_eq!(
+            extract_activity_load(Some(&json!({"training_load": 65.0}))),
+            Some(LoadObservation {
+                value: 65.0,
+                source: LoadSource::TrainingLoadAlias
+            })
+        );
+    }
+
+    #[test]
+    fn load_extraction_records_icu_training_load_camel_case_provenance() {
+        assert_eq!(
+            extract_activity_load(Some(&json!({"icuTrainingLoad": 72.0}))),
+            Some(LoadObservation {
+                value: 72.0,
+                source: LoadSource::TrainingLoadAlias
+            })
+        );
+    }
+
+    #[test]
+    fn load_extraction_prefers_canonical_over_aliases() {
         let detail = json!({
             "icu_training_load": 88.0,
-            "moving_time": 5400
+            "training_load": 65.0,
+            "tss": 73.0
         });
-
-        assert_eq!(extract_activity_load(Some(&detail)), Some(88.0));
+        assert_eq!(
+            extract_activity_load(Some(&detail)),
+            Some(LoadObservation {
+                value: 88.0,
+                source: LoadSource::IcuTrainingLoad
+            })
+        );
     }
 
     #[test]
-    fn extract_activity_load_falls_back_to_moving_time_minutes() {
-        let detail = json!({"moving_time": 5400});
+    fn activity_load_records_summary_training_load_provenance() {
+        let activity = ActivitySummary {
+            id: "a1".to_string(),
+            training_load: Some(42),
+            ..Default::default()
+        };
+        assert_eq!(
+            activity_load(&activity, None),
+            Some(LoadObservation {
+                value: 42.0,
+                source: LoadSource::ActivitySummaryTrainingLoad
+            })
+        );
+    }
 
-        assert_eq!(extract_activity_load(Some(&detail)), Some(90.0));
+    #[test]
+    fn daily_series_separates_rest_days_from_missing_load_coverage() {
+        // One loaded activity, one activity without load, and one rest day.
+        // Daily values include the rest-day zero, while coverage remains 1/2.
+        let window = AnalysisWindow::new(
+            NaiveDate::from_ymd_opt(2026, 3, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 3, 3).unwrap(),
+        );
+        let activities = [activity("a1", "2026-03-01"), activity("a2", "2026-03-02")];
+        let refs = activities.iter().collect::<Vec<_>>();
+        let details = HashMap::from([
+            ("a1".to_string(), json!({"icu_training_load": 50.0})),
+            // a2 has no load data
+        ]);
+
+        let series = build_daily_load_series(&refs, &details, &window);
+
+        assert_eq!(series.daily.len(), 3);
+        assert_eq!(series.daily[0].1, 50.0); // loaded
+        assert_eq!(series.daily[1].1, 0.0); // activity without load
+        assert_eq!(series.daily[2].1, 0.0); // rest day
+        assert_eq!(series.activities_total, 2);
+        assert_eq!(series.activities_with_load, 1);
+        assert_eq!(series.coverage_ratio(), Some(0.5));
     }
 
     #[test]
@@ -1172,8 +1295,8 @@ mod tests {
 
         let series = build_daily_load_series(&refs, &details, &window);
 
-        assert_eq!(series[0].1, 75.0);
-        assert_eq!(series[1].1, 0.0);
+        assert_eq!(series.daily[0].1, 75.0);
+        assert_eq!(series.daily[1].1, 0.0);
     }
 
     #[test]
@@ -1831,25 +1954,43 @@ mod tests {
     #[test]
     fn extract_activity_load_alternate_load_field_names() {
         let detail = json!({"training_load": 75.0});
-        assert_eq!(extract_activity_load(Some(&detail)), Some(75.0));
+        assert_eq!(
+            extract_activity_load(Some(&detail)),
+            Some(LoadObservation {
+                value: 75.0,
+                source: LoadSource::TrainingLoadAlias
+            })
+        );
     }
 
     #[test]
     fn extract_activity_load_camelcase_load_field() {
         let detail = json!({"icuTrainingLoad": 88.0});
-        assert_eq!(extract_activity_load(Some(&detail)), Some(88.0));
+        assert_eq!(
+            extract_activity_load(Some(&detail)),
+            Some(LoadObservation {
+                value: 88.0,
+                source: LoadSource::TrainingLoadAlias
+            })
+        );
     }
 
     #[test]
     fn extract_activity_load_integer_load() {
         let detail = json!({"icu_training_load": 90});
-        assert_eq!(extract_activity_load(Some(&detail)), Some(90.0));
+        assert_eq!(
+            extract_activity_load(Some(&detail)),
+            Some(LoadObservation {
+                value: 90.0,
+                source: LoadSource::IcuTrainingLoad
+            })
+        );
     }
 
     #[test]
-    fn extract_activity_load_moving_time_integer() {
+    fn extract_activity_load_moving_time_returns_none() {
         let detail = json!({"moving_time": 7200});
-        assert_eq!(extract_activity_load(Some(&detail)), Some(120.0));
+        assert_eq!(extract_activity_load(Some(&detail)), None);
     }
 
     // ========================================================================

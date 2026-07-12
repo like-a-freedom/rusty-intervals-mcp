@@ -4,6 +4,7 @@ use chrono::{Datelike, NaiveDate};
 use intervals_icu_client::ActivitySummary;
 use serde_json::Value;
 
+use crate::domains::baseline::{BaselineTransform, compute_personal_baseline};
 use crate::domains::coach::AnalysisWindow;
 use crate::domains::progress::{
     HypothesisDomain, ProgressHypothesis, ProgressReport, TidDriftMetrics, TidDriftState,
@@ -74,14 +75,14 @@ pub fn derive_ctl_series_from_activity_loads(
     let derivation_window = AnalysisWindow::new(first_activity_date, window.end_date);
     let activity_refs = activities.iter().collect::<Vec<_>>();
     let daily_loads = build_daily_load_series(&activity_refs, activity_details, &derivation_window);
-    if daily_loads.is_empty() {
+    if daily_loads.activities_with_load == 0 {
         return None;
     }
 
     let mut ctl = 0.0;
-    let mut dates = Vec::with_capacity(daily_loads.len());
-    let mut values = Vec::with_capacity(daily_loads.len());
-    for (date, load) in daily_loads {
+    let mut dates = Vec::with_capacity(daily_loads.daily.len());
+    let mut values = Vec::with_capacity(daily_loads.daily.len());
+    for (date, load) in &daily_loads.daily {
         ctl += (load - ctl) / CTL_TIME_CONSTANT_DAYS;
         dates.push(date.to_string());
         values.push(ctl);
@@ -416,10 +417,7 @@ pub fn build_progress_report_with_ctl_fallback(
 
     let activity_refs = activities.iter().collect::<Vec<_>>();
     let daily_load_series = build_daily_load_series(&activity_refs, activity_details, window);
-    let daily_load_values = daily_load_series
-        .iter()
-        .map(|(_, load)| *load)
-        .collect::<Vec<_>>();
+    let daily_load_values = daily_load_series.values().collect::<Vec<_>>();
     let trailing_7d = if daily_load_values.len() >= TRAILING_LOAD_WINDOW_DAYS {
         &daily_load_values[daily_load_values.len() - TRAILING_LOAD_WINDOW_DAYS..]
     } else {
@@ -466,6 +464,39 @@ pub fn build_progress_report_with_ctl_fallback(
         report
             .warnings
             .push("Wellness HRV history unavailable; lnRMSSD rollup and HRV ratio skipped.".into());
+    }
+
+    // Personal baseline from wellness history
+    if let Some(entries) = wellness.as_array() {
+        let hrv_observations: Vec<(chrono::NaiveDate, f64)> = entries
+            .iter()
+            .filter_map(|entry| {
+                let obj = entry.as_object()?;
+                let date_str = obj.get("date")?.as_str()?;
+                let date = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d").ok()?;
+                let hrv = obj.get("hrv")?.as_f64()?;
+                Some((date, hrv))
+            })
+            .collect();
+        let rhr_observations: Vec<(chrono::NaiveDate, f64)> = entries
+            .iter()
+            .filter_map(|entry| {
+                let obj = entry.as_object()?;
+                let date_str = obj.get("date")?.as_str()?;
+                let date = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d").ok()?;
+                let rhr = obj
+                    .get("resting_hr")
+                    .or_else(|| obj.get("restingHR"))
+                    .or_else(|| obj.get("resting_hr_bpm"))
+                    .or_else(|| obj.get("avgSleepingHR"))?
+                    .as_f64()?;
+                Some((date, rhr))
+            })
+            .collect();
+        report.hrv_personal_baseline =
+            compute_personal_baseline(&hrv_observations, BaselineTransform::LogLnRmssd);
+        report.resting_hr_personal_baseline =
+            compute_personal_baseline(&rhr_observations, BaselineTransform::RawBpm);
     }
 
     // Interpretation rule: if enough athlete-specific history exists, downstream
