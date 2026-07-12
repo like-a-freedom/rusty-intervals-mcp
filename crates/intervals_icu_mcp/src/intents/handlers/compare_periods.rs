@@ -7,12 +7,12 @@ use serde_json::{Value, json};
 /// Compares performance between two periods (like-for-like).
 use std::sync::Arc;
 
-use crate::domains::coach::{AnalysisWindow, CoachMetrics};
+use crate::domains::coach::{AnalysisWindow, CoachMetrics, EtvsMetrics};
 use crate::engines::analysis_fetch::{PeriodFetchRequest, fetch_period_data};
 use crate::engines::coach_guidance::{build_alerts, build_guidance};
 use crate::engines::coach_metrics::{
-    TrendSnapshot, build_trend_snapshot, compute_consistency_index, derive_trend_metrics,
-    derive_volume_metrics, parse_fitness_metrics,
+    TrendSnapshot, aggregate_period_etvs, build_trend_snapshot, compute_consistency_index,
+    derive_trend_metrics, derive_volume_metrics, parse_fitness_metrics,
 };
 use crate::intents::utils::{filter_activities_by_range, format_pct, parse_date};
 
@@ -85,7 +85,7 @@ impl IntentHandler for ComparePeriodsHandler {
                 "period_b_end": {"type": "string", "description": "Period B end (YYYY-MM-DD, 'today', 'tomorrow', or 'yesterday')"},
                 "period_b_label": {"type": "string", "description": "Period B label"},
                 "workout_type": {"type": "string", "description": "Filter by type: tempo, intervals, long_run"},
-                "metrics": {"type": "array", "items": {"type": "string"}, "description": "Metrics: volume, intensity, zones, pace, hr, tss"}
+                "metrics": {"type": "array", "items": {"type": "string"}, "description": "Metrics: volume, intensity, zones, pace, hr, tss, etvs. ETVS is compared as weighted minutes and includes zone-data coverage."}
             },
             "required": ["period_a_start", "period_a_end", "period_b_start", "period_b_end"]
         })
@@ -329,6 +329,7 @@ struct PeriodStats {
     activities: Vec<ActivitySummary>,
     activity_details: std::collections::HashMap<String, Value>,
     planned_count: usize,
+    etvs: Option<EtvsMetrics>,
 }
 
 fn matches_workout_type(activity: &ActivitySummary, filter: &str) -> bool {
@@ -453,6 +454,23 @@ fn requested_metric_value(metric: &str, stats: &PeriodStats) -> (String, String)
                 (parts.join(", "), "aggregated from icu_zone_times".into())
             }
         }
+        "etvs" => stats
+            .etvs
+            .as_ref()
+            .map(|metrics| {
+                let coverage = metrics
+                    .coverage_ratio
+                    .map(|ratio| format!("{:.1}%", ratio * 100.0))
+                    .unwrap_or_else(|| "unknown".into());
+                (
+                    format!("{:.1} weighted min", metrics.score_weighted_minutes),
+                    format!(
+                        "{} coverage ({}/{} activities)",
+                        coverage, metrics.activities_with_zone_data, metrics.activities_total,
+                    ),
+                )
+            })
+            .unwrap_or_else(|| ("n/a".into(), "zone times unavailable".into())),
         other => ("n/a".into(), format!("metric '{}' not yet modeled", other)),
     }
 }
@@ -465,6 +483,7 @@ fn requested_metric_label(metric: &str) -> String {
         "volume" => "Volume".to_string(),
         "zones" => "Zones".to_string(),
         "intensity" => "Intensity".to_string(),
+        "etvs" => "ETVS".to_string(),
         other => other.replace('_', " ").to_uppercase(),
     }
 }
@@ -518,6 +537,7 @@ impl ComparePeriodsHandler {
                 activities: Vec::new(),
                 activity_details: fetched.activity_details,
                 planned_count,
+                etvs: None,
             });
         }
 
@@ -551,12 +571,15 @@ impl ComparePeriodsHandler {
             build_trend_snapshot(&period, &activity_details)
         };
 
+        let etvs = aggregate_period_etvs(&period, &activity_details);
+
         Ok(PeriodStats {
             snapshot,
             window_days: window.window_days(),
             activities: period.into_iter().cloned().collect(),
             activity_details,
             planned_count,
+            etvs,
         })
     }
 }
@@ -688,6 +711,7 @@ mod tests {
             activities: vec![],
             activity_details: HashMap::new(),
             planned_count: 0,
+            etvs: None,
         };
 
         let (value, note) = requested_metric_value("volume", &stats);
@@ -708,6 +732,7 @@ mod tests {
             activities: vec![],
             activity_details: HashMap::new(),
             planned_count: 0,
+            etvs: None,
         };
 
         let (value, note) = requested_metric_value("pace", &stats);
@@ -728,6 +753,7 @@ mod tests {
             activities: vec![],
             activity_details: HashMap::new(),
             planned_count: 0,
+            etvs: None,
         };
 
         let (value, note) = requested_metric_value("pace", &stats);
@@ -756,6 +782,7 @@ mod tests {
                 json!({"average_heartrate": 150.0}),
             )]),
             planned_count: 0,
+            etvs: None,
         };
 
         let (value, note) = requested_metric_value("hr", &stats);
@@ -781,6 +808,7 @@ mod tests {
             }],
             activity_details: HashMap::new(),
             planned_count: 0,
+            etvs: None,
         };
 
         let (value, note) = requested_metric_value("hr", &stats);
@@ -809,6 +837,7 @@ mod tests {
                 json!({"icu_training_load": 75.0}),
             )]),
             planned_count: 0,
+            etvs: None,
         };
 
         let (value, note) = requested_metric_value("tss", &stats);
@@ -829,6 +858,7 @@ mod tests {
             activities: vec![],
             activity_details: HashMap::new(),
             planned_count: 0,
+            etvs: None,
         };
 
         let (value, note) = requested_metric_value("unknown_metric", &stats);
@@ -882,6 +912,7 @@ mod tests {
             activities,
             activity_details: details,
             planned_count: 0,
+            etvs: None,
         };
         let (value, note) = requested_metric_value("intensity", &stats);
         // 250 total TSS / 2 weeks = 125 TSS/wk
@@ -904,6 +935,7 @@ mod tests {
             activities: vec![],
             activity_details: HashMap::new(),
             planned_count: 0,
+            etvs: None,
         };
         let (value, note) = requested_metric_value("zones", &stats);
         assert_eq!(value, "n/a");
@@ -935,11 +967,49 @@ mod tests {
             activities,
             activity_details: details,
             planned_count: 0,
+            etvs: None,
         };
         let (value, note) = requested_metric_value("zones", &stats);
         assert!(value.contains("Z1: 60m"), "value: {value}");
         assert!(value.contains("Z2: 30m"), "value: {value}");
         assert_eq!(note, "aggregated from icu_zone_times");
+    }
+
+    #[test]
+    fn requested_metric_value_etvs_includes_score_and_coverage() {
+        let stats = PeriodStats {
+            snapshot: TrendSnapshot {
+                activity_count: 2,
+                total_time_secs: 3600,
+                total_distance_m: 0.0,
+                total_elevation_m: 0.0,
+            },
+            window_days: 7,
+            activities: vec![],
+            activity_details: HashMap::new(),
+            planned_count: 0,
+            etvs: Some(EtvsMetrics {
+                score_weighted_minutes: 110.0,
+                zone_minutes: [30.0, 15.0, 10.0, 5.0, 0.0],
+                coverage_ratio: Some(0.75),
+                activities_with_zone_data: 1,
+                activities_total: 2,
+                model: "intervals_icu_zones_linear_1_5_cap_v1".into(),
+            }),
+        };
+
+        let (value, note) = requested_metric_value("etvs", &stats);
+        assert_eq!(value, "110.0 weighted min");
+        assert_eq!(note, "75.0% coverage (1/2 activities)");
+        assert_eq!(requested_metric_label("etvs"), "ETVS");
+    }
+
+    #[test]
+    fn requested_metric_value_etvs_is_unavailable_without_zone_data() {
+        let stats = make_stats(vec![], HashMap::new(), 7);
+        let (value, note) = requested_metric_value("etvs", &stats);
+        assert_eq!(value, "n/a");
+        assert_eq!(note, "zone times unavailable");
     }
 
     // ========================================================================
@@ -1010,6 +1080,7 @@ mod tests {
             activities,
             activity_details: details,
             planned_count: 0,
+            etvs: None,
         }
     }
 
@@ -1413,5 +1484,49 @@ mod tests {
             desc.contains("period_a_start") && desc.contains("period_b_start"),
             "Description should mention all four boundary fields"
         );
+    }
+
+    #[tokio::test]
+    async fn compare_periods_renders_requested_etvs_for_both_periods() {
+        let client = Arc::new(
+            MockIntervalsClient::builder()
+                .with_activities(vec![
+                    ActivitySummary {
+                        id: "a".into(),
+                        name: Some("Period A Run".into()),
+                        start_date_local: "2026-01-03T08:00:00".into(),
+                        moving_time: Some(1800),
+                        ..Default::default()
+                    },
+                    ActivitySummary {
+                        id: "b".into(),
+                        name: Some("Period B Run".into()),
+                        start_date_local: "2026-02-03T08:00:00".into(),
+                        moving_time: Some(1800),
+                        ..Default::default()
+                    },
+                ])
+                .with_activity_detail("a", json!({"icu_zone_times": [{"id": "Z1", "secs": 1800}]}))
+                .with_activity_detail("b", json!({"icu_zone_times": [{"id": "Z2", "secs": 1800}]})),
+        );
+
+        let output = ComparePeriodsHandler::new()
+            .execute(
+                json!({
+                    "period_a_start": "2026-01-01",
+                    "period_a_end": "2026-01-07",
+                    "period_b_start": "2026-02-01",
+                    "period_b_end": "2026-02-07",
+                    "metrics": ["etvs"]
+                }),
+                client,
+                None,
+            )
+            .await
+            .unwrap();
+        let rendered = format!("{:?}", output.content);
+        assert!(rendered.contains("ETVS"));
+        assert!(rendered.contains("weighted min"));
+        assert!(rendered.contains("coverage"));
     }
 }
