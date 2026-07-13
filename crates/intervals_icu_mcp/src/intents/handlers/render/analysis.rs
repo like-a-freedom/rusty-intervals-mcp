@@ -5,11 +5,8 @@ use crate::domains::coach::{
     HeatMetrics, NdliMetrics, WdrMetrics,
 };
 #[allow(dead_code)]
-use crate::domains::interval_detection::TimeRange;
-#[allow(dead_code)]
 use crate::domains::interval_segment::{
-    EnrichedSegment, IntervalSegmentMetrics, SegmentProvenance, SegmentRole,
-    SegmentSeriesReport, SeriesConsistency,
+    SegmentProvenance, SegmentSeriesReport, SeriesConsistency,
     SportPresentation,
 };
 use crate::engines::interval_analysis::format_pace_from_speed;
@@ -1321,7 +1318,10 @@ mod tests {
         count_work_intervals, derive_interval_output, extract_exact_tss, format_pace_from_speed,
         interval_number, preferred_interval_output_kind, quality_output_finding, stream_series,
     };
-    use crate::domains::interval_segment::SegmentWindow;
+    use crate::domains::interval_detection::TimeRange;
+    use crate::domains::interval_segment::{
+        EnrichedSegment, IntervalSegmentMetrics, SegmentRole, SegmentWindow,
+    };
     use crate::intents::ContentBlock;
     use intervals_icu_client::{ActivityMessage, ActivitySummary, Event, EventCategory};
     use std::collections::HashMap;
