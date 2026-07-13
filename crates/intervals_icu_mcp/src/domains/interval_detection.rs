@@ -29,12 +29,20 @@ pub struct DetectedSegment {
     pub mean_intensity: f64,
 }
 
+/// A series of detected effort/recovery segments (e.g. from fartlek).
+#[derive(Debug, Clone)]
+pub struct DetectedSegmentSeries {
+    pub effort_segments: Vec<DetectedSegment>,
+    pub recovery_segments: Vec<DetectedSegment>,
+}
+
 /// Result of running the detector on a single session.
 #[derive(Debug, Clone)]
 pub struct IntervalDetectionResult {
     pub session_kind: SessionKind,
     pub work_segments: Vec<DetectedSegment>,
     pub recovery_segments: Vec<DetectedSegment>,
+    pub fartlek_series: Option<DetectedSegmentSeries>,
     pub confidence: Option<f64>,
     pub reasons: Vec<String>,
 }
@@ -94,6 +102,19 @@ impl Default for NormalizationConfig {
 pub struct TimeRange {
     pub start: f64,
     pub end: f64,
+}
+
+fn detected_segments(blocks: &[(f64, f64, f64)]) -> Vec<DetectedSegment> {
+    blocks
+        .iter()
+        .map(|(start, end, mean_intensity)| DetectedSegment {
+            range: TimeRange {
+                start: *start,
+                end: *end,
+            },
+            mean_intensity: *mean_intensity,
+        })
+        .collect()
 }
 
 fn mean(values: &[f64]) -> f64 {
@@ -193,6 +214,7 @@ pub fn detect_intervals(raw: &RawStream) -> IntervalDetectionResult {
                 session_kind: SessionKind::InsufficientData,
                 work_segments: Vec::new(),
                 recovery_segments: Vec::new(),
+                fartlek_series: None,
                 confidence: None,
                 reasons: vec![reason],
             };
@@ -204,6 +226,7 @@ pub fn detect_intervals(raw: &RawStream) -> IntervalDetectionResult {
             session_kind: SessionKind::InsufficientData,
             work_segments: Vec::new(),
             recovery_segments: Vec::new(),
+            fartlek_series: None,
             confidence: None,
             reasons: vec!["stream too short for detection".to_string()],
         };
@@ -229,6 +252,7 @@ pub fn detect_intervals(raw: &RawStream) -> IntervalDetectionResult {
             session_kind: SessionKind::Other,
             work_segments: Vec::new(),
             recovery_segments: Vec::new(),
+            fartlek_series: None,
             confidence: None,
             reasons: vec!["no intensity variation to detect intervals".to_string()],
         };
@@ -245,6 +269,7 @@ pub fn detect_intervals(raw: &RawStream) -> IntervalDetectionResult {
             session_kind: SessionKind::Other,
             work_segments: Vec::new(),
             recovery_segments: Vec::new(),
+            fartlek_series: None,
             confidence: None,
             reasons: vec!["no intensity variation to detect intervals".to_string()],
         };
@@ -308,6 +333,7 @@ pub fn detect_intervals(raw: &RawStream) -> IntervalDetectionResult {
             session_kind: SessionKind::Other,
             work_segments: Vec::new(),
             recovery_segments: Vec::new(),
+            fartlek_series: None,
             confidence: None,
             reasons: vec!["no sustained work segments found".to_string()],
         };
@@ -333,32 +359,15 @@ pub fn detect_intervals(raw: &RawStream) -> IntervalDetectionResult {
         && separation >= config.intensity_separation;
 
     if is_structured {
-        let work_segments = work_blocks
-            .iter()
-            .map(|b| DetectedSegment {
-                range: TimeRange {
-                    start: b.0,
-                    end: b.1,
-                },
-                mean_intensity: b.2,
-            })
-            .collect();
-        let recovery_segments = recovery_blocks
-            .iter()
-            .map(|b| DetectedSegment {
-                range: TimeRange {
-                    start: b.0,
-                    end: b.1,
-                },
-                mean_intensity: b.2,
-            })
-            .collect();
+        let work_segments = detected_segments(&work_blocks);
+        let recovery_segments = detected_segments(&recovery_blocks);
 
         let confidence = Some((1.0 - work_cv).clamp(0.0, 1.0));
         IntervalDetectionResult {
             session_kind: SessionKind::StructuredIntervals,
             work_segments,
             recovery_segments,
+            fartlek_series: None,
             confidence,
             reasons: vec![
                 format!(
@@ -382,10 +391,15 @@ pub fn detect_intervals(raw: &RawStream) -> IntervalDetectionResult {
         } else {
             "work present but regularity too low for structured intervals"
         };
+        let fartlek_series = (kind == SessionKind::Fartlek).then(|| DetectedSegmentSeries {
+            effort_segments: detected_segments(&work_blocks),
+            recovery_segments: detected_segments(&recovery_blocks),
+        });
         IntervalDetectionResult {
             session_kind: kind,
             work_segments: Vec::new(),
             recovery_segments: Vec::new(),
+            fartlek_series,
             confidence: Some(0.4),
             reasons: vec![reason.to_string()],
         }
@@ -456,16 +470,36 @@ mod tests {
         let result = detect_intervals(&raw);
         assert_eq!(result.session_kind, SessionKind::StructuredIntervals);
         assert_eq!(result.work_segments.len(), 4);
+
+        let work_ranges = result
+            .work_segments
+            .iter()
+            .map(|segment| (segment.range.start, segment.range.end))
+            .collect::<Vec<_>>();
+        let recovery_ranges = result
+            .recovery_segments
+            .iter()
+            .map(|segment| (segment.range.start, segment.range.end))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            work_ranges,
+            vec![(0.0, 180.0), (300.0, 480.0), (600.0, 780.0), (900.0, 1080.0)]
+        );
+        assert_eq!(
+            recovery_ranges,
+            vec![(180.0, 300.0), (480.0, 600.0), (780.0, 900.0)]
+        );
+        assert_eq!(
+            result.reasons,
+            vec![
+                "4 regular work/recovery cycles detected",
+                "work-duration CV=0.00, recovery-duration CV=0.00",
+            ]
+        );
     }
 
-    #[test]
-    fn irregular_surges_are_fartlek_not_structured_intervals() {
-        // Irregular surge/easy alternation with inconsistent durations.
-        let mut time_s = Vec::new();
-        let mut speed = Vec::new();
-        let mut hr = Vec::new();
-        let mut power = Vec::new();
-        let mut t = 0.0f64;
+    fn build_irregular_fartlek_raw() -> RawStream {
         let blocks: Vec<(f64, f64, f64, f64)> = vec![
             (20.0, 6.0, 178.0, 320.0),
             (250.0, 3.0, 145.0, 150.0),
@@ -473,6 +507,11 @@ mod tests {
             (50.0, 2.8, 140.0, 130.0),
             (40.0, 5.5, 172.0, 300.0),
         ];
+        let mut time_s = Vec::new();
+        let mut speed = Vec::new();
+        let mut hr = Vec::new();
+        let mut power = Vec::new();
+        let mut t = 0.0f64;
         for (dur, spd, h, pw) in blocks {
             for _ in 0..dur as usize {
                 time_s.push(t);
@@ -482,10 +521,42 @@ mod tests {
                 t += 1.0;
             }
         }
-        let raw = build_raw(time_s, speed, hr, power);
+        build_raw(time_s, speed, hr, power)
+    }
+
+    #[test]
+    fn irregular_surges_are_fartlek_not_structured_intervals() {
+        let raw = build_irregular_fartlek_raw();
         let result = detect_intervals(&raw);
         assert_eq!(result.session_kind, SessionKind::Fartlek);
         assert!(result.work_segments.is_empty());
+        assert!(result.recovery_segments.is_empty());
+        assert_eq!(
+            result.reasons,
+            vec!["irregular surges detected; not a structured interval set"]
+        );
+    }
+
+    #[test]
+    fn fartlek_retains_candidate_surges_without_claiming_structured_work() {
+        let raw = build_irregular_fartlek_raw();
+        let result = detect_intervals(&raw);
+
+        assert_eq!(result.session_kind, SessionKind::Fartlek);
+        assert!(result.work_segments.is_empty());
+        assert!(result.recovery_segments.is_empty());
+
+        let series = result
+            .fartlek_series
+            .as_ref()
+            .expect("fartlek candidates must be retained");
+        let surge_ranges = series
+            .effort_segments
+            .iter()
+            .map(|segment| (segment.range.start, segment.range.end))
+            .collect::<Vec<_>>();
+        assert_eq!(surge_ranges, vec![(0.0, 20.0), (270.0, 360.0), (410.0, 450.0)]);
+        assert_eq!(series.recovery_segments.len(), 2);
     }
 
     #[test]
