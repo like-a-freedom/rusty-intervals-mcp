@@ -9,6 +9,7 @@ pub mod coach_metrics;
 pub mod coach_metrics_constants;
 pub mod cp_regression;
 pub mod dedupe;
+pub(crate) mod endurance_evidence;
 pub mod fetch_error;
 pub mod forecast;
 pub mod interval_analysis;
