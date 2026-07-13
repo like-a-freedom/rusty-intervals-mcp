@@ -8,6 +8,9 @@ docs/
 .vscode/
 .opencode/
 .pi/
+.superpowers/
+.pytest_cache/
+coverage/
 
 **/*.rs.bk
 **/Cargo.lock
