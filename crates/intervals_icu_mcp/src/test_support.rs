@@ -160,6 +160,7 @@ pub(crate) mod mock {
         pub fitness_summary: Option<Value>,
         pub workout_detail: Option<Value>,
         pub streams: Option<Value>,
+        pub streams_map: HashMap<String, Value>,
         pub intervals: Option<Value>,
         pub best_efforts: Option<Value>,
         pub hr_histogram: Option<Value>,
@@ -220,6 +221,11 @@ pub(crate) mod mock {
 
         pub fn with_streams(mut self, streams: Value) -> Self {
             self.streams = Some(streams);
+            self
+        }
+
+        pub fn with_streams_for(mut self, activity_id: &str, streams: Value) -> Self {
+            self.streams_map.insert(activity_id.to_string(), streams);
             self
         }
 
@@ -343,10 +349,15 @@ pub(crate) mod mock {
 
         async fn get_activity_streams(
             &self,
-            _activity_id: &str,
+            activity_id: &str,
             _streams: Option<Vec<String>>,
         ) -> Result<Value, IntervalsError> {
-            Ok(self.streams.clone().unwrap_or_else(|| json!({})))
+            Ok(self
+                .streams_map
+                .get(activity_id)
+                .cloned()
+                .or_else(|| self.streams.clone())
+                .unwrap_or_else(|| json!({})))
         }
 
         async fn get_activity_intervals(

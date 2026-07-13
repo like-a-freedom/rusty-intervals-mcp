@@ -496,6 +496,7 @@ impl ComparePeriodsHandler {
                 window: window.clone(),
                 include_activity_details: true,
                 include_comparison_window: false,
+                include_endurance_evidence: false,
             },
         )
         .await

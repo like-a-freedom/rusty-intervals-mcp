@@ -13,8 +13,7 @@ use super::render::analysis::*;
 use crate::domains::coach::{AnalysisKind, AnalysisWindow, CoachContext};
 use crate::domains::interval_detection::{self, RawStream};
 use crate::domains::interval_segment::{
-    MetricStreams, SegmentProvenance, SegmentRole, SegmentSeriesReport, SegmentWindow,
-    SportPresentation,
+    SegmentProvenance, SegmentRole, SegmentSeriesReport, SegmentWindow, SportPresentation,
 };
 use crate::engines::adaptation::classify_curve_profile;
 use crate::engines::analysis::{
@@ -40,6 +39,7 @@ use crate::engines::interval_analysis::{
     preferred_interval_output_kind, quality_output_finding, upstream_segment_windows,
 };
 use crate::engines::interval_segment_metrics::{compute_structured_consistency, enrich_segments};
+use crate::engines::metric_streams::parse_metric_streams;
 use crate::engines::shared::parse_activity_date;
 use crate::engines::trail_execution::compute_terrain_context;
 
@@ -146,62 +146,6 @@ fn build_local_raw_stream(streams: &Value) -> Option<RawStream> {
         speed,
         heartrate,
         power,
-    })
-}
-
-/// Build a strict `MetricStreams` from a JSON streams payload.
-///
-/// Unlike `build_local_raw_stream`, this parser:
-/// - Only accepts confirmed m/s stream names (`velocity_smooth`, `speed`).
-/// - The ambiguous `pace` alias is **not** used for speed (preserving
-///   classification compatibility).
-/// - Preserves null/invalid signal entries as `f64::NAN` so per-signal
-///   coverage can be measured independently.
-/// - Returns `None` when timestamps are malformed (fewer than 2 points,
-///   non-monotonic, or non-finite).
-fn metric_signal_series(streams: &Value, keys: &[&str]) -> Option<Vec<f64>> {
-    keys.iter().find_map(|key| {
-        streams.get(*key).and_then(Value::as_array).map(|values| {
-            values
-                .iter()
-                .map(|value| value.as_f64().unwrap_or(f64::NAN))
-                .collect()
-        })
-    })
-}
-
-fn build_metric_streams(streams: &Value) -> Option<MetricStreams> {
-    let time_s = numeric_series(streams, &["time", "time_s"])?;
-    if time_s.len() < 2
-        || time_s
-            .windows(2)
-            .any(|pair| !pair[0].is_finite() || !pair[1].is_finite() || pair[1] <= pair[0])
-    {
-        return None;
-    }
-
-    let aligned = |keys: &[&str], valid: fn(f64) -> bool| {
-        metric_signal_series(streams, keys)
-            .filter(|values| values.len() == time_s.len())
-            .map(|values| {
-                values
-                    .into_iter()
-                    .map(|value| {
-                        if value.is_finite() && valid(value) {
-                            value
-                        } else {
-                            f64::NAN
-                        }
-                    })
-                    .collect()
-            })
-    };
-
-    Some(MetricStreams {
-        speed_mps: aligned(&["velocity_smooth", "speed"], |value| value >= 0.0),
-        heartrate_bpm: aligned(&["heartrate", "hr"], |value| value > 0.0),
-        power_w: aligned(&["watts", "power"], |value| value >= 0.0),
-        time_s,
     })
 }
 
@@ -983,7 +927,7 @@ impl AnalyzeTrainingHandler {
 
                         // ── Segment metrics ────────────────────────────────
                         let metric_streams =
-                            fetched.streams.as_ref().and_then(build_metric_streams);
+                            fetched.streams.as_ref().and_then(parse_metric_streams);
 
                         if let Some(ref streams) = metric_streams {
                             let presentation = sport_presentation(fetched.workout_detail.as_ref());
@@ -1047,7 +991,7 @@ impl AnalyzeTrainingHandler {
 
                         // ── Fartlek segment metrics ─────────────────────────
                         let metric_streams =
-                            fetched.streams.as_ref().and_then(build_metric_streams);
+                            fetched.streams.as_ref().and_then(parse_metric_streams);
 
                         if let (Some(streams), Some(series)) =
                             (metric_streams.as_ref(), detection.fartlek_series.as_ref())
@@ -1142,7 +1086,7 @@ impl AnalyzeTrainingHandler {
 
                 // ── Upstream segment metrics ──────────────────────────
                 if let Some(ref streams) = fetched.streams {
-                    let metric_streams = build_metric_streams(streams);
+                    let metric_streams = parse_metric_streams(streams);
                     if let Some(ref streams) = metric_streams {
                         let presentation = sport_presentation(fetched.workout_detail.as_ref());
                         let segment_windows =
@@ -1441,6 +1385,7 @@ impl AnalyzeTrainingHandler {
                 window: window.clone(),
                 include_activity_details: true,
                 include_comparison_window: true,
+                include_endurance_evidence: analysis_type != "summary",
             },
         )
         .await
@@ -4793,7 +4738,7 @@ mod tests {
         assert!(rendered.contains("Requested Metrics"));
     }
 
-    // ── build_metric_streams ────────────────────────────────────────
+    // ── parse_metric_streams (local alias for the engine helper) ────
 
     #[test]
     fn metric_stream_parser_drops_only_the_misaligned_signal() {
@@ -4803,7 +4748,7 @@ mod tests {
             "heartrate": [150.0, 155.0],
             "watts": [200.0, 220.0, 240.0]
         });
-        let parsed = build_metric_streams(&streams).expect("time stream");
+        let parsed = parse_metric_streams(&streams).expect("time stream");
         assert_eq!(parsed.speed_mps, Some(vec![4.0, 5.0, 6.0]));
         assert!(parsed.heartrate_bpm.is_none());
         assert_eq!(parsed.power_w, Some(vec![200.0, 220.0, 240.0]));
@@ -4811,7 +4756,7 @@ mod tests {
 
     #[test]
     fn metric_stream_parser_preserves_nulls_as_missing_samples() {
-        let parsed = build_metric_streams(&json!({
+        let parsed = parse_metric_streams(&json!({
             "time": [0.0, 1.0, 2.0],
             "watts": [200.0, null, 240.0]
         }))
@@ -4824,7 +4769,7 @@ mod tests {
 
     #[test]
     fn metric_stream_parser_does_not_guess_ambiguous_pace_units() {
-        let parsed = build_metric_streams(&json!({
+        let parsed = parse_metric_streams(&json!({
             "time": [0.0, 1.0, 2.0],
             "pace": [300.0, 295.0, 305.0],
             "heartrate": [150.0, 151.0, 152.0]

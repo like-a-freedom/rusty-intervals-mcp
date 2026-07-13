@@ -13,11 +13,35 @@ use crate::engines::shared::parse_activity_date;
 /// Requires 60 calendar days of observations to compute the reference window.
 pub const PERSONAL_BASELINE_WINDOW_DAYS: i32 = 60;
 
+// ── Endurance evidence fetch contract ────────────────────────────────
+
+/// How many calendar days back to scan when collecting historical ride
+/// candidates for endurance evidence. Reference cohort spans 15–90 days;
+/// recent cohort spans 0–14 days. The constant is the maximum backstop.
+pub const ENDURANCE_EVIDENCE_LOOKBACK_DAYS: i32 = 90;
+
+/// Cap on per-cohort candidate count to bound downstream work.
+pub const ENDURANCE_EVIDENCE_MAX_RECENT_CANDIDATES: usize = 12;
+pub const ENDURANCE_EVIDENCE_MAX_REFERENCE_CANDIDATES: usize = 12;
+
+/// Concurrency for stream retrieval. 3 keeps API pressure bounded while
+/// still finishing within the protocol's 3–5 second latency budget.
+pub const ENDURANCE_EVIDENCE_STREAM_CONCURRENCY: usize = 3;
+
+/// Minimum moving time (seconds) for an activity detail to be considered
+/// for endurance evidence. Shorter rides have no chance of containing
+/// eligible 600s control windows.
+pub const ENDURANCE_EVIDENCE_MIN_MOVING_TIME_S: i64 = 1800;
+
 #[derive(Debug, Clone)]
 pub struct PeriodFetchRequest {
     pub window: AnalysisWindow,
     pub include_activity_details: bool,
     pub include_comparison_window: bool,
+    /// Internal-only flag: when true, `fetch_period_data` performs the
+    /// bounded historical profile retrieval required for the endurance
+    /// evidence report. Always false for summary-mode period analysis.
+    pub include_endurance_evidence: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -75,6 +99,14 @@ pub struct FetchedAnalysisData {
     pub pace_histogram: Option<Value>,
     pub intervals_state: SourceFetchState,
     pub streams_state: SourceFetchState,
+    /// Historical ride activities scanned for endurance evidence.
+    /// Sorted descending by parsed date. May be partial when fetch
+    /// degraded.
+    pub endurance_profile_activities: Vec<ActivitySummary>,
+    /// Per-activity-id stream payloads for endurance evidence, post
+    /// `normalize_streams_payload`. Stream count is bounded by the
+    /// candidate caps in `PeriodFetchRequest`.
+    pub endurance_profile_streams: HashMap<String, Value>,
 }
 
 /// Returns true when a payload has no usable content (empty array/object or null).
@@ -494,7 +526,155 @@ pub async fn fetch_period_data(
         fetched.comparison_activities = fetched.activities.clone();
     }
 
+    if request.include_endurance_evidence {
+        collect_endurance_evidence(client, request, &mut fetched).await;
+    }
+
     Ok(fetched)
+}
+
+/// Bounded, best-effort retrieval of historical ride activities and
+/// matching streams for the endurance evidence report.
+///
+/// Never fails the period fetch — failures degrade the report to
+/// explicit `InsufficientCandidateSessions` status with a warning.
+async fn collect_endurance_evidence(
+    client: &dyn IntervalsClient,
+    request: &PeriodFetchRequest,
+    fetched: &mut FetchedAnalysisData,
+) {
+    let requested = match client
+        .get_recent_activities(None, Some(ENDURANCE_EVIDENCE_LOOKBACK_DAYS))
+        .await
+    {
+        Ok(value) => value,
+        Err(_) => {
+            fetched.fetch_warnings.push(
+                "endurance evidence partial: failed to list historical activities".into(),
+            );
+            return;
+        }
+    };
+
+    // Sort by parsed date descending, ties broken by activity_id so the
+    // selection is deterministic for callers with multiple rides on the
+    // same date.
+    let mut sorted = requested;
+    sorted.sort_by(|left, right| {
+        let date_left = parse_activity_date(&left.start_date_local);
+        let date_right = parse_activity_date(&right.start_date_local);
+        date_right
+            .cmp(&date_left)
+            .then_with(|| right.id.cmp(&left.id))
+    });
+
+    let mut recent: Vec<ActivitySummary> = Vec::new();
+    let mut reference: Vec<ActivitySummary> = Vec::new();
+    for activity in sorted {
+        let Some(date) = parse_activity_date(&activity.start_date_local) else {
+            continue;
+        };
+        let age = (request.window.end_date - date).num_days();
+        if (0..=14).contains(&age) && recent.len() < ENDURANCE_EVIDENCE_MAX_RECENT_CANDIDATES {
+            recent.push(activity);
+        } else if (15..=90).contains(&age)
+            && reference.len() < ENDURANCE_EVIDENCE_MAX_REFERENCE_CANDIDATES
+        {
+            reference.push(activity);
+        }
+    }
+
+    let mut profile_activities = recent;
+    profile_activities.append(&mut reference);
+    if profile_activities.is_empty() {
+        return;
+    }
+
+    let mut rejected_details: Vec<String> = Vec::new();
+    let mut retained_ids: Vec<String> = Vec::new();
+    for activity in profile_activities.iter() {
+        if fetched.activity_details.contains_key(&activity.id) {
+            retained_ids.push(activity.id.clone());
+            continue;
+        }
+        match client.get_activity_details(&activity.id).await {
+            Ok(detail) => {
+                let is_ride = detail
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| value == "Ride");
+                let moving_time = detail
+                    .get("moving_time")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(0.0);
+                if is_ride && moving_time >= ENDURANCE_EVIDENCE_MIN_MOVING_TIME_S as f64 {
+                    fetched.activity_details.insert(activity.id.clone(), detail);
+                    retained_ids.push(activity.id.clone());
+                }
+            }
+            Err(error) => {
+                tracing::info!(
+                    "Endurance evidence detail fetch failed for {}: {}",
+                    activity.id,
+                    error
+                );
+                rejected_details.push(activity.id.clone());
+            }
+        }
+    }
+
+    if !retained_ids.is_empty() {
+        let mut rejected_streams: Vec<String> = Vec::new();
+        let mut succeeded: HashMap<String, Value> = HashMap::new();
+
+        // Bounded, sequential stream retrieval. We track an in-flight
+        // budget so upstream concurrency stays low without requiring
+        // `&dyn IntervalsClient` to be `Send`.
+        let mut in_flight: usize = 0;
+        for id in retained_ids.iter() {
+            while in_flight >= ENDURANCE_EVIDENCE_STREAM_CONCURRENCY {
+                // Allow the runtime to make progress on any currently
+                // awaiting request before issuing another one.
+                tokio::task::yield_now().await;
+                in_flight = ENDURANCE_EVIDENCE_STREAM_CONCURRENCY.saturating_sub(1);
+            }
+            in_flight += 1;
+            match client.get_activity_streams(id, None).await {
+                Ok(payload) => {
+                    let normalized = normalize_streams_payload(payload);
+                    if !value_is_empty(&normalized) {
+                        succeeded.insert(id.clone(), normalized);
+                    }
+                }
+                Err(error) => {
+                    tracing::info!(
+                        "Endurance evidence stream fetch failed for {}: {}",
+                        id,
+                        error
+                    );
+                    rejected_streams.push(id.clone());
+                }
+            }
+            in_flight = in_flight.saturating_sub(1);
+        }
+
+        fetched.endurance_profile_streams.extend(succeeded);
+
+        if !rejected_details.is_empty() || !rejected_streams.is_empty() {
+            fetched.fetch_warnings.push(format!(
+                "endurance evidence partial: {} candidate details and {} ride streams unavailable",
+                rejected_details.len(),
+                rejected_streams.len()
+            ));
+        }
+    } else if !rejected_details.is_empty() {
+        fetched.fetch_warnings.push(format!(
+            "endurance evidence partial: {} candidate details and 0 ride streams unavailable",
+            rejected_details.len()
+        ));
+    }
+
+    fetched.endurance_profile_activities = profile_activities;
 }
 
 pub async fn fetch_recovery_data(
@@ -1405,6 +1585,7 @@ mod tests {
             ),
             include_activity_details: false,
             include_comparison_window: false,
+            include_endurance_evidence: false,
         };
 
         let (start, end) = required_activity_window(&request);
@@ -1422,6 +1603,7 @@ mod tests {
             ),
             include_activity_details: false,
             include_comparison_window: true,
+            include_endurance_evidence: false,
         };
 
         let (start, end) = required_activity_window(&request);
@@ -1442,6 +1624,7 @@ mod tests {
             ),
             include_activity_details: true,
             include_comparison_window: false,
+            include_endurance_evidence: false,
         };
         let _cloned = request.clone();
     }
@@ -1455,6 +1638,7 @@ mod tests {
             ),
             include_activity_details: true,
             include_comparison_window: false,
+            include_endurance_evidence: false,
         };
         let debug_str = format!("{:?}", request);
         assert!(debug_str.contains("PeriodFetchRequest"));
@@ -1993,6 +2177,7 @@ mod tests {
             window: AnalysisWindow::new(today - Duration::days(2), today + Duration::days(2)),
             include_activity_details: false,
             include_comparison_window: false,
+            include_endurance_evidence: false,
         };
 
         let fetched = fetch_period_data(&client as &dyn IntervalsClient, &request)
@@ -2036,6 +2221,7 @@ mod tests {
             window: AnalysisWindow::new(required_start, required_end),
             include_activity_details: false,
             include_comparison_window: false,
+            include_endurance_evidence: false,
         };
 
         let fetched = fetch_period_data(&client, &request).await.unwrap();
@@ -2056,6 +2242,7 @@ mod tests {
             window: AnalysisWindow::new(start, start + Duration::days(90)),
             include_activity_details: false,
             include_comparison_window: false,
+            include_endurance_evidence: false,
         };
 
         fetch_period_data(&client, &request).await.unwrap();
@@ -2475,6 +2662,7 @@ mod tests {
             window: AnalysisWindow::new(window_start, window_end),
             include_activity_details: true,
             include_comparison_window: false,
+            include_endurance_evidence: false,
         };
 
         let fetched = fetch_period_data(&client as &dyn IntervalsClient, &request)
@@ -2504,6 +2692,7 @@ mod tests {
             window: AnalysisWindow::new(window_start, window_end),
             include_activity_details: true,
             include_comparison_window: false,
+            include_endurance_evidence: false,
         };
 
         let fetched = fetch_period_data(&client as &dyn IntervalsClient, &request)
@@ -2530,6 +2719,7 @@ mod tests {
             window: AnalysisWindow::new(today - Duration::days(2), today + Duration::days(2)),
             include_activity_details: false,
             include_comparison_window: false,
+            include_endurance_evidence: false,
         };
 
         let fetched = fetch_period_data(&client as &dyn IntervalsClient, &request)
@@ -2544,5 +2734,125 @@ mod tests {
                 .any(|warning| warning.contains("rate limiting"))
         );
         assert_eq!(fetched.activities.len(), 1);
+    }
+
+    // -----------------------------------------------------------------
+    // Endurance evidence bounded retrieval
+    // -----------------------------------------------------------------
+
+    fn build_endurance_evidence_fixture(base_date: NaiveDate) -> MockIntervalsClient {
+        use intervals_icu_client::ActivitySummary;
+        let mut activities: Vec<ActivitySummary> = Vec::new();
+        let mut mock = MockIntervalsClient::builder();
+        for day_offset in 1..=8 {
+            let id = format!("ride-recent-{day_offset}");
+            activities.push(ActivitySummary {
+                id: id.clone(),
+                start_date_local: (base_date - chrono::Duration::days(day_offset))
+                    .format("%Y-%m-%d")
+                    .to_string(),
+                ..Default::default()
+            });
+            mock = mock
+                .with_activity_detail(
+                    &id,
+                    json!({ "id": id, "type": "Ride", "moving_time": 3600_i64 }),
+                )
+                .with_streams_for(
+                    &id,
+                    json!({
+                        "time": [0.0, 600.0],
+                        "watts": [200.0, 200.0],
+                        "heartrate": [145.0, 145.0],
+                    }),
+                );
+        }
+        for day_offset in 15..=22 {
+            let id = format!("ride-ref-{day_offset}");
+            activities.push(ActivitySummary {
+                id: id.clone(),
+                start_date_local: (base_date - chrono::Duration::days(day_offset))
+                    .format("%Y-%m-%d")
+                    .to_string(),
+                ..Default::default()
+            });
+            mock = mock
+                .with_activity_detail(
+                    &id,
+                    json!({ "id": id, "type": "Ride", "moving_time": 3600_i64 }),
+                )
+                .with_streams_for(
+                    &id,
+                    json!({
+                        "time": [0.0, 600.0],
+                        "watts": [200.0, 200.0],
+                        "heartrate": [150.0, 150.0],
+                    }),
+                );
+        }
+        // Non-ride activity must never appear in the endurance profile.
+        activities.push(ActivitySummary {
+            id: "run-recent-1".to_string(),
+            start_date_local: (base_date - chrono::Duration::days(2))
+                .format("%Y-%m-%d")
+                .to_string(),
+            ..Default::default()
+        });
+        mock = mock.with_activity_detail(
+            "run-recent-1",
+            json!({ "id": "run-recent-1", "type": "Run", "moving_time": 3600_i64 }),
+        );
+
+        mock.with_activities(activities)
+    }
+
+    fn date(year: i32, month: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(year, month, day).unwrap()
+    }
+
+    #[tokio::test]
+    async fn detailed_period_fetches_bounded_endurance_profile_and_never_fails() {
+        let client = build_endurance_evidence_fixture(date(2026, 7, 13));
+        let request = PeriodFetchRequest {
+            window: AnalysisWindow::new(date(2026, 7, 7), date(2026, 7, 13)),
+            include_activity_details: true,
+            include_comparison_window: true,
+            include_endurance_evidence: true,
+        };
+        let fetched = fetch_period_data(&client, &request)
+            .await
+            .expect("period fetch succeeds with bounded profile retrieval");
+
+        // Recent cohort caps at 12, reference cohort at 12 — total
+        // detail+stream surface tops out at 24 per cohort.
+        assert!(fetched.endurance_profile_activities.len() <= 24);
+        assert!(
+            fetched
+                .endurance_profile_activities
+                .iter()
+                .all(|a| a.id.starts_with("ride-") || a.id == "run-recent-1"),
+            "profile activities include both recent and reference cohorts"
+        );
+        assert!(
+            fetched
+                .endurance_profile_streams
+                .keys()
+                .all(|id| id.starts_with("ride-")),
+            "streams only fetched for retained rides, never runs"
+        );
+    }
+
+    #[tokio::test]
+    async fn summary_period_does_not_request_endurance_profile_streams() {
+        let client = build_endurance_evidence_fixture(date(2026, 7, 13));
+        let request = PeriodFetchRequest {
+            window: AnalysisWindow::new(date(2026, 7, 7), date(2026, 7, 13)),
+            include_activity_details: true,
+            include_comparison_window: true,
+            include_endurance_evidence: false,
+        };
+        let fetched = fetch_period_data(&client, &request).await.unwrap();
+        assert!(fetched.endurance_profile_streams.is_empty());
+        assert!(fetched.endurance_profile_activities.is_empty());
     }
 }
