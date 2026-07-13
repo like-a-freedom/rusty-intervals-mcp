@@ -1,13 +1,16 @@
+use crate::domains::baseline::{BaselineTransform, compute_personal_baseline};
 use crate::domains::coach::{
-    AcwrMetrics, DecouplingMetrics, EspeDerivedMetrics, EspePowerAnchors, EtvsMetrics,
-    FitnessMetrics, HeatMetrics, LoadManagementMetrics, NdliMetrics, TrendMetrics, VolumeMetrics,
-    WellnessMetrics, WorkoutMetricsContext,
+    AcwrMetrics, AnalysisKind, AnalysisWindow, CoachContext, DecouplingMetrics, EspeDerivedMetrics,
+    EspePowerAnchors, EtvsMetrics, FitnessMetrics, HeatMetrics, LoadManagementMetrics, NdliMetrics,
+    TrendMetrics, VolumeMetrics, WellnessMetrics, WorkoutMetricsContext,
 };
 use crate::engines::adaptation::AdaptationState;
 use crate::engines::adaptation::classify_adaptation;
 use crate::engines::coach_metrics_constants::*;
 use crate::engines::shared::{aggregate_five_zone_seconds, compute_zone_distribution};
+use crate::engines::traits::RecoveryMetricsBuilder;
 use intervals_icu_client::ActivitySummary;
+use intervals_icu_client::IntervalsError;
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -598,6 +601,9 @@ pub fn parse_wellness_metrics(payload: Option<&Value>) -> Option<WellnessMetrics
         )
     });
 
+    let hrv_observations = extract_wellness_observations(entries, HRV_KEYS);
+    let rhr_observations = extract_wellness_observations(entries, RESTING_HR_KEYS);
+
     Some(WellnessMetrics {
         avg_sleep_hours,
         avg_resting_hr,
@@ -617,9 +623,31 @@ pub fn parse_wellness_metrics(payload: Option<&Value>) -> Option<WellnessMetrics
         hrv_recovery_flag,
         hrv_trend_slope,
         recovery_quality_index,
-        hrv_personal_baseline: None,
-        resting_hr_personal_baseline: None,
+        hrv_personal_baseline: compute_personal_baseline(
+            &hrv_observations,
+            BaselineTransform::LogLnRmssd,
+        ),
+        resting_hr_personal_baseline: compute_personal_baseline(
+            &rhr_observations,
+            BaselineTransform::RawBpm,
+        ),
     })
+}
+
+fn extract_wellness_observations(entries: &[Value], keys: &[&str]) -> Vec<(NaiveDate, f64)> {
+    entries
+        .iter()
+        .filter_map(|entry| {
+            let obj = entry.as_object()?;
+            let date_str = obj.get("date")?.as_str()?;
+            let date = NaiveDate::parse_from_str(date_str, "%Y-%m-%d").ok()?;
+            let value = keys.iter().find_map(|key| {
+                let v = obj.get(*key)?;
+                v.as_f64().or_else(|| v.as_i64().map(|i| i as f64))
+            })?;
+            Some((date, value))
+        })
+        .collect()
 }
 
 use crate::domains::progress::LnRmssdRollup;
@@ -1510,6 +1538,32 @@ pub fn aggregate_period_etvs(
         activities_total: activities.len(),
         model: ETVS_MODEL.into(),
     })
+}
+
+pub struct CoachMetricsBuilder;
+
+impl RecoveryMetricsBuilder for CoachMetricsBuilder {
+    fn build_all(
+        &self,
+        fitness: Option<&Value>,
+        wellness: Option<&Value>,
+    ) -> Result<CoachContext, IntervalsError> {
+        let window = AnalysisWindow::new(
+            chrono::Utc::now().date_naive() - chrono::Duration::days(7),
+            chrono::Utc::now().date_naive(),
+        );
+        let mut context = CoachContext::new(AnalysisKind::RecoveryAssessment, window);
+
+        if let Some(fitness_value) = fitness {
+            context.metrics.fitness = parse_fitness_metrics(Some(fitness_value));
+        }
+
+        if let Some(wellness_value) = wellness {
+            context.metrics.wellness = parse_wellness_metrics(Some(wellness_value));
+        }
+
+        Ok(context)
+    }
 }
 
 #[cfg(test)]

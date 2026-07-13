@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 
 use chrono::{Duration, NaiveDate};
 use intervals_icu_client::{ActivityMessage, ActivitySummary, Event, IntervalsClient};
@@ -7,7 +7,7 @@ use serde_json::Value;
 use super::fetch_error::FetchError;
 use crate::domains::coach::AnalysisWindow;
 use crate::domains::load::{ComparableLoadSeries, LoadObservation, LoadSource};
-use crate::engines::shared::{parse_activity_date, parse_event_date};
+use crate::engines::shared::parse_activity_date;
 
 /// Minimum wellness history to fetch for personal baseline calculation.
 /// Requires 60 calendar days of observations to compute the reference window.
@@ -189,29 +189,8 @@ pub fn build_daily_load_series(
     }
 }
 
-fn dedupe_and_sort_events(mut events: Vec<Event>) -> Vec<Event> {
-    let mut seen = HashSet::new();
-    events.retain(|event| {
-        let dedupe_key = event.id.clone().unwrap_or_else(|| {
-            format!(
-                "{}:{}:{:?}",
-                event.start_date_local, event.name, event.category
-            )
-        });
-        seen.insert(dedupe_key)
-    });
-
-    events.sort_by(|a, b| {
-        let a_date = parse_event_date(&a.start_date_local).unwrap_or(NaiveDate::MIN);
-        let b_date = parse_event_date(&b.start_date_local).unwrap_or(NaiveDate::MIN);
-        a_date
-            .cmp(&b_date)
-            .then_with(|| a.name.cmp(&b.name))
-            .then_with(|| format!("{:?}", a.category).cmp(&format!("{:?}", b.category)))
-            .then_with(|| a.id.cmp(&b.id))
-    });
-
-    events
+fn dedupe_and_sort_events(events: Vec<Event>) -> Vec<Event> {
+    super::dedupe::dedupe_and_sort_events(events)
 }
 
 fn normalize_upcoming_events_payload(payload: Value) -> Value {
@@ -740,9 +719,10 @@ pub async fn fetch_race_data(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engines::shared::parse_event_date;
     use crate::test_support::mock::MockIntervalsClient;
     use chrono::NaiveDate;
-    use intervals_icu_client::{EventCategory, IntervalsClient, IntervalsError};
+    use intervals_icu_client::{IntervalsClient, IntervalsError};
     use serde_json::json;
     use std::sync::{Arc, Mutex};
 
@@ -1300,42 +1280,6 @@ mod tests {
     }
 
     #[test]
-    fn dedupe_and_sort_events_prefers_unique_calendar_entries() {
-        let events = vec![
-            Event {
-                id: Some("e2".into()),
-                start_date_local: "2026-03-03".into(),
-                name: "Injury note".into(),
-                category: intervals_icu_client::EventCategory::Injured,
-                description: None,
-                r#type: None,
-            },
-            Event {
-                id: Some("e1".into()),
-                start_date_local: "2026-03-01".into(),
-                name: "Race day".into(),
-                category: intervals_icu_client::EventCategory::RaceA,
-                description: None,
-                r#type: None,
-            },
-            Event {
-                id: Some("e1".into()),
-                start_date_local: "2026-03-01".into(),
-                name: "Race day".into(),
-                category: intervals_icu_client::EventCategory::RaceA,
-                description: None,
-                r#type: None,
-            },
-        ];
-
-        let normalized = dedupe_and_sort_events(events);
-
-        assert_eq!(normalized.len(), 2);
-        assert_eq!(normalized[0].name, "Race day");
-        assert_eq!(normalized[1].name, "Injury note");
-    }
-
-    #[test]
     fn normalize_upcoming_events_payload_backfills_missing_name() {
         let payload = json!([
             {
@@ -1699,92 +1643,6 @@ mod tests {
     #[test]
     fn parse_event_date_invalid() {
         assert!(parse_event_date("not-a-date").is_none());
-    }
-
-    // ========================================================================
-    // Dedupe and Sort Events Tests
-    // ========================================================================
-
-    #[test]
-    fn dedupe_and_sort_events_empty_list() {
-        let events: Vec<Event> = vec![];
-        let result = dedupe_and_sort_events(events);
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn dedupe_and_sort_events_removes_duplicates_by_id() {
-        let events = vec![
-            Event {
-                id: Some("e1".to_string()),
-                start_date_local: "2026-03-01".to_string(),
-                name: "Event 1".to_string(),
-                category: EventCategory::Workout,
-                description: None,
-                r#type: None,
-            },
-            Event {
-                id: Some("e1".to_string()),
-                start_date_local: "2026-03-01".to_string(),
-                name: "Event 1 Duplicate".to_string(),
-                category: EventCategory::Workout,
-                description: None,
-                r#type: None,
-            },
-        ];
-        let result = dedupe_and_sort_events(events);
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].id, Some("e1".to_string()));
-    }
-
-    #[test]
-    fn dedupe_and_sort_events_sorts_by_date() {
-        let events = vec![
-            Event {
-                id: Some("e2".to_string()),
-                start_date_local: "2026-03-02".to_string(),
-                name: "Event 2".to_string(),
-                category: EventCategory::Workout,
-                description: None,
-                r#type: None,
-            },
-            Event {
-                id: Some("e1".to_string()),
-                start_date_local: "2026-03-01".to_string(),
-                name: "Event 1".to_string(),
-                category: EventCategory::Workout,
-                description: None,
-                r#type: None,
-            },
-        ];
-        let result = dedupe_and_sort_events(events);
-        assert_eq!(result.len(), 2);
-        assert_eq!(result[0].id, Some("e1".to_string()));
-        assert_eq!(result[1].id, Some("e2".to_string()));
-    }
-
-    #[test]
-    fn dedupe_and_sort_events_without_id_uses_fallback_key() {
-        let events = vec![
-            Event {
-                id: None,
-                start_date_local: "2026-03-01".to_string(),
-                name: "Same Event".to_string(),
-                category: EventCategory::Workout,
-                description: None,
-                r#type: None,
-            },
-            Event {
-                id: None,
-                start_date_local: "2026-03-01".to_string(),
-                name: "Same Event".to_string(),
-                category: EventCategory::Workout,
-                description: None,
-                r#type: None,
-            },
-        ];
-        let result = dedupe_and_sort_events(events);
-        assert_eq!(result.len(), 1);
     }
 
     // ========================================================================

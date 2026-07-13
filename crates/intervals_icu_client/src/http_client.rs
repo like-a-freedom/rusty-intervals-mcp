@@ -3,15 +3,11 @@
 //! This module provides a reqwest-based implementation of the [`IntervalsClient`](crate::IntervalsClient) trait.
 
 use crate::circuit_breaker::CircuitBreaker;
-use crate::traits::{
-    ActivityService, AthleteService, EventService, FitnessService, GearService, RouteService,
-    SportSettingsService, WeatherService, WellnessService, WorkoutService,
-};
 use crate::{
-    ActivityMessage, AthleteProfile, BestEffortsOptions, IntervalsError, Result, ValidationError,
+    ActivityMessage, AthleteProfile, BestEffortsOptions, IntervalsClient, IntervalsError, Result,
+    ValidationError,
 };
 use ::metrics::{counter, histogram};
-use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use chrono::{Duration, Utc};
 use futures_util::StreamExt;
@@ -99,7 +95,7 @@ impl ReqwestIntervalsClient {
             return Ok(sport_type_or_id.to_string());
         }
 
-        let settings = <Self as SportSettingsService>::get_sport_settings(self).await?;
+        let settings = self.get_sport_settings().await?;
 
         Self::resolve_sport_settings_id_from_settings(&settings, sport_type_or_id)
     }
@@ -294,7 +290,7 @@ impl ReqwestIntervalsClient {
         url: String,
         output_path: Option<PathBuf>,
     ) -> Result<Option<String>> {
-        let resp = self.get_request(&url).send().await?;
+        let resp = self.execute_raw(self.get_request(&url)).await?;
         if !resp.status().is_success() {
             return Err(self.error_from_response(resp).await);
         }
@@ -465,7 +461,7 @@ impl ReqwestIntervalsClient {
 }
 
 // ============================================================================
-// Service Trait Implementations
+// Profile Payload Types
 // ============================================================================
 
 #[derive(serde::Deserialize)]
@@ -479,11 +475,11 @@ struct ProfileAthlete {
     name: Option<String>,
 }
 
-#[async_trait]
-impl AthleteService for ReqwestIntervalsClient {
+#[async_trait::async_trait]
+impl crate::IntervalsClient for ReqwestIntervalsClient {
     async fn get_athlete_profile(&self) -> Result<AthleteProfile> {
         let url = self.api_url(&["athlete", &self.athlete_id, "profile"]);
-        let resp = self.get_request(&url).send().await?;
+        let resp = self.execute_raw(self.get_request(&url)).await?;
         let status = resp.status();
         if !status.is_success() {
             return Err(self.error_from_response(resp).await);
@@ -502,10 +498,7 @@ impl AthleteService for ReqwestIntervalsClient {
                 ))
             })
     }
-}
 
-#[async_trait]
-impl ActivityService for ReqwestIntervalsClient {
     async fn get_recent_activities(
         &self,
         limit: Option<u32>,
@@ -626,7 +619,7 @@ impl ActivityService for ReqwestIntervalsClient {
 
         for params in &attempts {
             let qp: Vec<(&str, &str)> = params.iter().map(|(k, v)| (*k, *v)).collect();
-            let resp = self.get_request(&url).query(&qp).send().await?;
+            let resp = self.execute_raw(self.get_request(&url).query(&qp)).await?;
 
             if resp.status().is_success() {
                 let value = resp.json().await?;
@@ -681,7 +674,7 @@ impl ActivityService for ReqwestIntervalsClient {
 
                     for params in param_sets.iter().chain(param_sets_extended.iter()) {
                         let qp: Vec<(&str, &str)> = params.iter().map(|(k, v)| (*k, *v)).collect();
-                        let resp = self.get_request(&url).query(&qp).send().await?;
+                        let resp = self.execute_raw(self.get_request(&url).query(&qp)).await?;
                         if resp.status().is_success() {
                             let value = resp.json().await?;
                             let stream = params
@@ -828,7 +821,7 @@ impl ActivityService for ReqwestIntervalsClient {
         mut cancel_rx: tokio::sync::watch::Receiver<bool>,
     ) -> Result<Option<String>> {
         let url = format!("{}/api/v1/activity/{}/file", self.base_url, activity_id);
-        let resp = self.get_request(&url).send().await?;
+        let resp = self.execute_raw(self.get_request(&url)).await?;
         if !resp.status().is_success() {
             return Err(self.error_from_response(resp).await);
         }
@@ -983,10 +976,7 @@ impl ActivityService for ReqwestIntervalsClient {
         );
         self.execute_json(self.get_request(&url)).await
     }
-}
 
-#[async_trait]
-impl EventService for ReqwestIntervalsClient {
     async fn create_event(&self, event: crate::Event) -> Result<crate::Event> {
         let url = self.api_url(&["athlete", &self.athlete_id, "events"]);
 
@@ -999,7 +989,7 @@ impl EventService for ReqwestIntervalsClient {
                 })
             })?;
 
-        let resp = self.post_request(&url).json(&ev).send().await?;
+        let resp = self.execute_raw(self.post_request(&url).json(&ev)).await?;
         if !resp.status().is_success() {
             return Err(self.error_from_response(resp).await);
         }
@@ -1008,7 +998,7 @@ impl EventService for ReqwestIntervalsClient {
 
     async fn get_event(&self, event_id: &str) -> Result<crate::Event> {
         let url = self.api_url(&["athlete", &self.athlete_id, "events", event_id]);
-        let resp = self.get_request(&url).send().await?;
+        let resp = self.execute_raw(self.get_request(&url)).await?;
         if !resp.status().is_success() {
             return Err(self.error_from_response(resp).await);
         }
@@ -1120,10 +1110,7 @@ impl EventService for ReqwestIntervalsClient {
         });
         self.execute_json(self.post_request(&url).json(&body)).await
     }
-}
 
-#[async_trait]
-impl FitnessService for ReqwestIntervalsClient {
     async fn get_fitness_summary(&self) -> Result<serde_json::Value> {
         let url = format!(
             "{}/api/v1/athlete/{}/athlete-summary.json",
@@ -1155,10 +1142,7 @@ impl FitnessService for ReqwestIntervalsClient {
     ) -> Result<serde_json::Value> {
         self.get_curves(days_back, sport, "pace").await
     }
-}
 
-#[async_trait]
-impl GearService for ReqwestIntervalsClient {
     async fn get_gear_list(&self) -> Result<serde_json::Value> {
         let url = self.api_url(&["athlete", &self.athlete_id, "gear"]);
         self.execute_json(self.get_request(&url)).await
@@ -1217,10 +1201,7 @@ impl GearService for ReqwestIntervalsClient {
         self.execute_json(self.put_request(&url).query(&qp).json(fields))
             .await
     }
-}
 
-#[async_trait]
-impl WellnessService for ReqwestIntervalsClient {
     async fn get_wellness(&self, days_back: Option<i32>) -> Result<serde_json::Value> {
         let url = self.api_url(&["athlete", &self.athlete_id, "wellness"]);
         let mut pairs: Vec<(&str, String)> = Vec::new();
@@ -1254,10 +1235,7 @@ impl WellnessService for ReqwestIntervalsClient {
         self.execute_empty(self.put_request(&url).json(entries))
             .await
     }
-}
 
-#[async_trait]
-impl WeatherService for ReqwestIntervalsClient {
     async fn get_weather_config(&self) -> Result<serde_json::Value> {
         let url = self.api_url(&["athlete", &self.athlete_id, "weather-config"]);
         self.execute_json(self.get_request(&url)).await
@@ -1267,10 +1245,7 @@ impl WeatherService for ReqwestIntervalsClient {
         let url = self.api_url(&["athlete", &self.athlete_id, "weather-config"]);
         self.execute_json(self.put_request(&url).json(config)).await
     }
-}
 
-#[async_trait]
-impl RouteService for ReqwestIntervalsClient {
     async fn list_routes(&self) -> Result<serde_json::Value> {
         let url = self.api_url(&["athlete", &self.athlete_id, "routes"]);
         self.execute_json(self.get_request(&url)).await
@@ -1309,10 +1284,7 @@ impl RouteService for ReqwestIntervalsClient {
         ]);
         self.execute_json(self.get_request(&url)).await
     }
-}
 
-#[async_trait]
-impl WorkoutService for ReqwestIntervalsClient {
     async fn get_workout_library(&self) -> Result<Vec<crate::domains::workout::WorkoutItem>> {
         // API returns folders, plans and workouts together as a flat array
         let url = self.api_url(&["athlete", &self.athlete_id, "folders"]);
@@ -1350,10 +1322,7 @@ impl WorkoutService for ReqwestIntervalsClient {
         let url = self.api_url(&["athlete", &self.athlete_id, "folders", folder_id]);
         self.execute_empty(self.delete_request(&url)).await
     }
-}
 
-#[async_trait]
-impl SportSettingsService for ReqwestIntervalsClient {
     async fn get_sport_settings(&self) -> Result<crate::domains::workout::SportSettings> {
         let url = self.api_url(&["athlete", &self.athlete_id, "sport-settings"]);
         let value: serde_json::Value = self.execute_json(self.get_request(&url)).await?;
@@ -1420,417 +1389,6 @@ impl SportSettingsService for ReqwestIntervalsClient {
     }
 }
 
-#[async_trait::async_trait]
-impl crate::IntervalsClient for ReqwestIntervalsClient {
-    async fn get_athlete_profile(&self) -> Result<AthleteProfile> {
-        <Self as AthleteService>::get_athlete_profile(self).await
-    }
-
-    async fn get_recent_activities(
-        &self,
-        limit: Option<u32>,
-        days_back: Option<i32>,
-    ) -> Result<Vec<crate::ActivitySummary>> {
-        <Self as ActivityService>::get_recent_activities(self, limit, days_back).await
-    }
-
-    async fn create_event(&self, event: crate::Event) -> Result<crate::Event> {
-        <Self as EventService>::create_event(self, event).await
-    }
-
-    async fn get_event(&self, event_id: &str) -> Result<crate::Event> {
-        <Self as EventService>::get_event(self, event_id).await
-    }
-
-    async fn delete_event(&self, event_id: &str) -> Result<()> {
-        <Self as EventService>::delete_event(self, event_id).await
-    }
-
-    async fn get_events(
-        &self,
-        days_back: Option<i32>,
-        limit: Option<u32>,
-    ) -> Result<Vec<crate::Event>> {
-        <Self as EventService>::get_events(self, days_back, limit).await
-    }
-
-    async fn bulk_create_events(&self, events: Vec<crate::Event>) -> Result<Vec<crate::Event>> {
-        <Self as EventService>::bulk_create_events(self, events).await
-    }
-
-    async fn get_activity_streams(
-        &self,
-        activity_id: &str,
-        streams: Option<Vec<String>>,
-    ) -> Result<serde_json::Value> {
-        <Self as ActivityService>::get_activity_streams(self, activity_id, streams).await
-    }
-
-    async fn get_activity_intervals(&self, activity_id: &str) -> Result<serde_json::Value> {
-        <Self as ActivityService>::get_activity_intervals(self, activity_id).await
-    }
-
-    async fn get_best_efforts(
-        &self,
-        activity_id: &str,
-        options: Option<crate::BestEffortsOptions>,
-    ) -> Result<serde_json::Value> {
-        <Self as ActivityService>::get_best_efforts(self, activity_id, options).await
-    }
-
-    async fn get_activity_details(&self, activity_id: &str) -> Result<serde_json::Value> {
-        <Self as ActivityService>::get_activity_details(self, activity_id).await
-    }
-
-    async fn get_activity_messages(&self, activity_id: &str) -> Result<Vec<ActivityMessage>> {
-        <Self as ActivityService>::get_activity_messages(self, activity_id).await
-    }
-
-    async fn search_activities(
-        &self,
-        query: &str,
-        limit: Option<u32>,
-    ) -> Result<Vec<crate::ActivitySummary>> {
-        <Self as ActivityService>::search_activities(self, query, limit).await
-    }
-
-    async fn search_activities_full(
-        &self,
-        query: &str,
-        limit: Option<u32>,
-    ) -> Result<serde_json::Value> {
-        <Self as ActivityService>::search_activities_full(self, query, limit).await
-    }
-
-    async fn get_activities_csv(&self) -> Result<String> {
-        <Self as ActivityService>::get_activities_csv(self).await
-    }
-
-    async fn update_activity(
-        &self,
-        activity_id: &str,
-        fields: &serde_json::Value,
-    ) -> Result<serde_json::Value> {
-        <Self as ActivityService>::update_activity(self, activity_id, fields).await
-    }
-
-    async fn download_activity_file(
-        &self,
-        activity_id: &str,
-        output_path: Option<std::path::PathBuf>,
-    ) -> Result<Option<String>> {
-        <Self as ActivityService>::download_activity_file(self, activity_id, output_path).await
-    }
-
-    async fn download_activity_file_with_progress(
-        &self,
-        activity_id: &str,
-        output_path: Option<std::path::PathBuf>,
-        progress_tx: tokio::sync::mpsc::Sender<crate::DownloadProgress>,
-        cancel_rx: tokio::sync::watch::Receiver<bool>,
-    ) -> Result<Option<String>> {
-        <Self as ActivityService>::download_activity_file_with_progress(
-            self,
-            activity_id,
-            output_path,
-            progress_tx,
-            cancel_rx,
-        )
-        .await
-    }
-
-    async fn download_fit_file(
-        &self,
-        activity_id: &str,
-        output_path: Option<std::path::PathBuf>,
-    ) -> Result<Option<String>> {
-        <Self as ActivityService>::download_fit_file(self, activity_id, output_path).await
-    }
-
-    async fn download_gpx_file(
-        &self,
-        activity_id: &str,
-        output_path: Option<std::path::PathBuf>,
-    ) -> Result<Option<String>> {
-        <Self as ActivityService>::download_gpx_file(self, activity_id, output_path).await
-    }
-
-    async fn get_gear_list(&self) -> Result<serde_json::Value> {
-        <Self as GearService>::get_gear_list(self).await
-    }
-
-    async fn get_sport_settings(&self) -> Result<crate::domains::workout::SportSettings> {
-        <Self as SportSettingsService>::get_sport_settings(self).await
-    }
-
-    async fn get_power_curves(
-        &self,
-        days_back: Option<i32>,
-        sport: &str,
-    ) -> Result<serde_json::Value> {
-        <Self as FitnessService>::get_power_curves(self, days_back, sport).await
-    }
-
-    async fn get_gap_histogram(&self, activity_id: &str) -> Result<serde_json::Value> {
-        <Self as ActivityService>::get_gap_histogram(self, activity_id).await
-    }
-
-    async fn delete_activity(&self, activity_id: &str) -> Result<()> {
-        <Self as ActivityService>::delete_activity(self, activity_id).await
-    }
-
-    async fn get_activities_around(
-        &self,
-        activity_id: &str,
-        limit: Option<u32>,
-        route_id: Option<i64>,
-    ) -> Result<serde_json::Value> {
-        <Self as ActivityService>::get_activities_around(self, activity_id, limit, route_id).await
-    }
-
-    async fn search_intervals(
-        &self,
-        min_secs: u32,
-        max_secs: u32,
-        min_intensity: u32,
-        max_intensity: u32,
-        interval_type: Option<String>,
-        min_reps: Option<u32>,
-        max_reps: Option<u32>,
-        limit: Option<u32>,
-    ) -> Result<serde_json::Value> {
-        <Self as ActivityService>::search_intervals(
-            self,
-            min_secs,
-            max_secs,
-            min_intensity,
-            max_intensity,
-            interval_type,
-            min_reps,
-            max_reps,
-            limit,
-        )
-        .await
-    }
-
-    async fn get_power_histogram(&self, activity_id: &str) -> Result<serde_json::Value> {
-        <Self as ActivityService>::get_power_histogram(self, activity_id).await
-    }
-
-    async fn get_hr_histogram(&self, activity_id: &str) -> Result<serde_json::Value> {
-        <Self as ActivityService>::get_hr_histogram(self, activity_id).await
-    }
-
-    async fn get_pace_histogram(&self, activity_id: &str) -> Result<serde_json::Value> {
-        <Self as ActivityService>::get_pace_histogram(self, activity_id).await
-    }
-
-    async fn get_fitness_summary(&self) -> Result<serde_json::Value> {
-        <Self as FitnessService>::get_fitness_summary(self).await
-    }
-
-    async fn get_wellness(&self, days_back: Option<i32>) -> Result<serde_json::Value> {
-        <Self as WellnessService>::get_wellness(self, days_back).await
-    }
-
-    async fn get_wellness_for_date(&self, date: &str) -> Result<serde_json::Value> {
-        <Self as WellnessService>::get_wellness_for_date(self, date).await
-    }
-
-    async fn update_wellness(
-        &self,
-        date: &str,
-        payload: &serde_json::Value,
-    ) -> Result<serde_json::Value> {
-        <Self as WellnessService>::update_wellness(self, date, payload).await
-    }
-
-    async fn update_wellness_bulk(&self, entries: &[serde_json::Value]) -> Result<()> {
-        <Self as WellnessService>::update_wellness_bulk(self, entries).await
-    }
-
-    async fn get_upcoming_workouts(
-        &self,
-        days_ahead: Option<u32>,
-        limit: Option<u32>,
-        category: Option<String>,
-    ) -> Result<serde_json::Value> {
-        <Self as EventService>::get_upcoming_workouts(self, days_ahead, limit, category).await
-    }
-
-    async fn update_event(
-        &self,
-        event_id: &str,
-        fields: &serde_json::Value,
-    ) -> Result<serde_json::Value> {
-        <Self as EventService>::update_event(self, event_id, fields).await
-    }
-
-    async fn bulk_delete_events(&self, event_ids: Vec<String>) -> Result<()> {
-        <Self as EventService>::bulk_delete_events(self, event_ids).await
-    }
-
-    async fn duplicate_event(
-        &self,
-        event_id: &str,
-        num_copies: Option<u32>,
-        weeks_between: Option<u32>,
-    ) -> Result<Vec<crate::Event>> {
-        <Self as EventService>::duplicate_event(self, event_id, num_copies, weeks_between).await
-    }
-
-    async fn get_hr_curves(
-        &self,
-        days_back: Option<i32>,
-        sport: &str,
-    ) -> Result<serde_json::Value> {
-        <Self as FitnessService>::get_hr_curves(self, days_back, sport).await
-    }
-
-    async fn get_pace_curves(
-        &self,
-        days_back: Option<i32>,
-        sport: &str,
-    ) -> Result<serde_json::Value> {
-        <Self as FitnessService>::get_pace_curves(self, days_back, sport).await
-    }
-
-    async fn get_workout_library(&self) -> Result<Vec<crate::domains::workout::WorkoutItem>> {
-        <Self as WorkoutService>::get_workout_library(self).await
-    }
-
-    async fn get_workouts_in_folder(
-        &self,
-        folder_id: &str,
-    ) -> Result<Vec<crate::domains::workout::WorkoutItem>> {
-        <Self as WorkoutService>::get_workouts_in_folder(self, folder_id).await
-    }
-
-    async fn create_folder(
-        &self,
-        folder: &serde_json::Value,
-    ) -> Result<crate::domains::workout::Folder> {
-        <Self as WorkoutService>::create_folder(self, folder).await
-    }
-
-    async fn update_folder(
-        &self,
-        folder_id: &str,
-        fields: &serde_json::Value,
-    ) -> Result<serde_json::Value> {
-        <Self as WorkoutService>::update_folder(self, folder_id, fields).await
-    }
-
-    async fn delete_folder(&self, folder_id: &str) -> Result<()> {
-        <Self as WorkoutService>::delete_folder(self, folder_id).await
-    }
-
-    async fn create_gear(&self, gear: &serde_json::Value) -> Result<serde_json::Value> {
-        <Self as GearService>::create_gear(self, gear).await
-    }
-
-    async fn update_gear(
-        &self,
-        gear_id: &str,
-        fields: &serde_json::Value,
-    ) -> Result<serde_json::Value> {
-        <Self as GearService>::update_gear(self, gear_id, fields).await
-    }
-
-    async fn delete_gear(&self, gear_id: &str) -> Result<()> {
-        <Self as GearService>::delete_gear(self, gear_id).await
-    }
-
-    async fn create_gear_reminder(
-        &self,
-        gear_id: &str,
-        reminder: &serde_json::Value,
-    ) -> Result<serde_json::Value> {
-        <Self as GearService>::create_gear_reminder(self, gear_id, reminder).await
-    }
-
-    async fn update_gear_reminder(
-        &self,
-        gear_id: &str,
-        reminder_id: &str,
-        reset: bool,
-        snooze_days: u32,
-        fields: &serde_json::Value,
-    ) -> Result<serde_json::Value> {
-        <Self as GearService>::update_gear_reminder(
-            self,
-            gear_id,
-            reminder_id,
-            reset,
-            snooze_days,
-            fields,
-        )
-        .await
-    }
-
-    async fn update_sport_settings(
-        &self,
-        sport_type: &str,
-        recalc_hr_zones: bool,
-        fields: &serde_json::Value,
-    ) -> Result<serde_json::Value> {
-        <Self as SportSettingsService>::update_sport_settings(
-            self,
-            sport_type,
-            recalc_hr_zones,
-            fields,
-        )
-        .await
-    }
-
-    async fn apply_sport_settings(&self, sport_type: &str) -> Result<serde_json::Value> {
-        <Self as SportSettingsService>::apply_sport_settings(self, sport_type).await
-    }
-
-    async fn create_sport_settings(
-        &self,
-        settings: &serde_json::Value,
-    ) -> Result<serde_json::Value> {
-        <Self as SportSettingsService>::create_sport_settings(self, settings).await
-    }
-
-    async fn delete_sport_settings(&self, sport_type: &str) -> Result<()> {
-        <Self as SportSettingsService>::delete_sport_settings(self, sport_type).await
-    }
-
-    async fn get_weather_config(&self) -> Result<serde_json::Value> {
-        <Self as WeatherService>::get_weather_config(self).await
-    }
-
-    async fn update_weather_config(&self, config: &serde_json::Value) -> Result<serde_json::Value> {
-        <Self as WeatherService>::update_weather_config(self, config).await
-    }
-
-    async fn list_routes(&self) -> Result<serde_json::Value> {
-        <Self as RouteService>::list_routes(self).await
-    }
-
-    async fn get_route(&self, route_id: i64, include_path: bool) -> Result<serde_json::Value> {
-        <Self as RouteService>::get_route(self, route_id, include_path).await
-    }
-
-    async fn update_route(
-        &self,
-        route_id: i64,
-        route: &serde_json::Value,
-    ) -> Result<serde_json::Value> {
-        <Self as RouteService>::update_route(self, route_id, route).await
-    }
-
-    async fn get_route_similarity(
-        &self,
-        route_id: i64,
-        other_id: i64,
-    ) -> Result<serde_json::Value> {
-        <Self as RouteService>::get_route_similarity(self, route_id, other_id).await
-    }
-}
-
 /// Extract available stream names from a JSON response.
 fn extract_available_streams(json: &serde_json::Value) -> Vec<String> {
     let mut available_streams = Vec::new();
@@ -1891,8 +1449,9 @@ fn annotate_best_efforts_payload(
 
 #[cfg(test)]
 mod tests {
-    use crate::traits::{ActivityService, EventService};
-    use crate::{IntervalsError, ValidationError, http_client::ReqwestIntervalsClient};
+    use crate::{
+        IntervalsClient, IntervalsError, ValidationError, http_client::ReqwestIntervalsClient,
+    };
     use serde_json::json;
 
     #[test]

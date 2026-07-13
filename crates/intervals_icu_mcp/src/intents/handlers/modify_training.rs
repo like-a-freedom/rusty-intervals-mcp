@@ -16,6 +16,7 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 
 use crate::engines::analysis_fetch::fetch_calendar_events_between;
+use crate::engines::dedupe::dedupe_and_sort_events;
 use crate::intents::utils::{filter_events_by_date, filter_events_by_range, parse_date};
 
 pub struct ModifyTrainingHandler;
@@ -28,23 +29,6 @@ impl ModifyTrainingHandler {
         Self
     }
 
-    fn dedupe_events(events: Vec<Event>) -> Vec<Event> {
-        let mut deduped = Vec::new();
-        let mut seen_ids = std::collections::HashSet::new();
-
-        for event in events {
-            let dedupe_key = event
-                .id
-                .clone()
-                .unwrap_or_else(|| format!("{}:{}", event.start_date_local, event.name));
-            if seen_ids.insert(dedupe_key) {
-                deduped.push(event);
-            }
-        }
-
-        deduped
-    }
-
     async fn fetch_events_between(
         &self,
         client: &dyn IntervalsClient,
@@ -55,7 +39,7 @@ impl ModifyTrainingHandler {
         fetch_calendar_events_between(client, start_date, end_date, limit)
             .await
             .map_err(|e| IntentError::api(e.to_string()))
-            .map(Self::dedupe_events)
+            .map(dedupe_and_sort_events)
     }
 
     async fn fetch_events_for_date(
@@ -723,6 +707,7 @@ enum TargetScope {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engines::dedupe::dedupe_and_sort_events;
     use crate::test_support::content_text;
     use intervals_icu_client::EventCategory;
 
@@ -859,7 +844,7 @@ mod tests {
 
     #[test]
     fn test_dedupe_events_keeps_unique_id_and_fallback_keys() {
-        let deduped = ModifyTrainingHandler::dedupe_events(vec![
+        let deduped = dedupe_and_sort_events(vec![
             Event {
                 id: Some("event-1".to_string()),
                 start_date_local: "2026-03-01".to_string(),
@@ -1449,7 +1434,7 @@ mod tests {
     #[test]
     fn test_dedupe_events_empty_list() {
         let events: Vec<Event> = vec![];
-        let deduped = ModifyTrainingHandler::dedupe_events(events);
+        let deduped = dedupe_and_sort_events(events);
         assert!(deduped.is_empty());
     }
 
@@ -1473,7 +1458,7 @@ mod tests {
                 r#type: None,
             },
         ];
-        let deduped = ModifyTrainingHandler::dedupe_events(events);
+        let deduped = dedupe_and_sort_events(events);
         assert_eq!(deduped.len(), 2);
     }
 
@@ -1497,7 +1482,7 @@ mod tests {
                 r#type: None,
             },
         ];
-        let deduped = ModifyTrainingHandler::dedupe_events(events);
+        let deduped = dedupe_and_sort_events(events);
         // Should be deduped because they have the same fallback key
         assert_eq!(deduped.len(), 1);
     }

@@ -4,6 +4,10 @@ use crate::domains::coach::{
     DecouplingMetrics, EspeDerivedMetrics, EspePowerAnchors, EtvsMetrics, FitnessMetrics,
     HeatMetrics, NdliMetrics, WdrMetrics,
 };
+use crate::engines::interval_analysis::{
+    IntervalOutputKind, derive_interval_output, extract_exact_tss, format_pace_per_km,
+    interval_number, numeric_value,
+};
 use crate::intents::ContentBlock;
 
 pub(crate) fn build_load_management_text(
@@ -109,10 +113,6 @@ pub(crate) fn format_duration_compact(seconds: i64) -> String {
     }
 }
 
-pub(crate) fn is_planned_workout_id(activity_id: &str) -> bool {
-    activity_id.starts_with("event:")
-}
-
 pub(crate) fn build_calendar_event_rows(
     events: &[&intervals_icu_client::Event],
 ) -> Vec<Vec<String>> {
@@ -135,109 +135,6 @@ pub(crate) fn build_calendar_event_rows(
             ]
         })
         .collect()
-}
-
-pub(crate) fn count_work_intervals(intervals: &[Value]) -> usize {
-    if intervals.is_empty() {
-        return 0;
-    }
-
-    // Collect speed and HR data for all intervals
-    let mut speed_data: Vec<(usize, f64)> = Vec::new();
-    let mut hr_data: Vec<(usize, f64)> = Vec::new();
-
-    for (i, interval) in intervals.iter().filter_map(|v| v.as_object()).enumerate() {
-        if let Some(speed) = interval
-            .get("average_speed")
-            .and_then(|v| v.as_f64())
-            .filter(|&s| s > 0.0)
-        {
-            speed_data.push((i, speed));
-        }
-        if let Some(hr) = interval
-            .get("average_heartrate")
-            .and_then(|v| v.as_f64())
-            .filter(|&h| h > 0.0)
-        {
-            hr_data.push((i, hr));
-        }
-    }
-
-    // If we don't have enough data, fall back to counting all intervals
-    if speed_data.len() < 3 && hr_data.len() < 3 {
-        return intervals.len();
-    }
-
-    // Calculate median speed and HR
-    let median_speed =
-        calculate_median(&mut speed_data.iter().map(|(_, s)| *s).collect::<Vec<_>>());
-    let median_hr = calculate_median(&mut hr_data.iter().map(|(_, h)| *h).collect::<Vec<_>>());
-
-    // Count intervals that are above median in both speed and HR (work intervals)
-    // or at least above median in speed (for HR-less intervals)
-    let mut work_count = 0;
-
-    for interval in intervals.iter().filter_map(|v| v.as_object()) {
-        let speed = interval.get("average_speed").and_then(|v| v.as_f64());
-        let hr = interval.get("average_heartrate").and_then(|v| v.as_f64());
-
-        let is_work = match (speed, hr) {
-            (Some(s), Some(h)) => s >= median_speed && h >= median_hr,
-            (Some(s), None) => s >= median_speed,
-            (None, Some(h)) => h >= median_hr,
-            (None, None) => true, // No data, assume work
-        };
-
-        if is_work {
-            work_count += 1;
-        }
-    }
-
-    // Sanity check: work intervals should be less than total
-    // If all intervals are counted as work, return total
-    work_count.min(intervals.len())
-}
-
-pub(crate) fn calculate_median(values: &mut [f64]) -> f64 {
-    if values.is_empty() {
-        return 0.0;
-    }
-    values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let mid = values.len() / 2;
-    if values.len().is_multiple_of(2) {
-        (values[mid - 1] + values[mid]) / 2.0
-    } else {
-        values[mid]
-    }
-}
-
-pub(crate) fn format_pace_per_km(seconds: i64, distance_m: f64) -> Option<String> {
-    if seconds <= 0 || distance_m <= 0.0 {
-        return None;
-    }
-
-    let total_seconds = (seconds as f64 / (distance_m / 1000.0)).round() as i64;
-    Some(format!(
-        "{}:{:02} /km",
-        total_seconds / 60,
-        total_seconds % 60
-    ))
-}
-
-pub(crate) fn extract_exact_tss(object: &serde_json::Map<String, Value>) -> Option<f64> {
-    // Try TSS field names in priority order: prefer exact TSS, then fall back to intervals.icu naming
-    [
-        "tss",
-        "icu_training_load",
-        "training_load",
-        "icuTrainingLoad",
-    ]
-    .iter()
-    .find_map(|key| {
-        object
-            .get(*key)
-            .and_then(|value| value.as_f64().or_else(|| value.as_i64().map(|n| n as f64)))
-    })
 }
 
 pub(crate) fn build_basic_workout_metric_rows(workout_detail: Option<&Value>) -> Vec<Vec<String>> {
@@ -338,167 +235,6 @@ pub(crate) fn build_activity_message_rows(
         .collect()
 }
 
-pub(crate) fn interval_number(object: &serde_json::Map<String, Value>, key: &str) -> Option<f64> {
-    object
-        .get(key)
-        .and_then(|value| value.as_f64().or_else(|| value.as_i64().map(|n| n as f64)))
-}
-
-pub(crate) fn stream_series<'a>(
-    streams: Option<&'a Value>,
-    keys: &[&str],
-) -> Option<&'a Vec<Value>> {
-    let object = streams?.as_object()?;
-    keys.iter().find_map(|key| object.get(*key)?.as_array())
-}
-
-pub(crate) fn average_stream_slice(
-    values: &[Value],
-    start_index: usize,
-    end_index: usize,
-) -> Option<f64> {
-    if start_index >= end_index || start_index >= values.len() {
-        return None;
-    }
-
-    let upper_bound = end_index.min(values.len());
-    let numeric = values[start_index..upper_bound]
-        .iter()
-        .filter_map(|value| value.as_f64().or_else(|| value.as_i64().map(|n| n as f64)))
-        .collect::<Vec<_>>();
-
-    if numeric.is_empty() {
-        None
-    } else {
-        Some(numeric.iter().sum::<f64>() / numeric.len() as f64)
-    }
-}
-
-pub(crate) fn format_pace_from_speed(speed_mps: f64) -> Option<String> {
-    if speed_mps <= 0.0 {
-        return None;
-    }
-
-    let seconds_per_km = (1000.0 / speed_mps).round() as i64;
-    Some(format!(
-        "{}:{:02} /km",
-        seconds_per_km / 60,
-        seconds_per_km % 60
-    ))
-}
-
-pub(crate) fn average_numeric_stream_value(streams: Option<&Value>, keys: &[&str]) -> Option<f64> {
-    let values = stream_series(streams, keys)?;
-    let numeric = values
-        .iter()
-        .filter_map(|value| value.as_f64().or_else(|| value.as_i64().map(|n| n as f64)))
-        .collect::<Vec<_>>();
-
-    if numeric.is_empty() {
-        None
-    } else {
-        Some(numeric.iter().sum::<f64>() / numeric.len() as f64)
-    }
-}
-
-pub(crate) fn quality_output_finding(
-    workout_detail: Option<&Value>,
-    streams: Option<&Value>,
-) -> Option<String> {
-    let detail = workout_detail.and_then(Value::as_object);
-
-    if let Some(power) = detail.and_then(|obj| numeric_value(obj, "average_watts")) {
-        return Some(format!("Average power tracked at {:.0} W.", power));
-    }
-
-    if let Some(speed) = detail
-        .and_then(|obj| numeric_value(obj, "average_speed"))
-        .or_else(|| average_numeric_stream_value(streams, &["velocity_smooth", "pace"]))
-    {
-        if let Some(pace) = format_pace_from_speed(speed) {
-            return Some(format!("Average pace held at {pace}."));
-        }
-
-        return Some(format!("Average speed tracked at {:.1} km/h.", speed * 3.6));
-    }
-
-    None
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum IntervalOutputKind {
-    Power,
-    Pace,
-}
-
-pub(crate) enum IntervalOutputValue {
-    Power(f64),
-    Pace(f64),
-}
-
-impl IntervalOutputValue {
-    pub(crate) fn kind(&self) -> IntervalOutputKind {
-        match self {
-            Self::Power(_) => IntervalOutputKind::Power,
-            Self::Pace(_) => IntervalOutputKind::Pace,
-        }
-    }
-
-    pub(crate) fn format(&self) -> String {
-        match self {
-            Self::Power(value) => format!("{value:.0} W"),
-            Self::Pace(speed_mps) => {
-                format_pace_from_speed(*speed_mps).unwrap_or_else(|| "n/a".to_string())
-            }
-        }
-    }
-}
-
-pub(crate) fn derive_interval_output(
-    interval: &serde_json::Map<String, Value>,
-    streams: Option<&Value>,
-) -> Option<IntervalOutputValue> {
-    [
-        "average_watts",
-        "average_watts_alt",
-        "average_watts_alt_acc",
-        "weighted_average_watts",
-    ]
-    .iter()
-    .find_map(|key| interval_number(interval, key))
-    .map(IntervalOutputValue::Power)
-    .or_else(|| {
-        let start_index = interval.get("start_index").and_then(Value::as_u64)? as usize;
-        let end_index = interval.get("end_index").and_then(Value::as_u64)? as usize;
-        let watts_stream = stream_series(streams, &["watts", "power"])?;
-        average_stream_slice(watts_stream, start_index, end_index).map(IntervalOutputValue::Power)
-    })
-    .or_else(|| {
-        interval_number(interval, "average_speed")
-            .filter(|speed| *speed > 0.0)
-            .map(IntervalOutputValue::Pace)
-    })
-    .or_else(|| {
-        let start_index = interval.get("start_index").and_then(Value::as_u64)? as usize;
-        let end_index = interval.get("end_index").and_then(Value::as_u64)? as usize;
-        let speed_stream = stream_series(streams, &["velocity_smooth", "pace"])?;
-        average_stream_slice(speed_stream, start_index, end_index)
-            .filter(|speed| *speed > 0.0)
-            .map(IntervalOutputValue::Pace)
-    })
-}
-
-pub(crate) fn preferred_interval_output_kind(
-    intervals: &[Value],
-    streams: Option<&Value>,
-) -> IntervalOutputKind {
-    intervals
-        .iter()
-        .filter_map(Value::as_object)
-        .find_map(|interval| derive_interval_output(interval, streams).map(|value| value.kind()))
-        .unwrap_or(IntervalOutputKind::Power)
-}
-
 pub(crate) fn build_interval_analysis_rows(
     intervals: &[Value],
     streams: Option<&Value>,
@@ -513,8 +249,7 @@ pub(crate) fn build_interval_analysis_rows(
             let avg_hr = interval_number(obj, "average_heartrate")
                 .map(|value| format!("{value:.0} bpm"))
                 .unwrap_or_else(|| "n/a".to_string());
-            let avg_output = derive_interval_output(obj, streams)
-                .filter(|value| value.kind() == output_kind)
+            let avg_output = derive_interval_output(obj, streams, output_kind)
                 .map(|value| value.format())
                 .unwrap_or_else(|| "n/a".to_string());
 
@@ -728,12 +463,6 @@ pub(crate) fn build_zone_distribution_rows(
             ])
         })
         .collect()
-}
-
-pub(crate) fn numeric_value(object: &serde_json::Map<String, Value>, key: &str) -> Option<f64> {
-    object
-        .get(key)
-        .and_then(|value| value.as_f64().or_else(|| value.as_i64().map(|n| n as f64)))
 }
 
 pub(crate) fn format_histogram_number(value: f64) -> String {
@@ -1323,6 +1052,11 @@ mod tests {
         LoadManagementMetrics, NdliMetrics, WdrMetrics,
     };
     use crate::engines::coach_metrics::TrendSnapshot;
+    use crate::engines::interval_analysis::{
+        IntervalOutputKind, IntervalOutputValue, average_numeric_stream_value, calculate_median,
+        count_work_intervals, derive_interval_output, extract_exact_tss, format_pace_from_speed,
+        interval_number, preferred_interval_output_kind, quality_output_finding, stream_series,
+    };
     use crate::intents::ContentBlock;
     use intervals_icu_client::{ActivityMessage, ActivitySummary, Event, EventCategory};
     use std::collections::HashMap;
@@ -1831,7 +1565,7 @@ mod tests {
     fn derive_interval_output_power_from_field() {
         let obj = serde_json::json!({"average_watts": 250.0});
         let map = obj.as_object().unwrap();
-        let result = derive_interval_output(map, None);
+        let result = derive_interval_output(map, None, IntervalOutputKind::Power);
         assert_eq!(result.map(|v| v.format()), Some("250 W".to_string()));
     }
 
@@ -1839,7 +1573,7 @@ mod tests {
     fn derive_interval_output_power_from_alt() {
         let obj = serde_json::json!({"average_watts_alt": 230.0});
         let map = obj.as_object().unwrap();
-        let result = derive_interval_output(map, None);
+        let result = derive_interval_output(map, None, IntervalOutputKind::Power);
         assert_eq!(result.map(|v| v.format()), Some("230 W".to_string()));
     }
 
@@ -1847,7 +1581,7 @@ mod tests {
     fn derive_interval_output_power_from_weighted() {
         let obj = serde_json::json!({"weighted_average_watts": 240.0});
         let map = obj.as_object().unwrap();
-        let result = derive_interval_output(map, None);
+        let result = derive_interval_output(map, None, IntervalOutputKind::Power);
         assert_eq!(result.map(|v| v.format()), Some("240 W".to_string()));
     }
 
@@ -1856,7 +1590,7 @@ mod tests {
         let obj = serde_json::json!({"start_index": 0, "end_index": 3});
         let streams = serde_json::json!({"watts": [200, 220, 240, 260]});
         let map = obj.as_object().unwrap();
-        let result = derive_interval_output(map, Some(&streams));
+        let result = derive_interval_output(map, Some(&streams), IntervalOutputKind::Power);
         // avg of [200, 220, 240] = 220
         assert_eq!(result.map(|v| v.format()), Some("220 W".to_string()));
     }
@@ -1865,7 +1599,7 @@ mod tests {
     fn derive_interval_output_pace_from_field() {
         let obj = serde_json::json!({"average_speed": 5.0});
         let map = obj.as_object().unwrap();
-        let result = derive_interval_output(map, None);
+        let result = derive_interval_output(map, None, IntervalOutputKind::Pace);
         assert_eq!(result.map(|v| v.format()), Some("3:20 /km".to_string()));
     }
 
@@ -1874,7 +1608,7 @@ mod tests {
         let obj = serde_json::json!({"start_index": 0, "end_index": 3});
         let streams = serde_json::json!({"velocity_smooth": [4.0, 5.0, 6.0]});
         let map = obj.as_object().unwrap();
-        let result = derive_interval_output(map, Some(&streams));
+        let result = derive_interval_output(map, Some(&streams), IntervalOutputKind::Pace);
         assert_eq!(result.map(|v| v.format()), Some("3:20 /km".to_string()));
     }
 
@@ -1882,7 +1616,7 @@ mod tests {
     fn derive_interval_output_none() {
         let obj = serde_json::json!({});
         let map = obj.as_object().unwrap();
-        assert!(derive_interval_output(map, None).is_none());
+        assert!(derive_interval_output(map, None, IntervalOutputKind::Power).is_none());
     }
 
     // ── preferred_interval_output_kind ────────────────────────────────
@@ -1910,7 +1644,7 @@ mod tests {
         let intervals: Vec<Value> = vec![serde_json::json!({})];
         assert_eq!(
             preferred_interval_output_kind(&intervals, None),
-            IntervalOutputKind::Power
+            IntervalOutputKind::Pace
         );
     }
 
@@ -3123,7 +2857,7 @@ mod tests {
         let obj = serde_json::json!({"start_index": 0, "end_index": 3});
         let streams = serde_json::json!({"power": [200, 220, 240, 260]});
         let map = obj.as_object().unwrap();
-        let result = derive_interval_output(map, Some(&streams));
+        let result = derive_interval_output(map, Some(&streams), IntervalOutputKind::Power);
         // avg of [200, 220, 240] = 220
         assert_eq!(result.map(|v| v.format()), Some("220 W".to_string()));
     }
@@ -3135,7 +2869,7 @@ mod tests {
         let obj = serde_json::json!({"start_index": 0, "end_index": 3});
         let streams = serde_json::json!({"pace": [4.0, 5.0, 6.0]});
         let map = obj.as_object().unwrap();
-        let result = derive_interval_output(map, Some(&streams));
+        let result = derive_interval_output(map, Some(&streams), IntervalOutputKind::Pace);
         let result = result.map(|v| v.format());
         assert_eq!(result, Some("3:20 /km".to_string()));
     }
@@ -3146,7 +2880,7 @@ mod tests {
     fn derive_interval_output_zero_speed_filtered() {
         let obj = serde_json::json!({"average_speed": 0.0});
         let map = obj.as_object().unwrap();
-        let result = derive_interval_output(map, None);
+        let result = derive_interval_output(map, None, IntervalOutputKind::Pace);
         assert!(result.is_none());
     }
 
@@ -3157,7 +2891,7 @@ mod tests {
         let obj = serde_json::json!({"start_index": 0, "end_index": 3});
         let streams = serde_json::json!({"velocity_smooth": [0.0, 0.0, 0.0]});
         let map = obj.as_object().unwrap();
-        let result = derive_interval_output(map, Some(&streams));
+        let result = derive_interval_output(map, Some(&streams), IntervalOutputKind::Pace);
         // avg = 0.0, filtered by .filter(|speed| *speed > 0.0)
         assert!(result.is_none());
     }

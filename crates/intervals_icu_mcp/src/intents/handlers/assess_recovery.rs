@@ -1,14 +1,22 @@
-use crate::intents::{ContentBlock, IdempotencyCache, IntentError, IntentHandler, IntentOutput};
+use crate::intents::{
+    ContentBlock, IdempotencyCache, IntentError, IntentHandler, IntentOutput,
+    data_availability_block,
+};
 use async_trait::async_trait;
-use chrono::Local;
 use intervals_icu_client::IntervalsClient;
 use serde_json::{Value, json};
-/// Assess Recovery Intent Handler
-///
-/// Assesses recovery status, readiness to train, and detects red flags.
 use std::sync::Arc;
 
-use crate::domains::baseline::{BaselineTransform, compute_personal_baseline};
+use crate::domains::coach::WellnessMetrics;
+use crate::engines::ade::compute_ade;
+use crate::engines::analysis_fetch::RecoveryFetchRequest;
+
+#[cfg(test)]
+use crate::domains::coach::CoachMetrics;
+#[cfg(test)]
+use crate::engines::coach_guidance::build_alerts;
+#[cfg(test)]
+use crate::engines::coach_metrics::{parse_fitness_metrics, parse_wellness_metrics};
 
 const READINESS_SLEEP_EASY: f64 = 6.0;
 const READINESS_SLEEP_INTENSITY: f64 = 7.0;
@@ -20,16 +28,6 @@ const READINESS_TSB_RACE: f64 = 5.0;
 const READINESS_RECOVERY_INDEX_INTENSITY: f64 = 0.95;
 const READINESS_RECOVERY_INDEX_LONG: f64 = 0.9;
 const READINESS_RECOVERY_INDEX_RACE: f64 = 1.1;
-
-#[cfg(test)]
-use crate::domains::coach::CoachMetrics;
-use crate::domains::coach::{AnalysisKind, AnalysisWindow, CoachContext, WellnessMetrics};
-use crate::engines::ade::compute_ade;
-use crate::engines::analysis_audit::build_data_audit;
-use crate::engines::analysis_fetch::{RecoveryFetchRequest, fetch_recovery_data};
-use crate::engines::coach_guidance::{build_alerts, build_guidance};
-use crate::engines::coach_metrics::{parse_fitness_metrics, parse_wellness_metrics};
-use crate::intents::utils::data_availability_block;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PlannedActivity {
@@ -145,11 +143,17 @@ impl PlannedActivity {
         }
     }
 }
+pub struct AssessRecoveryHandler {
+    engine: crate::engines::recovery_assessment_engine::RecoveryAssessmentEngine,
+}
 
-pub struct AssessRecoveryHandler;
 impl AssessRecoveryHandler {
     pub fn new() -> Self {
-        Self
+        let builder = Arc::new(crate::engines::coach_metrics::CoachMetricsBuilder);
+        let engine = crate::engines::recovery_assessment_engine::RecoveryAssessmentEngine::new(
+            builder.clone(),
+        );
+        Self { engine }
     }
     #[cfg(test)]
     fn parse_wellness(&self, wellness: &Value) -> (f64, f64, f64) {
@@ -393,19 +397,18 @@ impl IntentHandler for AssessRecoveryHandler {
             .and_then(Value::as_bool)
             .unwrap_or(true);
 
-        let mut content = Vec::new();
-        let end_date = Local::now().date_naive();
-        let start_date = end_date - chrono::Duration::days(period_days);
+        let request = RecoveryFetchRequest {
+            period_days: period_days as i32,
+            include_wellness,
+        };
 
-        let fetched = fetch_recovery_data(
-            client.as_ref(),
-            &RecoveryFetchRequest {
-                period_days: period_days as i32,
-                include_wellness,
-            },
-        )
-        .await
-        .map_err(|e| IntentError::api(e.to_string()))?;
+        let report = self
+            .engine
+            .build_report(client.as_ref(), &request)
+            .await
+            .map_err(|e| IntentError::api(e.to_string()))?;
+
+        let recovery_context = report.coach_context;
 
         // Look-ahead: check upcoming workouts for key sessions
         let upcoming = client
@@ -413,57 +416,9 @@ impl IntentHandler for AssessRecoveryHandler {
             .await
             .ok();
 
-        let mut recovery_context = CoachContext::new(
-            AnalysisKind::RecoveryAssessment,
-            AnalysisWindow::new(start_date, end_date),
-        );
-        recovery_context.audit = build_data_audit(&fetched);
-        recovery_context.metrics.fitness = parse_fitness_metrics(fetched.fitness.as_ref());
-        recovery_context.metrics.wellness = parse_wellness_metrics(fetched.wellness.as_ref());
-
-        // Compute personal baselines from wellness history
-        if let Some(wellness) = &fetched.wellness
-            && let Some(entries) = wellness.as_array()
-        {
-            let hrv_observations: Vec<(chrono::NaiveDate, f64)> = entries
-                .iter()
-                .filter_map(|entry| {
-                    let obj = entry.as_object()?;
-                    let date_str = obj.get("date").and_then(|v| v.as_str())?;
-                    let date = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d").ok()?;
-                    let hrv = obj.get("hrv").and_then(|v| v.as_f64())?;
-                    Some((date, hrv))
-                })
-                .collect();
-
-            let rhr_observations: Vec<(chrono::NaiveDate, f64)> = entries
-                .iter()
-                .filter_map(|entry| {
-                    let obj = entry.as_object()?;
-                    let date_str = obj.get("date").and_then(|v| v.as_str())?;
-                    let date = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d").ok()?;
-                    let rhr = obj
-                        .get("resting_hr")
-                        .or_else(|| obj.get("restingHR"))
-                        .or_else(|| obj.get("resting_hr_bpm"))
-                        .or_else(|| obj.get("avgSleepingHR"))
-                        .and_then(|v| v.as_f64())?;
-                    Some((date, rhr))
-                })
-                .collect();
-
-            if let Some(ref mut wellness_metrics) = recovery_context.metrics.wellness {
-                wellness_metrics.hrv_personal_baseline =
-                    compute_personal_baseline(&hrv_observations, BaselineTransform::LogLnRmssd);
-                wellness_metrics.resting_hr_personal_baseline =
-                    compute_personal_baseline(&rhr_observations, BaselineTransform::RawBpm);
-            }
-        }
-        if include_red_flags {
-            recovery_context.alerts = build_alerts(&recovery_context.metrics);
-        }
-        recovery_context.guidance =
-            build_guidance(&recovery_context.metrics, &recovery_context.alerts);
+        let mut content = Vec::new();
+        let start_date = report.period.start_date;
+        let end_date = report.period.end_date;
 
         content.push(ContentBlock::markdown(format!(
             "# Recovery Assessment ({} - {})\nReadiness for: {}",
@@ -738,7 +693,7 @@ mod tests {
 
     #[test]
     fn test_default_handler() {
-        let _handler = AssessRecoveryHandler;
+        let _handler = AssessRecoveryHandler::new();
     }
 
     #[test]

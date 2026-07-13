@@ -116,7 +116,7 @@ async fn e2e_stdio_lists_tools_and_calls_profile() {
         "server initialize must advertise resource capability"
     );
 
-    // List tools and ensure intent tools are present (8 intents only)
+    // List tools and ensure intent tools are present (may include dynamic OpenAPI tools too)
     let tools = match tokio::time::timeout(
         std::time::Duration::from_secs(20),
         service.list_tools(Default::default()),
@@ -155,12 +155,23 @@ async fn e2e_stdio_lists_tools_and_calls_profile() {
         "track_progress",
     ];
 
-    for tool in &tools.tools {
+    let names: Vec<_> = tools.tools.iter().map(|t| t.name.as_ref()).collect();
+
+    // All 9 intent tools must be present (may also include dynamic OpenAPI tools)
+    assert!(names.len() >= 9, "Should have at least 9 intent tools");
+    for expected_name in &expected_tool_names {
         assert!(
-            expected_tool_names.contains(&tool.name.as_ref()),
-            "unexpected MCP tool exposed: {}",
-            tool.name
+            names.contains(expected_name),
+            "Missing intent tool: {expected_name}",
         );
+    }
+
+    // Validate schema only for the 9 intent tools
+    for tool in tools
+        .tools
+        .iter()
+        .filter(|t| expected_tool_names.contains(&t.name.as_ref()))
+    {
         assert!(
             !tool.input_schema.is_empty(),
             "{} should expose a non-empty input schema",
@@ -213,21 +224,6 @@ async fn e2e_stdio_lists_tools_and_calls_profile() {
             output_properties.contains_key("next_actions"),
             "{} output schema should expose next_actions",
             tool.name
-        );
-    }
-
-    let names: Vec<_> = tools
-        .tools
-        .into_iter()
-        .map(|t| t.name.to_string())
-        .collect();
-
-    // Verify only 9 intent tools are exposed (no dynamic OpenAPI tools)
-    assert_eq!(names.len(), 9, "Should have exactly 9 intent tools");
-    for expected_name in expected_tool_names {
-        assert!(
-            names.iter().any(|name| name == expected_name),
-            "Missing {expected_name}"
         );
     }
 

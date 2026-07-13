@@ -2,22 +2,6 @@
 //!
 //! This crate provides a trait-based API for interacting with the Intervals.icu service,
 //! along with a reqwest-based implementation and utilities for configuration.
-//!
-//! # Modular Service Traits
-//!
-//! For better modularity and testability, the `IntervalsClient` trait is composed of
-//! domain-specific service traits:
-//!
-//! - [`traits::AthleteService`] - Athlete profile operations
-//! - [`traits::ActivityService`] - Activity-related operations
-//! - [`traits::EventService`] - Calendar/event operations
-//! - [`traits::FitnessService`] - Fitness metrics and curves
-//! - [`traits::GearService`] - Equipment management
-//! - [`traits::RouteService`] - Route listing and similarity
-//! - [`traits::WellnessService`] - Wellness data
-//! - [`traits::WeatherService`] - Weather configuration
-//! - [`traits::WorkoutService`] - Workout library
-//! - [`traits::SportSettingsService`] - Sport configuration
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -27,15 +11,9 @@ pub mod config;
 pub mod domains;
 pub mod error;
 pub mod http_client;
-pub mod traits;
 pub mod utils;
 
 pub use error::{ApiError, ConfigError, IntervalsError, Result, ValidationError};
-// Service traits are available in the `traits` module for modular usage
-pub use traits::{
-    ActivityService, AthleteService, EventService, FitnessService, GearService, RouteService,
-    SportSettingsService, WeatherService, WellnessService, WorkoutService,
-};
 
 /// Options for finding best efforts in an activity.
 ///
@@ -143,9 +121,6 @@ where
         ))),
     }
 }
-
-// The IntervalsClient trait is defined here for backward compatibility.
-// For better modularity, use the service traits in the `traits` module.
 
 #[async_trait::async_trait]
 #[allow(clippy::too_many_arguments)]

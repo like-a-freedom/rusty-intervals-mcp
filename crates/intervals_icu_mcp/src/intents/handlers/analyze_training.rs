@@ -31,6 +31,10 @@ use crate::engines::coach_metrics::{
     parse_fitness_metrics, parse_polarisation_from_api,
 };
 use crate::engines::cp_regression::{fit_cp, validate_cp};
+use crate::engines::interval_analysis::{
+    IntervalOutputKind, count_work_intervals, is_planned_workout_id,
+    preferred_interval_output_kind, quality_output_finding,
+};
 use crate::engines::shared::parse_activity_date;
 use crate::engines::trail_execution::compute_terrain_context;
 
@@ -1976,6 +1980,7 @@ mod tests {
     use super::*;
     use crate::domains::coach::{AcwrMetrics, LoadManagementMetrics};
     use crate::engines::analysis_fetch::FetchedAnalysisData;
+    use crate::engines::interval_analysis::{IntervalOutputValue, calculate_median, numeric_value};
     use chrono::NaiveDate;
     use serde_json::json;
 

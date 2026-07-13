@@ -132,8 +132,6 @@ impl IntervalsMcpHandler {
 
     #[must_use]
     pub fn tool_count(&self) -> usize {
-        // Return only intent tool count (8 high-level business intents)
-        // Dynamic OpenAPI tools are internal-only and NOT exposed to LLM host
         self.intent_router.tool_definitions().len()
     }
 
@@ -213,6 +211,31 @@ impl IntervalsMcpHandler {
             .ok()?,
         ) as Arc<dyn IntervalsClient>)
     }
+
+    /// Dispatch a tool call through the dynamic OpenAPI runtime.
+    async fn dispatch_dynamic_tool(
+        &self,
+        tool_name: &str,
+        args: &rmcp::model::JsonObject,
+    ) -> Result<CallToolResult, ErrorData> {
+        let registry = self.dynamic_runtime.ensure_registry().await.map_err(|e| {
+            ErrorData::internal_error(format!("dynamic registry unavailable: {}", e.message), None)
+        })?;
+
+        let operation = registry.operation(tool_name).ok_or_else(|| {
+            ErrorData::internal_error(
+                format!(
+                    "tool '{}' not found in intent router or dynamic registry",
+                    tool_name
+                ),
+                None,
+            )
+        })?;
+
+        self.dynamic_runtime
+            .dispatch_openapi(operation, Some(args))
+            .await
+    }
 }
 
 impl ServerHandler for IntervalsMcpHandler {
@@ -246,12 +269,12 @@ impl ServerHandler for IntervalsMcpHandler {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
         metrics::record_mcp_method_call("tools/list");
-        // Return only intent tools (8 high-level business intents)
-        // Dynamic OpenAPI tools are internal-only and NOT exposed to LLM host
-        let intent_tools = self.intent_router.tool_definitions();
-        let mut all_tools = Vec::with_capacity(intent_tools.len());
 
-        for tool_def in intent_tools {
+        // 1. Collect intent tools (9 static handlers)
+        let intent_tools = self.intent_router.tool_definitions();
+        let mut all_tools: Vec<rmcp::model::Tool> = Vec::with_capacity(intent_tools.len() + 32);
+
+        for tool_def in &intent_tools {
             let input_schema_arc = std::sync::Arc::new(
                 tool_def
                     .input_schema
@@ -278,6 +301,17 @@ impl ServerHandler for IntervalsMcpHandler {
             all_tools.push(tool);
         }
 
+        // 2. Merge dynamic OpenAPI tools (skip any that collide with intent names)
+        if let Ok(registry) = self.dynamic_runtime.ensure_registry().await {
+            let intent_names: std::collections::HashSet<&str> =
+                intent_tools.iter().map(|td| td.name.as_str()).collect();
+            for dynamic_tool in registry.list_tools() {
+                if !intent_names.contains(dynamic_tool.name.as_ref()) {
+                    all_tools.push(dynamic_tool);
+                }
+            }
+        }
+
         Ok(ListToolsResult {
             tools: all_tools,
             next_cursor: None,
@@ -291,51 +325,48 @@ impl ServerHandler for IntervalsMcpHandler {
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         metrics::record_mcp_method_call("tools/call");
-        // For multi-tenant mode: extract credentials from HTTP request parts and create per-request client.
         let client_for_request = Self::client_for_extensions(&context.extensions);
         let athlete_id = Self::request_credentials(&context.extensions).map(|c| c.athlete_id);
 
-        // Route to intent handler by name
         let intent_name = request.name.as_ref();
-        let args = request.arguments.unwrap_or_default();
+        let args: rmcp::model::JsonObject = request.arguments.unwrap_or_default();
 
-        // Use per-request client if available, otherwise use default
-        match client_for_request {
+        // Try intent router first, fall back to dynamic OpenAPI dispatch
+        let intent_result = match &client_for_request {
             Some(client) => {
-                // Create temporary router with per-request client
                 let idempotency = Arc::new(intents::IdempotencyMiddleware::new());
                 let handlers = all_intent_handlers();
-                let router = Arc::new(intents::IntentRouter::new(handlers, client, idempotency));
-
-                match router
+                let router = Arc::new(intents::IntentRouter::new(
+                    handlers,
+                    client.clone(),
+                    idempotency,
+                ));
+                router
                     .route(
                         intent_name,
-                        serde_json::Value::Object(args),
+                        serde_json::Value::Object(args.clone()),
                         athlete_id.as_deref(),
                     )
                     .await
-                {
-                    Ok(output) => intent_output_to_call_tool_result(&output)
-                        .map_err(|e| ErrorData::internal_error(e.to_string(), None)),
-                    Err(e) => Err(intent_error_to_error_data(&e)),
-                }
             }
             None => {
-                // Single-user mode: use pre-configured intent router
-                match self
-                    .intent_router
+                self.intent_router
                     .route(
                         intent_name,
-                        serde_json::Value::Object(args),
+                        serde_json::Value::Object(args.clone()),
                         athlete_id.as_deref(),
                     )
                     .await
-                {
-                    Ok(output) => intent_output_to_call_tool_result(&output)
-                        .map_err(|e| ErrorData::internal_error(e.to_string(), None)),
-                    Err(e) => Err(intent_error_to_error_data(&e)),
-                }
             }
+        };
+
+        match intent_result {
+            Ok(output) => intent_output_to_call_tool_result(&output)
+                .map_err(|e| ErrorData::internal_error(e.to_string(), None)),
+            Err(intents::IntentError::UnknownIntent(_)) => {
+                self.dispatch_dynamic_tool(intent_name, &args).await
+            }
+            Err(e) => Err(intent_error_to_error_data(&e)),
         }
     }
 
