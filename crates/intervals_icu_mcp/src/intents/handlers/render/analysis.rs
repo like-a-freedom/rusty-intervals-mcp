@@ -4,7 +4,6 @@ use crate::domains::coach::{
     DecouplingMetrics, EspeDerivedMetrics, EspePowerAnchors, EtvsMetrics, FitnessMetrics,
     HeatMetrics, NdliMetrics, WdrMetrics,
 };
-#[allow(dead_code)]
 use crate::domains::interval_segment::{
     SegmentProvenance, SegmentSeriesReport, SeriesConsistency, SportPresentation,
 };
@@ -1049,7 +1048,6 @@ pub(crate) fn render_etvs_section(etvs: Option<&EtvsMetrics>) -> Option<String> 
 // ── Segment table rendering ───────────────────────────────────────────
 
 /// A renderable table for enriched segment metrics.
-#[allow(dead_code)]
 pub(crate) struct SegmentTable {
     pub title: String,
     pub headers: Vec<String>,
@@ -1077,7 +1075,6 @@ fn work_table_title(provenance: SegmentProvenance) -> &'static str {
 }
 
 /// Build segment metric tables from a report.
-#[allow(dead_code)]
 pub(crate) fn build_segment_tables(
     report: &SegmentSeriesReport,
     presentation: SportPresentation,
@@ -1244,7 +1241,6 @@ pub(crate) fn build_segment_tables(
 }
 
 /// Build repeat-consistency summary rows.
-#[allow(dead_code)]
 pub(crate) fn build_consistency_rows(
     consistency: &SeriesConsistency,
     _presentation: SportPresentation,
@@ -1298,7 +1294,6 @@ fn format_distance(distance_m: Option<f64>) -> String {
         .unwrap_or_else(|| "n/a".to_string())
 }
 
-#[allow(dead_code)]
 fn format_pace_or_na(speed_mps: Option<f64>) -> String {
     speed_mps
         .and_then(format_pace_from_speed)

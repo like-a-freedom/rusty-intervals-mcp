@@ -31,7 +31,6 @@ pub struct DetectedSegment {
 
 /// A series of detected effort/recovery segments (e.g. from fartlek).
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct DetectedSegmentSeries {
     pub effort_segments: Vec<DetectedSegment>,
     pub recovery_segments: Vec<DetectedSegment>,
@@ -43,7 +42,6 @@ pub struct IntervalDetectionResult {
     pub session_kind: SessionKind,
     pub work_segments: Vec<DetectedSegment>,
     pub recovery_segments: Vec<DetectedSegment>,
-    #[allow(dead_code)]
     pub fartlek_series: Option<DetectedSegmentSeries>,
     pub confidence: Option<f64>,
     pub reasons: Vec<String>,

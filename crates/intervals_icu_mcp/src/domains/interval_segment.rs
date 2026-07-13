@@ -8,7 +8,6 @@ use crate::domains::interval_detection::TimeRange;
 
 /// Where a segment's time boundaries came from.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[allow(dead_code)]
 pub enum SegmentProvenance {
     LocalStructured,
     LocalFartlek,
@@ -25,7 +24,6 @@ pub enum SegmentRole {
 
 /// How speed is presented for the activity's sport.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[allow(dead_code)]
 pub enum SportPresentation {
     Pace,
     Speed,
@@ -99,7 +97,6 @@ pub struct SeriesConsistency {
 /// A complete report for one source (local structured, local fartlek, or
 /// upstream).
 #[derive(Clone, Debug, PartialEq)]
-#[allow(dead_code)]
 pub struct SegmentSeriesReport {
     pub provenance: SegmentProvenance,
     pub efforts: Vec<EnrichedSegment>,

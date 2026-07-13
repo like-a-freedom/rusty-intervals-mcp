@@ -51,8 +51,6 @@ impl Span {
 #[derive(Clone, Copy, Default)]
 struct SignalSummary {
     integral: f64,
-    #[allow(dead_code)]
-    squared_integral: f64,
     mean: f64,
     variance: f64,
     coverage: SignalCoverage,
@@ -154,7 +152,6 @@ fn summarize_signal(time_s: &[f64], values: &[f64], range: TimeRange) -> SignalS
 
     SignalSummary {
         integral,
-        squared_integral,
         mean,
         variance,
         coverage: SignalCoverage {
@@ -575,6 +572,79 @@ mod tests {
         assert_eq!(metrics.avg_speed_mps, Some(5.0));
         assert_eq!(metrics.avg_hr_bpm, Some(160.0));
         assert!(metrics.avg_power_w.is_none());
+    }
+
+    #[test]
+    fn nan_samples_in_time_lower_coverage_ratio() {
+        let streams = MetricStreams {
+            time_s: vec![0.0, f64::NAN, 2.0, 3.0, 4.0, 5.0],
+            speed_mps: Some(vec![5.0; 6]),
+            heartrate_bpm: Some(vec![160.0; 6]),
+            power_w: None,
+        };
+        let metrics = compute_segment_metrics(
+            &streams,
+            TimeRange {
+                start: 0.0,
+                end: 5.0,
+            },
+        );
+        // NaN at index 1 kills the (0,NaN) and (NaN,2) span pairs via
+        // is_finite rejection. Only spans (2,3), (3,4), (4,5) contribute.
+        // coverage = 3s / 5s = 0.6 < 0.80 → metrics rejected.
+        assert!(metrics.avg_speed_mps.is_none());
+        assert!(metrics.avg_hr_bpm.is_none());
+        assert_eq!(
+            (metrics.speed_coverage.ratio * 100.0).round() as i32,
+            60,
+            "3/5 = 0.6"
+        );
+    }
+
+    #[test]
+    fn nan_signal_values_are_skipped_without_affecting_neighbouring_spans() {
+        // Speed has a NaN in the middle; the span crossing it is split.
+        let streams = MetricStreams {
+            time_s: vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0],
+            speed_mps: Some(vec![5.0, 5.0, f64::NAN, 5.0, 5.0, 5.0]),
+            heartrate_bpm: None,
+            power_w: None,
+        };
+        let metrics = compute_segment_metrics(
+            &streams,
+            TimeRange {
+                start: 0.0,
+                end: 5.0,
+            },
+        );
+        // NaN at time 2 means pairs (1,2) and (2,3) are rejected.
+        // Active spans: (0,1) dt=1, (3,4) dt=1, (4,5) dt=1 → 3s covered.
+        // ratio = 3/5 = 0.6 < 0.8, so no speed metric.
+        assert!(
+            metrics.avg_speed_mps.is_none(),
+            "coverage below threshold with NaN gaps"
+        );
+        assert!(metrics.speed_coverage.ratio < 0.80);
+    }
+
+    #[test]
+    fn misaligned_array_lengths_return_default_metrics() {
+        let streams = MetricStreams {
+            time_s: vec![0.0, 1.0, 2.0],
+            speed_mps: Some(vec![5.0, 5.0]), // only 2 elements vs 3 time
+            heartrate_bpm: None,
+            power_w: None,
+        };
+        let metrics = compute_segment_metrics(
+            &streams,
+            TimeRange {
+                start: 0.0,
+                end: 2.0,
+            },
+        );
+        // summarize_signal returns default because time_s.len() != values.len()
+        assert!(metrics.avg_speed_mps.is_none());
+        assert!(metrics.distance_m.is_none());
     }
 
     // ── Empty / reversed range ───────────────────────────────────────

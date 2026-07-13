@@ -37,7 +37,7 @@ use crate::engines::coach_metrics::{
 use crate::engines::cp_regression::{fit_cp, validate_cp};
 use crate::engines::interval_analysis::{
     IntervalOutputKind, count_work_intervals, is_planned_workout_id,
-    preferred_interval_output_kind, quality_output_finding,
+    preferred_interval_output_kind, quality_output_finding, upstream_segment_windows,
 };
 use crate::engines::interval_segment_metrics::{compute_structured_consistency, enrich_segments};
 use crate::engines::shared::parse_activity_date;
@@ -159,7 +159,6 @@ fn build_local_raw_stream(streams: &Value) -> Option<RawStream> {
 ///   coverage can be measured independently.
 /// - Returns `None` when timestamps are malformed (fewer than 2 points,
 ///   non-monotonic, or non-finite).
-#[allow(dead_code)]
 fn metric_signal_series(streams: &Value, keys: &[&str]) -> Option<Vec<f64>> {
     keys.iter().find_map(|key| {
         streams.get(*key).and_then(Value::as_array).map(|values| {
@@ -171,7 +170,6 @@ fn metric_signal_series(streams: &Value, keys: &[&str]) -> Option<Vec<f64>> {
     })
 }
 
-#[allow(dead_code)]
 fn build_metric_streams(streams: &Value) -> Option<MetricStreams> {
     let time_s = numeric_series(streams, &["time", "time_s"])?;
     if time_s.len() < 2
@@ -208,7 +206,6 @@ fn build_metric_streams(streams: &Value) -> Option<MetricStreams> {
 }
 
 /// Determine the sport presentation style from activity detail.
-#[allow(dead_code)]
 fn sport_presentation(workout_detail: Option<&Value>) -> SportPresentation {
     let type_val = workout_detail
         .and_then(Value::as_object)
@@ -1020,6 +1017,9 @@ impl AnalyzeTrainingHandler {
                                 consistency,
                             };
 
+                            content.push(ContentBlock::markdown(
+                                "Metrics require ≥80% time coverage per signal; lower-coverage values are shown as n/a."
+                            ));
                             let tables = build_segment_tables(&report, presentation);
                             for table in tables {
                                 content.push(ContentBlock::markdown(table.title));
@@ -1082,6 +1082,9 @@ impl AnalyzeTrainingHandler {
                                 consistency: None,
                             };
 
+                            content.push(ContentBlock::markdown(
+                                "Metrics require ≥80% time coverage per signal; lower-coverage values are shown as n/a."
+                            ));
                             let tables = build_segment_tables(&report, presentation);
                             for table in tables {
                                 content.push(ContentBlock::markdown(table.title));
@@ -1136,6 +1139,37 @@ impl AnalyzeTrainingHandler {
                     ],
                     interval_rows,
                 ));
+
+                // ── Upstream segment metrics ──────────────────────────
+                if let Some(ref streams) = fetched.streams {
+                    let metric_streams = build_metric_streams(streams);
+                    if let Some(ref streams) = metric_streams {
+                        let presentation = sport_presentation(fetched.workout_detail.as_ref());
+                        let segment_windows =
+                            upstream_segment_windows(intervals_arr, &streams.time_s);
+                        if !segment_windows.is_empty() {
+                            let (work, recovery): (Vec<_>, Vec<_>) = segment_windows
+                                .into_iter()
+                                .partition(|sw| sw.role == SegmentRole::Work);
+                            let efforts = enrich_segments(streams, &work);
+                            let recoveries = enrich_segments(streams, &recovery);
+                            let report = SegmentSeriesReport {
+                                provenance: SegmentProvenance::UpstreamIntervalsIcu,
+                                efforts,
+                                recoveries,
+                                consistency: None,
+                            };
+                            content.push(ContentBlock::markdown(
+                                "Metrics require ≥80% time coverage per signal; lower-coverage values are shown as n/a."
+                            ));
+                            let tables = build_segment_tables(&report, presentation);
+                            for table in tables {
+                                content.push(ContentBlock::markdown(table.title));
+                                content.push(ContentBlock::table(table.headers, table.rows));
+                            }
+                        }
+                    }
+                }
             } else {
                 // Streams unavailable/failed: detection cannot run at all. This
                 // is distinct from an empty upstream response or an upstream
