@@ -11,11 +11,11 @@ use std::sync::Arc;
 
 use super::render::analysis::*;
 use crate::domains::coach::{AnalysisKind, AnalysisWindow, CoachContext};
+use crate::domains::interval_detection::{self, RawStream};
 use crate::domains::interval_segment::{
     MetricStreams, SegmentProvenance, SegmentRole, SegmentSeriesReport, SegmentWindow,
     SportPresentation,
 };
-use crate::domains::interval_detection::{self, RawStream};
 use crate::engines::adaptation::classify_curve_profile;
 use crate::engines::analysis::{
     AnalysisEngine, WorkoutInsights, WorkoutMetrics as AnalysisWorkoutMetrics,
@@ -39,7 +39,7 @@ use crate::engines::interval_analysis::{
     IntervalOutputKind, count_work_intervals, is_planned_workout_id,
     preferred_interval_output_kind, quality_output_finding,
 };
-use crate::engines::interval_segment_metrics::{enrich_segments, compute_structured_consistency};
+use crate::engines::interval_segment_metrics::{compute_structured_consistency, enrich_segments};
 use crate::engines::shared::parse_activity_date;
 use crate::engines::trail_execution::compute_terrain_context;
 
@@ -175,9 +175,9 @@ fn metric_signal_series(streams: &Value, keys: &[&str]) -> Option<Vec<f64>> {
 fn build_metric_streams(streams: &Value) -> Option<MetricStreams> {
     let time_s = numeric_series(streams, &["time", "time_s"])?;
     if time_s.len() < 2
-        || time_s.windows(2).any(|pair| {
-            !pair[0].is_finite() || !pair[1].is_finite() || pair[1] <= pair[0]
-        })
+        || time_s
+            .windows(2)
+            .any(|pair| !pair[0].is_finite() || !pair[1].is_finite() || pair[1] <= pair[0])
     {
         return None;
     }
@@ -188,7 +188,13 @@ fn build_metric_streams(streams: &Value) -> Option<MetricStreams> {
             .map(|values| {
                 values
                     .into_iter()
-                    .map(|value| if value.is_finite() && valid(value) { value } else { f64::NAN })
+                    .map(|value| {
+                        if value.is_finite() && valid(value) {
+                            value
+                        } else {
+                            f64::NAN
+                        }
+                    })
                     .collect()
             })
     };
@@ -979,14 +985,11 @@ impl AnalyzeTrainingHandler {
                         )));
 
                         // ── Segment metrics ────────────────────────────────
-                        let metric_streams = fetched
-                            .streams
-                            .as_ref()
-                            .and_then(build_metric_streams);
+                        let metric_streams =
+                            fetched.streams.as_ref().and_then(build_metric_streams);
 
                         if let Some(ref streams) = metric_streams {
-                            let presentation =
-                                sport_presentation(fetched.workout_detail.as_ref());
+                            let presentation = sport_presentation(fetched.workout_detail.as_ref());
 
                             let work_windows: Vec<SegmentWindow> = detection
                                 .work_segments
@@ -1020,10 +1023,7 @@ impl AnalyzeTrainingHandler {
                             let tables = build_segment_tables(&report, presentation);
                             for table in tables {
                                 content.push(ContentBlock::markdown(table.title));
-                                content.push(ContentBlock::table(
-                                    table.headers,
-                                    table.rows,
-                                ));
+                                content.push(ContentBlock::table(table.headers, table.rows));
                             }
 
                             if let Some(ref cons) = report.consistency {
@@ -1046,17 +1046,13 @@ impl AnalyzeTrainingHandler {
                         )));
 
                         // ── Fartlek segment metrics ─────────────────────────
-                        let metric_streams = fetched
-                            .streams
-                            .as_ref()
-                            .and_then(build_metric_streams);
+                        let metric_streams =
+                            fetched.streams.as_ref().and_then(build_metric_streams);
 
-                        if let (Some(streams), Some(series)) = (
-                            metric_streams.as_ref(),
-                            detection.fartlek_series.as_ref(),
-                        ) {
-                            let presentation =
-                                sport_presentation(fetched.workout_detail.as_ref());
+                        if let (Some(streams), Some(series)) =
+                            (metric_streams.as_ref(), detection.fartlek_series.as_ref())
+                        {
+                            let presentation = sport_presentation(fetched.workout_detail.as_ref());
 
                             let surge_windows: Vec<SegmentWindow> = series
                                 .effort_segments
@@ -1089,10 +1085,7 @@ impl AnalyzeTrainingHandler {
                             let tables = build_segment_tables(&report, presentation);
                             for table in tables {
                                 content.push(ContentBlock::markdown(table.title));
-                                content.push(ContentBlock::table(
-                                    table.headers,
-                                    table.rows,
-                                ));
+                                content.push(ContentBlock::table(table.headers, table.rows));
                             }
                         }
                     }

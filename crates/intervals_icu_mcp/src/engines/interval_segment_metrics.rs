@@ -12,8 +12,8 @@
 
 use crate::domains::interval_detection::TimeRange;
 use crate::domains::interval_segment::{
-    EnrichedSegment, IntervalSegmentMetrics, MetricStreams, SegmentWindow,
-    SeriesConsistency, SignalCoverage,
+    EnrichedSegment, IntervalSegmentMetrics, MetricStreams, SegmentWindow, SeriesConsistency,
+    SignalCoverage,
 };
 
 const MIN_COVERAGE_RATIO: f64 = 0.80;
@@ -87,8 +87,7 @@ fn summarize_signal(time_s: &[f64], values: &[f64], range: TimeRange) -> SignalS
     for i in 0..time_s.len() {
         let t = time_s[i];
         let v = values[i];
-        if t.is_finite() && v.is_finite() && t >= seg_start && t < seg_end
-        {
+        if t.is_finite() && v.is_finite() && t >= seg_start && t < seg_end {
             sample_count += 1;
         }
     }
@@ -176,12 +175,7 @@ fn summarize_signal(time_s: &[f64], values: &[f64], range: TimeRange) -> SignalS
 /// - the window lies entirely inside the segment
 /// - the window's valid-span coverage is ≥80%
 /// - its mean is finite
-fn full_window_means(
-    time_s: &[f64],
-    values: &[f64],
-    range: TimeRange,
-    window_s: f64,
-) -> Vec<f64> {
+fn full_window_means(time_s: &[f64], values: &[f64], range: TimeRange, window_s: f64) -> Vec<f64> {
     if time_s.len() != values.len() || time_s.len() < 2 || window_s <= 0.0 {
         return Vec::new();
     }
@@ -301,16 +295,11 @@ pub fn compute_segment_metrics(
         distance_m: speed
             .as_ref()
             .and_then(|s| s.accepted.then_some(s.integral)),
-        avg_speed_mps: speed
-            .as_ref()
-            .and_then(|s| s.accepted.then_some(s.mean)),
+        avg_speed_mps: speed.as_ref().and_then(|s| s.accepted.then_some(s.mean)),
         avg_hr_bpm: hr.as_ref().and_then(|s| s.accepted.then_some(s.mean)),
-        avg_power_w: power
-            .as_ref()
-            .and_then(|s| s.accepted.then_some(s.mean)),
+        avg_power_w: power.as_ref().and_then(|s| s.accepted.then_some(s.mean)),
         power_cv_pct: power.as_ref().and_then(|s| {
-            (s.accepted && s.mean > 0.0)
-                .then_some(100.0 * s.variance.max(0.0).sqrt() / s.mean)
+            (s.accepted && s.mean > 0.0).then_some(100.0 * s.variance.max(0.0).sqrt() / s.mean)
         }),
         speed_coverage: speed
             .as_ref()
@@ -329,7 +318,8 @@ pub fn compute_segment_metrics(
 
     // ── Robust rolling-window percentiles ─────────────────────────────
     if let Some(speed_values) = streams.speed_mps.as_deref() {
-        let mut rolling = full_window_means(&streams.time_s, speed_values, range, SMOOTHING_WINDOW_S);
+        let mut rolling =
+            full_window_means(&streams.time_s, speed_values, range, SMOOTHING_WINDOW_S);
         if rolling.len() >= MIN_PERCENTILE_WINDOWS
             && metrics.speed_coverage.ratio >= MIN_COVERAGE_RATIO
         {
@@ -340,8 +330,7 @@ pub fn compute_segment_metrics(
     }
 
     if let Some(hr_values) = streams.heartrate_bpm.as_deref() {
-        let mut rolling =
-            full_window_means(&streams.time_s, hr_values, range, SMOOTHING_WINDOW_S);
+        let mut rolling = full_window_means(&streams.time_s, hr_values, range, SMOOTHING_WINDOW_S);
         if rolling.len() >= MIN_PERCENTILE_WINDOWS
             && metrics.hr_coverage.ratio >= MIN_COVERAGE_RATIO
         {
@@ -350,8 +339,7 @@ pub fn compute_segment_metrics(
     }
 
     if let Some(power_values) = streams.power_w.as_deref() {
-        let rolling =
-            full_window_means(&streams.time_s, power_values, range, SMOOTHING_WINDOW_S);
+        let rolling = full_window_means(&streams.time_s, power_values, range, SMOOTHING_WINDOW_S);
         if metrics.power_coverage.ratio >= MIN_COVERAGE_RATIO && !rolling.is_empty() {
             let best = rolling
                 .iter()
@@ -369,10 +357,7 @@ pub fn compute_segment_metrics(
 
 /// Enrich a collection of segment windows with metrics from the same
 /// metric streams.
-pub fn enrich_segments(
-    streams: &MetricStreams,
-    windows: &[SegmentWindow],
-) -> Vec<EnrichedSegment> {
+pub fn enrich_segments(streams: &MetricStreams, windows: &[SegmentWindow]) -> Vec<EnrichedSegment> {
     windows
         .iter()
         .cloned()
@@ -419,8 +404,7 @@ pub fn compute_structured_consistency(efforts: &[EnrichedSegment]) -> Option<Ser
             if let (Some(first), Some(last)) = (speeds.first(), speeds.last())
                 && *first > 0.0
             {
-                result.first_to_last_speed_change_pct =
-                    Some((last - first) / first * 100.0);
+                result.first_to_last_speed_change_pct = Some((last - first) / first * 100.0);
                 let first_pace = 1000.0 / first;
                 let last_pace = 1000.0 / last;
                 if first_pace > 0.0 {
@@ -436,8 +420,7 @@ pub fn compute_structured_consistency(efforts: &[EnrichedSegment]) -> Option<Ser
         if let (Some(first), Some(last)) = (powers.first(), powers.last())
             && *first > 0.0
         {
-            result.first_to_last_power_change_pct =
-                Some((last - first) / first * 100.0);
+            result.first_to_last_power_change_pct = Some((last - first) / first * 100.0);
         }
     }
 
@@ -477,8 +460,13 @@ mod tests {
             heartrate_bpm: None,
             power_w: None,
         };
-        let metrics =
-            compute_segment_metrics(&streams, TimeRange { start: 0.0, end: 10.0 });
+        let metrics = compute_segment_metrics(
+            &streams,
+            TimeRange {
+                start: 0.0,
+                end: 10.0,
+            },
+        );
         // 0-1: speed 2 → 1s at 2
         // 1-9: gap 8s > 10s → skipped
         // 9-10: speed 6 → 1s at 6
@@ -517,8 +505,13 @@ mod tests {
             heartrate_bpm: None,
             power_w: None,
         };
-        let metrics =
-            compute_segment_metrics(&streams, TimeRange { start: 5.0, end: 15.0 });
+        let metrics = compute_segment_metrics(
+            &streams,
+            TimeRange {
+                start: 5.0,
+                end: 15.0,
+            },
+        );
         // 0-10: dt=10 > MAX_GAP_S? No, 10 ≤ 10. So kept.
         // span_start = 5, span_end = 10
         // frac_start = (5-0)/10 = 0.5, clamp to 0.5
@@ -547,8 +540,13 @@ mod tests {
             heartrate_bpm: None,
             power_w: None,
         };
-        let metrics =
-            compute_segment_metrics(&streams, TimeRange { start: 0.0, end: 21.0 });
+        let metrics = compute_segment_metrics(
+            &streams,
+            TimeRange {
+                start: 0.0,
+                end: 21.0,
+            },
+        );
         // dt from 1 to 20 = 19 > 10 → gap skipped
         // covered = 1s (0-1) + 1s (20-21) = 2s
         // ratio = 2/21 = 0.095..., < 0.8
@@ -567,8 +565,13 @@ mod tests {
             heartrate_bpm: Some(vec![160.0; 11]),
             power_w: None,
         };
-        let metrics =
-            compute_segment_metrics(&streams, TimeRange { start: 0.0, end: 10.0 });
+        let metrics = compute_segment_metrics(
+            &streams,
+            TimeRange {
+                start: 0.0,
+                end: 10.0,
+            },
+        );
         assert_eq!(metrics.avg_speed_mps, Some(5.0));
         assert_eq!(metrics.avg_hr_bpm, Some(160.0));
         assert!(metrics.avg_power_w.is_none());
@@ -580,8 +583,14 @@ mod tests {
     fn empty_or_reversed_range_returns_no_measurements() {
         let streams = MetricStreams::default();
         for range in [
-            TimeRange { start: 10.0, end: 10.0 },
-            TimeRange { start: 11.0, end: 10.0 },
+            TimeRange {
+                start: 10.0,
+                end: 10.0,
+            },
+            TimeRange {
+                start: 11.0,
+                end: 10.0,
+            },
         ] {
             let metrics = compute_segment_metrics(&streams, range);
             assert_eq!(metrics.duration_s, 0.0);
@@ -604,11 +613,17 @@ mod tests {
         let windows = vec![
             SegmentWindow {
                 role: SegmentRole::Work,
-                range: TimeRange { start: 0.0, end: 10.0 },
+                range: TimeRange {
+                    start: 0.0,
+                    end: 10.0,
+                },
             },
             SegmentWindow {
                 role: SegmentRole::Recovery,
-                range: TimeRange { start: 10.0, end: 15.0 },
+                range: TimeRange {
+                    start: 10.0,
+                    end: 15.0,
+                },
             },
         ];
         let enriched = enrich_segments(&streams, &windows);
@@ -632,8 +647,13 @@ mod tests {
             heartrate_bpm: Some(hr),
             power_w: None,
         };
-        let metrics =
-            compute_segment_metrics(&streams, TimeRange { start: 0.0, end: 30.0 });
+        let metrics = compute_segment_metrics(
+            &streams,
+            TimeRange {
+                start: 0.0,
+                end: 30.0,
+            },
+        );
         assert!(metrics.high_speed_p95_mps.expect("p95 speed") < 15.0);
         assert!(metrics.peak_hr_p95_bpm.expect("p95 HR") < 180.0);
     }
@@ -646,12 +666,23 @@ mod tests {
             heartrate_bpm: None,
             power_w: Some(
                 (0..=15)
-                    .map(|second| if (5..=10).contains(&second) { 300.0 } else { 100.0 })
+                    .map(|second| {
+                        if (5..=10).contains(&second) {
+                            300.0
+                        } else {
+                            100.0
+                        }
+                    })
                     .collect(),
             ),
         };
-        let metrics =
-            compute_segment_metrics(&streams, TimeRange { start: 0.0, end: 15.0 });
+        let metrics = compute_segment_metrics(
+            &streams,
+            TimeRange {
+                start: 0.0,
+                end: 15.0,
+            },
+        );
         assert_eq!(metrics.best_5s_power_w, Some(300.0));
     }
 
@@ -663,8 +694,13 @@ mod tests {
             heartrate_bpm: Some(vec![160.0; 8]),
             power_w: None,
         };
-        let metrics =
-            compute_segment_metrics(&streams, TimeRange { start: 0.0, end: 7.0 });
+        let metrics = compute_segment_metrics(
+            &streams,
+            TimeRange {
+                start: 0.0,
+                end: 7.0,
+            },
+        );
         assert!(metrics.high_speed_p95_mps.is_none());
         assert!(metrics.low_speed_p05_mps.is_none());
         assert!(metrics.peak_hr_p95_bpm.is_none());
@@ -676,7 +712,10 @@ mod tests {
         EnrichedSegment {
             window: SegmentWindow {
                 role: SegmentRole::Work,
-                range: TimeRange { start: 0.0, end: 60.0 },
+                range: TimeRange {
+                    start: 0.0,
+                    end: 60.0,
+                },
             },
             metrics: IntervalSegmentMetrics {
                 duration_s: 60.0,
@@ -715,12 +754,8 @@ mod tests {
         ];
         let result = compute_structured_consistency(&efforts).expect("consistency");
         assert!(result.speed_cv_pct.expect("speed CV") > 0.0);
-        assert!(
-            (result.first_to_last_speed_change_pct.expect("speed delta") + 10.0).abs() < 1e-9
-        );
-        assert!(
-            (result.first_to_last_power_change_pct.expect("power delta") + 10.0).abs() < 1e-9
-        );
+        assert!((result.first_to_last_speed_change_pct.expect("speed delta") + 10.0).abs() < 1e-9);
+        assert!((result.first_to_last_power_change_pct.expect("power delta") + 10.0).abs() < 1e-9);
         assert!(result.pace_cv_pct.expect("pace CV") > 0.0);
     }
 }

@@ -587,15 +587,15 @@ mod tests {
             "start_index": 2,
             "end_index": 5
         })];
-        let windows = upstream_segment_windows(
-            &intervals,
-            &[0.0, 1.0, 2.0, 3.0, 4.0, 5.0],
-        );
+        let windows = upstream_segment_windows(&intervals, &[0.0, 1.0, 2.0, 3.0, 4.0, 5.0]);
         assert_eq!(
             windows,
             vec![SegmentWindow {
                 role: SegmentRole::Work,
-                range: TimeRange { start: 2.0, end: 5.0 },
+                range: TimeRange {
+                    start: 2.0,
+                    end: 5.0
+                },
             }]
         );
     }

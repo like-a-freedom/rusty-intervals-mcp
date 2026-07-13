@@ -486,7 +486,12 @@ mod tests {
 
         assert_eq!(
             work_ranges,
-            vec![(0.0, 180.0), (300.0, 480.0), (600.0, 780.0), (900.0, 1080.0)]
+            vec![
+                (0.0, 180.0),
+                (300.0, 480.0),
+                (600.0, 780.0),
+                (900.0, 1080.0)
+            ]
         );
         assert_eq!(
             recovery_ranges,
@@ -557,7 +562,10 @@ mod tests {
             .iter()
             .map(|segment| (segment.range.start, segment.range.end))
             .collect::<Vec<_>>();
-        assert_eq!(surge_ranges, vec![(0.0, 20.0), (270.0, 360.0), (410.0, 450.0)]);
+        assert_eq!(
+            surge_ranges,
+            vec![(0.0, 20.0), (270.0, 360.0), (410.0, 450.0)]
+        );
         assert_eq!(series.recovery_segments.len(), 2);
     }
 

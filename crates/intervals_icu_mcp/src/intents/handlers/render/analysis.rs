@@ -6,8 +6,7 @@ use crate::domains::coach::{
 };
 #[allow(dead_code)]
 use crate::domains::interval_segment::{
-    SegmentProvenance, SegmentSeriesReport, SeriesConsistency,
-    SportPresentation,
+    SegmentProvenance, SegmentSeriesReport, SeriesConsistency, SportPresentation,
 };
 use crate::engines::interval_analysis::format_pace_from_speed;
 use crate::engines::interval_analysis::{
@@ -1073,9 +1072,7 @@ fn work_table_title(provenance: SegmentProvenance) -> &'static str {
     match provenance {
         SegmentProvenance::LocalStructured => "Work intervals — Local structured detector",
         SegmentProvenance::LocalFartlek => "Fartlek surges — Local detector",
-        SegmentProvenance::UpstreamIntervalsIcu => {
-            "Intervals — Intervals.icu upstream boundaries"
-        }
+        SegmentProvenance::UpstreamIntervalsIcu => "Intervals — Intervals.icu upstream boundaries",
     }
 }
 
@@ -1187,8 +1184,14 @@ pub(crate) fn build_segment_tables(
             "Distance".to_string(),
         ];
         let mut rec_headers = rec_headers;
-        let has_rec_speed = report.recoveries.iter().any(|e| e.metrics.avg_speed_mps.is_some());
-        let has_rec_power = report.recoveries.iter().any(|e| e.metrics.avg_power_w.is_some());
+        let has_rec_speed = report
+            .recoveries
+            .iter()
+            .any(|e| e.metrics.avg_speed_mps.is_some());
+        let has_rec_power = report
+            .recoveries
+            .iter()
+            .any(|e| e.metrics.avg_power_w.is_some());
 
         if has_rec_speed {
             match presentation {
@@ -1312,15 +1315,15 @@ mod tests {
         AcwrMetrics, DecouplingMetrics, EspeDerivedMetrics, EspePowerAnchors, HeatMetrics,
         LoadManagementMetrics, NdliMetrics, WdrMetrics,
     };
+    use crate::domains::interval_detection::TimeRange;
+    use crate::domains::interval_segment::{
+        EnrichedSegment, IntervalSegmentMetrics, SegmentRole, SegmentWindow,
+    };
     use crate::engines::coach_metrics::TrendSnapshot;
     use crate::engines::interval_analysis::{
         IntervalOutputKind, IntervalOutputValue, average_numeric_stream_value, calculate_median,
         count_work_intervals, derive_interval_output, extract_exact_tss, format_pace_from_speed,
         interval_number, preferred_interval_output_kind, quality_output_finding, stream_series,
-    };
-    use crate::domains::interval_detection::TimeRange;
-    use crate::domains::interval_segment::{
-        EnrichedSegment, IntervalSegmentMetrics, SegmentRole, SegmentWindow,
     };
     use crate::intents::ContentBlock;
     use intervals_icu_client::{ActivityMessage, ActivitySummary, Event, EventCategory};
@@ -3245,7 +3248,10 @@ mod tests {
             efforts: vec![EnrichedSegment {
                 window: SegmentWindow {
                     role: SegmentRole::Work,
-                    range: TimeRange { start: 0.0, end: 60.0 },
+                    range: TimeRange {
+                        start: 0.0,
+                        end: 60.0,
+                    },
                 },
                 metrics: IntervalSegmentMetrics {
                     duration_s: 60.0,
@@ -3271,7 +3277,10 @@ mod tests {
         report.recoveries.push(EnrichedSegment {
             window: SegmentWindow {
                 role: SegmentRole::Recovery,
-                range: TimeRange { start: 60.0, end: 90.0 },
+                range: TimeRange {
+                    start: 60.0,
+                    end: 90.0,
+                },
             },
             metrics: IntervalSegmentMetrics {
                 duration_s: 30.0,
@@ -3297,7 +3306,12 @@ mod tests {
         assert!(work.headers.contains(&"Peak HR P95".to_string()));
         assert!(work.headers.contains(&"Best 5s".to_string()));
         assert!(work.rows[0].contains(&"3:20 /km".to_string()));
-        assert!(!work.headers.iter().any(|header| header == "NP" || header == "VI"));
+        assert!(
+            !work
+                .headers
+                .iter()
+                .any(|header| header == "NP" || header == "VI")
+        );
     }
 
     #[test]
@@ -3318,7 +3332,14 @@ mod tests {
             .expect("recovery table");
         assert_eq!(
             recovery.headers,
-            vec!["#", "Start", "Duration", "Distance", "Avg Pace", "Avg Power"]
+            vec![
+                "#",
+                "Start",
+                "Duration",
+                "Distance",
+                "Avg Pace",
+                "Avg Power"
+            ]
         );
     }
 
@@ -3326,10 +3347,12 @@ mod tests {
     fn unknown_sport_does_not_render_pace_or_speed_columns() {
         let report = report_with_work_segment();
         let tables = build_segment_tables(&report, SportPresentation::Unknown);
-        assert!(!tables[0]
-            .headers
-            .iter()
-            .any(|header| header.contains("Pace") || header.contains("Speed")));
+        assert!(
+            !tables[0]
+                .headers
+                .iter()
+                .any(|header| header.contains("Pace") || header.contains("Speed"))
+        );
     }
 
     #[test]
@@ -3342,9 +3365,13 @@ mod tests {
             },
             SportPresentation::Pace,
         );
-        assert!(rows.iter().any(|row| row[0] == "Pace CV" && row[1] == "2.1%"));
-        assert!(rows
-            .iter()
-            .any(|row| row[0] == "First → last pace" && row[1] == "+3.0% (slower)"));
+        assert!(
+            rows.iter()
+                .any(|row| row[0] == "Pace CV" && row[1] == "2.1%")
+        );
+        assert!(
+            rows.iter()
+                .any(|row| row[0] == "First → last pace" && row[1] == "+3.0% (slower)")
+        );
     }
 }
