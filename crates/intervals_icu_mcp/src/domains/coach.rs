@@ -9,6 +9,7 @@ use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::baseline::PersonalBaselineDeviation;
+use super::endurance_evidence::EnduranceEvidenceMetrics;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum AnalysisKind {
@@ -373,6 +374,7 @@ pub struct CoachMetrics {
     pub ndli: Option<NdliMetrics>,
     pub heat: Option<HeatMetrics>,
     pub race_readiness: Option<RaceReadinessMetrics>,
+    pub endurance_evidence: Option<EnduranceEvidenceMetrics>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -446,6 +448,7 @@ mod tests {
         assert!(metrics.trend.is_none());
         assert!(metrics.workout.is_none());
         assert!(metrics.race.is_none());
+        assert!(metrics.endurance_evidence.is_none());
     }
 
     #[test]

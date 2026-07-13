@@ -21,6 +21,7 @@
 pub mod activity_analysis;
 pub mod baseline;
 pub mod coach;
+pub(crate) mod endurance_evidence;
 pub mod events;
 pub mod fitness;
 pub mod gear;
