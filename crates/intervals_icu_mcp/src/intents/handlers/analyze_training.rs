@@ -155,6 +155,7 @@ fn build_local_raw_stream(streams: &Value) -> Option<RawStream> {
 ///   coverage can be measured independently.
 /// - Returns `None` when timestamps are malformed (fewer than 2 points,
 ///   non-monotonic, or non-finite).
+#[allow(dead_code)]
 fn metric_signal_series(streams: &Value, keys: &[&str]) -> Option<Vec<f64>> {
     keys.iter().find_map(|key| {
         streams.get(*key).and_then(Value::as_array).map(|values| {
@@ -166,6 +167,7 @@ fn metric_signal_series(streams: &Value, keys: &[&str]) -> Option<Vec<f64>> {
     })
 }
 
+#[allow(dead_code)]
 fn build_metric_streams(streams: &Value) -> Option<MetricStreams> {
     let time_s = numeric_series(streams, &["time", "time_s"])?;
     if time_s.len() < 2
@@ -196,6 +198,7 @@ fn build_metric_streams(streams: &Value) -> Option<MetricStreams> {
 }
 
 /// Determine the sport presentation style from activity detail.
+#[allow(dead_code)]
 fn sport_presentation(workout_detail: Option<&Value>) -> SportPresentation {
     let type_val = workout_detail
         .and_then(Value::as_object)

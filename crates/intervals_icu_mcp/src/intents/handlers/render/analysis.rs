@@ -4,6 +4,15 @@ use crate::domains::coach::{
     DecouplingMetrics, EspeDerivedMetrics, EspePowerAnchors, EtvsMetrics, FitnessMetrics,
     HeatMetrics, NdliMetrics, WdrMetrics,
 };
+#[allow(dead_code)]
+use crate::domains::interval_detection::TimeRange;
+#[allow(dead_code)]
+use crate::domains::interval_segment::{
+    EnrichedSegment, IntervalSegmentMetrics, SegmentProvenance, SegmentRole,
+    SegmentSeriesReport, SeriesConsistency,
+    SportPresentation,
+};
+use crate::engines::interval_analysis::format_pace_from_speed;
 use crate::engines::interval_analysis::{
     IntervalOutputKind, derive_interval_output, extract_exact_tss, format_pace_per_km,
     interval_number, numeric_value,
@@ -1041,6 +1050,261 @@ pub(crate) fn render_etvs_section(etvs: Option<&EtvsMetrics>) -> Option<String> 
     ))
 }
 
+// ── Segment table rendering ───────────────────────────────────────────
+
+/// A renderable table for enriched segment metrics.
+#[allow(dead_code)]
+pub(crate) struct SegmentTable {
+    pub title: String,
+    pub headers: Vec<String>,
+    pub rows: Vec<Vec<String>>,
+}
+
+fn format_optional(value: Option<f64>, unit: &str, decimals: usize) -> String {
+    value
+        .map(|v| format!("{v:.decimals$} {unit}"))
+        .unwrap_or_else(|| "n/a".to_string())
+}
+
+fn format_speed_kmh(speed_mps: Option<f64>) -> String {
+    speed_mps
+        .map(|s| format!("{:.1} km/h", s * 3.6))
+        .unwrap_or_else(|| "n/a".to_string())
+}
+
+fn work_table_title(provenance: SegmentProvenance) -> &'static str {
+    match provenance {
+        SegmentProvenance::LocalStructured => "Work intervals — Local structured detector",
+        SegmentProvenance::LocalFartlek => "Fartlek surges — Local detector",
+        SegmentProvenance::UpstreamIntervalsIcu => {
+            "Intervals — Intervals.icu upstream boundaries"
+        }
+    }
+}
+
+/// Build segment metric tables from a report.
+#[allow(dead_code)]
+pub(crate) fn build_segment_tables(
+    report: &SegmentSeriesReport,
+    presentation: SportPresentation,
+) -> Vec<SegmentTable> {
+    let mut tables = Vec::new();
+
+    // Efforts (work / surge) table
+    let has_speed = report
+        .efforts
+        .iter()
+        .any(|e| e.metrics.avg_speed_mps.is_some());
+    let has_hr = report
+        .efforts
+        .iter()
+        .any(|e| e.metrics.avg_hr_bpm.is_some());
+    let has_power = report
+        .efforts
+        .iter()
+        .any(|e| e.metrics.avg_power_w.is_some());
+
+    let mut headers = vec![
+        "#".to_string(),
+        "Duration".to_string(),
+        "Start".to_string(),
+        "Distance".to_string(),
+    ];
+
+    if has_speed {
+        match presentation {
+            SportPresentation::Pace => {
+                headers.push("Avg Pace".to_string());
+                headers.push("Fastest P95".to_string());
+                headers.push("Slowest P05".to_string());
+            }
+            SportPresentation::Speed => {
+                headers.push("Avg Speed".to_string());
+                headers.push("High P95".to_string());
+                headers.push("Low P05".to_string());
+            }
+            SportPresentation::Unknown => {}
+        }
+    }
+    if has_hr {
+        headers.push("Avg HR".to_string());
+        headers.push("Peak HR P95".to_string());
+    }
+    if has_power {
+        headers.push("Avg Power".to_string());
+        headers.push("Best 5s".to_string());
+    }
+
+    let rows: Vec<Vec<String>> = report
+        .efforts
+        .iter()
+        .enumerate()
+        .map(|(i, e)| {
+            let mut row = vec![
+                (i + 1).to_string(),
+                format_duration_compact(e.metrics.duration_s as i64),
+                format_duration_compact(e.window.range.start as i64),
+                format_distance(e.metrics.distance_m),
+            ];
+            if has_speed {
+                match presentation {
+                    SportPresentation::Pace => {
+                        row.push(format_pace_or_na(e.metrics.avg_speed_mps));
+                        row.push(format_pace_or_na(e.metrics.high_speed_p95_mps));
+                        row.push(format_pace_or_na(e.metrics.low_speed_p05_mps));
+                    }
+                    SportPresentation::Speed => {
+                        row.push(format_speed_kmh(e.metrics.avg_speed_mps));
+                        row.push(format_speed_kmh(e.metrics.high_speed_p95_mps));
+                        row.push(format_speed_kmh(e.metrics.low_speed_p05_mps));
+                    }
+                    SportPresentation::Unknown => {}
+                }
+            }
+            if has_hr {
+                row.push(format_optional(e.metrics.avg_hr_bpm, "bpm", 0));
+                row.push(format_optional(e.metrics.peak_hr_p95_bpm, "bpm", 0));
+            }
+            if has_power {
+                row.push(format_optional(e.metrics.avg_power_w, "W", 0));
+                row.push(format_optional(e.metrics.best_5s_power_w, "W", 0));
+            }
+            row
+        })
+        .collect();
+
+    if !rows.is_empty() {
+        tables.push(SegmentTable {
+            title: work_table_title(report.provenance).to_string(),
+            headers,
+            rows,
+        });
+    }
+
+    // Recoveries table (compact)
+    if !report.recoveries.is_empty() {
+        let rec_headers = vec![
+            "#".to_string(),
+            "Start".to_string(),
+            "Duration".to_string(),
+            "Distance".to_string(),
+        ];
+        let mut rec_headers = rec_headers;
+        let has_rec_speed = report.recoveries.iter().any(|e| e.metrics.avg_speed_mps.is_some());
+        let has_rec_power = report.recoveries.iter().any(|e| e.metrics.avg_power_w.is_some());
+
+        if has_rec_speed {
+            match presentation {
+                SportPresentation::Pace => rec_headers.push("Avg Pace".to_string()),
+                SportPresentation::Speed => rec_headers.push("Avg Speed".to_string()),
+                SportPresentation::Unknown => {}
+            }
+        }
+        if has_rec_power {
+            rec_headers.push("Avg Power".to_string());
+        }
+
+        let rec_rows: Vec<Vec<String>> = report
+            .recoveries
+            .iter()
+            .enumerate()
+            .map(|(i, e)| {
+                let mut row = vec![
+                    (i + 1).to_string(),
+                    format_duration_compact(e.window.range.start as i64),
+                    format_duration_compact(e.metrics.duration_s as i64),
+                    format_distance(e.metrics.distance_m),
+                ];
+                if has_rec_speed {
+                    match presentation {
+                        SportPresentation::Pace => {
+                            row.push(format_pace_or_na(e.metrics.avg_speed_mps));
+                        }
+                        SportPresentation::Speed => {
+                            row.push(format_speed_kmh(e.metrics.avg_speed_mps));
+                        }
+                        SportPresentation::Unknown => {}
+                    }
+                }
+                if has_rec_power {
+                    row.push(format_optional(e.metrics.avg_power_w, "W", 0));
+                }
+                row
+            })
+            .collect();
+
+        tables.push(SegmentTable {
+            title: "Recoveries".to_string(),
+            headers: rec_headers,
+            rows: rec_rows,
+        });
+    }
+
+    tables
+}
+
+/// Build repeat-consistency summary rows.
+#[allow(dead_code)]
+pub(crate) fn build_consistency_rows(
+    consistency: &SeriesConsistency,
+    _presentation: SportPresentation,
+) -> Vec<Vec<String>> {
+    let mut rows = Vec::new();
+
+    if let Some(pc) = consistency.pace_cv_pct {
+        rows.push(vec!["Pace CV".to_string(), format!("{pc:.1}%")]);
+    }
+    if let Some(sc) = consistency.speed_cv_pct {
+        rows.push(vec!["Speed CV".to_string(), format!("{sc:.1}%")]);
+    }
+    if let Some(pc) = consistency.power_cv_pct {
+        rows.push(vec!["Power CV".to_string(), format!("{pc:.1}%")]);
+    }
+
+    if let Some(delta) = consistency.first_to_last_pace_change_pct {
+        let dir = if delta > 0.0 { "slower" } else { "faster" };
+        rows.push(vec![
+            "First → last pace".to_string(),
+            format!("{:+.1}% ({dir})", delta),
+        ]);
+    }
+    if let Some(delta) = consistency.first_to_last_speed_change_pct {
+        let dir = if delta > 0.0 { "higher" } else { "lower" };
+        rows.push(vec![
+            "First → last speed".to_string(),
+            format!("{:+.1}% ({dir})", delta),
+        ]);
+    }
+    if let Some(delta) = consistency.first_to_last_power_change_pct {
+        let dir = if delta > 0.0 { "higher" } else { "lower" };
+        rows.push(vec![
+            "First → last power".to_string(),
+            format!("{:+.1}% ({dir})", delta),
+        ]);
+    }
+
+    rows
+}
+
+fn format_distance(distance_m: Option<f64>) -> String {
+    distance_m
+        .map(|d| {
+            if d >= 1000.0 {
+                format!("{:.2} km", d / 1000.0)
+            } else {
+                format!("{:.0} m", d)
+            }
+        })
+        .unwrap_or_else(|| "n/a".to_string())
+}
+
+#[allow(dead_code)]
+fn format_pace_or_na(speed_mps: Option<f64>) -> String {
+    speed_mps
+        .and_then(format_pace_from_speed)
+        .unwrap_or_else(|| "n/a".to_string())
+}
+
 #[cfg(test)]
 pub(crate) mod legacy_work_interval_baseline;
 
@@ -1057,6 +1321,7 @@ mod tests {
         count_work_intervals, derive_interval_output, extract_exact_tss, format_pace_from_speed,
         interval_number, preferred_interval_output_kind, quality_output_finding, stream_series,
     };
+    use crate::domains::interval_segment::SegmentWindow;
     use crate::intents::ContentBlock;
     use intervals_icu_client::{ActivityMessage, ActivitySummary, Event, EventCategory};
     use std::collections::HashMap;
@@ -2970,5 +3235,116 @@ mod tests {
     fn requested_etvs_is_unavailable_instead_of_zero() {
         let rows = build_requested_single_metric_rows(None, &["etvs".into()], None);
         assert_eq!(rows[0], vec!["ETVS", "n/a", "unavailable"]);
+    }
+
+    // ── Segment tables ───────────────────────────────────────────────
+
+    fn report_with_work_segment() -> SegmentSeriesReport {
+        SegmentSeriesReport {
+            provenance: SegmentProvenance::LocalStructured,
+            efforts: vec![EnrichedSegment {
+                window: SegmentWindow {
+                    role: SegmentRole::Work,
+                    range: TimeRange { start: 0.0, end: 60.0 },
+                },
+                metrics: IntervalSegmentMetrics {
+                    duration_s: 60.0,
+                    distance_m: Some(300.0),
+                    avg_speed_mps: Some(5.0),
+                    low_speed_p05_mps: Some(4.8),
+                    high_speed_p95_mps: Some(5.2),
+                    avg_hr_bpm: Some(160.0),
+                    peak_hr_p95_bpm: Some(170.0),
+                    avg_power_w: Some(250.0),
+                    best_5s_power_w: Some(300.0),
+                    power_cv_pct: Some(4.0),
+                    ..IntervalSegmentMetrics::default()
+                },
+            }],
+            recoveries: Vec::new(),
+            consistency: None,
+        }
+    }
+
+    fn report_with_work_and_recovery() -> SegmentSeriesReport {
+        let mut report = report_with_work_segment();
+        report.recoveries.push(EnrichedSegment {
+            window: SegmentWindow {
+                role: SegmentRole::Recovery,
+                range: TimeRange { start: 60.0, end: 90.0 },
+            },
+            metrics: IntervalSegmentMetrics {
+                duration_s: 30.0,
+                distance_m: Some(75.0),
+                avg_speed_mps: Some(2.5),
+                avg_power_w: Some(100.0),
+                ..IntervalSegmentMetrics::default()
+            },
+        });
+        report
+    }
+
+    #[test]
+    fn running_work_table_renders_robust_metrics_and_n_a() {
+        let report = report_with_work_segment();
+        let tables = build_segment_tables(&report, SportPresentation::Pace);
+        let work = &tables[0];
+
+        assert_eq!(work.title, "Work intervals — Local structured detector");
+        assert!(work.headers.contains(&"Avg Pace".to_string()));
+        assert!(work.headers.contains(&"Fastest P95".to_string()));
+        assert!(work.headers.contains(&"Slowest P05".to_string()));
+        assert!(work.headers.contains(&"Peak HR P95".to_string()));
+        assert!(work.headers.contains(&"Best 5s".to_string()));
+        assert!(work.rows[0].contains(&"3:20 /km".to_string()));
+        assert!(!work.headers.iter().any(|header| header == "NP" || header == "VI"));
+    }
+
+    #[test]
+    fn cycling_table_renders_speed_not_pace() {
+        let report = report_with_work_segment();
+        let tables = build_segment_tables(&report, SportPresentation::Speed);
+        let headers = &tables[0].headers;
+        assert!(headers.contains(&"Avg Speed".to_string()));
+        assert!(!headers.iter().any(|header| header.contains("Pace")));
+    }
+
+    #[test]
+    fn recovery_table_is_compact() {
+        let report = report_with_work_and_recovery();
+        let recovery = build_segment_tables(&report, SportPresentation::Pace)
+            .into_iter()
+            .find(|table| table.title == "Recoveries")
+            .expect("recovery table");
+        assert_eq!(
+            recovery.headers,
+            vec!["#", "Start", "Duration", "Distance", "Avg Pace", "Avg Power"]
+        );
+    }
+
+    #[test]
+    fn unknown_sport_does_not_render_pace_or_speed_columns() {
+        let report = report_with_work_segment();
+        let tables = build_segment_tables(&report, SportPresentation::Unknown);
+        assert!(!tables[0]
+            .headers
+            .iter()
+            .any(|header| header.contains("Pace") || header.contains("Speed")));
+    }
+
+    #[test]
+    fn consistency_rows_explain_delta_direction() {
+        let rows = build_consistency_rows(
+            &SeriesConsistency {
+                pace_cv_pct: Some(2.1),
+                first_to_last_pace_change_pct: Some(3.0),
+                ..SeriesConsistency::default()
+            },
+            SportPresentation::Pace,
+        );
+        assert!(rows.iter().any(|row| row[0] == "Pace CV" && row[1] == "2.1%"));
+        assert!(rows
+            .iter()
+            .any(|row| row[0] == "First → last pace" && row[1] == "+3.0% (slower)"));
     }
 }

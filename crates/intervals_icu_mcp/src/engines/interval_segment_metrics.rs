@@ -464,7 +464,7 @@ mod tests {
     use crate::domains::interval_detection::TimeRange;
     use crate::domains::interval_segment::{
         EnrichedSegment, IntervalSegmentMetrics, MetricStreams, SegmentRole, SegmentWindow,
-        SeriesConsistency, SignalCoverage,
+        SignalCoverage,
     };
 
     // ── Time-weighted mean ────────────────────────────────────────────

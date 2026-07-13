@@ -12,6 +12,7 @@ pub mod dedupe;
 pub mod fetch_error;
 pub mod forecast;
 pub mod interval_analysis;
+pub mod interval_segment_metrics;
 pub mod progress_tracking;
 pub mod race_readiness;
 pub mod recovery_assessment_engine;

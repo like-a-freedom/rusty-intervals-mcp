@@ -27,6 +27,7 @@ pub mod gear;
 #[cfg(test)]
 pub(crate) mod interval_benchmark;
 pub(crate) mod interval_detection;
+pub(crate) mod interval_segment;
 pub mod load;
 pub mod nutrition;
 pub mod progress;
