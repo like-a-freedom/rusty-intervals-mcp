@@ -309,6 +309,51 @@ pub fn is_planned_workout_id(id: &str) -> bool {
     id.starts_with("event:")
 }
 
+use crate::domains::interval_detection::TimeRange;
+use crate::domains::interval_segment::{SegmentRole, SegmentWindow};
+
+/// Convert upstream interval objects with safe index boundaries into
+/// `SegmentWindow` values.
+///
+/// An upstream interval is included only when:
+/// - `start_index` and `end_index` are valid non-negative integers
+/// - `start < end`
+/// - both indexes exist in `time_s`
+/// - the type is `WORK` (or missing/unknown), or `RECOVERY`
+pub fn upstream_segment_windows(intervals: &[Value], time_s: &[f64]) -> Vec<SegmentWindow> {
+    intervals
+        .iter()
+        .filter_map(|interval| {
+            let obj = interval.as_object()?;
+            let start_idx = obj.get("start_index")?.as_u64()? as usize;
+            let end_idx = obj.get("end_index")?.as_u64()? as usize;
+
+            if start_idx >= end_idx {
+                return None;
+            }
+            if end_idx >= time_s.len() {
+                return None;
+            }
+
+            let start = time_s[start_idx];
+            let end = time_s[end_idx];
+            if !start.is_finite() || !end.is_finite() {
+                return None;
+            }
+
+            let role = match obj.get("type").and_then(Value::as_str) {
+                Some("RECOVERY") => SegmentRole::Recovery,
+                _ => SegmentRole::Work,
+            };
+
+            Some(SegmentWindow {
+                role,
+                range: TimeRange { start, end },
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -531,5 +576,44 @@ mod tests {
     #[test]
     fn is_planned_workout_id_false() {
         assert!(!is_planned_workout_id("activity:12345"));
+    }
+
+    // ── upstream_segment_windows ───────────────────────────────────────
+
+    #[test]
+    fn upstream_indexes_become_half_open_time_ranges() {
+        let intervals = vec![json!({
+            "type": "WORK",
+            "start_index": 2,
+            "end_index": 5
+        })];
+        let windows = upstream_segment_windows(
+            &intervals,
+            &[0.0, 1.0, 2.0, 3.0, 4.0, 5.0],
+        );
+        assert_eq!(
+            windows,
+            vec![SegmentWindow {
+                role: SegmentRole::Work,
+                range: TimeRange { start: 2.0, end: 5.0 },
+            }]
+        );
+    }
+
+    #[test]
+    fn upstream_interval_without_safe_end_boundary_is_skipped() {
+        let intervals = vec![json!({"start_index": 2, "end_index": 6})];
+        assert!(upstream_segment_windows(&intervals, &[0.0, 1.0, 2.0]).is_empty());
+    }
+
+    #[test]
+    fn upstream_recovery_type_is_mapped_to_recovery_role() {
+        let intervals = vec![json!({
+            "type": "RECOVERY",
+            "start_index": 0,
+            "end_index": 3
+        })];
+        let windows = upstream_segment_windows(&intervals, &[0.0, 1.0, 2.0, 3.0]);
+        assert_eq!(windows[0].role, SegmentRole::Recovery);
     }
 }

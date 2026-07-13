@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use super::render::analysis::*;
 use crate::domains::coach::{AnalysisKind, AnalysisWindow, CoachContext};
+use crate::domains::interval_segment::{MetricStreams, SportPresentation};
 use crate::domains::interval_detection::{self, RawStream};
 use crate::engines::adaptation::classify_curve_profile;
 use crate::engines::analysis::{
@@ -112,16 +113,16 @@ impl AnalyzeTrainingHandler {
 /// The detector accepts the canonical Intervals.icu stream names as well as
 /// the normalized aliases used by fixtures. Returns `None` when required
 /// aligned signals are missing or malformed.
-fn build_local_raw_stream(streams: &Value) -> Option<RawStream> {
-    fn numeric_series(streams: &Value, keys: &[&str]) -> Option<Vec<f64>> {
-        keys.iter().find_map(|key| {
-            streams
-                .get(*key)
-                .and_then(Value::as_array)
-                .and_then(|values| values.iter().map(Value::as_f64).collect::<Option<Vec<_>>>())
-        })
-    }
+fn numeric_series(streams: &Value, keys: &[&str]) -> Option<Vec<f64>> {
+    keys.iter().find_map(|key| {
+        streams
+            .get(*key)
+            .and_then(Value::as_array)
+            .and_then(|values| values.iter().map(Value::as_f64).collect::<Option<Vec<_>>>())
+    })
+}
 
+fn build_local_raw_stream(streams: &Value) -> Option<RawStream> {
     let time_s = numeric_series(streams, &["time", "time_s"])?;
     let speed = numeric_series(streams, &["velocity_smooth", "speed", "pace"])?;
     let heartrate = numeric_series(streams, &["heartrate", "hr"])?;
@@ -142,6 +143,72 @@ fn build_local_raw_stream(streams: &Value) -> Option<RawStream> {
         heartrate,
         power,
     })
+}
+
+/// Build a strict `MetricStreams` from a JSON streams payload.
+///
+/// Unlike `build_local_raw_stream`, this parser:
+/// - Only accepts confirmed m/s stream names (`velocity_smooth`, `speed`).
+/// - The ambiguous `pace` alias is **not** used for speed (preserving
+///   classification compatibility).
+/// - Preserves null/invalid signal entries as `f64::NAN` so per-signal
+///   coverage can be measured independently.
+/// - Returns `None` when timestamps are malformed (fewer than 2 points,
+///   non-monotonic, or non-finite).
+fn metric_signal_series(streams: &Value, keys: &[&str]) -> Option<Vec<f64>> {
+    keys.iter().find_map(|key| {
+        streams.get(*key).and_then(Value::as_array).map(|values| {
+            values
+                .iter()
+                .map(|value| value.as_f64().unwrap_or(f64::NAN))
+                .collect()
+        })
+    })
+}
+
+fn build_metric_streams(streams: &Value) -> Option<MetricStreams> {
+    let time_s = numeric_series(streams, &["time", "time_s"])?;
+    if time_s.len() < 2
+        || time_s.windows(2).any(|pair| {
+            !pair[0].is_finite() || !pair[1].is_finite() || pair[1] <= pair[0]
+        })
+    {
+        return None;
+    }
+
+    let aligned = |keys: &[&str], valid: fn(f64) -> bool| {
+        metric_signal_series(streams, keys)
+            .filter(|values| values.len() == time_s.len())
+            .map(|values| {
+                values
+                    .into_iter()
+                    .map(|value| if value.is_finite() && valid(value) { value } else { f64::NAN })
+                    .collect()
+            })
+    };
+
+    Some(MetricStreams {
+        speed_mps: aligned(&["velocity_smooth", "speed"], |value| value >= 0.0),
+        heartrate_bpm: aligned(&["heartrate", "hr"], |value| value > 0.0),
+        power_w: aligned(&["watts", "power"], |value| value >= 0.0),
+        time_s,
+    })
+}
+
+/// Determine the sport presentation style from activity detail.
+fn sport_presentation(workout_detail: Option<&Value>) -> SportPresentation {
+    let type_val = workout_detail
+        .and_then(Value::as_object)
+        .and_then(|obj| obj.get("type"))
+        .and_then(Value::as_str);
+
+    match type_val {
+        Some("Run" | "TrailRun" | "VirtualRun" | "Walk" | "Hike") => SportPresentation::Pace,
+        Some("Ride" | "VirtualRide" | "MountainBikeRide" | "GravelRide" | "EBikeRide") => {
+            SportPresentation::Speed
+        }
+        _ => SportPresentation::Unknown,
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -4577,5 +4644,64 @@ mod tests {
         assert!(rendered.contains("30.0 weighted min"));
         assert!(rendered.contains("Coverage: 50.0% (1/2 activities)"));
         assert!(rendered.contains("Requested Metrics"));
+    }
+
+    // ── build_metric_streams ────────────────────────────────────────
+
+    #[test]
+    fn metric_stream_parser_drops_only_the_misaligned_signal() {
+        let streams = json!({
+            "time": [0.0, 1.0, 2.0],
+            "velocity_smooth": [4.0, 5.0, 6.0],
+            "heartrate": [150.0, 155.0],
+            "watts": [200.0, 220.0, 240.0]
+        });
+        let parsed = build_metric_streams(&streams).expect("time stream");
+        assert_eq!(parsed.speed_mps, Some(vec![4.0, 5.0, 6.0]));
+        assert!(parsed.heartrate_bpm.is_none());
+        assert_eq!(parsed.power_w, Some(vec![200.0, 220.0, 240.0]));
+    }
+
+    #[test]
+    fn metric_stream_parser_preserves_nulls_as_missing_samples() {
+        let parsed = build_metric_streams(&json!({
+            "time": [0.0, 1.0, 2.0],
+            "watts": [200.0, null, 240.0]
+        }))
+        .expect("time stream");
+        let power = parsed.power_w.expect("aligned power stream");
+        assert_eq!(power[0], 200.0);
+        assert!(power[1].is_nan());
+        assert_eq!(power[2], 240.0);
+    }
+
+    #[test]
+    fn metric_stream_parser_does_not_guess_ambiguous_pace_units() {
+        let parsed = build_metric_streams(&json!({
+            "time": [0.0, 1.0, 2.0],
+            "pace": [300.0, 295.0, 305.0],
+            "heartrate": [150.0, 151.0, 152.0]
+        }))
+        .expect("time stream");
+        assert!(parsed.speed_mps.is_none());
+        assert!(parsed.heartrate_bpm.is_some());
+    }
+
+    // ── sport_presentation ──────────────────────────────────────────
+
+    #[test]
+    fn sport_presentation_is_explicit_and_conservative() {
+        assert_eq!(
+            sport_presentation(Some(&json!({"type": "Run"}))),
+            SportPresentation::Pace
+        );
+        assert_eq!(
+            sport_presentation(Some(&json!({"type": "Ride"}))),
+            SportPresentation::Speed
+        );
+        assert_eq!(
+            sport_presentation(Some(&json!({"type": "Rowing"}))),
+            SportPresentation::Unknown
+        );
     }
 }
