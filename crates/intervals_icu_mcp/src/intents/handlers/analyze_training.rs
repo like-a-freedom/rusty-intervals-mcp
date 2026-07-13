@@ -11,7 +11,10 @@ use std::sync::Arc;
 
 use super::render::analysis::*;
 use crate::domains::coach::{AnalysisKind, AnalysisWindow, CoachContext};
-use crate::domains::interval_segment::{MetricStreams, SportPresentation};
+use crate::domains::interval_segment::{
+    MetricStreams, SegmentProvenance, SegmentRole, SegmentSeriesReport, SegmentWindow,
+    SportPresentation,
+};
 use crate::domains::interval_detection::{self, RawStream};
 use crate::engines::adaptation::classify_curve_profile;
 use crate::engines::analysis::{
@@ -36,6 +39,7 @@ use crate::engines::interval_analysis::{
     IntervalOutputKind, count_work_intervals, is_planned_workout_id,
     preferred_interval_output_kind, quality_output_finding,
 };
+use crate::engines::interval_segment_metrics::{enrich_segments, compute_structured_consistency};
 use crate::engines::shared::parse_activity_date;
 use crate::engines::trail_execution::compute_terrain_context;
 
@@ -973,11 +977,124 @@ impl AnalyzeTrainingHandler {
                             mean_work_intensity,
                             confidence * 100.0,
                         )));
+
+                        // ── Segment metrics ────────────────────────────────
+                        let metric_streams = fetched
+                            .streams
+                            .as_ref()
+                            .and_then(build_metric_streams);
+
+                        if let Some(ref streams) = metric_streams {
+                            let presentation =
+                                sport_presentation(fetched.workout_detail.as_ref());
+
+                            let work_windows: Vec<SegmentWindow> = detection
+                                .work_segments
+                                .iter()
+                                .map(|seg| SegmentWindow {
+                                    role: SegmentRole::Work,
+                                    range: seg.range,
+                                })
+                                .collect();
+
+                            let recovery_windows: Vec<SegmentWindow> = detection
+                                .recovery_segments
+                                .iter()
+                                .map(|seg| SegmentWindow {
+                                    role: SegmentRole::Recovery,
+                                    range: seg.range,
+                                })
+                                .collect();
+
+                            let efforts = enrich_segments(streams, &work_windows);
+                            let recoveries = enrich_segments(streams, &recovery_windows);
+                            let consistency = compute_structured_consistency(&efforts);
+
+                            let report = SegmentSeriesReport {
+                                provenance: SegmentProvenance::LocalStructured,
+                                efforts,
+                                recoveries,
+                                consistency,
+                            };
+
+                            let tables = build_segment_tables(&report, presentation);
+                            for table in tables {
+                                content.push(ContentBlock::markdown(table.title));
+                                content.push(ContentBlock::table(
+                                    table.headers,
+                                    table.rows,
+                                ));
+                            }
+
+                            if let Some(ref cons) = report.consistency {
+                                let cons_rows = build_consistency_rows(cons, presentation);
+                                if !cons_rows.is_empty() {
+                                    content.push(ContentBlock::markdown(
+                                        "Repeat Consistency".to_string(),
+                                    ));
+                                    content.push(ContentBlock::table(
+                                        vec!["Metric".to_string(), "Value".to_string()],
+                                        cons_rows,
+                                    ));
+                                }
+                            }
+                        }
                     }
                     interval_detection::SessionKind::Fartlek => {
                         content.push(ContentBlock::markdown(format!(
                             "Interval Analysis\n  Session looks like fartlek / non-structured; no structured work count claimed ({rationale})."
                         )));
+
+                        // ── Fartlek segment metrics ─────────────────────────
+                        let metric_streams = fetched
+                            .streams
+                            .as_ref()
+                            .and_then(build_metric_streams);
+
+                        if let (Some(streams), Some(series)) = (
+                            metric_streams.as_ref(),
+                            detection.fartlek_series.as_ref(),
+                        ) {
+                            let presentation =
+                                sport_presentation(fetched.workout_detail.as_ref());
+
+                            let surge_windows: Vec<SegmentWindow> = series
+                                .effort_segments
+                                .iter()
+                                .map(|seg| SegmentWindow {
+                                    role: SegmentRole::Surge,
+                                    range: seg.range,
+                                })
+                                .collect();
+
+                            let rec_windows: Vec<SegmentWindow> = series
+                                .recovery_segments
+                                .iter()
+                                .map(|seg| SegmentWindow {
+                                    role: SegmentRole::Recovery,
+                                    range: seg.range,
+                                })
+                                .collect();
+
+                            let efforts = enrich_segments(streams, &surge_windows);
+                            let recoveries = enrich_segments(streams, &rec_windows);
+
+                            let report = SegmentSeriesReport {
+                                provenance: SegmentProvenance::LocalFartlek,
+                                efforts,
+                                recoveries,
+                                consistency: None,
+                            };
+
+                            let tables = build_segment_tables(&report, presentation);
+                            for table in tables {
+                                content.push(ContentBlock::markdown(table.title));
+                                content.push(ContentBlock::table(
+                                    table.headers,
+                                    table.rows,
+                                ));
+                            }
+                        }
                     }
                     interval_detection::SessionKind::Other => {
                         content.push(ContentBlock::markdown(format!(
