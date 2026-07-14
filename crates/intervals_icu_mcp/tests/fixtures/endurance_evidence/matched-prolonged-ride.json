@@ -1,0 +1,24 @@
+{
+  "as_of": "2026-07-13",
+  "eftp_w": 300.0,
+  "sessions": [
+    {
+      "id": "long",
+      "date": "2026-07-10",
+      "duration_s": 8100,
+      "power_w": 200.0,
+      "hr_bpm_base": 145.0,
+      "hr_bpm_appended": 155.0,
+      "hr_segments": [
+        { "start_s": 0, "end_s": 6599, "hr_bpm": 145.0 },
+        { "start_s": 6600, "end_s": 8099, "hr_bpm": 155.0 }
+      ]
+    }
+  ],
+  "expected": {
+    "submax_status": "InsufficientCandidateSessions",
+    "submax_hr_delta_bpm": null,
+    "prolonged_status": "Available",
+    "prolonged_hr_delta_bpm": 10.0
+  }
+}

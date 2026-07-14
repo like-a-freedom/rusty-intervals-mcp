@@ -504,6 +504,8 @@ Fetch → Audit → Compute → Interpret → Render
 - detail-derived metrics (HR, zones, TSS, load) may report partial availability if upstream detail calls fail
 - requested metrics rendered per-period with delta summaries
 
+Detailed period analysis may show Endurance Performance Evidence for cycling power data. It compares matched, steady 10-minute HR–power windows and, when a qualifying long ride exists, matched early and late windows. It reports observations, physiological context (bilingual explanation of what the signal may indicate), and data eligibility; it is not a readiness, recovery, or durability score. Summary analysis does not fetch historical streams for this section. Expect an additional 3–5 seconds of API latency for historical stream retrieval in detailed mode. See `docs/METRIC_METHODS.md` for the protocol and explicit non-goals.
+
 #### `analyze_training`
 
 - single-workout deep dives: ESPE anchors (eFTP, W′, pMax), WDRM, ISDM with durability state, Z2 HR stability, terrain context (index, VAM), nutrition demand (carb/protein), curve profile classification (endurance/punchy/speed)

@@ -1,0 +1,28 @@
+{
+  "as_of": "2026-07-13",
+  "eftp_w": 300.0,
+  "sessions": [
+    {
+      "id": "g1",
+      "date": "2026-07-08",
+      "duration_s": 600,
+      "power_w": 200.0,
+      "hr_bpm": 145.0,
+      "gaps": [{ "start_s": 100, "end_s": 399, "nullify_power": true }]
+    },
+    {
+      "id": "g2",
+      "date": "2026-07-10",
+      "duration_s": 600,
+      "power_w": 200.0,
+      "hr_bpm": 145.0,
+      "gaps": [{ "start_s": 100, "end_s": 399, "nullify_power": true }]
+    }
+  ],
+  "expected": {
+    "submax_status": "InsufficientCandidateSessions",
+    "submax_hr_delta_bpm": null,
+    "prolonged_status": "NoEligibleProlongedRide",
+    "prolonged_hr_delta_bpm": null
+  }
+}

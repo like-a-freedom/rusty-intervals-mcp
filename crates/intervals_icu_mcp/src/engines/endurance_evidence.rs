@@ -240,9 +240,7 @@ fn submaximal_report(
         .filter(|w| power_match(w.avg_power_w, anchor_power))
         .collect();
 
-    if matched_recent.len() < MIN_COHORT_WINDOWS
-        || matched_reference.len() < MIN_COHORT_WINDOWS
-    {
+    if matched_recent.len() < MIN_COHORT_WINDOWS || matched_reference.len() < MIN_COHORT_WINDOWS {
         let matched_total =
             unique_ref_count(&matched_recent) + unique_ref_count(&matched_reference);
         return status_only_submaximal(
@@ -250,18 +248,28 @@ fn submaximal_report(
             considered,
             matched_total,
             collect_source_ids_refs(
-                matched_recent.iter().chain(matched_reference.iter()).copied(),
+                matched_recent
+                    .iter()
+                    .chain(matched_reference.iter())
+                    .copied(),
             ),
         );
     }
 
     let recent_hr = median_of_refs(matched_recent.iter().copied().map(|w| w.avg_hr_bpm));
-    let reference_hr =
-        median_of_refs(matched_reference.iter().copied().map(|w| w.avg_hr_bpm));
-    let recent_eff =
-        median_of_refs(matched_recent.iter().copied().map(|w| w.efficiency_w_per_bpm));
-    let reference_eff =
-        median_of_refs(matched_reference.iter().copied().map(|w| w.efficiency_w_per_bpm));
+    let reference_hr = median_of_refs(matched_reference.iter().copied().map(|w| w.avg_hr_bpm));
+    let recent_eff = median_of_refs(
+        matched_recent
+            .iter()
+            .copied()
+            .map(|w| w.efficiency_w_per_bpm),
+    );
+    let reference_eff = median_of_refs(
+        matched_reference
+            .iter()
+            .copied()
+            .map(|w| w.efficiency_w_per_bpm),
+    );
 
     let recent_hr = recent_hr.expect("non-empty");
     let reference_hr = reference_hr.expect("non-empty");
@@ -286,7 +294,8 @@ fn submaximal_report(
     SubmaximalHrPowerMetrics {
         status: EnduranceEvidenceStatus::Available,
         activities_considered: considered,
-        activities_accepted: unique_ref_count(&matched_recent) + unique_ref_count(&matched_reference),
+        activities_accepted: unique_ref_count(&matched_recent)
+            + unique_ref_count(&matched_reference),
         source_activity_ids: source_ids,
         anchor_power_w: Some(anchor_power),
         recent_median_hr_bpm: Some(recent_hr),
@@ -474,17 +483,20 @@ fn add_sample(
 ) {
     if let Some(power) = streams.power_w.as_ref()
         && let Some(value) = power.get(index)
-            && value.is_finite() {
-                *power_sum += value;
-                *power_sq_sum += value * value;
-                *power_count += 1;
-            }
+        && value.is_finite()
+    {
+        *power_sum += value;
+        *power_sq_sum += value * value;
+        *power_count += 1;
+    }
     if let Some(hr) = streams.heartrate_bpm.as_ref()
         && let Some(value) = hr.get(index)
-            && value.is_finite() && *value > 0.0 {
-                *hr_sum += value;
-                *hr_count += 1;
-            }
+        && value.is_finite()
+        && *value > 0.0
+    {
+        *hr_sum += value;
+        *hr_count += 1;
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -499,17 +511,20 @@ fn remove_sample(
 ) {
     if let Some(power) = streams.power_w.as_ref()
         && let Some(value) = power.get(index)
-            && value.is_finite() {
-                *power_sum -= value;
-                *power_sq_sum -= value * value;
-                *power_count = power_count.saturating_sub(1);
-            }
+        && value.is_finite()
+    {
+        *power_sum -= value;
+        *power_sq_sum -= value * value;
+        *power_count = power_count.saturating_sub(1);
+    }
     if let Some(hr) = streams.heartrate_bpm.as_ref()
         && let Some(value) = hr.get(index)
-            && value.is_finite() && *value > 0.0 {
-                *hr_sum -= value;
-                *hr_count = hr_count.saturating_sub(1);
-            }
+        && value.is_finite()
+        && *value > 0.0
+    {
+        *hr_sum -= value;
+        *hr_count = hr_count.saturating_sub(1);
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -537,9 +552,7 @@ fn build_window(
     let power_coverage_ratio = (power_count as f64 / window_duration.max(1.0)).min(1.0);
     let hr_coverage_ratio = (hr_count as f64 / window_duration.max(1.0)).min(1.0);
 
-    if power_coverage_ratio < CONTROL_MIN_COVERAGE
-        || hr_coverage_ratio < CONTROL_MIN_COVERAGE
-    {
+    if power_coverage_ratio < CONTROL_MIN_COVERAGE || hr_coverage_ratio < CONTROL_MIN_COVERAGE {
         return None;
     }
 
@@ -691,7 +704,13 @@ fn prolonged_report(sessions: &[CyclingSessionInput], eftp_w: f64) -> ProlongedR
 mod tests {
     use super::*;
 
-    fn session(id: &str, date: &str, power: f64, hr: f64, duration_s: usize) -> CyclingSessionInput {
+    fn session(
+        id: &str,
+        date: &str,
+        power: f64,
+        hr: f64,
+        duration_s: usize,
+    ) -> CyclingSessionInput {
         CyclingSessionInput {
             activity_id: id.into(),
             date: NaiveDate::parse_from_str(date, "%Y-%m-%d").unwrap(),
@@ -729,7 +748,14 @@ mod tests {
     #[test]
     fn variable_or_gapped_power_never_becomes_a_control_window() {
         let mut variable = session("v", "2026-07-08", 200.0, 145.0, 600);
-        for (index, value) in variable.streams.power_w.as_mut().unwrap().iter_mut().enumerate() {
+        for (index, value) in variable
+            .streams
+            .power_w
+            .as_mut()
+            .unwrap()
+            .iter_mut()
+            .enumerate()
+        {
             if index % 2 == 0 {
                 *value = 320.0;
             }
@@ -840,11 +866,8 @@ mod tests {
             *hr = 146.0;
         }
         let date = NaiveDate::from_ymd_opt(2026, 7, 13).unwrap();
-        let report = compute_endurance_evidence(
-            &[older_a, older_b, newer_a, newer_b],
-            date,
-            Some(300.0),
-        );
+        let report =
+            compute_endurance_evidence(&[older_a, older_b, newer_a, newer_b], date, Some(300.0));
         // Median of recent HRs (144, 146) = 145.0; reference HRs (148,
         // 152) median = 150.0. Delta -5 bpm.
         assert_eq!(report.submaximal.status, EnduranceEvidenceStatus::Available);
@@ -862,5 +885,223 @@ mod tests {
                 "old-z".to_string(),
             ],
         );
+    }
+
+    // ── numerical fixture regression ──────────────────────────────────
+
+    use chrono::NaiveDate as _NaiveDate;
+    use serde::Deserialize as _Deserialize;
+    use serde_json::Value as _Value;
+
+    const STABLE_FIXTURE: &str =
+        include_str!("../../tests/fixtures/endurance_evidence/stable-control.json");
+    const GAPPED_FIXTURE: &str =
+        include_str!("../../tests/fixtures/endurance_evidence/gapped-control.json");
+    const LONG_FIXTURE: &str =
+        include_str!("../../tests/fixtures/endurance_evidence/matched-prolonged-ride.json");
+
+    #[derive(Debug, _Deserialize)]
+    struct Fixture {
+        as_of: _NaiveDate,
+        eftp_w: Option<f64>,
+        sessions: Vec<FixtureSession>,
+        expected: FixtureExpected,
+    }
+
+    #[derive(Debug, _Deserialize)]
+    #[serde(untagged)]
+    enum FixtureSession {
+        Constant {
+            id: String,
+            date: String,
+            duration_s: usize,
+            power_w: f64,
+            hr_bpm: f64,
+            #[serde(default)]
+            gaps: Vec<Gap>,
+        },
+        Piecewise {
+            id: String,
+            date: String,
+            duration_s: usize,
+            power_w: f64,
+            hr_segments: Vec<HrSegment>,
+        },
+    }
+
+    #[derive(Debug, _Deserialize, Default)]
+    #[allow(dead_code)]
+    struct Gap {
+        start_s: usize,
+        end_s: usize,
+        #[serde(default)]
+        nullify_power: bool,
+    }
+
+    #[derive(Debug, _Deserialize)]
+    #[allow(dead_code)]
+    struct HrSegment {
+        start_s: usize,
+        end_s: usize,
+        hr_bpm: f64,
+    }
+
+    #[derive(Debug, _Deserialize)]
+    struct FixtureExpected {
+        submax_status: EnduranceEvidenceStatus,
+        submax_hr_delta_bpm: Option<f64>,
+        prolonged_status: EnduranceEvidenceStatus,
+        prolonged_hr_delta_bpm: Option<f64>,
+    }
+
+    fn load_endurance_evidence_fixtures() -> Vec<Fixture> {
+        [
+            ("stable-control", STABLE_FIXTURE),
+            ("gapped-control", GAPPED_FIXTURE),
+            ("matched-prolonged-ride", LONG_FIXTURE),
+        ]
+        .into_iter()
+        .map(|(name, raw)| {
+            serde_json::from_str(raw)
+                .unwrap_or_else(|_| panic!("parametric fixture {name} must parse"))
+        })
+        .collect()
+    }
+
+    fn fixture_to_sessions(fixture: &Fixture) -> Vec<CyclingSessionInput> {
+        let mut out = Vec::new();
+        for raw in &fixture.sessions {
+            match raw {
+                FixtureSession::Constant {
+                    id,
+                    date,
+                    duration_s,
+                    power_w,
+                    hr_bpm,
+                    gaps,
+                } => {
+                    let mut power = vec![*power_w; *duration_s + 1];
+                    let hr = vec![*hr_bpm; *duration_s + 1];
+                    for gap in gaps {
+                        if gap.nullify_power {
+                            for slot in power.iter_mut().take(gap.end_s + 1).skip(gap.start_s) {
+                                *slot = f64::NAN;
+                            }
+                        }
+                    }
+                    out.push(CyclingSessionInput {
+                        activity_id: id.clone(),
+                        date: _NaiveDate::parse_from_str(date, "%Y-%m-%d")
+                            .expect("fixture date must be YYYY-MM-DD"),
+                        streams: MetricStreams {
+                            time_s: (0..=*duration_s).map(|v| v as f64).collect(),
+                            speed_mps: None,
+                            heartrate_bpm: Some(hr),
+                            power_w: Some(power),
+                        },
+                    });
+                }
+                FixtureSession::Piecewise {
+                    id,
+                    date,
+                    duration_s,
+                    power_w,
+                    hr_segments,
+                } => {
+                    let mut hr = vec![0.0_f64; *duration_s + 1];
+                    for segment in hr_segments {
+                        let start = segment.start_s.min(hr.len() - 1);
+                        let end = segment.end_s.min(hr.len() - 1);
+                        for slot in hr.iter_mut().take(end + 1).skip(start) {
+                            *slot = segment.hr_bpm;
+                        }
+                    }
+                    let power = vec![*power_w; *duration_s + 1];
+                    out.push(CyclingSessionInput {
+                        activity_id: id.clone(),
+                        date: _NaiveDate::parse_from_str(date, "%Y-%m-%d")
+                            .expect("fixture date must be YYYY-MM-DD"),
+                        streams: MetricStreams {
+                            time_s: (0..=*duration_s).map(|v| v as f64).collect(),
+                            speed_mps: None,
+                            heartrate_bpm: Some(hr),
+                            power_w: Some(power),
+                        },
+                    });
+                }
+            }
+        }
+        out
+    }
+
+    fn assert_close(actual: Option<f64>, expected: Option<f64>, tolerance: f64, label: &str) {
+        match (actual, expected) {
+            (Some(a), Some(e)) => {
+                assert!(
+                    (a - e).abs() <= tolerance,
+                    "{label}: actual {a} vs expected {e}"
+                );
+            }
+            (None, None) => {}
+            (None, Some(e)) => panic!("{label}: expected {e} but got None"),
+            (Some(a), None) => panic!("{label}: actual {a} but expected None"),
+        }
+    }
+
+    #[test]
+    fn numerical_fixtures_preserve_control_and_prolonged_response_semantics() {
+        for fixture in load_endurance_evidence_fixtures() {
+            let sessions = fixture_to_sessions(&fixture);
+            let actual = compute_endurance_evidence(&sessions, fixture.as_of, fixture.eftp_w);
+            assert_eq!(
+                actual.submaximal.status, fixture.expected.submax_status,
+                "fixture as_of={} submax status",
+                fixture.as_of,
+            );
+            assert_close(
+                actual.submaximal.hr_delta_bpm,
+                fixture.expected.submax_hr_delta_bpm,
+                3.0,
+                "submax HR delta",
+            );
+            assert_eq!(
+                actual.prolonged_response.status, fixture.expected.prolonged_status,
+                "fixture as_of={} prolonged status",
+                fixture.as_of,
+            );
+            assert_close(
+                actual.prolonged_response.hr_delta_bpm,
+                fixture.expected.prolonged_hr_delta_bpm,
+                3.0,
+                "prolonged HR delta",
+            );
+        }
+    }
+
+    #[test]
+    fn regression_fixture_schema_is_analytically_documented() {
+        let raw_fixtures: &[(&str, &str)] = &[
+            ("stable-control", STABLE_FIXTURE),
+            ("gapped-control", GAPPED_FIXTURE),
+            ("matched-prolonged-ride", LONG_FIXTURE),
+        ];
+        for (name, raw) in raw_fixtures {
+            let parsed: _Value = serde_json::from_str(raw)
+                .unwrap_or_else(|_| panic!("fixture {name} must stay valid JSON"));
+            assert!(parsed.is_object(), "fixture {name} must be an object");
+            let object = parsed.as_object().expect("object");
+            assert!(
+                object.contains_key("as_of"),
+                "fixture {name} requires as_of"
+            );
+            assert!(
+                object.contains_key("sessions"),
+                "fixture {name} requires sessions"
+            );
+            assert!(
+                object.contains_key("expected"),
+                "fixture {name} requires expected"
+            );
+        }
     }
 }

@@ -1,0 +1,16 @@
+{
+  "as_of": "2026-07-13",
+  "eftp_w": 300.0,
+  "sessions": [
+    { "id": "b1", "date": "2026-04-20", "duration_s": 600, "power_w": 200.0, "hr_bpm": 150.0 },
+    { "id": "b2", "date": "2026-04-28", "duration_s": 600, "power_w": 202.0, "hr_bpm": 151.0 },
+    { "id": "r1", "date": "2026-07-03", "duration_s": 600, "power_w": 201.0, "hr_bpm": 145.0 },
+    { "id": "r2", "date": "2026-07-08", "duration_s": 600, "power_w": 199.0, "hr_bpm": 144.0 }
+  ],
+  "expected": {
+    "submax_status": "Available",
+    "submax_hr_delta_bpm": -6.0,
+    "prolonged_status": "NoEligibleProlongedRide",
+    "prolonged_hr_delta_bpm": null
+  }
+}
