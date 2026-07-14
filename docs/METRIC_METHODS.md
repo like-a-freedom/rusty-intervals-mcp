@@ -171,7 +171,7 @@ bounded, best-effort, and **never fails** the period analysis:
   single `get_recent_activities(None, Some(90))` call
 - Per-candidate `get_activity_details` filtered by `type == "Ride"` and
   `moving_time ≥ 1800 s`
-- Per-survivor stream fetch with `buffer_unordered` semantics (3 concurrent
+- Per-survivor stream fetch (sequential, bounded to ≤24 rides)
 - A single aggregate warning emitted on partial failure:
   `endurance evidence partial: <n> candidate details and <m> ride streams unavailable`
 - `analyze_training` `summary` mode skips **both** the fetch and the renderer call

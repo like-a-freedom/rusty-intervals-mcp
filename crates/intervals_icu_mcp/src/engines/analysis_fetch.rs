@@ -24,10 +24,6 @@ pub const ENDURANCE_EVIDENCE_LOOKBACK_DAYS: i32 = 90;
 pub const ENDURANCE_EVIDENCE_MAX_RECENT_CANDIDATES: usize = 12;
 pub const ENDURANCE_EVIDENCE_MAX_REFERENCE_CANDIDATES: usize = 12;
 
-/// Concurrency for stream retrieval. 3 keeps API pressure bounded while
-/// still finishing within the protocol's 3–5 second latency budget.
-pub const ENDURANCE_EVIDENCE_STREAM_CONCURRENCY: usize = 3;
-
 /// Minimum moving time (seconds) for an activity detail to be considered
 /// for endurance evidence. Shorter rides have no chance of containing
 /// eligible 600s control windows.
@@ -627,16 +623,13 @@ async fn collect_endurance_evidence(
         let mut rejected_streams: Vec<String> = Vec::new();
         let mut succeeded: HashMap<String, Value> = HashMap::new();
 
-        // Bounded, sequential stream retrieval. We track an in-flight
-        // budget so upstream concurrency stays low without requiring
-        // `&dyn IntervalsClient` to be `Send`.
-        let mut in_flight: usize = 0;
+        // Sequential stream retrieval. Each `get_activity_streams` call
+        // blocks until it completes before starting the next one.
+        // Concurrency is not needed here because the candidate set is
+        // bounded (≤ 24 rides) and each fetch is cheap; true concurrent
+        // retrieval would require `&dyn IntervalsClient: Send` which is
+        // not the case today.
         for id in retained_ids.iter() {
-            while in_flight >= ENDURANCE_EVIDENCE_STREAM_CONCURRENCY {
-                tokio::task::yield_now().await;
-                in_flight = ENDURANCE_EVIDENCE_STREAM_CONCURRENCY.saturating_sub(1);
-            }
-            in_flight += 1;
             match client.get_activity_streams(id, None).await {
                 Ok(payload) => {
                     let normalized = normalize_streams_payload(payload);
@@ -653,7 +646,6 @@ async fn collect_endurance_evidence(
                     rejected_streams.push(id.clone());
                 }
             }
-            in_flight = in_flight.saturating_sub(1);
         }
 
         fetched.endurance_profile_streams.extend(succeeded);
