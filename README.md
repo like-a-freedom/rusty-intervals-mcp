@@ -66,6 +66,9 @@ The LLM sees **9 high-level intents** such as `analyze_training` or `modify_trai
 
 This is not a hand-maintained wrapper that goes stale. The server still loads the Intervals.icu OpenAPI spec dynamically and uses it as the execution layer behind the intent orchestration.
 
+Those endpoint operations are private implementation capabilities: they are never returned
+by MCP `tools/list` and cannot be invoked by their operation ids through `tools/call`.
+
 ### 3. Token-efficiency by default
 
 Responses are designed for LLMs:

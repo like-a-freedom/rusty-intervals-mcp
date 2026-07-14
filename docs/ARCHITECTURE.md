@@ -46,6 +46,11 @@ Intent Router           — validation, idempotency, orchestration
 Internal Execution Layer— dynamic OpenAPI runtime, ICu client
 ```
 
+The MCP capability boundary is intentionally smaller than the internal execution layer:
+`tools/list` returns exactly the nine curated intent tools. OpenAPI operation ids are
+private implementation capabilities used by server-owned orchestration and are neither
+listed nor accepted as `tools/call` names.
+
 Key design: auth runs **before** governor so `athlete_id` is available for rate-limit keying. Unauthenticated endpoints (`/health`, `/metrics`) are separate routes and skip both layers.
 
 ## Rate limiting

@@ -211,31 +211,6 @@ impl IntervalsMcpHandler {
             .ok()?,
         ) as Arc<dyn IntervalsClient>)
     }
-
-    /// Dispatch a tool call through the dynamic OpenAPI runtime.
-    async fn dispatch_dynamic_tool(
-        &self,
-        tool_name: &str,
-        args: &rmcp::model::JsonObject,
-    ) -> Result<CallToolResult, ErrorData> {
-        let registry = self.dynamic_runtime.ensure_registry().await.map_err(|e| {
-            ErrorData::internal_error(format!("dynamic registry unavailable: {}", e.message), None)
-        })?;
-
-        let operation = registry.operation(tool_name).ok_or_else(|| {
-            ErrorData::internal_error(
-                format!(
-                    "tool '{}' not found in intent router or dynamic registry",
-                    tool_name
-                ),
-                None,
-            )
-        })?;
-
-        self.dynamic_runtime
-            .dispatch_openapi(operation, Some(args))
-            .await
-    }
 }
 
 impl ServerHandler for IntervalsMcpHandler {
@@ -258,8 +233,8 @@ impl ServerHandler for IntervalsMcpHandler {
         )
         .with_instructions(
             "Intervals.icu MCP server with intent-driven architecture. \
-                 Provides 8 high-level intents for training planning, analysis, and management. \
-                 Dynamic OpenAPI tools are available for advanced usage.",
+                 Provides 9 high-level intents for training planning, analysis, and management. \
+                 The dynamic OpenAPI registry is private implementation state and is not exposed as MCP tools.",
         )
     }
 
@@ -270,9 +245,9 @@ impl ServerHandler for IntervalsMcpHandler {
     ) -> Result<ListToolsResult, ErrorData> {
         metrics::record_mcp_method_call("tools/list");
 
-        // 1. Collect intent tools (9 static handlers)
+        // The public MCP surface is the curated intent catalogue only.
         let intent_tools = self.intent_router.tool_definitions();
-        let mut all_tools: Vec<rmcp::model::Tool> = Vec::with_capacity(intent_tools.len() + 32);
+        let mut public_tools: Vec<rmcp::model::Tool> = Vec::with_capacity(intent_tools.len());
 
         for tool_def in &intent_tools {
             let input_schema_arc = std::sync::Arc::new(
@@ -298,22 +273,11 @@ impl ServerHandler for IntervalsMcpHandler {
                 tool = tool.with_raw_output_schema(output_schema);
             }
 
-            all_tools.push(tool);
-        }
-
-        // 2. Merge dynamic OpenAPI tools (skip any that collide with intent names)
-        if let Ok(registry) = self.dynamic_runtime.ensure_registry().await {
-            let intent_names: std::collections::HashSet<&str> =
-                intent_tools.iter().map(|td| td.name.as_str()).collect();
-            for dynamic_tool in registry.list_tools() {
-                if !intent_names.contains(dynamic_tool.name.as_ref()) {
-                    all_tools.push(dynamic_tool);
-                }
-            }
+            public_tools.push(tool);
         }
 
         Ok(ListToolsResult {
-            tools: all_tools,
+            tools: public_tools,
             next_cursor: None,
             meta: None,
         })
@@ -331,7 +295,8 @@ impl ServerHandler for IntervalsMcpHandler {
         let intent_name = request.name.as_ref();
         let args: rmcp::model::JsonObject = request.arguments.unwrap_or_default();
 
-        // Try intent router first, fall back to dynamic OpenAPI dispatch
+        // Route exclusively through the intent layer. Dynamic OpenAPI operations
+        // are private implementation capabilities, never MCP tool names.
         let intent_result = match &client_for_request {
             Some(client) => {
                 let idempotency = Arc::new(intents::IdempotencyMiddleware::new());
@@ -363,9 +328,6 @@ impl ServerHandler for IntervalsMcpHandler {
         match intent_result {
             Ok(output) => intent_output_to_call_tool_result(&output)
                 .map_err(|e| ErrorData::internal_error(e.to_string(), None)),
-            Err(intents::IntentError::UnknownIntent(_)) => {
-                self.dispatch_dynamic_tool(intent_name, &args).await
-            }
             Err(e) => Err(intent_error_to_error_data(&e)),
         }
     }

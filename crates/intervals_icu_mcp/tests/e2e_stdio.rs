@@ -1,4 +1,5 @@
 use rmcp::ServiceExt;
+use rmcp::model::CallToolRequestParams;
 use rmcp::transport::TokioChildProcess;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -27,6 +28,41 @@ async fn e2e_stdio_lists_tools_and_calls_profile() {
     Mock::given(method("GET"))
         .and(path("/api/v1/athlete/ath123/activities"))
         .respond_with(ResponseTemplate::new(200).set_body_json(acts_body))
+        .mount(&mock)
+        .await;
+
+    // The OpenAPI registry is private server state. It deliberately contains
+    // operations that must never become client-visible MCP tools.
+    let openapi = serde_json::json!({
+        "openapi": "3.0.0",
+        "info": { "title": "private test API", "version": "1" },
+        "paths": {
+            "/api/v1/raw-profile": {
+                "get": {
+                    "operationId": "rawGetProfile",
+                    "responses": { "200": { "description": "ok" } }
+                }
+            },
+            "/api/v1/raw-activities": {
+                "get": {
+                    "operationId": "rawListActivities",
+                    "responses": { "200": { "description": "ok" } }
+                }
+            }
+        }
+    });
+    Mock::given(method("GET"))
+        .and(path("/api/v1/docs"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(openapi))
+        .mount(&mock)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/v1/raw-profile"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({ "sentinel": "raw-dispatch" })),
+        )
         .mount(&mock)
         .await;
 
@@ -116,7 +152,7 @@ async fn e2e_stdio_lists_tools_and_calls_profile() {
         "server initialize must advertise resource capability"
     );
 
-    // List tools and ensure intent tools are present (may include dynamic OpenAPI tools too)
+    // The public MCP contract is exactly the curated intent surface.
     let tools = match tokio::time::timeout(
         std::time::Duration::from_secs(20),
         service.list_tools(Default::default()),
@@ -155,23 +191,19 @@ async fn e2e_stdio_lists_tools_and_calls_profile() {
         "track_progress",
     ];
 
-    let names: Vec<_> = tools.tools.iter().map(|t| t.name.as_ref()).collect();
-
-    // All 9 intent tools must be present (may also include dynamic OpenAPI tools)
-    assert!(names.len() >= 9, "Should have at least 9 intent tools");
-    for expected_name in &expected_tool_names {
-        assert!(
-            names.contains(expected_name),
-            "Missing intent tool: {expected_name}",
-        );
-    }
-
-    // Validate schema only for the 9 intent tools
-    for tool in tools
+    let actual_names: std::collections::BTreeSet<String> = tools
         .tools
         .iter()
-        .filter(|t| expected_tool_names.contains(&t.name.as_ref()))
-    {
+        .map(|tool| tool.name.to_string())
+        .collect();
+    let expected_names = std::collections::BTreeSet::from_iter(
+        expected_tool_names.iter().map(|name| (*name).to_string()),
+    );
+    assert_eq!(actual_names, expected_names);
+    assert_eq!(tools.tools.len(), expected_tool_names.len());
+
+    // Every public tool must carry its complete intent schema.
+    for tool in &tools.tools {
         assert!(
             !tool.input_schema.is_empty(),
             "{} should expose a non-empty input schema",
@@ -226,6 +258,26 @@ async fn e2e_stdio_lists_tools_and_calls_profile() {
             tool.name
         );
     }
+
+    // Raw OpenAPI operation ids must not bypass the public intent boundary.
+    let raw_call = service
+        .call_tool(CallToolRequestParams::new("rawGetProfile"))
+        .await;
+    assert!(
+        raw_call.is_err(),
+        "raw OpenAPI operation must not be an MCP tool"
+    );
+    assert!(
+        raw_call.unwrap_err().to_string().contains("Unknown intent"),
+        "the server must reject the raw name at the intent boundary"
+    );
+    let requests = mock.received_requests().await.unwrap_or_default();
+    assert!(
+        !requests
+            .iter()
+            .any(|request| request.url.path() == "/api/v1/raw-profile"),
+        "unknown MCP tools must not dispatch raw upstream operations"
+    );
 
     // Note: Full intent execution testing requires mock API endpoints for all internal calls
     // This test verifies the MCP layer correctly exposes only intent tools
