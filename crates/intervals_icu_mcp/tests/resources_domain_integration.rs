@@ -1,9 +1,6 @@
-#[allow(dead_code)]
-mod test_helpers;
-
 use intervals_icu_mcp::domains::resources::{athlete_profile_resource, build_athlete_profile_text};
-use serde_json::Value;
-use test_helpers::MockClient;
+use intervals_icu_mcp::test_support::mock::MockIntervalsClient;
+use serde_json::{Value, json};
 
 #[test]
 fn athlete_profile_resource_exposes_expected_metadata() {
@@ -22,7 +19,9 @@ fn athlete_profile_resource_exposes_expected_metadata() {
 
 #[tokio::test]
 async fn build_athlete_profile_text_returns_json_with_all_sections() {
-    let text = build_athlete_profile_text(&MockClient)
+    let client = MockIntervalsClient::builder()
+        .with_fitness_summary(json!([{ "fitness": 50, "fatigue": 30, "form": 20 }]));
+    let text = build_athlete_profile_text(&client)
         .await
         .expect("athlete profile resource should render");
 

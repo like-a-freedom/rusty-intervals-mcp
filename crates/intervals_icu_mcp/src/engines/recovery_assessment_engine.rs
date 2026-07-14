@@ -45,21 +45,20 @@ impl RecoveryAssessmentEngine {
         coach_context.guidance = build_guidance(&coach_context.metrics, &coach_context.alerts);
 
         let ade_outputs = compute_ade(
-            coach_context.metrics.fitness.as_ref().and_then(|f| f.tsb),
-            coach_context
-                .metrics
-                .wellness
-                .as_ref()
-                .and_then(|w| w.hrv_ratio),
-            false,
-            false,
-            coach_context
-                .metrics
-                .fitness
-                .as_ref()
-                .and_then(|f| f.ramp_rate),
-            None,
-            0,
+            &crate::engines::ade::AdeInputs {
+                tsb: coach_context.metrics.fitness.as_ref().and_then(|f| f.tsb),
+                hrv_ratio: coach_context
+                    .metrics
+                    .wellness
+                    .as_ref()
+                    .and_then(|w| w.hrv_ratio),
+                ramp_rate: coach_context
+                    .metrics
+                    .fitness
+                    .as_ref()
+                    .and_then(|f| f.ramp_rate),
+                ..Default::default()
+            },
             coach_context.metrics.fitness.as_ref().and_then(|f| f.tsb),
         );
 

@@ -1,5 +1,6 @@
 use serde_json::Value;
 
+use crate::content::ContentBlock;
 use crate::domains::coach::{
     DecouplingMetrics, EspeDerivedMetrics, EspePowerAnchors, EtvsMetrics, FitnessMetrics,
     HeatMetrics, NdliMetrics, WdrMetrics,
@@ -16,9 +17,8 @@ use crate::engines::interval_analysis::{
     IntervalOutputKind, derive_interval_output, extract_exact_tss, format_pace_per_km,
     interval_number, numeric_value,
 };
-use crate::intents::ContentBlock;
 
-pub(crate) fn build_load_management_text(
+pub fn build_load_management_text(
     metrics: Option<&crate::domains::coach::LoadManagementMetrics>,
 ) -> String {
     let mut lines = vec![String::from("Load Context")];
@@ -81,7 +81,7 @@ pub(crate) fn build_load_management_text(
     lines.join("\n")
 }
 
-pub(crate) fn requested_metrics(input: &Value) -> Vec<String> {
+pub fn requested_metrics(input: &Value) -> Vec<String> {
     input
         .get("metrics")
         .and_then(Value::as_array)
@@ -95,7 +95,7 @@ pub(crate) fn requested_metrics(input: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-pub(crate) fn format_duration_hhmm(seconds: i64) -> String {
+pub fn format_duration_hhmm(seconds: i64) -> String {
     let hours = seconds / 3600;
     let minutes = (seconds % 3600) / 60;
     let secs = seconds % 60;
@@ -109,7 +109,7 @@ pub(crate) fn format_duration_hhmm(seconds: i64) -> String {
     }
 }
 
-pub(crate) fn format_duration_compact(seconds: i64) -> String {
+pub fn format_duration_compact(seconds: i64) -> String {
     let hours = seconds / 3600;
     let minutes = (seconds % 3600) / 60;
     let secs = seconds % 60;
@@ -121,9 +121,7 @@ pub(crate) fn format_duration_compact(seconds: i64) -> String {
     }
 }
 
-pub(crate) fn build_calendar_event_rows(
-    events: &[&intervals_icu_client::Event],
-) -> Vec<Vec<String>> {
+pub fn build_calendar_event_rows(events: &[&intervals_icu_client::Event]) -> Vec<Vec<String>> {
     events
         .iter()
         .map(|event| {
@@ -145,7 +143,7 @@ pub(crate) fn build_calendar_event_rows(
         .collect()
 }
 
-pub(crate) fn build_basic_workout_metric_rows(workout_detail: Option<&Value>) -> Vec<Vec<String>> {
+pub fn build_basic_workout_metric_rows(workout_detail: Option<&Value>) -> Vec<Vec<String>> {
     let Some(obj) = workout_detail.and_then(Value::as_object) else {
         return Vec::new();
     };
@@ -171,7 +169,7 @@ pub(crate) fn build_basic_workout_metric_rows(workout_detail: Option<&Value>) ->
     rows
 }
 
-pub(crate) fn build_detailed_workout_rows(workout_detail: Option<&Value>) -> Vec<Vec<String>> {
+pub fn build_detailed_workout_rows(workout_detail: Option<&Value>) -> Vec<Vec<String>> {
     let Some(obj) = workout_detail.and_then(Value::as_object) else {
         return Vec::new();
     };
@@ -210,7 +208,7 @@ pub(crate) fn build_detailed_workout_rows(workout_detail: Option<&Value>) -> Vec
     rows
 }
 
-pub(crate) fn build_activity_message_rows(
+pub fn build_activity_message_rows(
     messages: &[intervals_icu_client::ActivityMessage],
 ) -> Vec<Vec<String>> {
     messages
@@ -243,7 +241,7 @@ pub(crate) fn build_activity_message_rows(
         .collect()
 }
 
-pub(crate) fn build_interval_analysis_rows(
+pub fn build_interval_analysis_rows(
     intervals: &[Value],
     streams: Option<&Value>,
     output_kind: IntervalOutputKind,
@@ -271,7 +269,7 @@ pub(crate) fn build_interval_analysis_rows(
         .collect()
 }
 
-pub(crate) fn build_period_summary_rows(
+pub fn build_period_summary_rows(
     _activity_count: usize,
     period_snapshot: &crate::engines::coach_metrics::TrendSnapshot,
     weekly_hrs: f64,
@@ -293,7 +291,7 @@ pub(crate) fn build_period_summary_rows(
     ]
 }
 
-pub(crate) fn build_requested_single_metric_rows(
+pub fn build_requested_single_metric_rows(
     workout_detail: Option<&serde_json::Map<String, Value>>,
     requested: &[String],
     etvs: Option<&EtvsMetrics>,
@@ -361,7 +359,7 @@ pub(crate) fn build_requested_single_metric_rows(
     rows
 }
 
-pub(crate) fn build_requested_period_metric_rows(
+pub fn build_requested_period_metric_rows(
     requested: &[String],
     period: &[&intervals_icu_client::ActivitySummary],
     period_snapshot: &crate::engines::coach_metrics::TrendSnapshot,
@@ -449,9 +447,7 @@ pub(crate) fn build_requested_period_metric_rows(
     rows
 }
 
-pub(crate) fn build_zone_distribution_rows(
-    zones: &serde_json::Map<String, Value>,
-) -> Vec<Vec<String>> {
+pub fn build_zone_distribution_rows(zones: &serde_json::Map<String, Value>) -> Vec<Vec<String>> {
     let total_time: i64 = zones.values().filter_map(Value::as_i64).sum();
 
     zones
@@ -473,7 +469,7 @@ pub(crate) fn build_zone_distribution_rows(
         .collect()
 }
 
-pub(crate) fn format_histogram_number(value: f64) -> String {
+pub fn format_histogram_number(value: f64) -> String {
     if (value - value.round()).abs() < 1e-6 {
         format!("{:.0}", value)
     } else {
@@ -481,7 +477,7 @@ pub(crate) fn format_histogram_number(value: f64) -> String {
     }
 }
 
-pub(crate) fn build_range_histogram_rows(buckets: &[Value], unit: &str) -> Vec<Vec<String>> {
+pub fn build_range_histogram_rows(buckets: &[Value], unit: &str) -> Vec<Vec<String>> {
     buckets
         .iter()
         .filter_map(Value::as_object)
@@ -505,7 +501,7 @@ pub(crate) fn build_range_histogram_rows(buckets: &[Value], unit: &str) -> Vec<V
         .collect()
 }
 
-pub(crate) fn build_bucket_histogram_rows(
+pub fn build_bucket_histogram_rows(
     buckets: &[Value],
     average_key: Option<&str>,
     start_suffix: &str,
@@ -551,7 +547,7 @@ pub(crate) fn build_bucket_histogram_rows(
         .collect()
 }
 
-pub(crate) fn append_histogram_section(
+pub fn append_histogram_section(
     content: &mut Vec<ContentBlock>,
     title: &str,
     payload: Option<&Value>,
@@ -606,14 +602,14 @@ pub(crate) fn append_histogram_section(
     }
 }
 
-pub(crate) fn best_efforts_array(best_efforts: &Value) -> Option<&Vec<Value>> {
+pub fn best_efforts_array(best_efforts: &Value) -> Option<&Vec<Value>> {
     best_efforts
         .as_array()
         .or_else(|| best_efforts.get("best_efforts").and_then(Value::as_array))
         .or_else(|| best_efforts.get("efforts").and_then(Value::as_array))
 }
 
-pub(crate) fn format_best_effort_duration(secs: i64) -> String {
+pub fn format_best_effort_duration(secs: i64) -> String {
     if secs < 60 {
         format!("{}s", secs)
     } else if secs < 3600 {
@@ -623,7 +619,7 @@ pub(crate) fn format_best_effort_duration(secs: i64) -> String {
     }
 }
 
-pub(crate) fn format_best_effort_average(
+pub fn format_best_effort_average(
     best_efforts: &Value,
     effort: &serde_json::Map<String, Value>,
 ) -> Option<String> {
@@ -675,7 +671,7 @@ pub(crate) fn format_best_effort_average(
     average.map(|avg| format!("{avg:.2}"))
 }
 
-pub(crate) fn append_best_efforts_section(content: &mut Vec<ContentBlock>, best_efforts: &Value) {
+pub fn append_best_efforts_section(content: &mut Vec<ContentBlock>, best_efforts: &Value) {
     let Some(arr) = best_efforts_array(best_efforts) else {
         return;
     };
@@ -739,7 +735,7 @@ pub(crate) fn append_best_efforts_section(content: &mut Vec<ContentBlock>, best_
     }
 }
 
-pub(crate) fn append_stream_insights(content: &mut Vec<ContentBlock>, streams: Option<&Value>) {
+pub fn append_stream_insights(content: &mut Vec<ContentBlock>, streams: Option<&Value>) {
     let Some(streams) = streams.and_then(Value::as_object) else {
         content.push(ContentBlock::markdown(
             "Stream Insights\n  Stream data requested but unavailable.".to_string(),
@@ -806,7 +802,7 @@ pub(crate) fn append_stream_insights(content: &mut Vec<ContentBlock>, streams: O
     ));
 }
 
-pub(crate) fn render_espe_section(
+pub fn render_espe_section(
     anchors: &Option<EspePowerAnchors>,
     derived: &Option<EspeDerivedMetrics>,
 ) -> Option<String> {
@@ -859,7 +855,7 @@ pub(crate) fn render_espe_section(
     Some(lines.join("\n"))
 }
 
-pub(crate) fn render_wdrm_section(wdrm: &Option<WdrMetrics>) -> Option<String> {
+pub fn render_wdrm_section(wdrm: &Option<WdrMetrics>) -> Option<String> {
     let wdrm = wdrm.as_ref()?;
     if !wdrm.supported {
         return None;
@@ -900,7 +896,7 @@ pub(crate) fn render_wdrm_section(wdrm: &Option<WdrMetrics>) -> Option<String> {
     Some(lines.join("\n"))
 }
 
-pub(crate) fn render_isdm_section(decoupling: &Option<DecouplingMetrics>) -> Option<String> {
+pub fn render_isdm_section(decoupling: &Option<DecouplingMetrics>) -> Option<String> {
     let decoupling = decoupling.as_ref()?;
     let mut lines = vec!["Aerobic Decoupling (ISDM)".to_string()];
     lines.push(format!(
@@ -937,7 +933,7 @@ pub(crate) fn render_isdm_section(decoupling: &Option<DecouplingMetrics>) -> Opt
     Some(lines.join("\n"))
 }
 
-pub(crate) fn render_ndli_section(ndli: &Option<NdliMetrics>) -> Option<String> {
+pub fn render_ndli_section(ndli: &Option<NdliMetrics>) -> Option<String> {
     let ndli = ndli.as_ref()?;
     if !ndli.supported {
         return None;
@@ -972,7 +968,7 @@ pub(crate) fn render_ndli_section(ndli: &Option<NdliMetrics>) -> Option<String> 
     Some(lines.join("\n"))
 }
 
-pub(crate) fn render_heat_section(heat: &Option<HeatMetrics>) -> Option<String> {
+pub fn render_heat_section(heat: &Option<HeatMetrics>) -> Option<String> {
     let heat = heat.as_ref()?;
     if !heat.supported {
         return None;
@@ -988,7 +984,7 @@ pub(crate) fn render_heat_section(heat: &Option<HeatMetrics>) -> Option<String> 
     Some(lines.join("\n"))
 }
 
-pub(crate) fn render_fitness_snapshot(fitness: &Option<FitnessMetrics>) -> Option<String> {
+pub fn render_fitness_snapshot(fitness: &Option<FitnessMetrics>) -> Option<String> {
     let metrics = fitness.as_ref()?;
     let mut lines = vec!["Fitness Snapshot".to_string()];
     if let Some(ctl) = metrics.ctl {
@@ -1013,7 +1009,7 @@ pub(crate) fn render_fitness_snapshot(fitness: &Option<FitnessMetrics>) -> Optio
     Some(lines.join("\n"))
 }
 
-pub(crate) fn render_z2_stability_section(
+pub fn render_z2_stability_section(
     z2_lower: f64,
     z2_upper: f64,
     variance: Option<f64>,
@@ -1032,7 +1028,7 @@ pub(crate) fn render_z2_stability_section(
     ))
 }
 
-pub(crate) fn render_etvs_section(etvs: Option<&EtvsMetrics>) -> Option<String> {
+pub fn render_etvs_section(etvs: Option<&EtvsMetrics>) -> Option<String> {
     let metrics = etvs?;
     let coverage = metrics
         .coverage_ratio
@@ -1057,9 +1053,7 @@ pub(crate) fn render_etvs_section(etvs: Option<&EtvsMetrics>) -> Option<String> 
 /// bad, ready, fatigued, durable, or fit. Reasoning context paragraphs
 /// follow each numeric block so the reader can interpret the magnitude
 /// without the renderer acting as a coach.
-pub(crate) fn render_endurance_evidence(
-    evidence: Option<&EnduranceEvidenceMetrics>,
-) -> Option<String> {
+pub fn render_endurance_evidence(evidence: Option<&EnduranceEvidenceMetrics>) -> Option<String> {
     let evidence = evidence?;
     let mut lines: Vec<String> = Vec::new();
     lines.push("Endurance Performance Evidence — Cycling Power Protocol".to_string());
@@ -1230,7 +1224,7 @@ fn work_table_title(provenance: SegmentProvenance) -> &'static str {
 }
 
 /// Build segment metric tables from a report.
-pub(crate) fn build_segment_tables(
+pub fn build_segment_tables(
     report: &SegmentSeriesReport,
     presentation: SportPresentation,
 ) -> Vec<SegmentTable> {
@@ -1396,7 +1390,7 @@ pub(crate) fn build_segment_tables(
 }
 
 /// Build repeat-consistency summary rows.
-pub(crate) fn build_consistency_rows(
+pub fn build_consistency_rows(
     consistency: &SeriesConsistency,
     _presentation: SportPresentation,
 ) -> Vec<Vec<String>> {
@@ -1461,6 +1455,7 @@ pub(crate) mod legacy_work_interval_baseline;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::content::ContentBlock;
     use crate::domains::coach::{
         AcwrMetrics, DecouplingMetrics, EspeDerivedMetrics, EspePowerAnchors, HeatMetrics,
         LoadManagementMetrics, NdliMetrics, WdrMetrics,
@@ -1475,7 +1470,6 @@ mod tests {
         count_work_intervals, derive_interval_output, extract_exact_tss, format_pace_from_speed,
         interval_number, preferred_interval_output_kind, quality_output_finding, stream_series,
     };
-    use crate::intents::ContentBlock;
     use intervals_icu_client::{ActivityMessage, ActivitySummary, Event, EventCategory};
     use std::collections::HashMap;
 

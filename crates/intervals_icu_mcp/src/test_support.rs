@@ -1,9 +1,14 @@
-use once_cell::sync::Lazy;
+#[cfg(test)]
 use std::collections::HashMap;
+#[cfg(test)]
+use std::sync::LazyLock;
+#[cfg(test)]
 use tokio::sync::{Mutex, MutexGuard};
 
-static ENV_MUTEX: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+#[cfg(test)]
+static ENV_MUTEX: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
+#[cfg(test)]
 pub(crate) const DYNAMIC_RUNTIME_ENV_VARS: &[&str] = &[
     "INTERVALS_ICU_BASE_URL",
     "INTERVALS_ICU_ATHLETE_ID",
@@ -12,11 +17,13 @@ pub(crate) const DYNAMIC_RUNTIME_ENV_VARS: &[&str] = &[
     "INTERVALS_ICU_SPEC_REFRESH_SECS",
 ];
 
+#[cfg(test)]
 pub(crate) struct EnvVarGuard {
     _guard: MutexGuard<'static, ()>,
     saved: HashMap<&'static str, Option<String>>,
 }
 
+#[cfg(test)]
 impl EnvVarGuard {
     pub(crate) fn acquire_blocking(keys: &'static [&'static str]) -> Self {
         let guard = ENV_MUTEX.blocking_lock();
@@ -28,6 +35,7 @@ impl EnvVarGuard {
     }
 }
 
+#[cfg(test)]
 impl Drop for EnvVarGuard {
     fn drop(&mut self) {
         for (key, value) in &self.saved {
@@ -49,6 +57,7 @@ impl Drop for EnvVarGuard {
     }
 }
 
+#[cfg(test)]
 fn snapshot_env(keys: &'static [&'static str]) -> HashMap<&'static str, Option<String>> {
     keys.iter()
         .copied()
@@ -108,8 +117,7 @@ fn clone_intervals_error(
 // Shared MockIntervalsClient for tests
 // ============================================================================
 
-#[cfg(test)]
-pub(crate) mod mock {
+pub mod mock {
     use async_trait::async_trait;
     use intervals_icu_client::domains::workout::{Folder, SportSettings, WorkoutItem};
     use intervals_icu_client::{
@@ -135,7 +143,7 @@ pub(crate) mod mock {
     /// and the test, so tests can inspect call counts even after the mock has been
     /// moved into a `dyn IntervalsClient` trait object.
     #[derive(Default, Debug)]
-    pub(crate) struct MockObservations {
+    pub struct MockObservations {
         pub wellness_last_days_back: Mutex<Option<i32>>,
         pub wellness_calls: AtomicUsize,
     }
@@ -154,7 +162,7 @@ pub(crate) mod mock {
     }
 
     #[derive(Default)]
-    pub(crate) struct MockIntervalsClient {
+    pub struct MockIntervalsClient {
         pub activities: Vec<ActivitySummary>,
         pub events: Vec<Event>,
         pub fitness_summary: Option<Value>,
@@ -178,6 +186,25 @@ pub(crate) mod mock {
         /// Observations shared with the test. `Arc` so the test can keep its own
         /// reference after the mock is wrapped in a trait object.
         pub observations: Arc<MockObservations>,
+        /// Per-activity-id stream payload overrides. Falls back to `streams` when
+        /// an id is missing.
+        pub streams_map: HashMap<String, Value>,
+        /// Per-activity-id detail payload overrides. When non-empty and an id is
+        /// not found, returns `NotFound` instead of falling back.
+        pub activity_details_map: HashMap<String, Value>,
+        /// Injectable error for `get_activity_intervals`.
+        pub intervals_error: Option<String>,
+        /// Injectable error for `get_activity_streams`.
+        pub streams_error: Option<String>,
+        /// Wellness payload returned by `get_wellness_for_date`. Falls back to
+        /// `wellness` when `None`.
+        pub wellness_for_date_data: Option<Value>,
+        /// Records `(limit, days_back)` arguments passed to `get_recent_activities`.
+        #[allow(clippy::type_complexity)]
+        pub activity_calls: Arc<Mutex<Vec<(Option<u32>, Option<i32>)>>>,
+        /// Counts `get_activity_streams` calls for `ride-` prefixed ids
+        /// (endurance evidence observation).
+        pub profile_stream_calls: Arc<Mutex<usize>>,
     }
 
     impl MockIntervalsClient {
@@ -304,6 +331,1188 @@ pub(crate) mod mock {
         pub fn upcoming_workouts_call_count(&self) -> usize {
             self.upcoming_workouts_calls.load(Ordering::SeqCst)
         }
+
+        pub fn with_intervals_error(mut self, error: impl Into<String>) -> Self {
+            self.intervals_error = Some(error.into());
+            self
+        }
+
+        pub fn with_streams_error(mut self, error: impl Into<String>) -> Self {
+            self.streams_error = Some(error.into());
+            self
+        }
+
+        pub fn with_wellness_for_date(mut self, data: Value) -> Self {
+            self.wellness_for_date_data = Some(data);
+            self
+        }
+
+        pub fn with_stream_for_id(mut self, id: &str, streams: Value) -> Self {
+            self.streams_map.insert(id.to_string(), streams);
+            self
+        }
+
+        pub fn with_activity_details_map(mut self, map: HashMap<String, Value>) -> Self {
+            self.activity_details_map = map;
+            self
+        }
+
+        pub fn activity_call_count(&self) -> usize {
+            self.activity_calls.lock().unwrap().len()
+        }
+
+        pub fn activity_calls_snapshot(&self) -> Vec<(Option<u32>, Option<i32>)> {
+            self.activity_calls.lock().unwrap().clone()
+        }
+
+        pub fn endurance_stream_calls(&self) -> usize {
+            *self.profile_stream_calls.lock().unwrap()
+        }
+
+        pub fn observations_wellness_days(&self) -> Vec<Option<i32>> {
+            self.observations
+                .wellness_last_days_back
+                .lock()
+                .map(|opt| opt.map_or_else(Vec::new, |d| vec![Some(d)]))
+                .unwrap_or_default()
+        }
+    }
+
+    // ========================================================================
+    // Scenario constructors (absorbed from MockCoachClient)
+    // ========================================================================
+
+    impl MockIntervalsClient {
+        pub fn adaptive_wellness_series(
+            baseline_sleep_secs: f64,
+            baseline_resting_hr: f64,
+            baseline_hrv: f64,
+            recent_sleep_secs: f64,
+            recent_resting_hr: f64,
+            recent_hrv: f64,
+        ) -> Value {
+            let mut entries = Vec::new();
+            entries.extend((0..28).map(|_| {
+                json!({
+                    "sleepSecs": baseline_sleep_secs,
+                    "restingHR": baseline_resting_hr,
+                    "hrv": baseline_hrv
+                })
+            }));
+            entries.extend((0..7).map(|_| {
+                json!({
+                    "sleepSecs": recent_sleep_secs,
+                    "restingHR": recent_resting_hr,
+                    "hrv": recent_hrv
+                })
+            }));
+            Value::Array(entries)
+        }
+
+        pub fn relative_date(days_from_today: i64) -> String {
+            (chrono::Utc::now().date_naive() + chrono::Duration::days(days_from_today))
+                .format("%Y-%m-%d")
+                .to_string()
+        }
+
+        pub fn mock_event(event_id: Option<&str>) -> Event {
+            Event {
+                id: event_id.map(str::to_owned),
+                start_date_local: "2026-03-04".to_string(),
+                name: "Mock event".to_string(),
+                category: EventCategory::Workout,
+                description: None,
+                r#type: None,
+            }
+        }
+
+        pub fn fitness_snapshot(fitness: f64, fatigue: f64, form: f64) -> Value {
+            json!([{ "fitness": fitness, "fatigue": fatigue, "form": form }])
+        }
+
+        pub fn activity(activity_id: &str, name: &str, start_date_local: &str) -> ActivitySummary {
+            ActivitySummary {
+                id: activity_id.to_string(),
+                name: Some(name.to_string()),
+                start_date_local: start_date_local.to_string(),
+                ..Default::default()
+            }
+        }
+
+        pub fn with_tsb(tsb: f64) -> Self {
+            Self {
+                activities: vec![Self::activity("activity-1", "Hard Session", "2026-03-04")],
+                fitness_summary: Some(Self::fitness_snapshot(50.0, 75.0, tsb)),
+                activity_details: HashMap::from([(
+                    "activity-1".to_string(),
+                    json!({
+                        "distance": 10000.0,
+                        "moving_time": 3600,
+                        "average_heartrate": 150.0,
+                        "average_watts": 220.0,
+                        "total_elevation_gain": 200.0
+                    }),
+                )]),
+                ..Default::default()
+            }
+        }
+
+        pub fn with_race_activity() -> Self {
+            Self {
+                activities: vec![Self::activity("race-1", "Mountain 50K", "2026-03-01")],
+                events: vec![Event {
+                    id: Some("event-race-1".to_string()),
+                    start_date_local: "2026-03-01".to_string(),
+                    name: "Mountain 50K Plan".to_string(),
+                    category: intervals_icu_client::EventCategory::RaceA,
+                    description: Some("Planned race target".to_string()),
+                    r#type: Some("Race".to_string()),
+                }],
+                fitness_summary: Some(Self::fitness_snapshot(42.0, 68.0, -18.0)),
+                wellness: Some(json!([
+                    {"sleepSecs": 21600.0, "restingHR": 58.0, "hrv": 45.0},
+                    {"sleepSecs": 21000.0, "restingHR": 60.0, "hrv": 42.0}
+                ])),
+                activity_details: HashMap::from([(
+                    "race-1".to_string(),
+                    json!({
+                        "distance": 50000.0,
+                        "moving_time": 18000,
+                        "average_heartrate": 148.0,
+                        "total_elevation_gain": 1800.0
+                    }),
+                )]),
+                intervals: Some(json!([
+                    {"moving_time": 1800, "average_heartrate": 145.0, "average_watts": 210.0},
+                    {"moving_time": 1800, "average_heartrate": 152.0, "average_watts": 205.0}
+                ])),
+                streams: Some(json!({
+                    "velocity_smooth": [3.0, 3.0, 3.0, 3.0, 3.0, 3.0],
+                    "heartrate": [140.0, 141.0, 142.0, 150.0, 151.0, 152.0],
+                    "watts": [220.0, 220.0, 220.0, 220.0, 220.0, 220.0]
+                })),
+                ..Default::default()
+            }
+        }
+
+        pub fn with_period_blocks() -> Self {
+            Self {
+                activities: vec![
+                    Self::activity("a1", "Run 1", "2026-03-01"),
+                    Self::activity("a2", "Run 2", "2026-03-03"),
+                    Self::activity("a3", "Run 3", "2026-02-25"),
+                ],
+                fitness_summary: Some(Self::fitness_snapshot(55.0, 45.0, 10.0)),
+                activity_details: HashMap::from([(
+                    "a1".to_string(),
+                    json!({
+                        "distance": 15000.0,
+                        "moving_time": 5400,
+                        "average_heartrate": 145.0,
+                        "average_watts": 210.0,
+                        "total_elevation_gain": 300.0
+                    }),
+                )]),
+                ..Default::default()
+            }
+        }
+
+        pub fn with_single_workout_degraded_streams() -> Self {
+            Self {
+                activities: vec![Self::activity("single-1", "Track Intervals", "2026-03-04")],
+                fitness_summary: Some(json!({})),
+                activity_details: HashMap::from([(
+                    "single-1".to_string(),
+                    json!({
+                        "distance": 12000.0,
+                        "moving_time": 4200,
+                        "average_heartrate": 158.0,
+                        "average_watts": 245.0,
+                        "total_elevation_gain": 90.0
+                    }),
+                )]),
+                intervals: Some(json!([
+                    {"moving_time": 300, "average_heartrate": 162.0, "average_watts": 265.0},
+                    {"moving_time": 300, "average_heartrate": 164.0, "average_watts": 268.0}
+                ])),
+                ..Default::default()
+            }
+        }
+
+        pub fn with_race_degraded_context() -> Self {
+            Self {
+                activities: vec![Self::activity(
+                    "race-degraded-1",
+                    "Spring Marathon",
+                    "2026-03-02",
+                )],
+                fitness_summary: Some(json!({})),
+                activity_details: HashMap::from([(
+                    "race-degraded-1".to_string(),
+                    json!({
+                        "distance": 42195.0,
+                        "moving_time": 12600,
+                        "average_heartrate": 151.0,
+                        "total_elevation_gain": 180.0
+                    }),
+                )]),
+                ..Default::default()
+            }
+        }
+
+        pub fn with_positive_tsb_and_low_sleep() -> Self {
+            Self {
+                activities: vec![Self::activity(
+                    "activity-1",
+                    "Sharpening Session",
+                    "2026-03-04",
+                )],
+                fitness_summary: Some(Self::fitness_snapshot(62.0, 48.0, 14.0)),
+                wellness: Some(json!([
+                    {"sleepSecs": 19800.0, "restingHR": 58.0, "hrv": 30.0},
+                    {"sleepSecs": 20700.0, "restingHR": 60.0, "hrv": 34.0}
+                ])),
+                activity_details: HashMap::from([(
+                    "activity-1".to_string(),
+                    json!({
+                        "distance": 12000.0,
+                        "moving_time": 4300,
+                        "average_heartrate": 150.0,
+                        "average_watts": 230.0,
+                        "total_elevation_gain": 120.0
+                    }),
+                )]),
+                ..Default::default()
+            }
+        }
+
+        pub fn with_supportive_recovery_metrics() -> Self {
+            Self {
+                activities: vec![Self::activity(
+                    "supportive-1",
+                    "Pre-race tune-up",
+                    "2026-03-04",
+                )],
+                fitness_summary: Some(Self::fitness_snapshot(64.0, 46.0, 15.0)),
+                wellness: Some(json!([
+                    {"sleepSecs": 28800.0, "restingHR": 48.0, "hrv": 74.0},
+                    {"sleepSecs": 28200.0, "restingHR": 49.0, "hrv": 71.0}
+                ])),
+                activity_details: HashMap::from([(
+                    "supportive-1".to_string(),
+                    json!({
+                        "distance": 10000.0,
+                        "moving_time": 3300,
+                        "average_heartrate": 142.0,
+                        "average_watts": 225.0,
+                        "total_elevation_gain": 80.0
+                    }),
+                )]),
+                ..Default::default()
+            }
+        }
+
+        pub fn with_personal_hrv_drop_profile() -> Self {
+            Self {
+                activities: vec![Self::activity(
+                    "adaptive-drop-1",
+                    "Quality Session",
+                    "2026-03-04",
+                )],
+                fitness_summary: Some(Self::fitness_snapshot(62.0, 48.0, 14.0)),
+                wellness: Some(Self::adaptive_wellness_series(
+                    28_800.0, 50.0, 60.0, 28_800.0, 50.0, 45.0,
+                )),
+                activity_details: HashMap::from([(
+                    "adaptive-drop-1".to_string(),
+                    json!({
+                        "distance": 12000.0,
+                        "moving_time": 4300,
+                        "average_heartrate": 150.0,
+                        "average_watts": 230.0,
+                        "total_elevation_gain": 120.0
+                    }),
+                )]),
+                ..Default::default()
+            }
+        }
+
+        pub fn with_personal_hrv_norm_profile() -> Self {
+            Self {
+                activities: vec![Self::activity(
+                    "adaptive-norm-1",
+                    "Quality Session",
+                    "2026-03-04",
+                )],
+                fitness_summary: Some(Self::fitness_snapshot(62.0, 48.0, 14.0)),
+                wellness: Some(Self::adaptive_wellness_series(
+                    28_800.0, 50.0, 44.0, 28_800.0, 50.0, 45.0,
+                )),
+                activity_details: HashMap::from([(
+                    "adaptive-norm-1".to_string(),
+                    json!({
+                        "distance": 12000.0,
+                        "moving_time": 4300,
+                        "average_heartrate": 150.0,
+                        "average_watts": 230.0,
+                        "total_elevation_gain": 120.0
+                    }),
+                )]),
+                ..Default::default()
+            }
+        }
+
+        pub fn with_load_ramp_block() -> Self {
+            let activities: Vec<ActivitySummary> = (1..=28)
+                .map(|day| ActivitySummary {
+                    id: format!("load-{day}"),
+                    name: Some(format!("Run {day}")),
+                    start_date_local: format!("2026-03-{day:02}"),
+                    ..Default::default()
+                })
+                .collect();
+
+            Self {
+                activities,
+                fitness_summary: Some(Self::fitness_snapshot(58.0, 50.0, 8.0)),
+                activity_details: HashMap::from([(
+                    "load-1".to_string(),
+                    json!({
+                        "distance": 12000.0,
+                        "moving_time": 3600,
+                        "average_heartrate": 145.0,
+                        "average_watts": 215.0,
+                        "total_elevation_gain": 120.0,
+                        "icu_training_load": 55.0
+                    }),
+                )]),
+                ..Default::default()
+            }
+        }
+
+        pub fn with_stream_supported_workout() -> Self {
+            Self {
+                activities: vec![Self::activity("stream-1", "Tempo Session", "2026-03-04")],
+                fitness_summary: Some(Self::fitness_snapshot(55.0, 47.0, 8.0)),
+                activity_details: HashMap::from([(
+                    "stream-1".to_string(),
+                    json!({
+                        "distance": 14000.0,
+                        "moving_time": 3600,
+                        "average_heartrate": 145.0,
+                        "average_watts": 220.0,
+                        "total_elevation_gain": 80.0
+                    }),
+                )]),
+                intervals: Some(json!([])),
+                streams: Some(json!({
+                    "heartrate": [140.0, 141.0, 142.0, 144.0, 145.0, 146.0],
+                    "watts": [220.0, 221.0, 222.0, 224.0, 225.0, 226.0]
+                })),
+                pace_histogram: Some(json!({
+                    "zones": {
+                        "z1": 600,
+                        "z2": 1200,
+                        "z3": 300
+                    }
+                })),
+                ..Default::default()
+            }
+        }
+
+        pub fn with_api_load_snapshot() -> Self {
+            let mut client = Self::with_load_ramp_block();
+            client.wellness_for_date_data = Some(json!({"atlLoad": 444.0, "ctlLoad": 333.0}));
+            client
+        }
+
+        pub fn with_profile_metrics() -> Self {
+            Self {
+                fitness_summary: Some(json!([{
+                    "fitness": 61.0,
+                    "fatigue": 47.0,
+                    "form": 14.0
+                }])),
+                sport_settings: Some(intervals_icu_client::domains::workout::SportSettings {
+                    sports: vec![intervals_icu_client::domains::workout::SportSetting {
+                        id: Some(1783043),
+                        types: Some(vec!["Run".into(), "VirtualRun".into(), "TrailRun".into()]),
+                        lthr: Some(171.0),
+                        max_hr: Some(180.0),
+                        hr_zones: vec![json!(144), json!(160), json!(167), json!(173), json!(180)],
+                        threshold_pace: Some(3.7037036),
+                        pace_units: Some("MINS_KM".into()),
+                        load_order: Some("HR_PACE_POWER".into()),
+                        ..Default::default()
+                    }],
+                    age: None,
+                    weight: None,
+                }),
+                ..Default::default()
+            }
+        }
+
+        pub fn with_mode_collapse_single_workout() -> Self {
+            Self {
+                activities: vec![Self::activity(
+                    "mode-collapse-1",
+                    "Uphill intervals",
+                    "2026-02-18",
+                )],
+                fitness_summary: Some(Self::fitness_snapshot(54.0, 47.0, 7.0)),
+                activity_details: HashMap::from([(
+                    "mode-collapse-1".to_string(),
+                    json!({
+                        "distance": 12240.0,
+                        "moving_time": 4740,
+                        "average_heartrate": 145.0,
+                        "total_elevation_gain": 0.0
+                    }),
+                )]),
+                ..Default::default()
+            }
+        }
+
+        pub fn with_future_workouts_only() -> Self {
+            let first_date = Self::relative_date(1);
+            let second_date = Self::relative_date(2);
+
+            Self {
+                fitness_summary: Some(Self::fitness_snapshot(57.0, 43.0, 14.0)),
+                upcoming_workouts: Some(json!([
+                    {
+                        "id": 94131802,
+                        "category": "WORKOUT",
+                        "start_date_local": format!("{first_date}T00:00:00"),
+                        "description": "Recovery Run Z1",
+                        "moving_time": 2700,
+                        "icu_training_load": 30.0,
+                        "paired_activity_id": null
+                    },
+                    {
+                        "id": 94131803,
+                        "category": "WORKOUT",
+                        "start_date_local": format!("{second_date}T00:00:00"),
+                        "description": "Endurance Run Z2 — Pre-Trip",
+                        "moving_time": 6300,
+                        "icu_training_load": 82.0,
+                        "paired_activity_id": null
+                    }
+                ])),
+                ..Default::default()
+            }
+        }
+
+        pub fn with_future_calendar_events_only() -> Self {
+            let race_date = Self::relative_date(1);
+            let sick_date = Self::relative_date(2);
+
+            Self {
+                upcoming_workouts: Some(json!([
+                    {
+                        "id": 99131991,
+                        "category": "RACE_A",
+                        "start_date_local": format!("{race_date}T00:00:00"),
+                        "description": "Race day",
+                        "name": "City Marathon",
+                        "type": "Race",
+                        "moving_time": 14400,
+                        "paired_activity_id": null
+                    },
+                    {
+                        "id": 99131992,
+                        "category": "SICK",
+                        "start_date_local": format!("{sick_date}T00:00:00"),
+                        "description": "Out sick, rest only",
+                        "name": "Sick day",
+                        "type": null,
+                        "moving_time": 0,
+                        "paired_activity_id": null
+                    }
+                ])),
+                ..Default::default()
+            }
+        }
+
+        pub fn with_paired_activity_and_calendar_duplicate() -> Self {
+            let planned_date = Self::relative_date(0);
+
+            Self {
+                activities: vec![Self::activity(
+                    "i130349092",
+                    "Completed Endurance Run",
+                    &format!("{planned_date}T07:00:00"),
+                )],
+                fitness_summary: Some(Self::fitness_snapshot(57.0, 43.0, 14.0)),
+                upcoming_workouts: Some(json!([
+                    {
+                        "id": 94131804,
+                        "category": "WORKOUT",
+                        "start_date_local": format!("{planned_date}T00:00:00"),
+                        "description": "Endurance Run Z2 — Key Workout",
+                        "moving_time": 6300,
+                        "icu_training_load": 82.0,
+                        "paired_activity_id": "i130349092"
+                    }
+                ])),
+                activity_details: HashMap::from([(
+                    "i130349092".to_string(),
+                    json!({
+                        "distance": 18000.0,
+                        "moving_time": 6300,
+                        "icu_training_load": 82.0,
+                        "total_elevation_gain": 220.0
+                    }),
+                )]),
+                ..Default::default()
+            }
+        }
+
+        pub fn with_profile_metrics_and_wellness_weight() -> Self {
+            let mut client = Self::with_profile_metrics();
+            client.wellness_for_date_data = Some(json!({
+                "weight": 86.0,
+                "restingHR": 54,
+                "ctl": 40.13324,
+                "atl": 40.22276
+            }));
+            client
+        }
+
+        pub fn with_recent_non_race_then_race_activity() -> Self {
+            Self {
+                activities: vec![
+                    Self::activity("activity-regular-1", "Easy Run", "2026-03-06"),
+                    Self::activity("race-2", "City Marathon Race", "2026-03-01"),
+                ],
+                events: vec![Event {
+                    id: Some("planned-race-2".to_string()),
+                    start_date_local: "2026-03-01".to_string(),
+                    name: "City Marathon Race Plan".to_string(),
+                    category: intervals_icu_client::EventCategory::RaceA,
+                    description: Some("Goal marathon plan".to_string()),
+                    r#type: Some("Race".to_string()),
+                }],
+                fitness_summary: Some(Self::fitness_snapshot(45.0, 60.0, -8.0)),
+                activity_details: HashMap::from([(
+                    "race-2".to_string(),
+                    json!({
+                        "distance": 42195.0,
+                        "moving_time": 13200,
+                        "average_heartrate": 149.0,
+                        "total_elevation_gain": 120.0
+                    }),
+                )]),
+                intervals: Some(json!([
+                    {"moving_time": 1800, "average_heartrate": 145.0, "average_watts": 210.0},
+                    {"moving_time": 1800, "average_heartrate": 152.0, "average_watts": 205.0}
+                ])),
+                streams: Some(json!({
+                    "velocity_smooth": [3.1, 3.0, 2.9, 2.8],
+                    "heartrate": [145.0, 148.0, 151.0, 154.0],
+                    "watts": [220.0, 218.0, 210.0, 205.0]
+                })),
+                ..Default::default()
+            }
+        }
+
+        pub fn with_mixed_period_workouts() -> Self {
+            Self {
+                activities: vec![
+                    Self::activity("tempo-1", "Tempo Builder", "2026-03-01"),
+                    Self::activity("long-1", "Long Run", "2026-03-03"),
+                    Self::activity("tempo-2", "Tempo Cruise Intervals", "2026-02-25"),
+                ],
+                fitness_summary: Some(Self::fitness_snapshot(55.0, 45.0, 10.0)),
+                activity_details: HashMap::from([(
+                    "tempo-1".to_string(),
+                    json!({
+                        "distance": 15000.0,
+                        "moving_time": 5400,
+                        "average_heartrate": 145.0,
+                        "average_watts": 210.0,
+                        "total_elevation_gain": 300.0,
+                        "tss": 77.0
+                    }),
+                )]),
+                ..Default::default()
+            }
+        }
+
+        pub fn with_mode_sensitive_single_workout() -> Self {
+            Self {
+                activities: vec![Self::activity("mode-1", "Progression Run", "2026-03-08")],
+                fitness_summary: Some(Self::fitness_snapshot(58.0, 46.0, 12.0)),
+                activity_details: HashMap::from([(
+                    "mode-1".to_string(),
+                    json!({
+                        "distance": 7040.0,
+                        "moving_time": 2880,
+                        "average_heartrate": 127.0,
+                        "average_watts": 188.0,
+                        "total_elevation_gain": 66.0,
+                        "decoupling": 2.8,
+                        "icu_efficiency_factor": 1.74
+                    }),
+                )]),
+                intervals: Some(json!([
+                    {"moving_time": 600, "average_heartrate": 122.0, "average_watts": 175.0},
+                    {"moving_time": 600, "average_heartrate": 129.0, "average_watts": 192.0}
+                ])),
+                streams: Some(json!({
+                    "heartrate": [120.0, 122.0, 124.0, 126.0, 128.0, 130.0],
+                    "watts": [170.0, 176.0, 182.0, 188.0, 194.0, 200.0],
+                    "velocity_smooth": [2.9, 3.0, 3.1, 3.1, 3.0, 2.9]
+                })),
+                ..Default::default()
+            }
+        }
+
+        pub fn with_object_shaped_interval_payload() -> Self {
+            Self {
+                activities: vec![Self::activity(
+                    "i126027814",
+                    "Uphill intervals",
+                    "2026-02-18",
+                )],
+                fitness_summary: Some(Self::fitness_snapshot(54.0, 47.0, 7.0)),
+                activity_details: HashMap::from([(
+                    "i126027814".to_string(),
+                    json!({
+                        "distance": 12240.0,
+                        "moving_time": 4740,
+                        "average_heartrate": 145.0,
+                        "total_elevation_gain": 0.0
+                    }),
+                )]),
+                intervals: Some(json!({
+                    "id": "i126027814",
+                    "icu_intervals": [
+                        {"moving_time": 601, "average_heartrate": 126, "average_watts": null, "type": "WORK"},
+                        {"moving_time": 300, "average_heartrate": 142, "average_watts": null, "type": "WORK"},
+                        {"moving_time": 360, "average_heartrate": 158, "average_watts": null, "type": "WORK"}
+                    ],
+                    "icu_groups": [{"moving_time": 300, "average_heartrate": 138, "count": 6}]
+                })),
+                ..Default::default()
+            }
+        }
+
+        pub fn with_interval_power_only_in_streams() -> Self {
+            Self {
+                activities: vec![Self::activity(
+                    "power-fallback-1",
+                    "Hill reps",
+                    "2026-02-18",
+                )],
+                fitness_summary: Some(Self::fitness_snapshot(54.0, 47.0, 7.0)),
+                activity_details: HashMap::from([(
+                    "power-fallback-1".to_string(),
+                    json!({
+                        "distance": 6400.0,
+                        "moving_time": 1800,
+                        "average_heartrate": 152.0,
+                        "total_elevation_gain": 120.0,
+                        "average_cadence": 86.0,
+                        "icu_training_load": 74.0
+                    }),
+                )]),
+                intervals: Some(json!({
+                    "id": "power-fallback-1",
+                    "icu_intervals": [
+                        {"start_index": 0, "end_index": 4, "moving_time": 240, "average_heartrate": 150.0, "average_watts": null, "type": "WORK"},
+                        {"start_index": 4, "end_index": 8, "moving_time": 240, "average_heartrate": 162.0, "average_watts": null, "type": "WORK"}
+                    ]
+                })),
+                streams: Some(json!({
+                    "watts": [210.0, 220.0, 230.0, 240.0, 280.0, 290.0, 300.0, 310.0],
+                    "heartrate": [148.0, 149.0, 150.0, 151.0, 158.0, 160.0, 162.0, 164.0]
+                })),
+                ..Default::default()
+            }
+        }
+
+        pub fn with_noncanonical_stream_payload() -> Self {
+            Self {
+                activities: vec![Self::activity(
+                    "streams-weird-1",
+                    "Tempo with sensors",
+                    "2026-02-18",
+                )],
+                fitness_summary: Some(Self::fitness_snapshot(54.0, 47.0, 7.0)),
+                activity_details: HashMap::from([(
+                    "streams-weird-1".to_string(),
+                    json!({
+                        "distance": 10000.0,
+                        "moving_time": 2700,
+                        "average_heartrate": 148.0,
+                        "average_watts": 225.0,
+                        "average_cadence": 85.0,
+                        "total_elevation_gain": 40.0,
+                        "icu_training_load": 63.0
+                    }),
+                )]),
+                intervals: Some(json!([
+                    {"moving_time": 300, "average_heartrate": 150.0, "average_watts": 240.0}
+                ])),
+                streams: Some(json!({
+                    "streams": [
+                        {"type": "heartrate", "data": [138.0, 142.0, 147.0, 151.0]},
+                        {"type": "watts", "data": [205.0, 218.0, 231.0, 244.0]},
+                        {"type": "cadence", "data": [82.0, 84.0, 86.0, 88.0]}
+                    ]
+                })),
+                ..Default::default()
+            }
+        }
+
+        pub fn with_rich_detailed_workout() -> Self {
+            Self {
+                activities: vec![Self::activity(
+                    "detail-rich-1",
+                    "Steady aerobic run",
+                    "2026-03-08",
+                )],
+                fitness_summary: Some(Self::fitness_snapshot(58.0, 46.0, 12.0)),
+                activity_details: HashMap::from([(
+                    "detail-rich-1".to_string(),
+                    json!({
+                        "distance": 12000.0,
+                        "moving_time": 3600,
+                        "average_heartrate": 141.0,
+                        "average_watts": 212.0,
+                        "average_cadence": 84.5,
+                        "average_speed": 3.3333333,
+                        "average_temp": 19.4,
+                        "total_elevation_gain": 95.0,
+                        "tss": 78.5,
+                        "icu_training_load": 81.0
+                    }),
+                )]),
+                ..Default::default()
+            }
+        }
+
+        pub fn with_interval_power_stream_alias() -> Self {
+            Self {
+                activities: vec![Self::activity(
+                    "power-alias-1",
+                    "Threshold reps",
+                    "2026-02-18",
+                )],
+                fitness_summary: Some(Self::fitness_snapshot(54.0, 47.0, 7.0)),
+                activity_details: HashMap::from([(
+                    "power-alias-1".to_string(),
+                    json!({
+                        "distance": 9000.0,
+                        "moving_time": 2700,
+                        "average_heartrate": 151.0,
+                        "average_speed": 3.2,
+                        "total_elevation_gain": 70.0
+                    }),
+                )]),
+                intervals: Some(json!({
+                    "id": "power-alias-1",
+                    "icu_intervals": [
+                        {"start_index": 0, "end_index": 3, "moving_time": 180, "average_heartrate": 148.0, "average_watts": null, "type": "WORK"},
+                        {"start_index": 3, "end_index": 6, "moving_time": 180, "average_heartrate": 156.0, "average_watts": null, "type": "WORK"}
+                    ]
+                })),
+                streams: Some(json!({
+                    "power": [250.0, 255.0, 260.0, 300.0, 305.0, 310.0],
+                    "heartrate": [145.0, 148.0, 151.0, 153.0, 156.0, 159.0],
+                    "velocity_smooth": [2.9, 3.0, 3.1, 3.2, 3.3, 3.4]
+                })),
+                ..Default::default()
+            }
+        }
+
+        pub fn with_interval_output_only_in_speed_streams() -> Self {
+            Self {
+                activities: vec![Self::activity(
+                    "speed-fallback-1",
+                    "Run intervals from pace stream",
+                    "2026-02-18",
+                )],
+                fitness_summary: Some(Self::fitness_snapshot(54.0, 47.0, 7.0)),
+                activity_details: HashMap::from([(
+                    "speed-fallback-1".to_string(),
+                    json!({
+                        "distance": 11000.0,
+                        "moving_time": 3600,
+                        "average_heartrate": 148.0,
+                        "total_elevation_gain": 0.0
+                    }),
+                )]),
+                intervals: Some(json!({
+                    "id": "speed-fallback-1",
+                    "icu_intervals": [
+                        {"start_index": 0, "end_index": 4, "moving_time": 240, "average_heartrate": 146.0, "average_watts": null, "average_speed": 3.0, "type": "WORK"},
+                        {"start_index": 4, "end_index": 8, "moving_time": 240, "average_heartrate": 156.0, "average_watts": null, "average_speed": 3.2, "type": "WORK"}
+                    ]
+                })),
+                streams: Some(json!({
+                    "velocity_smooth": [3.0, 3.0, 3.0, 3.0, 3.2, 3.2, 3.2, 3.2],
+                    "heartrate": [144.0, 145.0, 146.0, 147.0, 153.0, 155.0, 156.0, 158.0]
+                })),
+                ..Default::default()
+            }
+        }
+
+        pub fn with_many_intervals() -> Self {
+            let intervals_data: Vec<Value> = (0..15)
+                .map(|idx| {
+                    let start = idx * 4;
+                    json!({
+                        "start_index": start,
+                        "end_index": start + 4,
+                        "moving_time": if idx % 2 == 0 { 300 } else { 360 },
+                        "average_heartrate": 140.0 + idx as f64,
+                        "average_watts": 220.0 + idx as f64,
+                        "type": "WORK"
+                    })
+                })
+                .collect();
+
+            Self {
+                activities: vec![Self::activity(
+                    "many-intervals-1",
+                    "Big interval session",
+                    "2026-02-18",
+                )],
+                fitness_summary: Some(Self::fitness_snapshot(54.0, 47.0, 7.0)),
+                activity_details: HashMap::from([(
+                    "many-intervals-1".to_string(),
+                    json!({
+                        "distance": 16000.0,
+                        "moving_time": 5400,
+                        "average_heartrate": 149.0,
+                        "total_elevation_gain": 120.0
+                    }),
+                )]),
+                intervals: Some(json!({
+                    "id": "many-intervals-1",
+                    "icu_intervals": intervals_data
+                })),
+                streams: Some(json!({
+                    "watts": (0..60).map(|idx| 220.0 + idx as f64).collect::<Vec<_>>(),
+                    "heartrate": (0..60).map(|idx| 135.0 + idx as f64 * 0.5).collect::<Vec<_>>()
+                })),
+                ..Default::default()
+            }
+        }
+
+        pub fn with_priority_streams_without_power() -> Self {
+            Self {
+                activities: vec![Self::activity(
+                    "priority-streams-1",
+                    "Uphill intervals",
+                    "2026-02-18",
+                )],
+                fitness_summary: Some(Self::fitness_snapshot(54.0, 47.0, 7.0)),
+                activity_details: HashMap::from([(
+                    "priority-streams-1".to_string(),
+                    json!({
+                        "distance": 12240.0,
+                        "moving_time": 4740,
+                        "average_heartrate": 145.0,
+                        "average_speed": 2.5822785,
+                        "average_cadence": 82.0,
+                        "total_elevation_gain": 0.0
+                    }),
+                )]),
+                intervals: Some(json!([])),
+                streams: Some(json!([
+                    {"type": "time", "data": [0, 1, 2, 3]},
+                    {"type": "cadence", "data": [80.0, 81.0, 82.0, 83.0]},
+                    {"type": "heartrate", "data": [138.0, 142.0, 147.0, 151.0]},
+                    {"type": "distance", "data": [0.0, 100.0, 200.0, 300.0]},
+                    {"type": "altitude", "data": [152.2, 152.2, 152.2, 152.2]},
+                    {"type": "velocity_smooth", "data": [2.50, 2.55, 2.60, 2.68]},
+                    {"type": "temp", "data": [26.0, 26.2, 26.4, 26.5]},
+                    {"type": "GroundContactTime", "data": [250.0, 255.0, 260.0, 265.0]},
+                    {"type": "VerticalOscillation", "data": [70.0, 72.0, 74.0, 76.0]}
+                ])),
+                ..Default::default()
+            }
+        }
+
+        pub fn with_best_efforts_and_bucket_histograms() -> Self {
+            Self {
+                activities: vec![Self::activity(
+                    "payload-1",
+                    "Structured Long Run",
+                    "2026-03-08",
+                )],
+                fitness_summary: Some(Self::fitness_snapshot(60.0, 44.0, 16.0)),
+                activity_details: HashMap::from([(
+                    "payload-1".to_string(),
+                    json!({
+                        "distance": 18000.0,
+                        "moving_time": 5400,
+                        "average_heartrate": 138.0,
+                        "average_watts": 215.0,
+                        "total_elevation_gain": 110.0
+                    }),
+                )]),
+                best_efforts: Some(json!({
+                    "best_efforts": [
+                        {"seconds": 60, "watts": 310.0, "heartrate": 171.0},
+                        {"seconds": 300, "watts": 282.0, "heartrate": 165.0}
+                    ]
+                })),
+                hr_histogram: Some(json!([
+                    {"min": 120, "max": 124, "secs": 469},
+                    {"min": 125, "max": 129, "secs": 1150}
+                ])),
+                power_histogram: Some(json!([
+                    {"min": 200, "max": 224, "secs": 1525},
+                    {"min": 225, "max": 249, "secs": 1021}
+                ])),
+                pace_histogram: Some(json!([
+                    {"min": 2.2593105, "max": 2.354023, "secs": 295},
+                    {"min": 2.354023, "max": 2.4487357, "secs": 353}
+                ])),
+                ..Default::default()
+            }
+        }
+
+        pub fn with_full_histogram_ranges() -> Self {
+            Self {
+                activities: vec![Self::activity(
+                    "hist-full-1",
+                    "Recovery Run Z1",
+                    "2026-03-08",
+                )],
+                fitness_summary: Some(Self::fitness_snapshot(58.0, 46.0, 12.0)),
+                activity_details: HashMap::from([(
+                    "hist-full-1".to_string(),
+                    json!({
+                        "distance": 7040.0,
+                        "moving_time": 2880,
+                        "average_heartrate": 127.0,
+                        "average_watts": 219.0,
+                        "total_elevation_gain": 66.0
+                    }),
+                )]),
+                hr_histogram: Some(json!([
+                    {"min": 80, "max": 84, "secs": 1},
+                    {"min": 85, "max": 89, "secs": 5},
+                    {"min": 90, "max": 94, "secs": 8},
+                    {"min": 95, "max": 99, "secs": 17},
+                    {"min": 100, "max": 104, "secs": 29},
+                    {"min": 105, "max": 109, "secs": 40},
+                    {"min": 110, "max": 114, "secs": 54},
+                    {"min": 115, "max": 119, "secs": 190},
+                    {"min": 120, "max": 124, "secs": 469},
+                    {"min": 125, "max": 129, "secs": 1150},
+                    {"min": 130, "max": 134, "secs": 720},
+                    {"min": 135, "max": 139, "secs": 151},
+                    {"min": 140, "max": 144, "secs": 22},
+                    {"min": 145, "max": 149, "secs": 9},
+                    {"min": 150, "max": 154, "secs": 3}
+                ])),
+                power_histogram: Some(json!([
+                    {"min": 0, "max": 24, "secs": 71},
+                    {"min": 25, "max": 49, "secs": 9},
+                    {"min": 50, "max": 74, "secs": 8},
+                    {"min": 75, "max": 99, "secs": 7},
+                    {"min": 100, "max": 124, "secs": 6},
+                    {"min": 125, "max": 149, "secs": 5},
+                    {"min": 150, "max": 174, "secs": 4},
+                    {"min": 175, "max": 199, "secs": 84},
+                    {"min": 200, "max": 224, "secs": 1525},
+                    {"min": 225, "max": 249, "secs": 1021},
+                    {"min": 250, "max": 274, "secs": 91},
+                    {"min": 275, "max": 299, "secs": 24},
+                    {"min": 300, "max": 324, "secs": 3},
+                    {"min": 325, "max": 349, "secs": 1}
+                ])),
+                pace_histogram: Some(json!([
+                    {"min": 0.93333334, "max": 1.028046, "secs": 3},
+                    {"min": 1.028046, "max": 1.1227586, "secs": 12},
+                    {"min": 1.1227586, "max": 1.2174712, "secs": 18},
+                    {"min": 1.2174712, "max": 1.3121839, "secs": 22},
+                    {"min": 1.3121839, "max": 1.4068965, "secs": 27},
+                    {"min": 1.4068965, "max": 1.5016091, "secs": 31},
+                    {"min": 1.5016091, "max": 1.5963217, "secs": 36},
+                    {"min": 1.5963217, "max": 1.6910343, "secs": 41},
+                    {"min": 1.6910343, "max": 1.785747, "secs": 48},
+                    {"min": 1.785747, "max": 1.8804595, "secs": 55},
+                    {"min": 1.8804595, "max": 1.9751722, "secs": 58},
+                    {"min": 1.9751722, "max": 2.0698848, "secs": 59},
+                    {"min": 2.0698848, "max": 2.1645975, "secs": 61},
+                    {"min": 2.1645975, "max": 2.2593105, "secs": 74},
+                    {"min": 2.2593105, "max": 2.354023, "secs": 295},
+                    {"min": 2.354023, "max": 2.4487357, "secs": 353},
+                    {"min": 2.4487357, "max": 2.5434482, "secs": 166},
+                    {"min": 2.5434482, "max": 2.6381607, "secs": 117},
+                    {"min": 2.6381607, "max": 2.7328734, "secs": 89},
+                    {"min": 2.7328734, "max": 2.8275862, "secs": 61},
+                    {"min": 2.8275862, "max": 2.922299, "secs": 44},
+                    {"min": 2.922299, "max": 3.0170114, "secs": 29},
+                    {"min": 3.0170114, "max": 3.1117241, "secs": 17},
+                    {"min": 3.1117241, "max": 3.2064366, "secs": 8},
+                    {"min": 3.2064366, "max": 3.3011494, "secs": 4},
+                    {"min": 3.3011494, "max": 3.395862, "secs": 2},
+                    {"min": 3.395862, "max": 3.4905746, "secs": 1},
+                    {"min": 3.4905746, "max": 3.5852873, "secs": 1},
+                    {"min": 3.5852873, "max": 3.68, "secs": 1},
+                    {"min": 3.68, "max": 3.77, "secs": 1}
+                ])),
+                ..Default::default()
+            }
+        }
+
+        pub fn with_live_best_efforts_shape() -> Self {
+            Self {
+                activities: vec![Self::activity(
+                    "live-efforts-1",
+                    "Recovery Run Z1",
+                    "2026-03-08",
+                )],
+                fitness_summary: Some(Self::fitness_snapshot(58.0, 46.0, 12.0)),
+                activity_details: HashMap::from([(
+                    "live-efforts-1".to_string(),
+                    json!({
+                        "distance": 7040.0,
+                        "moving_time": 2880,
+                        "average_heartrate": 127.0,
+                        "average_watts": 219.0,
+                        "total_elevation_gain": 66.0
+                    }),
+                )]),
+                best_efforts: Some(json!({
+                    "stream": "watts",
+                    "efforts": [
+                        {"start_index": 2723, "end_index": 2783, "average": 303.51666, "duration": 60, "distance": null},
+                        {"start_index": 1320, "end_index": 1380, "average": 241.98334, "duration": 60, "distance": null}
+                    ]
+                })),
+                ..Default::default()
+            }
+        }
+
+        pub fn with_streams_and_interval_error() -> Self {
+            let mut time_s = Vec::new();
+            let mut speed = Vec::new();
+            let mut heartrate = Vec::new();
+            let mut power = Vec::new();
+            let mut t = 0.0f64;
+            for rep in 0..4 {
+                for _ in 0..180 {
+                    time_s.push(t);
+                    speed.push(6.0);
+                    heartrate.push(175.0);
+                    power.push(300.0);
+                    t += 1.0;
+                }
+                if rep < 3 {
+                    for _ in 0..120 {
+                        time_s.push(t);
+                        speed.push(2.5);
+                        heartrate.push(140.0);
+                        power.push(100.0);
+                        t += 1.0;
+                    }
+                }
+            }
+            Self {
+                activities: vec![Self::activity(
+                    "stream-err-1",
+                    "Workout with stream fallback",
+                    "2026-02-18",
+                )],
+                fitness_summary: Some(Self::fitness_snapshot(54.0, 47.0, 7.0)),
+                activity_details: HashMap::from([(
+                    "stream-err-1".to_string(),
+                    json!({
+                        "distance": 12000.0,
+                        "moving_time": 1200,
+                        "average_heartrate": 160.0,
+                        "average_watts": 250.0,
+                        "total_elevation_gain": 80.0
+                    }),
+                )]),
+                streams: Some(json!({
+                    "time": time_s,
+                    "velocity_smooth": speed,
+                    "heartrate": heartrate,
+                    "watts": power
+                })),
+                intervals_error: Some("upstream interval endpoint unavailable".to_string()),
+                ..Default::default()
+            }
+        }
+
+        pub fn with_stream_error() -> Self {
+            Self {
+                activities: vec![Self::activity(
+                    "stream-err-2",
+                    "Workout with missing streams",
+                    "2026-02-18",
+                )],
+                fitness_summary: Some(Self::fitness_snapshot(54.0, 47.0, 7.0)),
+                activity_details: HashMap::from([(
+                    "stream-err-2".to_string(),
+                    json!({
+                        "distance": 12000.0,
+                        "moving_time": 1200,
+                        "average_heartrate": 160.0,
+                        "average_watts": 250.0,
+                        "total_elevation_gain": 80.0
+                    }),
+                )]),
+                streams_error: Some("streams endpoint 504".to_string()),
+                ..Default::default()
+            }
+        }
+
+        pub fn with_fartlek_streams_and_upstream_intervals() -> Self {
+            let mut time_s = Vec::new();
+            let mut speed = Vec::new();
+            let mut heartrate = Vec::new();
+            let mut power = Vec::new();
+            let mut t = 0.0f64;
+            for block in 0..6 {
+                let is_work = block % 2 == 0;
+                let dur = if is_work { 180 } else { 120 };
+                let spd = if is_work { 5.5 } else { 2.5 };
+                let hr = if is_work { 170.0 } else { 135.0 };
+                let w = if is_work { 280.0 } else { 100.0 };
+                for _ in 0..dur {
+                    time_s.push(t);
+                    speed.push(spd);
+                    heartrate.push(hr);
+                    power.push(w);
+                    t += 1.0;
+                }
+            }
+            Self {
+                activities: vec![Self::activity("fartlek-1", "Fartlek session", "2026-02-18")],
+                fitness_summary: Some(Self::fitness_snapshot(54.0, 47.0, 7.0)),
+                activity_details: HashMap::from([(
+                    "fartlek-1".to_string(),
+                    json!({
+                        "distance": 10000.0,
+                        "moving_time": 1800,
+                        "average_heartrate": 155.0,
+                        "average_watts": 200.0,
+                        "total_elevation_gain": 50.0
+                    }),
+                )]),
+                streams: Some(json!({
+                    "time": time_s,
+                    "velocity_smooth": speed,
+                    "heartrate": heartrate,
+                    "watts": power
+                })),
+                intervals: Some(json!([
+                    {"moving_time": 180, "average_heartrate": 170.0, "average_watts": 280.0}
+                ])),
+                ..Default::default()
+            }
+        }
     }
 
     #[async_trait]
@@ -320,9 +1529,10 @@ pub(crate) mod mock {
 
         async fn get_recent_activities(
             &self,
-            _limit: Option<u32>,
-            _days_back: Option<i32>,
+            limit: Option<u32>,
+            days_back: Option<i32>,
         ) -> Result<Vec<ActivitySummary>, IntervalsError> {
+            self.activity_calls.lock().unwrap().push((limit, days_back));
             Ok(self.activities.clone())
         }
 
@@ -333,6 +1543,15 @@ pub(crate) mod mock {
         }
 
         async fn get_activity_details(&self, activity_id: &str) -> Result<Value, IntervalsError> {
+            if !self.activity_details_map.is_empty() {
+                return self
+                    .activity_details_map
+                    .get(activity_id)
+                    .cloned()
+                    .ok_or_else(|| {
+                        IntervalsError::NotFound(format!("Activity {activity_id} not found"))
+                    });
+            }
             Ok(self
                 .activity_details
                 .get(activity_id)
@@ -343,16 +1562,34 @@ pub(crate) mod mock {
 
         async fn get_activity_streams(
             &self,
-            _activity_id: &str,
+            activity_id: &str,
             _streams: Option<Vec<String>>,
         ) -> Result<Value, IntervalsError> {
-            Ok(self.streams.clone().unwrap_or_else(|| json!({})))
+            if let Some(reason) = &self.streams_error {
+                return Err(IntervalsError::Config(
+                    intervals_icu_client::ConfigError::Other(reason.clone()),
+                ));
+            }
+            if activity_id.starts_with("ride-") {
+                *self.profile_stream_calls.lock().unwrap() += 1;
+            }
+            Ok(self
+                .streams_map
+                .get(activity_id)
+                .cloned()
+                .or_else(|| self.streams.clone())
+                .unwrap_or_else(|| json!({})))
         }
 
         async fn get_activity_intervals(
             &self,
             _activity_id: &str,
         ) -> Result<Value, IntervalsError> {
+            if let Some(reason) = &self.intervals_error {
+                return Err(IntervalsError::Config(
+                    intervals_icu_client::ConfigError::Other(reason.clone()),
+                ));
+            }
             Ok(self.intervals.clone().unwrap_or_else(|| json!({})))
         }
 
@@ -380,6 +1617,11 @@ pub(crate) mod mock {
             &self,
             _activity_id: &str,
         ) -> Result<Vec<ActivityMessage>, IntervalsError> {
+            if let Some(msgs) = self.activity_details.get("__activity_messages") {
+                return serde_json::from_value(msgs.clone()).map_err(|e| {
+                    IntervalsError::Config(intervals_icu_client::ConfigError::Other(e.to_string()))
+                });
+            }
             Ok(self.activity_messages.clone())
         }
 
@@ -392,6 +1634,9 @@ pub(crate) mod mock {
         }
 
         async fn get_wellness_for_date(&self, _date: &str) -> Result<Value, IntervalsError> {
+            if let Some(data) = &self.wellness_for_date_data {
+                return Ok(data.clone());
+            }
             self.wellness
                 .clone()
                 .ok_or_else(|| IntervalsError::NotFound("No wellness data".to_string()))

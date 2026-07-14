@@ -499,25 +499,24 @@ impl IntentHandler for AssessRecoveryHandler {
 
         // ADE — System State Assessment
         let ade_result = compute_ade(
-            recovery_context
-                .metrics
-                .fitness
-                .as_ref()
-                .and_then(|f| f.tsb),
-            recovery_context
-                .metrics
-                .wellness
-                .as_ref()
-                .and_then(|w| w.hrv_ratio),
-            false,
-            false,
-            recovery_context
-                .metrics
-                .fitness
-                .as_ref()
-                .and_then(|f| f.ramp_rate),
-            None,
-            0,
+            &crate::engines::ade::AdeInputs {
+                tsb: recovery_context
+                    .metrics
+                    .fitness
+                    .as_ref()
+                    .and_then(|f| f.tsb),
+                hrv_ratio: recovery_context
+                    .metrics
+                    .wellness
+                    .as_ref()
+                    .and_then(|w| w.hrv_ratio),
+                ramp_rate: recovery_context
+                    .metrics
+                    .fitness
+                    .as_ref()
+                    .and_then(|f| f.ramp_rate),
+                ..Default::default()
+            },
             recovery_context
                 .metrics
                 .fitness

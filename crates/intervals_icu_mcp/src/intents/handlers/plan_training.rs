@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 
 use crate::domains::events::validate_and_prepare_event;
-use crate::engines::coach_metrics::parse_fitness_metrics;
+use crate::engines::fitness_context::FitnessContext;
 use crate::engines::forecast::{
     TAPER_ACTUAL_REDUCTION_PCT, TAPER_TARGET_REDUCTION_PCT, parameterized_load, project_tsb,
 };
@@ -148,12 +148,12 @@ impl IntentHandler for PlanTrainingHandler {
 
         let sport_settings = client.get_sport_settings().await.ok();
 
-        let fitness = if adaptive {
-            client.get_fitness_summary().await.ok()
+        let fitness_context = if adaptive {
+            FitnessContext::load(client.as_ref()).await
         } else {
-            None
+            FitnessContext::empty()
         };
-        let fitness_metrics = parse_fitness_metrics(fitness.as_ref());
+        let fitness_metrics = fitness_context.metrics().cloned();
 
         // --- Task 2: Wellness ---
         let wellness = if adaptive {

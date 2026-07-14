@@ -1,4 +1,4 @@
-use crate::engines::coach_metrics::parse_fitness_metrics;
+use crate::engines::fitness_context::FitnessContext;
 use crate::intents::{ContentBlock, IdempotencyCache, IntentError, IntentHandler, IntentOutput};
 use async_trait::async_trait;
 use chrono::Utc;
@@ -199,10 +199,10 @@ impl ManageProfileHandler {
             .map_err(|e| IntentError::api(format!("Failed to fetch sport settings: {}", e)))?;
         let sport_settings_value =
             serde_json::to_value(&sport_settings).unwrap_or_else(|_| json!([]));
-        let fitness_summary = if sections.contains(&"metrics".to_string()) {
-            client.get_fitness_summary().await.ok()
+        let fitness_context = if sections.contains(&"metrics".to_string()) {
+            FitnessContext::load(client).await
         } else {
-            None
+            FitnessContext::empty()
         };
         let wellness_for_today = if sections.contains(&"overview".to_string())
             || sections.contains(&"metrics".to_string())
@@ -317,9 +317,9 @@ impl ManageProfileHandler {
         if sections.contains(&"metrics".to_string()) {
             content.push(ContentBlock::markdown("Metrics".to_string()));
 
-            if let Some(fitness) = parse_fitness_metrics(fitness_summary.as_ref())
-                .or_else(|| parse_fitness_metrics(wellness_for_today.as_ref()))
-            {
+            if let Some(fitness) = fitness_context.metrics().cloned().or_else(|| {
+                crate::engines::coach_metrics::parse_fitness_metrics(wellness_for_today.as_ref())
+            }) {
                 let mut metric_rows = vec![vec!["Metric".to_string(), "Value".to_string()]];
                 if let Some(ctl) = fitness.ctl {
                     metric_rows.push(vec!["CTL (Fitness)".to_string(), format!("{:.1}", ctl)]);

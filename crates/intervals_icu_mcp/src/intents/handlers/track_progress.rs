@@ -170,11 +170,10 @@ On error: API or validation errors with descriptive messages."
             activity_ctl_fallback,
         );
 
-        let fitness = client.get_fitness_summary().await.ok();
-        let fitness_metrics =
-            crate::engines::coach_metrics::parse_fitness_metrics(fitness.as_ref());
+        let fitness_context =
+            crate::engines::fitness_context::FitnessContext::load(client.as_ref()).await;
 
-        let content = render_progress_report(&report, hypothesis_mode, fitness_metrics.as_ref());
+        let content = render_progress_report(&report, hypothesis_mode, fitness_context.metrics());
 
         Ok(IntentOutput::new(content)
             .with_suggestions(report.recommendations.clone())

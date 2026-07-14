@@ -10,6 +10,8 @@ docs/
 .pi/
 .superpowers/
 .pytest_cache/
+.commandcode/
+.scratch/
 coverage/
 
 **/*.rs.bk

@@ -12,9 +12,8 @@ use crate::domains::coach::{AnalysisKind, AnalysisWindow, CoachContext, RaceMetr
 use crate::engines::analysis_audit::build_data_audit;
 use crate::engines::analysis_fetch::{RaceFetchRequest, fetch_race_data};
 use crate::engines::coach_guidance::{build_alerts, build_guidance};
-use crate::engines::coach_metrics::{
-    extract_ctl_series, parse_fitness_metrics, parse_wellness_metrics,
-};
+use crate::engines::coach_metrics::{extract_ctl_series, parse_wellness_metrics};
+use crate::engines::fitness_context::FitnessContext;
 use crate::engines::race_readiness::{compute_ctl_drop, compute_race_readiness};
 use crate::engines::shared::parse_activity_date;
 use crate::intents::utils::{data_availability_block, filter_activities_by_description};
@@ -214,7 +213,7 @@ impl IntentHandler for AnalyzeRaceHandler {
             .await
             .map_err(|e| IntentError::api(e.to_string()))?;
             fetched.activities = vec![race.clone()];
-            fetched.fitness = client.get_fitness_summary().await.ok();
+            let fitness_context = FitnessContext::load(client.as_ref()).await;
             fetched.wellness = client.get_wellness(Some(7)).await.ok();
 
             let race_date = NaiveDate::parse_from_str(&race.start_date_local, "%Y-%m-%d")
@@ -225,7 +224,7 @@ impl IntentHandler for AnalyzeRaceHandler {
                 AnalysisWindow::new(race_date, race_date),
             );
             race_context.audit = build_data_audit(&fetched);
-            race_context.metrics.fitness = parse_fitness_metrics(fetched.fitness.as_ref());
+            race_context.metrics.fitness = fitness_context.metrics().cloned();
             race_context.metrics.wellness = parse_wellness_metrics(fetched.wellness.as_ref());
 
             let details = fetched.workout_detail.clone().unwrap_or_else(|| json!({}));

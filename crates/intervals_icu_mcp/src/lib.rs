@@ -43,6 +43,7 @@ use intervals_icu_client::IntervalsClient;
 pub mod auth;
 pub mod auth_ui;
 pub mod compact;
+pub mod content;
 pub mod domains;
 pub mod dynamic;
 pub mod engines;
@@ -51,8 +52,7 @@ pub mod intents;
 pub mod metrics;
 mod services;
 mod state;
-#[cfg(test)]
-mod test_support;
+pub mod test_support;
 pub mod types;
 
 pub use event_id::{EventId, FolderId};

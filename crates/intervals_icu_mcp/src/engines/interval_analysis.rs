@@ -1,8 +1,7 @@
 //! Interval analysis and work detection logic.
 //!
 //! This module contains business logic for classifying intervals as work/rest,
-//! extracting metrics, and deriving output values. Previously lived in
-//! `render/analysis.rs` but belongs in the engine layer.
+//! extracting metrics, and deriving output values.
 
 use serde_json::Value;
 
