@@ -4,6 +4,10 @@ use crate::domains::coach::{
     DecouplingMetrics, EspeDerivedMetrics, EspePowerAnchors, EtvsMetrics, FitnessMetrics,
     HeatMetrics, NdliMetrics, WdrMetrics,
 };
+use crate::domains::endurance_evidence::{
+    EnduranceEvidenceMetrics, EnduranceEvidenceStatus, ProlongedRideResponseMetrics,
+    SubmaximalHrPowerMetrics,
+};
 use crate::domains::interval_segment::{
     SegmentProvenance, SegmentSeriesReport, SeriesConsistency, SportPresentation,
 };
@@ -1045,7 +1049,161 @@ pub(crate) fn render_etvs_section(etvs: Option<&EtvsMetrics>) -> Option<String> 
     ))
 }
 
-// ── Segment table rendering ───────────────────────────────────────────
+/// Render the evidence-gated cycling endurance report. Returns `Some`
+/// when the coach context has an evidence section to surface; `None`
+/// only when the section itself is absent.
+///
+/// Output is descriptive, never diagnostic: it never calls a sign good,
+/// bad, ready, fatigued, durable, or fit. Reasoning context paragraphs
+/// follow each numeric block so the reader can interpret the magnitude
+/// without the renderer acting as a coach.
+pub(crate) fn render_endurance_evidence(
+    evidence: Option<&EnduranceEvidenceMetrics>,
+) -> Option<String> {
+    let evidence = evidence?;
+    let mut lines: Vec<String> = Vec::new();
+    lines.push("Endurance Performance Evidence — Cycling Power Protocol".to_string());
+    lines.push(
+        "  Protocol: 10-minute windows, ≥90% HR/power coverage, power CV ≤5%, 55–80% eFTP; comparisons require power match within 5%.".to_string(),
+    );
+
+    let sub_section = render_submaximal_section(&evidence.submaximal);
+    lines.extend(sub_section.lines().map(|s| s.to_string()));
+
+    let prolonged_section = render_prolonged_section(&evidence.prolonged_response);
+    lines.extend(prolonged_section.lines().map(|s| s.to_string()));
+
+    Some(lines.join("\n"))
+}
+
+fn render_status_message(status: EnduranceEvidenceStatus) -> String {
+    match status {
+        EnduranceEvidenceStatus::Available => "Available".to_string(),
+        EnduranceEvidenceStatus::UnsupportedSport => {
+            "Cycling power data is required; no speed-based estimate was made.".to_string()
+        }
+        EnduranceEvidenceStatus::MissingEftp => {
+            "eFTP is unavailable, so submaximal intensity could not be standardised.".to_string()
+        }
+        EnduranceEvidenceStatus::InsufficientCandidateSessions => {
+            "Fewer than two accepted sessions were available in either comparison cohort."
+                .to_string()
+        }
+        EnduranceEvidenceStatus::NoComparableControlWindows => {
+            "No matched 10-minute HR–power windows were found across the two cohorts.".to_string()
+        }
+        EnduranceEvidenceStatus::IncompleteSignalCoverage => {
+            "HR or power coverage was below the protocol requirement.".to_string()
+        }
+        EnduranceEvidenceStatus::NoEligibleProlongedRide => {
+            "No eligible prolonged ride was available for an early-to-late comparison.".to_string()
+        }
+        EnduranceEvidenceStatus::NoMatchedEarlyLateWindows => {
+            "No early and late control windows matched in power within 5%.".to_string()
+        }
+    }
+}
+
+const SUBMAXIMAL_CONTEXT: &str =
+    "  Lower HR at matched power may indicate improved aerobic efficiency. Higher HR may indicate acute strain, thermal stress, or reduced plasma volume. Trend is individual — not a standalone diagnosis.";
+
+const PROLONGED_CONTEXT: &str =
+    "  Rising HR at steady power (cardiovascular drift) is normal during prolonged work. Larger drift than personal baseline may reflect fuelling, heat, or residual strain. Individual observation — not a durability score.";
+
+fn render_submaximal_section(sub: &SubmaximalHrPowerMetrics) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    lines.push(String::new());
+    lines.push("Submaximal HR–Power Response".to_string());
+    if sub.status == EnduranceEvidenceStatus::Available {
+        lines.push(format!(
+            "  Sessions: {} of {} accepted",
+            sub.activities_accepted, sub.activities_considered
+        ));
+        if let Some(anchor) = sub.anchor_power_w {
+            lines.push(format!(
+                "  Anchor power: {:.0} W (matched across cohorts)",
+                anchor
+            ));
+        }
+        if let (Some(recent), Some(reference)) =
+            (sub.recent_median_hr_bpm, sub.reference_median_hr_bpm)
+        {
+            lines.push(format!(
+                "  Recent − reference HR: {:+.1} bpm (reference {:.1} → recent {:.1})",
+                sub.hr_delta_bpm.unwrap_or(0.0),
+                reference,
+                recent,
+            ));
+        }
+        if let Some(delta) = sub.efficiency_delta_pct {
+            lines.push(format!("  Efficiency change: {:+.1}%", delta));
+        }
+        if let Some(recent_eff) = sub.recent_efficiency_w_per_bpm {
+            lines.push(format!("  Recent efficiency: {:.2} W/bpm", recent_eff));
+        }
+        if let Some(reference_eff) = sub.reference_efficiency_w_per_bpm {
+            lines.push(format!(
+                "  Reference efficiency: {:.2} W/bpm",
+                reference_eff
+            ));
+        }
+        if !sub.source_activity_ids.is_empty() {
+            lines.push(format!(
+                "  Source activities: {}",
+                sub.source_activity_ids.join(", ")
+            ));
+        }
+        lines.push(SUBMAXIMAL_CONTEXT.to_string());
+    } else {
+        lines.push(format!("  Status: {}", render_status_message(sub.status)));
+    }
+    lines.join("\n")
+}
+
+fn render_prolonged_section(prolonged: &ProlongedRideResponseMetrics) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    lines.push(String::new());
+    lines.push("Matched HR–Power Shift After Prolonged Work".to_string());
+    if prolonged.status == EnduranceEvidenceStatus::Available {
+        if let Some(id) = prolonged.source_activity_id.as_deref() {
+            lines.push(format!("  Source activity: {id}"));
+        }
+        if let (Some(early), Some(late)) =
+            (prolonged.early_window_end_min, prolonged.late_window_end_min)
+        {
+            lines.push(format!(
+                "  Early window end: {:.1} min · Late window end: {:.1} min",
+                early, late
+            ));
+        }
+        if let Some(power) = prolonged.matched_power_w {
+            lines.push(format!("  Matched power: {:.0} W", power));
+        }
+        if let (Some(early_hr), Some(late_hr)) =
+            (prolonged.early_hr_bpm, prolonged.late_hr_bpm)
+        {
+            lines.push(format!(
+                "  Early HR: {:.1} bpm · Late HR: {:.1} bpm",
+                early_hr, late_hr
+            ));
+        }
+        if let Some(delta) = prolonged.hr_delta_bpm {
+            lines.push(format!("  HR delta (late − early): {:+.1} bpm", delta));
+        }
+        if let Some(delta) = prolonged.efficiency_delta_pct {
+            lines.push(format!("  Efficiency change: {:+.1}%", delta));
+        }
+        if prolonged.late_window_end_min.unwrap_or(0.0) >= 120.0 {
+            lines.push(PROLONGED_CONTEXT.to_string());
+        }
+    } else {
+        lines.push(format!(
+            "  Status: {}",
+            render_status_message(prolonged.status)
+        ));
+    }
+    lines.join("\n")
+}
 
 /// A renderable table for enriched segment metrics.
 pub(crate) struct SegmentTable {
@@ -3218,6 +3376,85 @@ mod tests {
     #[test]
     fn render_etvs_section_omits_missing_metric() {
         assert_eq!(render_etvs_section(None), None);
+    }
+
+    // ── endurance evidence rendering ──────────────────────────────
+
+    fn render_available_submaximal() -> SubmaximalHrPowerMetrics {
+        SubmaximalHrPowerMetrics {
+            status: EnduranceEvidenceStatus::Available,
+            activities_considered: 8,
+            activities_accepted: 4,
+            source_activity_ids: vec!["r1".into(), "r2".into(), "b1".into(), "b2".into()],
+            anchor_power_w: Some(200.0),
+            recent_median_hr_bpm: Some(144.0),
+            reference_median_hr_bpm: Some(150.0),
+            hr_delta_bpm: Some(-6.0),
+            recent_efficiency_w_per_bpm: Some(200.0 / 144.0),
+            reference_efficiency_w_per_bpm: Some(200.0 / 150.0),
+            efficiency_delta_pct: Some(4.166_666_666_666_667),
+        }
+    }
+
+    fn render_available_prolonged() -> ProlongedRideResponseMetrics {
+        ProlongedRideResponseMetrics {
+            status: EnduranceEvidenceStatus::Available,
+            source_activity_id: Some("long-ride".into()),
+            early_window_end_min: Some(60.0),
+            late_window_end_min: Some(130.0),
+            matched_power_w: Some(200.0),
+            early_hr_bpm: Some(145.0),
+            late_hr_bpm: Some(155.0),
+            hr_delta_bpm: Some(10.0),
+            early_efficiency_w_per_bpm: Some(200.0 / 145.0),
+            late_efficiency_w_per_bpm: Some(200.0 / 155.0),
+            efficiency_delta_pct: Some(-6.451_612_903_225_806),
+        }
+    }
+
+    #[test]
+    fn render_endurance_evidence_shows_values_and_context_never_diagnosis() {
+        let text = render_endurance_evidence(Some(&EnduranceEvidenceMetrics {
+            submaximal: render_available_submaximal(),
+            prolonged_response: render_available_prolonged(),
+        }))
+        .expect("non-empty evidence");
+        assert!(text.contains("Submaximal HR–Power Response"));
+        assert!(text.contains("Recent − reference HR: -6.0 bpm"));
+        assert!(text.contains("Efficiency change: +4.2%"));
+        assert!(text.contains(
+            "Lower HR at matched power may indicate improved aerobic efficiency",
+        ));
+        assert!(text.contains("Matched HR–Power Shift After Prolonged Work"));
+        assert!(text.contains("Late window end: 130.0 min"));
+        assert!(text.contains(
+            "Rising HR at steady power (cardiovascular drift)",
+        ));
+        let lower = text.to_lowercase();
+        assert!(!lower.contains("ready"));
+        assert!(!lower.contains("durable"));
+        assert!(!lower.contains("fatigue"));
+    }
+
+    #[test]
+    fn render_endurance_evidence_explains_unavailable_data() {
+        let evidence = EnduranceEvidenceMetrics {
+            submaximal: SubmaximalHrPowerMetrics {
+                status: EnduranceEvidenceStatus::NoComparableControlWindows,
+                ..SubmaximalHrPowerMetrics::default()
+            },
+            prolonged_response: ProlongedRideResponseMetrics::unavailable(
+                EnduranceEvidenceStatus::NoEligibleProlongedRide,
+            ),
+        };
+        let text = render_endurance_evidence(Some(&evidence)).expect("non-empty");
+        assert!(text.contains("No matched 10-minute HR–power windows"));
+        assert!(text.contains("No eligible prolonged ride"));
+    }
+
+    #[test]
+    fn render_endurance_evidence_returns_none_when_option_is_none() {
+        assert_eq!(render_endurance_evidence(None), None);
     }
 
     // ── build_requested_single_metric_rows: ETVS ────────────────────────

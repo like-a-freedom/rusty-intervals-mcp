@@ -35,9 +35,16 @@ struct MockCoachClient {
     pace_histogram: Value,
     intervals_error: Option<String>,
     streams_error: Option<String>,
-    #[allow(clippy::type_complexity)]
+    #[allow(clippy::type_complexity, dead_code)]
     activity_calls: Arc<Mutex<Vec<(Option<u32>, Option<i32>)>>>,
     activity_details_map: HashMap<String, Value>,
+    /// Per-activity-id stream payload overrides. Falls back to
+    /// `streams` when an id is missing.
+    streams_map: HashMap<String, Value>,
+    /// Endurance-evidence detail/stream call counters.
+    #[allow(dead_code)]
+    profile_detail_calls: Arc<Mutex<usize>>,
+    profile_stream_calls: Arc<Mutex<usize>>,
 }
 
 impl Default for MockCoachClient {
@@ -61,6 +68,9 @@ impl Default for MockCoachClient {
             streams_error: None,
             activity_calls: Arc::new(Mutex::new(Vec::new())),
             activity_details_map: HashMap::new(),
+            streams_map: HashMap::new(),
+            profile_detail_calls: Arc::new(Mutex::new(0)),
+            profile_stream_calls: Arc::new(Mutex::new(0)),
         }
     }
 }
@@ -120,6 +130,14 @@ impl MockCoachClient {
 
     fn fitness_snapshot(fitness: f64, fatigue: f64, form: f64) -> Value {
         json!([{ "fitness": fitness, "fatigue": fatigue, "form": form }])
+    }
+
+    /// Number of `get_activity_streams` calls observed for `ride-`
+    /// prefixed ids during endurance evidence retrieval. Tests use
+    /// this to confirm bounded, optional behaviour.
+    #[allow(dead_code)]
+    fn endurance_stream_calls(&self) -> usize {
+        *self.profile_stream_calls.lock().unwrap()
     }
 
     fn with_tsb(tsb: f64) -> Self {
@@ -1224,7 +1242,7 @@ impl IntervalsClient for MockCoachClient {
 
     async fn get_activity_streams(
         &self,
-        _activity_id: &str,
+        activity_id: &str,
         _streams: Option<Vec<String>>,
     ) -> Result<Value, IntervalsError> {
         if let Some(reason) = &self.streams_error {
@@ -1232,7 +1250,14 @@ impl IntervalsClient for MockCoachClient {
                 intervals_icu_client::ConfigError::Other(reason.clone()),
             ));
         }
-        Ok(self.streams.clone())
+        if activity_id.starts_with("ride-") {
+            *self.profile_stream_calls.lock().unwrap() += 1;
+        }
+        Ok(self
+            .streams_map
+            .get(activity_id)
+            .cloned()
+            .unwrap_or_else(|| self.streams.clone()))
     }
 
     async fn get_best_efforts(
@@ -3936,5 +3961,263 @@ async fn track_progress_does_not_derive_ctl_from_duration_only_activities() {
     assert!(
         result.is_none(),
         "must not derive CTL from duration-only activities"
+    );
+}
+
+// -----------------------------------------------------------------
+// Endurance evidence integration tests
+// -----------------------------------------------------------------
+
+/// Build a deterministic stream payload (15 minutes at 200 W / 145 bpm)
+/// so the engine's sliding 600 s windows have a stable baseline.
+fn endurance_ride_streams(avg_hr: f64) -> Value {
+    let duration_s = 900_usize;
+    let mut time = Vec::with_capacity(duration_s + 1);
+    let mut watts = Vec::with_capacity(duration_s + 1);
+    let mut heartrate = Vec::with_capacity(duration_s + 1);
+    for t in 0..=duration_s {
+        time.push(t as f64);
+        watts.push(200.0);
+        heartrate.push(avg_hr);
+    }
+    json!({
+        "time": time,
+        "watts": watts,
+        "heartrate": heartrate,
+    })
+}
+
+/// Build a long ride (135 min) where HR is steady 145 except for
+/// indices 7800..=8100 (the late window), where it is 155 bpm. Power
+/// is constant 200W so CV stays well below 5% everywhere. Total
+/// duration is 8100 s, so the late window's end (8100) is ≥ LATE_END_MIN_S
+/// (7200) — satisfying the prolonged-response protocol.
+fn endurance_long_ride_streams() -> Value {
+    let duration_s = 8100_usize;
+    let late_start_s = 7800_usize;
+    let mut time = Vec::with_capacity(duration_s + 1);
+    let mut watts = Vec::with_capacity(duration_s + 1);
+    let mut heartrate = Vec::with_capacity(duration_s + 1);
+    for t in 0..=duration_s {
+        time.push(t as f64);
+        watts.push(200.0);
+        heartrate.push(if t >= late_start_s { 155.0 } else { 145.0 });
+    }
+    json!({
+        "time": time,
+        "watts": watts,
+        "heartrate": heartrate,
+    })
+}
+
+fn build_period_window(days: &[(&str, &str, f64, f64)]) -> MockCoachClient {
+    let mut details_map = HashMap::new();
+    let mut streams_map = HashMap::new();
+    let activities: Vec<ActivitySummary> = days
+        .iter()
+        .map(|(id, date, _power, hr)| {
+            details_map.insert(
+                id.to_string(),
+                json!({
+                    "type": "Ride",
+                    "moving_time": 3600_i64,
+                    "icu_pm_ftp": 300.0,
+                    "icu_pm_w_prime": 20000.0
+                }),
+            );
+            streams_map.insert(id.to_string(), endurance_ride_streams(*hr));
+            MockCoachClient::activity(id, "Endurance Ride", date)
+        })
+        .collect();
+    MockCoachClient {
+        activities,
+        fitness: json!([{ "fitness": 50.0, "fatigue": 30.0, "form": 20.0 }]),
+        wellness: json!([{ "type": "Ride", "eftp": 300.0 }]),
+        activity_details_map: details_map,
+        streams_map,
+        ..MockCoachClient::default()
+    }
+}
+
+#[tokio::test]
+async fn detailed_period_renders_endurance_evidence_end_to_end() {
+    // Two recent rides (HR 145, 144) and two reference rides (HR 150,
+    // 151) within the protocol window. eFTP=300W lets power=200 sit in
+    // the 0.55-0.80 eFTP band.
+    let client = build_period_window(&[
+        ("ride-ref-1", "2026-04-15", 200.0, 150.0),
+        ("ride-ref-2", "2026-05-01", 200.0, 151.0),
+        ("ride-rec-1", "2026-07-08", 200.0, 145.0),
+        ("ride-rec-2", "2026-07-10", 200.0, 144.0),
+    ]);
+    let handler = AnalyzeTrainingHandler::new();
+
+    let output = handler
+        .execute(
+            json!({
+                "target_type": "period",
+                "period_start": "2026-07-07",
+                "period_end": "2026-07-13",
+                "analysis_type": "detailed",
+            }),
+            Arc::new(client),
+            None,
+        )
+        .await
+        .unwrap();
+
+    let markdown = markdown_text(&output);
+
+    assert!(
+        markdown.contains("Endurance Performance Evidence — Cycling Power Protocol"),
+        "expected evidence header:\n{}",
+        markdown
+    );
+    assert!(markdown.contains("Submaximal HR–Power Response"));
+    assert!(markdown.contains("Recent − reference HR"));
+    assert!(
+        markdown.contains(
+            "Lower HR at matched power may indicate improved aerobic efficiency"
+        ),
+        "context paragraph must appear:\n{}",
+        markdown
+    );
+    assert!(markdown.contains("Matched HR–Power Shift After Prolonged Work"));
+    let lower = markdown.to_lowercase();
+    assert!(!lower.contains("durable"));
+    assert!(!lower.contains("ready"));
+}
+
+#[tokio::test]
+async fn summary_period_does_not_fetch_or_render_endurance_evidence() {
+    let client = build_period_window(&[("ride-rec-1", "2026-07-08", 200.0, 145.0)]);
+
+    // Snapshot the shared profile-call counter via Arc so we can keep
+    // inspecting it after `client` is moved into the handler below.
+    let shared_counter = client.profile_stream_calls.clone();
+    let stream_calls_before = *shared_counter.lock().unwrap();
+
+    let handler = AnalyzeTrainingHandler::new();
+    let output = handler
+        .execute(
+            json!({
+                "target_type": "period",
+                "period_start": "2026-07-07",
+                "period_end": "2026-07-13",
+                "analysis_type": "summary",
+            }),
+            Arc::new(client),
+            None,
+        )
+        .await
+        .unwrap();
+    let markdown = markdown_text(&output);
+
+    assert!(
+        !markdown.contains("Endurance Performance Evidence"),
+        "summary mode must not render the evidence section"
+    );
+    assert_eq!(
+        *shared_counter.lock().unwrap(),
+        stream_calls_before,
+        "summary mode must not fetch endurance-relevant streams"
+    );
+}
+
+#[tokio::test]
+async fn endurance_long_ride_pair_marks_late_window_at_or_after_120_minutes() {
+    let mut details_map = HashMap::new();
+    let mut streams_map = HashMap::new();
+    // Recent rides (HR 145) plus one 90-minute ride with HR ramp.
+    details_map.insert(
+        "ride-rec-1".to_string(),
+        json!({ "type": "Ride", "moving_time": 3600_i64, "icu_pm_ftp": 300.0 }),
+    );
+    streams_map.insert("ride-rec-1".to_string(), endurance_ride_streams(145.0));
+    details_map.insert(
+        "ride-long".to_string(),
+        json!({ "type": "Ride", "moving_time": 6000_i64, "icu_pm_ftp": 300.0 }),
+    );
+    streams_map.insert(
+        "ride-long".to_string(),
+        endurance_long_ride_streams(),
+    );
+    let client = MockCoachClient {
+        activities: vec![
+            MockCoachClient::activity("ride-rec-1", "Steady", "2026-07-08"),
+            MockCoachClient::activity("ride-long", "Long", "2026-07-10"),
+        ],
+        fitness: json!([{ "fitness": 50.0, "fatigue": 30.0, "form": 20.0 }]),
+        wellness: json!([{ "type": "Ride", "eftp": 300.0 }]),
+        activity_details_map: details_map,
+        streams_map,
+        ..MockCoachClient::default()
+    };
+
+    let handler = AnalyzeTrainingHandler::new();
+    let output = handler
+        .execute(
+            json!({
+                "target_type": "period",
+                "period_start": "2026-07-07",
+                "period_end": "2026-07-13",
+                "analysis_type": "detailed",
+            }),
+            Arc::new(client),
+            None,
+        )
+        .await
+        .unwrap();
+    let markdown = markdown_text(&output);
+    assert!(
+        markdown.contains("Late window end: "),
+        "prolonged response block must include late window end minutes"
+    );
+    assert!(markdown.contains("HR delta (late − early): "));
+}
+
+#[tokio::test]
+async fn incomplete_or_running_data_renders_an_honest_reason_not_a_score() {
+    // No streams at all → bounded fetch returns empty profile → renderer
+    // shows availability reason.
+    let details_map: HashMap<String, Value> = HashMap::new();
+    let client = MockCoachClient {
+        activities: vec![MockCoachClient::activity("run-1", "Run", "2026-07-08")],
+        fitness: json!([{ "fitness": 50.0, "fatigue": 30.0, "form": 20.0 }]),
+        wellness: json!([{ "type": "Run", "eftp": 250.0 }]),
+        activity_details: json!({ "type": "Run" }),
+        activity_details_map: details_map,
+        ..MockCoachClient::default()
+    };
+
+    let handler = AnalyzeTrainingHandler::new();
+    let output = handler
+        .execute(
+            json!({
+                "target_type": "period",
+                "period_start": "2026-07-07",
+                "period_end": "2026-07-13",
+                "analysis_type": "detailed",
+            }),
+            Arc::new(client),
+            None,
+        )
+        .await
+        .unwrap();
+    let markdown = markdown_text(&output);
+    let lower = markdown.to_lowercase();
+    assert!(
+        !lower.contains("0.0 bpm"),
+        "must never emit zero deltas instead of an explicit reason"
+    );
+    assert!(
+        markdown.contains("Endurance Performance Evidence")
+            && (markdown.contains("Cycling power data is required")
+                || markdown.contains("coverage was below")
+                || markdown.contains("Fewer than two accepted sessions")
+                || markdown.contains("eFTP is unavailable")
+                || markdown.contains("No eligible prolonged ride")),
+        "expected an explicit availability reason:\n{}",
+        markdown
     );
 }

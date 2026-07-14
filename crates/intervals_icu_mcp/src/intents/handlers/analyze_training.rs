@@ -42,6 +42,7 @@ use crate::engines::interval_segment_metrics::{compute_structured_consistency, e
 use crate::engines::metric_streams::parse_metric_streams;
 use crate::engines::shared::parse_activity_date;
 use crate::engines::trail_execution::compute_terrain_context;
+use crate::engines::endurance_evidence::{compute_endurance_evidence, CyclingSessionInput};
 
 use crate::domains::activity_analysis::{back_to_back_load, vert_per_week};
 use crate::domains::nutrition::{compute_carb_demand, compute_protein_demand};
@@ -1586,6 +1587,33 @@ impl AnalyzeTrainingHandler {
         period_context.metrics.espe_anchors = Some(espe_anchors);
         period_context.metrics.espe_derived = Some(espe_derived);
 
+        // ── Endurance evidence (power-based, cycling-only v1) ──────────
+        //
+        // Built from the bounded profile streams fetched during the
+        // period data retrieval. Streams that weren't fetched (or
+        // couldn't be parsed) simply don't appear in `profile_sessions`,
+        // which the engine degrades to the appropriate `MissingEftp` /
+        // `InsufficientCandidateSessions` status.
+        let eftp = period_context.metrics.espe_anchors.as_ref().and_then(|a| a.eftp);
+        let profile_sessions: Vec<CyclingSessionInput> = fetched
+            .endurance_profile_activities
+            .iter()
+            .filter_map(|activity| {
+                let stream = fetched.endurance_profile_streams.get(&activity.id)?;
+                let streams = parse_metric_streams(stream)?;
+                Some(CyclingSessionInput {
+                    activity_id: activity.id.clone(),
+                    date: crate::engines::shared::parse_activity_date(&activity.start_date_local)?,
+                    streams,
+                })
+            })
+            .collect();
+        period_context.metrics.endurance_evidence = Some(compute_endurance_evidence(
+            &profile_sessions,
+            window.end_date,
+            eftp,
+        ));
+
         // W5 — WDR 7-day rollup across period activities
         period_context.metrics.wdrm = Some(compute_wdr_7d_rollup(
             &fetched.activity_details,
@@ -1631,6 +1659,17 @@ impl AnalyzeTrainingHandler {
         if let Some(etvs_text) = render_etvs_section(period_context.metrics.etvs.as_ref()) {
             content.push(ContentBlock::markdown(etvs_text));
         }
+
+        // Endurance evidence is intentionally a `detailed`/`intervals`/
+        // `streams`-only artefact. `summary` mode skips both the
+        // fetch AND the renderer call to guarantee zero extra HTTP
+        // pressure and zero output surface.
+        if analysis_type != "summary"
+            && let Some(evidence_text) =
+                render_endurance_evidence(period_context.metrics.endurance_evidence.as_ref())
+            {
+                content.push(ContentBlock::markdown(evidence_text));
+            }
 
         let planned_workouts = period
             .iter()
@@ -4738,7 +4777,7 @@ mod tests {
         assert!(rendered.contains("Requested Metrics"));
     }
 
-    // ── parse_metric_streams (local alias for the engine helper) ────
+    // ── parse_metric_streams ────────────────────────────────────────
 
     #[test]
     fn metric_stream_parser_drops_only_the_misaligned_signal() {
