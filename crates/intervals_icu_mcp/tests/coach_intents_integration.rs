@@ -4076,9 +4076,7 @@ async fn detailed_period_renders_endurance_evidence_end_to_end() {
     assert!(markdown.contains("Submaximal HR–Power Response"));
     assert!(markdown.contains("Recent − reference HR"));
     assert!(
-        markdown.contains(
-            "Lower HR at matched power may indicate improved aerobic efficiency"
-        ),
+        markdown.contains("Lower HR at matched power may indicate improved aerobic efficiency"),
         "context paragraph must appear:\n{}",
         markdown
     );
@@ -4138,10 +4136,7 @@ async fn endurance_long_ride_pair_marks_late_window_at_or_after_120_minutes() {
         "ride-long".to_string(),
         json!({ "type": "Ride", "moving_time": 6000_i64, "icu_pm_ftp": 300.0 }),
     );
-    streams_map.insert(
-        "ride-long".to_string(),
-        endurance_long_ride_streams(),
-    );
+    streams_map.insert("ride-long".to_string(), endurance_long_ride_streams());
     let client = MockCoachClient {
         activities: vec![
             MockCoachClient::activity("ride-rec-1", "Steady", "2026-07-08"),

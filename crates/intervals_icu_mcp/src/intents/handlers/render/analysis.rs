@@ -1104,11 +1104,9 @@ fn render_status_message(status: EnduranceEvidenceStatus) -> String {
     }
 }
 
-const SUBMAXIMAL_CONTEXT: &str =
-    "  Lower HR at matched power may indicate improved aerobic efficiency. Higher HR may indicate acute strain, thermal stress, or reduced plasma volume. Trend is individual — not a standalone diagnosis.";
+const SUBMAXIMAL_CONTEXT: &str = "  Lower HR at matched power may indicate improved aerobic efficiency. Higher HR may indicate acute strain, thermal stress, or reduced plasma volume. Trend is individual — not a standalone diagnosis.";
 
-const PROLONGED_CONTEXT: &str =
-    "  Rising HR at steady power (cardiovascular drift) is normal during prolonged work. Larger drift than personal baseline may reflect fuelling, heat, or residual strain. Individual observation — not a durability score.";
+const PROLONGED_CONTEXT: &str = "  Rising HR at steady power (cardiovascular drift) is normal during prolonged work. Larger drift than personal baseline may reflect fuelling, heat, or residual strain. Individual observation — not a durability score.";
 
 fn render_submaximal_section(sub: &SubmaximalHrPowerMetrics) -> String {
     let mut lines: Vec<String> = Vec::new();
@@ -1168,9 +1166,10 @@ fn render_prolonged_section(prolonged: &ProlongedRideResponseMetrics) -> String 
         if let Some(id) = prolonged.source_activity_id.as_deref() {
             lines.push(format!("  Source activity: {id}"));
         }
-        if let (Some(early), Some(late)) =
-            (prolonged.early_window_end_min, prolonged.late_window_end_min)
-        {
+        if let (Some(early), Some(late)) = (
+            prolonged.early_window_end_min,
+            prolonged.late_window_end_min,
+        ) {
             lines.push(format!(
                 "  Early window end: {:.1} min · Late window end: {:.1} min",
                 early, late
@@ -1179,9 +1178,7 @@ fn render_prolonged_section(prolonged: &ProlongedRideResponseMetrics) -> String 
         if let Some(power) = prolonged.matched_power_w {
             lines.push(format!("  Matched power: {:.0} W", power));
         }
-        if let (Some(early_hr), Some(late_hr)) =
-            (prolonged.early_hr_bpm, prolonged.late_hr_bpm)
-        {
+        if let (Some(early_hr), Some(late_hr)) = (prolonged.early_hr_bpm, prolonged.late_hr_bpm) {
             lines.push(format!(
                 "  Early HR: {:.1} bpm · Late HR: {:.1} bpm",
                 early_hr, late_hr
@@ -3422,14 +3419,12 @@ mod tests {
         assert!(text.contains("Submaximal HR–Power Response"));
         assert!(text.contains("Recent − reference HR: -6.0 bpm"));
         assert!(text.contains("Efficiency change: +4.2%"));
-        assert!(text.contains(
-            "Lower HR at matched power may indicate improved aerobic efficiency",
-        ));
+        assert!(
+            text.contains("Lower HR at matched power may indicate improved aerobic efficiency",)
+        );
         assert!(text.contains("Matched HR–Power Shift After Prolonged Work"));
         assert!(text.contains("Late window end: 130.0 min"));
-        assert!(text.contains(
-            "Rising HR at steady power (cardiovascular drift)",
-        ));
+        assert!(text.contains("Rising HR at steady power (cardiovascular drift)",));
         let lower = text.to_lowercase();
         assert!(!lower.contains("ready"));
         assert!(!lower.contains("durable"));

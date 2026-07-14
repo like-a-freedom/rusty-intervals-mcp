@@ -34,6 +34,7 @@ use crate::engines::coach_metrics::{
     parse_fitness_metrics, parse_polarisation_from_api,
 };
 use crate::engines::cp_regression::{fit_cp, validate_cp};
+use crate::engines::endurance_evidence::{CyclingSessionInput, compute_endurance_evidence};
 use crate::engines::interval_analysis::{
     IntervalOutputKind, count_work_intervals, is_planned_workout_id,
     preferred_interval_output_kind, quality_output_finding, upstream_segment_windows,
@@ -42,7 +43,6 @@ use crate::engines::interval_segment_metrics::{compute_structured_consistency, e
 use crate::engines::metric_streams::parse_metric_streams;
 use crate::engines::shared::parse_activity_date;
 use crate::engines::trail_execution::compute_terrain_context;
-use crate::engines::endurance_evidence::{compute_endurance_evidence, CyclingSessionInput};
 
 use crate::domains::activity_analysis::{back_to_back_load, vert_per_week};
 use crate::domains::nutrition::{compute_carb_demand, compute_protein_demand};
@@ -1594,7 +1594,11 @@ impl AnalyzeTrainingHandler {
         // couldn't be parsed) simply don't appear in `profile_sessions`,
         // which the engine degrades to the appropriate `MissingEftp` /
         // `InsufficientCandidateSessions` status.
-        let eftp = period_context.metrics.espe_anchors.as_ref().and_then(|a| a.eftp);
+        let eftp = period_context
+            .metrics
+            .espe_anchors
+            .as_ref()
+            .and_then(|a| a.eftp);
         let profile_sessions: Vec<CyclingSessionInput> = fetched
             .endurance_profile_activities
             .iter()
@@ -1667,9 +1671,9 @@ impl AnalyzeTrainingHandler {
         if analysis_type != "summary"
             && let Some(evidence_text) =
                 render_endurance_evidence(period_context.metrics.endurance_evidence.as_ref())
-            {
-                content.push(ContentBlock::markdown(evidence_text));
-            }
+        {
+            content.push(ContentBlock::markdown(evidence_text));
+        }
 
         let planned_workouts = period
             .iter()

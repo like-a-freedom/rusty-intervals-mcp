@@ -549,9 +549,9 @@ async fn collect_endurance_evidence(
     {
         Ok(value) => value,
         Err(_) => {
-            fetched.fetch_warnings.push(
-                "endurance evidence partial: failed to list historical activities".into(),
-            );
+            fetched
+                .fetch_warnings
+                .push("endurance evidence partial: failed to list historical activities".into());
             return;
         }
     };

@@ -158,13 +158,19 @@ mod tests {
     #[test]
     fn default_status_never_claims_availability_for_partial_inputs() {
         let sub = SubmaximalHrPowerMetrics::default();
-        assert_eq!(sub.status, EnduranceEvidenceStatus::InsufficientCandidateSessions);
+        assert_eq!(
+            sub.status,
+            EnduranceEvidenceStatus::InsufficientCandidateSessions
+        );
         assert!(sub.anchor_power_w.is_none());
         assert!(sub.recent_median_hr_bpm.is_none());
         assert!(sub.efficiency_delta_pct.is_none());
 
         let prolonged = ProlongedRideResponseMetrics::default();
-        assert_eq!(prolonged.status, EnduranceEvidenceStatus::NoEligibleProlongedRide);
+        assert_eq!(
+            prolonged.status,
+            EnduranceEvidenceStatus::NoEligibleProlongedRide
+        );
         assert!(prolonged.hr_delta_bpm.is_none());
         assert!(prolonged.matched_power_w.is_none());
     }
@@ -174,7 +180,10 @@ mod tests {
         let prolonged = ProlongedRideResponseMetrics::unavailable(
             EnduranceEvidenceStatus::NoMatchedEarlyLateWindows,
         );
-        assert_eq!(prolonged.status, EnduranceEvidenceStatus::NoMatchedEarlyLateWindows);
+        assert_eq!(
+            prolonged.status,
+            EnduranceEvidenceStatus::NoMatchedEarlyLateWindows
+        );
         assert!(prolonged.early_hr_bpm.is_none());
         assert!(prolonged.late_hr_bpm.is_none());
         assert!(prolonged.early_window_end_min.is_none());
@@ -193,7 +202,10 @@ mod tests {
             EnduranceEvidenceStatus::NoEligibleProlongedRide,
             EnduranceEvidenceStatus::NoMatchedEarlyLateWindows,
         ] {
-            assert!(!unavailable.is_available(), "{unavailable:?} must not be available");
+            assert!(
+                !unavailable.is_available(),
+                "{unavailable:?} must not be available"
+            );
         }
     }
 
