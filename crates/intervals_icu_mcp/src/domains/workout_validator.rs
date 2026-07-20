@@ -260,12 +260,32 @@ fn parse_workout_sections(description: &str) -> Vec<WorkoutSection> {
 }
 
 /// Sum all step durations accounting for section repeat counts.
+///
+/// When a repeat block (N > 1) is followed by another section (e.g. Cooldown),
+/// Intervals.icu drops the trailing step from the last repetition. This mirrors
+/// the Workout Builder behavior where the final recovery transitions directly
+/// into the next section rather than playing out fully.
 pub fn sum_step_durations_with_repeats(description: &str) -> u32 {
-    parse_workout_sections(description)
+    let sections = parse_workout_sections(description);
+    let len = sections.len();
+
+    sections
         .iter()
-        .map(|section| {
+        .enumerate()
+        .map(|(i, section)| {
             let step_sum: u32 = section.steps.iter().map(|s| s.duration_seconds).sum();
-            step_sum * section.repeat_count
+            let has_subsequent = i + 1 < len;
+
+            if section.repeat_count > 1
+                && has_subsequent
+                && section.steps.len() > 1
+                && let Some(last) = section.steps.last()
+            {
+                // Drop the trailing step from the last repetition
+                (step_sum * (section.repeat_count - 1)) + (step_sum - last.duration_seconds)
+            } else {
+                step_sum * section.repeat_count
+            }
         })
         .sum()
 }
@@ -1090,9 +1110,93 @@ Main Set 3x
 Cooldown
 - 10m 50%";
         // Raw sum: 600 + 300 + 180 + 600 = 1680
-        // With repeats: 600 + 3*(300+180) + 600 = 600 + 1440 + 600 = 2640
+        // Intervals.icu drops trailing recovery on last rep when followed by Cooldown:
+        // Warmup: 600
+        // 3x block: 2*(480) + (480-180) = 960 + 300 = 1260
+        // Cooldown: 600
+        // Total: 600 + 1260 + 600 = 2460
         assert_eq!(sum_step_durations(desc), 1680);
-        assert_eq!(sum_step_durations_with_repeats(desc), 2640);
+        assert_eq!(sum_step_durations_with_repeats(desc), 2460);
+    }
+
+    #[test]
+    fn sum_with_repeats_2x_block_with_cooldown() {
+        // The exact scenario from the bug report: 2x block with work+recovery, then cooldown
+        let desc = "\
+Warmup
+- 10m 50%
+
+Main Set 2x
+- 5m 95%
+- 3m Z1
+
+Cooldown
+- 10m 50%";
+        // Warmup: 600
+        // 2x block: 1*(480) + (480-180) = 480 + 300 = 780
+        // Cooldown: 600
+        // Total: 600 + 780 + 600 = 1980
+        assert_eq!(sum_step_durations_with_repeats(desc), 1980);
+    }
+
+    #[test]
+    fn sum_with_repeats_trailing_kept_when_no_subsequent_section() {
+        // Repeat block at end of workout: trailing step is kept
+        let desc = "\
+Warmup
+- 10m 50%
+
+Main Set 2x
+- 5m 95%
+- 3m Z1";
+        // Warmup: 600
+        // 2x block (no subsequent): 2*(480) = 960
+        // Total: 600 + 960 = 1560
+        assert_eq!(sum_step_durations_with_repeats(desc), 1560);
+    }
+
+    #[test]
+    fn sum_with_repeats_single_step_block() {
+        // Single-step repeat block: nothing to drop even with subsequent section
+        let desc = "\
+Warmup
+- 10m 50%
+
+Main Set 3x
+- 5m 95%
+
+Cooldown
+- 10m 50%";
+        // Warmup: 600
+        // 3x block (single step, nothing to drop): 3*300 = 900
+        // Cooldown: 600
+        // Total: 600 + 900 + 600 = 2100
+        assert_eq!(sum_step_durations_with_repeats(desc), 2100);
+    }
+
+    #[test]
+    fn sum_with_repeats_empty_section_between() {
+        // An empty header section between the repeat block and Cooldown should
+        // still count as a "subsequent section" (its repeat_count defaults to 1),
+        // so the trailing-step drop still fires.
+        let desc = "\
+Warmup
+- 10m 50%
+
+Main Set 3x
+- 5m 95%
+- 3m Z1
+
+EmptyHeader
+
+Cooldown
+- 10m 50%";
+        // Warmup: 600
+        // 3x block (subsequent section exists): 2*(480) + (480-180) = 1260
+        // EmptyHeader: 0
+        // Cooldown: 600
+        // Total: 600 + 1260 + 0 + 600 = 2460
+        assert_eq!(sum_step_durations_with_repeats(desc), 2460);
     }
 
     #[test]
@@ -1116,15 +1220,16 @@ Cooldown
 
 1x
 - 5m Z1";
-        // 3*(120+60) + 1*300 = 540 + 300 = 840
-        assert_eq!(sum_step_durations_with_repeats(desc), 840);
+        // 3x block followed by 1x: drop trailing 1m on last rep
+        // 2*(180) + (180-60) + 300 = 360 + 120 + 300 = 780
+        assert_eq!(sum_step_durations_with_repeats(desc), 780);
     }
 
     // --- validate_workout_description with repeats ---
 
     #[test]
     fn no_false_positive_duration_mismatch_with_repeats() {
-        // Main Set 3x makes total 44m (2640s), not 28m (1680s)
+        // Main Set 3x with trailing recovery dropped: 2460s (41m)
         let desc = "\
 Warmup
 - 10m 50%
@@ -1135,7 +1240,7 @@ Main Set 3x
 
 Cooldown
 - 10m 50%";
-        let result = validate_workout_description(desc, Some(2640));
+        let result = validate_workout_description(desc, Some(2460));
         assert!(
             !result
                 .warnings
@@ -1462,6 +1567,7 @@ Main Set 99x
 
 Cooldown
 - 1m Z1";
+        // 99x block followed by Cooldown: single step, nothing to drop
         // 60 + 99*120 + 60 = 60 + 11880 + 60 = 12000
         assert_eq!(sum_step_durations_with_repeats(desc), 12000);
     }
@@ -1524,8 +1630,8 @@ Cooldown
 
     #[test]
     fn detects_mismatch_with_repeat_when_expected_too_low() {
-        // With repeats the total is 2640s (44m), but expected is 2480s (41m20s)
-        // diff = 160s > 30, should warn
+        // Single-step 3x block: total is 2100s (35m), but expected is 2480s (41m20s)
+        // diff = 380s > 30, should warn
         let desc = "\
 Warmup
 - 10m 50%
