@@ -2381,6 +2381,12 @@ mod tests {
         // Dates must be within TrendWindows::MEDIUM (30 days) of the test
         // execution date, otherwise analyze_trend returns None and the
         // "Linear Trends" section never renders.
+        let today = chrono::Utc::now().date_naive();
+        let d1 = today - chrono::Duration::days(28);
+        let d2 = today - chrono::Duration::days(21);
+        let d3 = today - chrono::Duration::days(14);
+        let d4 = today - chrono::Duration::days(7);
+
         let handler = AnalyzeTrainingHandler::new();
         let client = Arc::new(
             MockIntervalsClient::builder()
@@ -2388,25 +2394,25 @@ mod tests {
                     ActivitySummary {
                         id: "1".to_string(),
                         name: Some("Run 1".to_string()),
-                        start_date_local: "2026-07-01".to_string(),
+                        start_date_local: d1.to_string(),
                         ..Default::default()
                     },
                     ActivitySummary {
                         id: "2".to_string(),
                         name: Some("Run 2".to_string()),
-                        start_date_local: "2026-07-05".to_string(),
+                        start_date_local: d2.to_string(),
                         ..Default::default()
                     },
                     ActivitySummary {
                         id: "3".to_string(),
                         name: Some("Run 3".to_string()),
-                        start_date_local: "2026-07-10".to_string(),
+                        start_date_local: d3.to_string(),
                         ..Default::default()
                     },
                     ActivitySummary {
                         id: "4".to_string(),
                         name: Some("Run 4".to_string()),
-                        start_date_local: "2026-07-15".to_string(),
+                        start_date_local: d4.to_string(),
                         ..Default::default()
                     },
                 ])
@@ -2446,8 +2452,8 @@ mod tests {
 
         let input = json!({
             "target_type": "period",
-            "period_start": "2026-07-01",
-            "period_end": "2026-07-20",
+            "period_start": d1.to_string(),
+            "period_end": today.to_string(),
             "analysis_type": "detailed"
         });
 
