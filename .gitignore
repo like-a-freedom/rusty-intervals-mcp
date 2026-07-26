@@ -13,6 +13,7 @@ docs/
 .commandcode/
 .scratch/
 coverage/
+.agents/prompts
 
 **/*.rs.bk
 **/Cargo.lock

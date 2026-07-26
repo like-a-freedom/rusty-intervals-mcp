@@ -116,6 +116,21 @@ impl IntervalsMcpHandler {
         // Create idempotency middleware
         let idempotency = Arc::new(IdempotencyMiddleware::new());
 
+        // Phase 2B (ADR-0001): when dynamic dispatch is enabled via
+        // env var, wrap the typed client in `DynamicClientAdapter` so
+        // mapped trait methods dispatch through the OpenAPI runtime;
+        // everything else falls back to the typed path. Disabled by
+        // default — flip with `INTERVALS_ICU_DYNAMIC_DISPATCH_ENABLED=1`
+        // after Phase 2C proves a real call site.
+        let client: Arc<dyn IntervalsClient> = if dynamic_dispatch_enabled() {
+            Arc::new(dynamic::DynamicClientAdapter::new(
+                Arc::new(dynamic_runtime.clone()),
+                client,
+            ))
+        } else {
+            client
+        };
+
         let handlers = all_intent_handlers();
 
         // Create intent router
@@ -733,6 +748,20 @@ impl tower_governor::key_extractor::KeyExtractor for AthleteKeyExtractor {
         }
         Err(tower_governor::errors::GovernorError::UnableToExtractKey)
     }
+}
+
+/// Check whether dynamic upstream dispatch is enabled.
+///
+/// When `true`, [`IntervalsMcpHandler::with_dynamic_runtime`] wraps the
+/// typed client in [`dynamic::DynamicClientAdapter`], routing mapped
+/// trait methods through the live OpenAPI registry. Default: `false`.
+/// Phase 2B of ADR-0001; flip to `1` after Phase 2C proves a real call
+/// site.
+fn dynamic_dispatch_enabled() -> bool {
+    matches!(
+        std::env::var("INTERVALS_ICU_DYNAMIC_DISPATCH_ENABLED").as_deref(),
+        Ok("1") | Ok("true") | Ok("TRUE")
+    )
 }
 
 /// Parse rate limit config from optional string values.

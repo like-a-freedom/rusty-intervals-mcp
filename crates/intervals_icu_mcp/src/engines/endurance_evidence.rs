@@ -27,8 +27,6 @@
 //! compares all eligible early/late pairs and selects the most informative
 //! one (largest HR delta at the closest power match).
 
-#![allow(dead_code)]
-
 use chrono::NaiveDate;
 
 use crate::domains::endurance_evidence::{
@@ -105,7 +103,6 @@ struct ControlWindow {
     efficiency_w_per_bpm: f64,
     power_cv_pct: f64,
     activity_id: String,
-    session_date: NaiveDate,
 }
 
 // ── Public entry point ────────────────────────────────────────────────
@@ -591,7 +588,6 @@ fn build_window(
         efficiency_w_per_bpm: avg_power / avg_hr,
         power_cv_pct: power_cv,
         activity_id: session.activity_id.clone(),
-        session_date: session.date,
     })
 }
 
@@ -929,6 +925,10 @@ mod tests {
         },
     }
 
+    /// Fixture-only struct. Deserialised from JSON regression fixtures;
+    /// only the fields touched by `fixture_to_sessions` are read, the rest
+    /// are kept to mirror the on-disk schema. Per ADR-0002 test-fixture
+    /// exemption.
     #[derive(Debug, _Deserialize, Default)]
     #[allow(dead_code)]
     struct Gap {
@@ -938,6 +938,10 @@ mod tests {
         nullify_power: bool,
     }
 
+    /// Fixture-only struct. Deserialised from JSON regression fixtures;
+    /// fields are present to mirror the on-disk schema even when the
+    /// piecewise builder only consumes a subset. Per ADR-0002 test-fixture
+    /// exemption.
     #[derive(Debug, _Deserialize)]
     #[allow(dead_code)]
     struct HrSegment {

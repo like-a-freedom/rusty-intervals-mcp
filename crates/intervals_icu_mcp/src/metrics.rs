@@ -212,6 +212,32 @@ pub fn record_idempotency(result: &str) {
     .increment(1);
 }
 
+/// Record a dynamic upstream dispatch attempt and its outcome.
+///
+/// Outcomes:
+/// - `dispatched` — operation mapped, registry loaded, HTTP call
+///   succeeded with 2xx.
+/// - `fallback` — operation had no mapping (silent typed-path
+///   fallthrough; the normal state during strangler-fig migration).
+/// - `registry_unavailable` — `DynamicRuntime::ensure_registry` failed;
+///   adapter fell back to typed path. Indicates upstream spec fetch is
+///   broken.
+/// - `dispatch_error` — transport-level failure (network, malformed
+///   request). Surfaced to caller per ADR-0001.
+/// - `http_error` — upstream returned non-2xx. Surfaced to caller per
+///   ADR-0001.
+/// - `decode_error` — `serde_json` could not turn the structured content
+///   into the trait return type. Indicates schema drift between upstream
+///   and our typed model.
+pub fn record_dynamic_dispatch(method: &str, outcome: &str) {
+    counter!(
+        "intervals_icu_mcp_dynamic_dispatch_total",
+        "method" => method.to_owned(),
+        "outcome" => outcome.to_owned()
+    )
+    .increment(1);
+}
+
 /// Record HTTP request with duration.
 pub fn record_http_request(method: &str, path: &str, status: u16, duration_secs: f64) {
     let status_str = format!("{status}");

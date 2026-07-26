@@ -35,6 +35,10 @@ struct MockCoachClient {
     pace_histogram: Value,
     intervals_error: Option<String>,
     streams_error: Option<String>,
+    /// MockCoachClient duplicate slated for removal in Phase 3B mock
+    /// consolidation (see `.scratch/execution-plan-2026-07-25.md`).
+    /// Counters retained for fixture parity with the canonical
+    /// `MockIntervalsClient` once it gains `with_recorded_calls()`.
     #[allow(clippy::type_complexity, dead_code)]
     activity_calls: Arc<Mutex<Vec<(Option<u32>, Option<i32>)>>>,
     activity_details_map: HashMap<String, Value>,
@@ -135,6 +139,11 @@ impl MockCoachClient {
     /// Number of `get_activity_streams` calls observed for `ride-`
     /// prefixed ids during endurance evidence retrieval. Tests use
     /// this to confirm bounded, optional behaviour.
+    ///
+    /// Currently unused on every test path; the assertion it supported
+    /// was retired when the endurance fetch was made best-effort. Kept
+    /// until Phase 3B mock consolidation folds MockCoachClient into the
+    /// canonical `MockIntervalsClient` builder.
     #[allow(dead_code)]
     fn endurance_stream_calls(&self) -> usize {
         *self.profile_stream_calls.lock().unwrap()

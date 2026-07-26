@@ -7,11 +7,13 @@
 //! - Caching with configurable refresh intervals
 //! - Compact response mode for token efficiency
 
+mod adapter;
 mod dispatch;
 mod parser;
 mod runtime;
 mod types;
 
+pub use adapter::DynamicClientAdapter;
 pub use dispatch::dispatch_operation;
 pub use parser::parse_openapi_spec;
 pub use runtime::{DynamicRuntime, DynamicRuntimeConfig, DynamicRuntimeConfigBuilder};

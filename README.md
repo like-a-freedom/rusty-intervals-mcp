@@ -628,6 +628,7 @@ See `.env.example` for the standard environment layout.
 | `INTERVALS_ICU_BASE_URL` | `https://intervals.icu` | Base URL for the upstream API |
 | `INTERVALS_ICU_OPENAPI_SPEC` | unset | Explicit OpenAPI source (HTTP(S) URL or local file) |
 | `INTERVALS_ICU_SPEC_REFRESH_SECS` | `300` | Refresh cadence for the cached OpenAPI runtime |
+| `INTERVALS_ICU_DYNAMIC_DISPATCH_ENABLED` | unset | When set to `1`/`true`, wraps the typed upstream client in `DynamicClientAdapter` so mapped `IntervalsClient` methods (and adapter-only methods like `get_athlete_training_plan`) dispatch through the live OpenAPI runtime. See ADR-0001. Default off — no behaviour change. |
 | `RUST_LOG` | unset | Standard Rust logging control |
 | `MCP_TRANSPORT` | `stdio` | Transport mode: `stdio` or `http` |
 | `MCP_HTTP_ADDRESS` | `127.0.0.1:3000` | Listen address for HTTP mode |

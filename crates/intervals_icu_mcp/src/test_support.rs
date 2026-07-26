@@ -205,6 +205,12 @@ pub mod mock {
         /// Counts `get_activity_streams` calls for `ride-` prefixed ids
         /// (endurance evidence observation).
         pub profile_stream_calls: Arc<Mutex<usize>>,
+        /// Records every `activity_id` passed to `get_activity_details`.
+        /// Lets tests assert which activities were re-fetched in order.
+        pub activity_details_calls: Arc<Mutex<Vec<String>>>,
+        /// Activity ids whose `get_activity_details` calls should fail with
+        /// `IntervalsError::NotFound`. Driven by `with_failing_activity_details`.
+        pub failing_activity_detail_ids: std::collections::HashSet<String>,
     }
 
     impl MockIntervalsClient {
@@ -270,6 +276,9 @@ pub mod mock {
             self
         }
 
+        /// Builder ergonomic completeness: lets test authors set the pace
+        /// histogram even when their assertion path does not read it back.
+        /// Per ADR-0002 builder-completeness exemption.
         #[allow(dead_code)]
         pub fn with_pace_histogram(mut self, histogram: Value) -> Self {
             self.pace_histogram = Some(histogram);
@@ -355,6 +364,21 @@ pub mod mock {
         pub fn with_activity_details_map(mut self, map: HashMap<String, Value>) -> Self {
             self.activity_details_map = map;
             self
+        }
+
+        /// Mark the given activity ids as failing for `get_activity_details`.
+        /// Mirrors the `with_failing_details` knob on the now-retired inline
+        /// `DetailRecordingClient` mock.
+        pub fn with_failing_activity_details(mut self, ids: Vec<&str>) -> Self {
+            self.failing_activity_detail_ids = ids.into_iter().map(str::to_owned).collect();
+            self
+        }
+
+        /// Snapshot of every `activity_id` passed to `get_activity_details`,
+        /// in call order. Mirrors `requested_detail_ids()` on the now-retired
+        /// inline mocks.
+        pub fn requested_activity_detail_ids(&self) -> Vec<String> {
+            self.activity_details_calls.lock().unwrap().clone()
         }
 
         pub fn activity_call_count(&self) -> usize {
@@ -1543,6 +1567,15 @@ pub mod mock {
         }
 
         async fn get_activity_details(&self, activity_id: &str) -> Result<Value, IntervalsError> {
+            self.activity_details_calls
+                .lock()
+                .unwrap()
+                .push(activity_id.to_string());
+            if self.failing_activity_detail_ids.contains(activity_id) {
+                return Err(IntervalsError::NotFound(format!(
+                    "Activity {activity_id} not found"
+                )));
+            }
             if !self.activity_details_map.is_empty() {
                 return self
                     .activity_details_map
