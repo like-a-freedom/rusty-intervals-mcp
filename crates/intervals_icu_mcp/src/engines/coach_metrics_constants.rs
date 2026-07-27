@@ -113,3 +113,89 @@ pub const POLARISATION_DENOMINATOR_FACTOR: f64 = 2.0;
 pub const POWER_CURVE_DECLINE_THRESHOLD: f64 = -1.0;
 pub const POWER_CURVE_STABLE_THRESHOLD: f64 = 1.0;
 pub const POWER_CURVE_ROTATION_AVERAGE: f64 = 2.0;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Recovery quality score is a weighted blend of HRV, RHR, and sleep
+    /// components. If these weights stop summing to 1.0 the score silently
+    /// breaks its normalized [0, 1] semantics.
+    // Const-evaluated by design: catches weight-drift at compile time.
+    #[allow(clippy::assertions_on_constants)]
+    #[test]
+    fn recovery_quality_weights_sum_to_one() {
+        let sum = RECOVERY_QUALITY_HRV_WEIGHT
+            + RECOVERY_QUALITY_RHR_WEIGHT
+            + RECOVERY_QUALITY_SLEEP_WEIGHT;
+        assert!(
+            (sum - 1.0).abs() < 1e-9,
+            "weights sum to {sum}, expected 1.0 \u{2014} score will lose its [0, 1] semantics"
+        );
+    }
+
+    /// Same reasoning as above for the readiness score: weights must sum to 1.
+    #[allow(clippy::assertions_on_constants)]
+    #[test]
+    fn readiness_weights_sum_to_one() {
+        let sum = READINESS_MOOD_WEIGHT
+            + READINESS_SLEEP_WEIGHT
+            + READINESS_STRESS_WEIGHT
+            + READINESS_FATIGUE_WEIGHT;
+        assert!(
+            (sum - 1.0).abs() < 1e-9,
+            "weights sum to {sum}, expected 1.0 \u{2014} readiness score will lose its [0, 1] semantics"
+        );
+    }
+
+    /// Banding thresholds used to categorise TSB must be monotonic \u2014
+    /// otherwise the same value can match two bands and produce unstable
+    /// classifications across calls.
+    #[allow(clippy::assertions_on_constants)]
+    #[test]
+    fn tsb_bands_are_monotonic() {
+        assert!(
+            TSB_LOAD_PRESSURE_THRESHOLD < TSB_BALANCED_UPPER,
+            "TSB pressure threshold {} must be below balanced upper {}",
+            TSB_LOAD_PRESSURE_THRESHOLD,
+            TSB_BALANCED_UPPER,
+        );
+    }
+
+    /// HRV banding thresholds (watch drop / suppressed drop) are both negative
+    /// percentages. The suppressed threshold is the more severe boundary, so
+    /// its magnitude must exceed the watch threshold's magnitude.
+    #[allow(clippy::assertions_on_constants)]
+    #[test]
+    fn hrv_watch_drop_is_less_severe_than_suppressed_drop() {
+        assert!(
+            HRV_WATCH_DROP_PCT > HRV_SUPPRESSED_DROP_PCT,
+            "HRV watch drop {HRV_WATCH_DROP_PCT}% must be less severe (closer to 0) than suppressed {HRV_SUPPRESSED_DROP_PCT}%",
+        );
+    }
+
+    /// RHR / sleep component clamps must define a positive range and the
+    /// minimum must be strictly less than the maximum.
+    #[allow(clippy::assertions_on_constants)]
+    #[test]
+    fn sleep_component_min_less_than_max() {
+        assert!(SLEEP_COMPONENT_MIN < SLEEP_COMPONENT_MAX);
+        assert!(SLEEP_COMPONENT_MIN >= 0.0);
+    }
+
+    #[allow(clippy::assertions_on_constants)]
+    #[test]
+    fn rhr_component_min_less_than_max() {
+        assert!(RHR_COMPONENT_MIN < RHR_COMPONENT_MAX);
+        assert!(RHR_COMPONENT_MIN >= 0.0);
+    }
+
+    /// Sleep clamp must yield a non-negative range \u2014 negative sleep hours
+    /// are nonsensical and downstream code divides by the clamp width.
+    #[allow(clippy::assertions_on_constants)]
+    #[test]
+    fn sleep_clamp_range_is_non_negative() {
+        assert!(SLEEP_CLAMP_MIN >= 0.0);
+        assert!(READINESS_SLEEP_CLAMP_MAX > SLEEP_CLAMP_MIN);
+    }
+}

@@ -7,6 +7,7 @@
 use chrono::{DateTime, Duration, Local, NaiveDate, NaiveDateTime};
 use intervals_icu_client::{ActivitySummary, Event};
 
+use crate::engines::shared::parse_activity_date;
 use crate::intents::{ContentBlock, IntentError};
 
 fn resolve_relative_day_alias(date_str: &str) -> Option<NaiveDate> {
@@ -85,13 +86,6 @@ pub fn filter_activities_by_range<'a>(
                 .is_some_and(|date| date >= *start && date <= *end)
         })
         .collect()
-}
-
-pub fn parse_activity_date(value: &str) -> Option<NaiveDate> {
-    NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S")
-        .ok()
-        .map(|dt| dt.date())
-        .or_else(|| NaiveDate::parse_from_str(value, "%Y-%m-%d").ok())
 }
 
 /// Normalize a date string to `YYYY-MM-DD`.

@@ -1,7 +1,9 @@
-//! Minimal `IntervalsClient` trait and basic reqwest-based skeleton.
+//! Trait-based HTTP client for the Intervals.icu API.
 //!
-//! This crate provides a trait-based API for interacting with the Intervals.icu service,
-//! along with a reqwest-based implementation and utilities for configuration.
+//! Provides the [`IntervalsClient`] async trait and a `ReqwestIntervalsClient`
+//! implementation with circuit breaking, structured error reporting, and typed
+//! domain models. See `http_client` for the implementation, `error` for the
+//! error taxonomy, and `circuit_breaker` for upstream fail-fast semantics.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -13,7 +15,7 @@ pub mod error;
 pub mod http_client;
 pub mod utils;
 
-pub use error::{ApiError, ConfigError, IntervalsError, Result, ValidationError};
+pub use error::{ApiError, ConfigError, IntervalsError, Result, TransportError, ValidationError};
 
 /// Options for finding best efforts in an activity.
 ///
@@ -149,9 +151,9 @@ pub trait IntervalsClient: Send + Sync + 'static {
     ) -> Result<serde_json::Value>;
     async fn get_activity_details(&self, activity_id: &str) -> Result<serde_json::Value>;
     async fn get_activity_messages(&self, _activity_id: &str) -> Result<Vec<ActivityMessage>> {
-        Err(IntervalsError::Config(ConfigError::Other(
-            "get_activity_messages is not implemented for this client".to_string(),
-        )))
+        Err(IntervalsError::Config(ConfigError::Unsupported {
+            method: "get_activity_messages",
+        }))
     }
     async fn search_activities(
         &self,
@@ -228,10 +230,20 @@ pub trait IntervalsClient: Send + Sync + 'static {
         date: &str,
         data: &serde_json::Value,
     ) -> Result<serde_json::Value>;
+    /// Update wellness entries in bulk (PUT `/athlete/{id}/wellness-bulk`).
+    ///
+    /// Production callers: none today. A real implementation lives in
+    /// `ReqwestIntervalsClient::update_wellness_bulk` (`http_client.rs`)
+    /// with a contract test in `tests/http_client_contract.rs`.
+    ///
+    /// Per ADR-0005, this is a **YAGNI candidate**: hidden from rendered
+    /// docs until a production caller appears. Re-promote by removing the
+    /// `#[doc(hidden)]` annotation when that happens.
+    #[doc(hidden)]
     async fn update_wellness_bulk(&self, _entries: &[serde_json::Value]) -> Result<()> {
-        Err(IntervalsError::Config(ConfigError::Other(
-            "update_wellness_bulk is not implemented for this client".to_string(),
-        )))
+        Err(IntervalsError::Config(ConfigError::Unsupported {
+            method: "update_wellness_bulk",
+        }))
     }
     async fn get_upcoming_workouts(
         &self,
@@ -302,46 +314,85 @@ pub trait IntervalsClient: Send + Sync + 'static {
         settings: &serde_json::Value,
     ) -> Result<serde_json::Value>;
     async fn delete_sport_settings(&self, sport_type: &str) -> Result<()>;
+    /// Get the athlete's weather configuration (GET
+    /// `/athlete/{id}/weather-config`).
+    ///
+    /// Production callers: none today. A real implementation lives in
+    /// `ReqwestIntervalsClient::get_weather_config` (`http_client.rs`).
+    ///
+    /// Per ADR-0005, this is a **YAGNI candidate**: hidden from rendered
+    /// docs until a production caller appears.
+    #[doc(hidden)]
     async fn get_weather_config(&self) -> Result<serde_json::Value> {
-        Err(IntervalsError::Config(ConfigError::Other(
-            "get_weather_config is not implemented for this client".to_string(),
-        )))
+        Err(IntervalsError::Config(ConfigError::Unsupported {
+            method: "get_weather_config",
+        }))
     }
+    /// Update the athlete's weather configuration (PUT
+    /// `/athlete/{id}/weather-config`).
+    ///
+    /// Per ADR-0005, this is a **YAGNI candidate**: hidden from rendered
+    /// docs until a production caller appears.
+    #[doc(hidden)]
     async fn update_weather_config(
         &self,
         _config: &serde_json::Value,
     ) -> Result<serde_json::Value> {
-        Err(IntervalsError::Config(ConfigError::Other(
-            "update_weather_config is not implemented for this client".to_string(),
-        )))
+        Err(IntervalsError::Config(ConfigError::Unsupported {
+            method: "update_weather_config",
+        }))
     }
+    /// List the athlete's routes (GET `/athlete/{id}/routes`).
+    ///
+    /// The `router.rs` smoke block in `intents/router.rs` exercises this
+    /// path with a discarded `_ =` binding.
+    ///
+    /// Per ADR-0005, this is a **YAGNI candidate**: hidden from rendered
+    /// docs until a production caller appears.
+    #[doc(hidden)]
     async fn list_routes(&self) -> Result<serde_json::Value> {
-        Err(IntervalsError::Config(ConfigError::Other(
-            "list_routes is not implemented for this client".to_string(),
-        )))
+        Err(IntervalsError::Config(ConfigError::Unsupported {
+            method: "list_routes",
+        }))
     }
+    /// Fetch a single route by ID (GET `/athlete/{id}/routes/{route_id}`).
+    ///
+    /// Per ADR-0005, this is a **YAGNI candidate**: hidden from rendered
+    /// docs until a production caller appears.
+    #[doc(hidden)]
     async fn get_route(&self, _route_id: i64, _include_path: bool) -> Result<serde_json::Value> {
-        Err(IntervalsError::Config(ConfigError::Other(
-            "get_route is not implemented for this client".to_string(),
-        )))
+        Err(IntervalsError::Config(ConfigError::Unsupported {
+            method: "get_route",
+        }))
     }
+    /// Update a route (PUT `/athlete/{id}/routes/{route_id}`).
+    ///
+    /// Per ADR-0005, this is a **YAGNI candidate**: hidden from rendered
+    /// docs until a production caller appears.
+    #[doc(hidden)]
     async fn update_route(
         &self,
         _route_id: i64,
         _route: &serde_json::Value,
     ) -> Result<serde_json::Value> {
-        Err(IntervalsError::Config(ConfigError::Other(
-            "update_route is not implemented for this client".to_string(),
-        )))
+        Err(IntervalsError::Config(ConfigError::Unsupported {
+            method: "update_route",
+        }))
     }
+    /// Compare route similarity between two routes (GET
+    /// `/athlete/{id}/routes/{route_id}/similarity/{other_id}`).
+    ///
+    /// Per ADR-0005, this is a **YAGNI candidate**: hidden from rendered
+    /// docs until a production caller appears.
+    #[doc(hidden)]
     async fn get_route_similarity(
         &self,
         _route_id: i64,
         _other_id: i64,
     ) -> Result<serde_json::Value> {
-        Err(IntervalsError::Config(ConfigError::Other(
-            "get_route_similarity is not implemented for this client".to_string(),
-        )))
+        Err(IntervalsError::Config(ConfigError::Unsupported {
+            method: "get_route_similarity",
+        }))
     }
 }
 

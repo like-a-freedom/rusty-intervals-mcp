@@ -101,6 +101,11 @@ On error: API or validation errors with descriptive messages."
             .get("period_weeks")
             .and_then(Value::as_u64)
             .unwrap_or(DEFAULT_PERIOD_WEEKS as u64) as i64;
+        if !(MIN_PERIOD_WEEKS..=MAX_PERIOD_WEEKS).contains(&period_weeks) {
+            return Err(IntentError::validation(format!(
+                "period_weeks must be in [{MIN_PERIOD_WEEKS}, {MAX_PERIOD_WEEKS}], got {period_weeks}"
+            )));
+        }
         let hypothesis_mode = input
             .get("hypothesis_mode")
             .and_then(Value::as_bool)
@@ -290,7 +295,7 @@ mod tests {
         let handler = TrackProgressHandler::new();
         let output = handler
             .execute(
-                json!({"period_weeks": 1, "hypothesis_mode": false}),
+                json!({"period_weeks": 4, "hypothesis_mode": false}),
                 Arc::new(client),
                 None,
             )
@@ -471,8 +476,7 @@ mod tests {
 
     #[test]
     fn test_description_mentions_compare_periods_for_yoy() {
-        let handler = TrackProgressHandler::new();
-        let desc = IntentHandler::description(&handler);
+        let desc = TrackProgressHandler::new().description();
         assert!(
             desc.contains("compare_periods"),
             "Description should route YoY/two non-contiguous periods to compare_periods, got: {}",
@@ -482,6 +486,61 @@ mod tests {
             desc.contains("Do NOT use for YoY"),
             "Description should explicitly forbid YoY usage, got: {}",
             desc
+        );
+    }
+
+    /// Regression test (F-13): an empty-activity period must still produce
+    /// a usable report — the handler should surface "no data" sections,
+    /// not crash on empty wellness/activities.
+    #[tokio::test]
+    async fn execute_with_empty_activities_returns_report() {
+        let client = MockIntervalsClient::builder()
+            .with_wellness(json!([
+                {"date": "2026-01-01", "ctl": 60.0, "hrv": 65.0},
+                {"date": "2026-01-02", "ctl": 60.2, "hrv": 64.0},
+                {"date": "2026-01-03", "ctl": 60.1, "hrv": 63.0},
+            ]))
+            .with_activities(Vec::<ActivitySummary>::new());
+        let handler = TrackProgressHandler::new();
+        let output = handler
+            .execute(
+                json!({"period_weeks": 4, "hypothesis_mode": false}),
+                Arc::new(client),
+                None,
+            )
+            .await;
+        assert!(
+            output.is_ok(),
+            "expected Ok with empty activities, got: {output:?}"
+        );
+    }
+
+    /// Regression test (F-13): `period_weeks` outside [MIN_PERIOD_WEEKS, MAX_PERIOD_WEEKS]
+    /// must be rejected with a validation error. Prior code silently accepted
+    /// any u64 and produced nonsensical windows (negative day arithmetic, etc.).
+    #[tokio::test]
+    async fn execute_rejects_period_weeks_out_of_range() {
+        let client = MockIntervalsClient::builder();
+        let handler = TrackProgressHandler::new();
+        // way above MAX_PERIOD_WEEKS=24
+        let result = handler
+            .execute(json!({"period_weeks": 1000}), Arc::new(client), None)
+            .await;
+        assert!(
+            result.is_err(),
+            "expected validation error for period_weeks=1000, got: {result:?}"
+        );
+        // way below MIN_PERIOD_WEEKS=4
+        let result = handler
+            .execute(
+                json!({"period_weeks": 1}),
+                Arc::new(MockIntervalsClient::default()),
+                None,
+            )
+            .await;
+        assert!(
+            result.is_err(),
+            "expected validation error for period_weeks=1, got: {result:?}"
         );
     }
 }

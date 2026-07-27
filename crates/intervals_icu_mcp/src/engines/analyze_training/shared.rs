@@ -4,7 +4,7 @@ use crate::domains::interval_detection::RawStream;
 use crate::domains::interval_segment::SportPresentation;
 use crate::domains::load::{ComparableLoadSeries, LoadSource};
 use crate::engines::analysis::PeriodSummary;
-use crate::engines::analysis_fetch::activity_load;
+use crate::engines::analysis_fetch::{activity_load, extract_activity_load};
 use intervals_icu_client::ActivitySummary;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -303,10 +303,8 @@ pub(crate) fn requested_metric_value(metric: &str, stats: &PeriodStats) -> (Stri
                     stats
                         .activity_details
                         .get(&activity.id)
-                        .and_then(|detail| detail.get("icu_training_load"))
-                        .and_then(|value| {
-                            value.as_f64().or_else(|| value.as_i64().map(|n| n as f64))
-                        })
+                        .and_then(|detail| extract_activity_load(Some(detail)))
+                        .map(|obs| obs.value)
                 })
                 .sum::<f64>();
             (format!("{sum:.1}"), "sum of training load".into())
@@ -319,8 +317,8 @@ pub(crate) fn requested_metric_value(metric: &str, stats: &PeriodStats) -> (Stri
                     stats
                         .activity_details
                         .get(&activity.id)
-                        .and_then(|detail| detail.get("icu_training_load"))
-                        .and_then(|v| v.as_f64().or_else(|| v.as_i64().map(|n| n as f64)))
+                        .and_then(|detail| extract_activity_load(Some(detail)))
+                        .map(|obs| obs.value)
                 })
                 .sum();
             let weeks = (stats.window_days as f64 / 7.0).max(1.0);

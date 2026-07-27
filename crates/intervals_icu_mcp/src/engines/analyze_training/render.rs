@@ -12,6 +12,7 @@ use crate::domains::endurance_evidence::{
 use crate::domains::interval_segment::{
     SegmentProvenance, SegmentSeriesReport, SeriesConsistency, SportPresentation,
 };
+use crate::engines::analysis_fetch::extract_activity_load;
 use crate::engines::interval_analysis::format_pace_from_speed;
 use crate::engines::interval_analysis::{
     IntervalOutputKind, derive_interval_output, extract_exact_tss, format_pace_per_km,
@@ -190,10 +191,7 @@ pub fn build_detailed_workout_rows(workout_detail: Option<&Value>) -> Vec<Vec<St
         rows.push(vec!["Cadence".into(), format!("{cadence:.0} spm")]);
     }
 
-    if let Some(load) = ["icu_training_load", "training_load", "load"]
-        .iter()
-        .find_map(|key| numeric_value(obj, key))
-    {
+    if let Some(load) = extract_activity_load(workout_detail).map(|obs| obs.value) {
         rows.push(vec!["Training Load".into(), format!("{load:.1}")]);
     }
 
@@ -1715,7 +1713,8 @@ mod tests {
         let detail = serde_json::json!({
             "moving_time": 1800,
             "distance": 5000.0,
-            "load": 95.0,
+            // Canonical alias: `training_load` (per F-8 unification with extract_activity_load)
+            "training_load": 95.0,
         });
         let rows = build_detailed_workout_rows(Some(&detail));
         assert!(rows.iter().any(|r| r[1].contains("95.0")));
@@ -3225,6 +3224,25 @@ mod tests {
         let rows = build_detailed_workout_rows(Some(&detail));
         // "training_load" is found by extract_exact_tss after "tss" and "icu_training_load"
         assert!(rows.iter().any(|r| r[1].contains("95.1")));
+    }
+
+    /// Regression test (F-8): a detail that exposes load only via the
+    /// `tss` alias (no `icu_training_load`/`training_load`/`icuTrainingLoad`)
+    /// should still surface as "Training Load" in the detailed rows.
+    /// Old code only probed `["icu_training_load","training_load","load"]`
+    /// and silently dropped the `tss` alias.
+    #[test]
+    fn build_detailed_workout_rows_load_via_tss_alias() {
+        let detail = serde_json::json!({
+            "moving_time": 1800,
+            "distance": 5000.0,
+            "tss": 73.5,
+        });
+        let rows = build_detailed_workout_rows(Some(&detail));
+        assert!(
+            rows.iter().any(|r| r[1].contains("73.5")),
+            "tss alias (73.5) should appear as Training Load, got rows: {rows:?}"
+        );
     }
 
     // ── build_detailed_workout_rows: partial data ─────────────────────

@@ -71,8 +71,11 @@ fn clone_intervals_error(
     use intervals_icu_client::{ApiError, ConfigError, IntervalsError, ValidationError};
 
     match err {
-        IntervalsError::Http(e) => IntervalsError::from_status(
-            e.status().map(|status| status.as_u16()).unwrap_or(500),
+        IntervalsError::Transport(e) => IntervalsError::from_status(
+            // Transport errors don't carry an HTTP status; classify them as 500
+            // (server/proxy-style) so upstream observability surfaces are still
+            // discriminable. Tests can introspect the message via `err.to_string()`.
+            500,
             e.to_string(),
         ),
         IntervalsError::Config(e) => IntervalsError::Config(match e {
@@ -81,6 +84,7 @@ fn clone_intervals_error(
                 key: key.clone(),
                 message: message.clone(),
             },
+            ConfigError::Unsupported { method } => ConfigError::Unsupported { method },
             ConfigError::Other(message) => ConfigError::Other(message.clone()),
         }),
         IntervalsError::Api(api) => IntervalsError::Api(ApiError {
@@ -110,6 +114,14 @@ fn clone_intervals_error(
         }),
         IntervalsError::NotFound(message) => IntervalsError::NotFound(message.clone()),
         IntervalsError::Auth(message) => IntervalsError::Auth(message.clone()),
+        IntervalsError::Io(e) => IntervalsError::Io(std::io::Error::new(e.kind(), e.to_string())),
+        IntervalsError::Cancelled { reason } => IntervalsError::Cancelled {
+            reason: reason.clone(),
+        },
+        IntervalsError::Decode { message, snippet } => IntervalsError::Decode {
+            message: message.clone(),
+            snippet: snippet.clone(),
+        },
     }
 }
 

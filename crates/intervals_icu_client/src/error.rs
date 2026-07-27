@@ -7,6 +7,29 @@
 
 use thiserror::Error;
 
+/// Transport-level error independent of the HTTP client library.
+///
+/// `reqwest::Error` and other transport-specific errors are converted to this
+/// domain-owned type at the `http_client` boundary, so callers never have to
+/// match on a specific HTTP library to handle transport failures.
+#[derive(Debug, Clone)]
+pub struct TransportError {
+    /// Human-readable message for logging/diagnostics.
+    pub message: String,
+    /// True if the error was caused by a connection timeout.
+    pub is_timeout: bool,
+    /// True if the error was caused by a connection-refused or DNS failure.
+    pub is_connect: bool,
+}
+
+impl std::fmt::Display for TransportError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for TransportError {}
+
 /// Configuration-related errors.
 #[derive(Debug, Error)]
 pub enum ConfigError {
@@ -17,6 +40,13 @@ pub enum ConfigError {
     /// Invalid configuration value.
     #[error("invalid configuration value for {key}: {message}")]
     InvalidValue { key: String, message: String },
+
+    /// Typed stub for unimplemented trait methods on test-only extension clients.
+    ///
+    /// Replaces the historical `Other("...is not implemented...")` string so call
+    /// sites can match on a genuine variant instead of substring-matching.
+    #[error("operation not implemented: {method}")]
+    Unsupported { method: &'static str },
 
     /// General configuration error.
     #[error("configuration error: {0}")]
@@ -100,9 +130,13 @@ pub enum ValidationError {
 /// while maintaining type safety and clear error categorization.
 #[derive(Debug, Error)]
 pub enum IntervalsError {
-    /// HTTP client or network error.
-    #[error("HTTP error: {0}")]
-    Http(#[from] reqwest::Error),
+    /// Transport-level error (network, timeout, connection failure).
+    ///
+    /// Carries a `TransportError` (domain-owned) instead of a `reqwest::Error`
+    /// directly so the public API does not depend on the HTTP client library.
+    /// See ADR-0003.
+    #[error("transport error: {0}")]
+    Transport(TransportError),
 
     /// Configuration error.
     #[error("configuration error: {0}")]
@@ -127,6 +161,25 @@ pub enum IntervalsError {
     /// Authentication or authorization failed.
     #[error("authentication error: {0}")]
     Auth(String),
+
+    /// I/O error during a file or stream operation (download to disk,
+    /// file sync, etc.). Distinguished from `Http` because the underlying
+    /// transport succeeded — the failure is on the persistence side.
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+
+    /// Operation cancelled by an external signal (download watch channel,
+    /// shutdown, etc.). String payload so callers can log human-readable
+    /// reasons without inventing a sub-enum per cancellation source.
+    #[error("operation cancelled: {reason}")]
+    Cancelled { reason: String },
+
+    /// Response body could not be decoded into the target domain type even
+    /// though it was valid JSON. Distinct from `JsonDecode` (parse failure)
+    /// — this means the payload exists but doesn't match the expected schema.
+    /// `snippet` carries a bounded preview of the body for diagnostics.
+    #[error("decode error: {message} — body: {snippet}")]
+    Decode { message: String, snippet: String },
 }
 
 impl IntervalsError {
@@ -189,6 +242,39 @@ impl IntervalsError {
             Self::Api(e) => e.is_rate_limited(),
             _ => false,
         }
+    }
+
+    /// Check if this error represents a cancellation signal received mid-flight.
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        matches!(self, Self::Cancelled { .. })
+    }
+
+    /// Check if this error originated from local I/O (file or stream) rather
+    /// than the network layer.
+    #[must_use]
+    pub fn is_io(&self) -> bool {
+        matches!(self, Self::Io(_))
+    }
+
+    /// Check if this error represents a transport-level timeout.
+    /// Returns `false` for non-transport errors.
+    #[must_use]
+    pub fn is_timeout(&self) -> bool {
+        matches!(self, Self::Transport(t) if t.is_timeout)
+    }
+
+    /// Check if this error represents a transport-level connection failure
+    /// (refused, DNS failure, etc.). Returns `false` for non-transport errors.
+    #[must_use]
+    pub fn is_connect(&self) -> bool {
+        matches!(self, Self::Transport(t) if t.is_connect)
+    }
+}
+
+impl From<TransportError> for IntervalsError {
+    fn from(e: TransportError) -> Self {
+        Self::Transport(e)
     }
 }
 
@@ -274,5 +360,147 @@ mod tests {
             err.to_string(),
             "required environment variable API_KEY is not set"
         );
+    }
+
+    // ------------------------------------------------------------------
+    // New variants (Phase 5b.1, ADR-0004): Io, Cancelled, Decode, Unsupported
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn intervals_error_io_from_std_io() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file missing");
+        let err: IntervalsError = io_err.into();
+        assert!(matches!(err, IntervalsError::Io(_)));
+        assert!(err.to_string().contains("I/O error"));
+        assert!(err.to_string().contains("file missing"));
+    }
+
+    #[test]
+    fn intervals_error_io_vido_question_mark() {
+        fn returns_io() -> std::io::Result<()> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "denied",
+            ))
+        }
+        fn prop() -> Result<()> {
+            returns_io()?;
+            Ok(())
+        }
+        let err = prop().unwrap_err();
+        assert!(matches!(err, IntervalsError::Io(_)));
+    }
+
+    #[test]
+    fn intervals_error_cancelled_has_reason() {
+        let err = IntervalsError::Cancelled {
+            reason: "download cancelled".to_string(),
+        };
+        assert!(matches!(err, IntervalsError::Cancelled { .. }));
+        assert_eq!(err.to_string(), "operation cancelled: download cancelled");
+    }
+
+    #[test]
+    fn intervals_error_decode_carries_message_and_snippet() {
+        let err = IntervalsError::Decode {
+            message: "missing field id".to_string(),
+            snippet: "{\"foo\":1}".to_string(),
+        };
+        assert!(matches!(err, IntervalsError::Decode { .. }));
+        let s = err.to_string();
+        assert!(s.contains("decode error"));
+        assert!(s.contains("missing field id"));
+        assert!(s.contains("{\"foo\":1}"));
+    }
+
+    #[test]
+    fn intervals_error_decode_is_distinct_from_json_decode() {
+        // The point of separation: Decode = valid JSON, wrong schema.
+        // JsonDecode = parse failure. Two distinct variants by intent.
+        let decode = IntervalsError::Decode {
+            message: "schema".into(),
+            snippet: "[]".into(),
+        };
+        let json_decode: IntervalsError =
+            serde_json::from_str::<i32>("not_json").unwrap_err().into();
+        assert!(matches!(decode, IntervalsError::Decode { .. }));
+        assert!(matches!(json_decode, IntervalsError::JsonDecode(_)));
+    }
+
+    #[test]
+    fn config_error_unsupported_carries_method_name() {
+        let err = ConfigError::Unsupported {
+            method: "list_routes",
+        };
+        assert_eq!(err.to_string(), "operation not implemented: list_routes");
+    }
+
+    #[test]
+    fn config_error_other_keeps_legacy_message_passthrough() {
+        let err = ConfigError::Other("legacy string".to_string());
+        assert_eq!(err.to_string(), "configuration error: legacy string");
+    }
+
+    // ------------------------------------------------------------------
+    // ADR-0003: TransportError abstraction
+    // ------------------------------------------------------------------
+
+    /// `TransportError` carries the original error's message unchanged so log
+    /// lines and diagnostic surfaces remain stable across the transport swap.
+    #[test]
+    fn transport_error_display_uses_inner_message() {
+        let err = crate::error::TransportError {
+            message: "connection refused".to_string(),
+            is_timeout: false,
+            is_connect: true,
+        };
+        assert_eq!(err.to_string(), "connection refused");
+    }
+
+    /// `IntervalsError::Transport` is the new public surface replacing the
+    /// leaky `IntervalsError::Http(#[from] reqwest::Error)`.
+    #[test]
+    fn intervals_error_transport_matches_new_variant() {
+        let err = IntervalsError::Transport(crate::error::TransportError {
+            message: "dns lookup failed".to_string(),
+            is_timeout: false,
+            is_connect: true,
+        });
+        assert!(matches!(err, IntervalsError::Transport(_)));
+    }
+
+    /// `is_timeout` is a first-class query on `IntervalsError` so call sites
+    /// can branch on transport semantics without knowing the HTTP library.
+    #[test]
+    fn intervals_error_is_timeout_queries_transport() {
+        let timeout = IntervalsError::Transport(crate::error::TransportError {
+            message: "request timed out".to_string(),
+            is_timeout: true,
+            is_connect: false,
+        });
+        let non_timeout = IntervalsError::Transport(crate::error::TransportError {
+            message: "connection refused".to_string(),
+            is_timeout: false,
+            is_connect: true,
+        });
+        assert!(timeout.is_timeout());
+        assert!(!non_timeout.is_timeout());
+    }
+
+    /// `is_connect` mirrors `is_timeout` for connection-level failures.
+    #[test]
+    fn intervals_error_is_connect_queries_transport() {
+        let connect = IntervalsError::Transport(crate::error::TransportError {
+            message: "dns failure".to_string(),
+            is_timeout: false,
+            is_connect: true,
+        });
+        let timeout = IntervalsError::Transport(crate::error::TransportError {
+            message: "read timeout".to_string(),
+            is_timeout: true,
+            is_connect: false,
+        });
+        assert!(connect.is_connect());
+        assert!(!timeout.is_connect());
     }
 }

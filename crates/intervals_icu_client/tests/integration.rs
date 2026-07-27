@@ -557,11 +557,12 @@ async fn get_event_returns_helpful_error_on_unexpected_body() {
     assert!(res.is_err());
     let err = res.err().unwrap();
     match err {
-        intervals_icu_client::IntervalsError::Config(cfg_err) => {
-            let msg = cfg_err.to_string();
-            assert!(msg.contains("decoding event"));
+        intervals_icu_client::IntervalsError::Decode { message, snippet } => {
+            assert!(message.contains("decoding event"));
+            // Snippet should carry a bounded preview of the response body
+            assert!(!snippet.is_empty());
         }
-        _ => panic!("expected Config error with decoding message"),
+        _ => panic!("expected Decode error for invalid Event payload"),
     }
 }
 
@@ -847,8 +848,8 @@ async fn download_file_create_error_returns_config() {
     let res = client.download_activity_file("a3", Some(path)).await;
     assert!(res.is_err());
     match res.err().unwrap() {
-        intervals_icu_client::IntervalsError::Config(_) => {}
-        _ => panic!("expected Config error"),
+        intervals_icu_client::IntervalsError::Io(_) => {}
+        _ => panic!("expected Io error from file create failure"),
     }
 }
 
@@ -1775,11 +1776,10 @@ async fn download_activity_file_with_progress_can_be_cancelled() {
     let res = handle.await.unwrap();
     assert!(res.is_err());
     match res.err().unwrap() {
-        IntervalsError::Config(cfg_err) => {
-            let msg = cfg_err.to_string();
-            assert!(msg.contains("download cancelled"));
+        IntervalsError::Cancelled { reason } => {
+            assert!(reason.contains("download cancelled"));
         }
-        e => panic!("expected Config error, got: {e:?}"),
+        e => panic!("expected Cancelled error, got: {e:?}"),
     }
 }
 

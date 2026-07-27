@@ -3,74 +3,27 @@
 //! This module implements deterministic guidance rules based on metric thresholds and alert states.
 //! All suggestions are derived from metric/alert states, not ad-hoc prose.
 
-use crate::domains::coach::{CoachAlert, CoachAlertSeverity, CoachGuidance, CoachMetrics};
+use crate::domains::coach::{CoachAlert, CoachGuidance, CoachMetrics};
 use crate::engines::adaptation::AdaptationState;
-use crate::engines::coach_metrics_constants::WDRM_HIGH_DEPLETION_PCT;
 
 // =============================================================================
-// Wellness Thresholds
+// Module structure
 // =============================================================================
 
-/// Sleep: good threshold (≥ this value)
-pub const SLEEP_GOOD_HOURS: f64 = 7.0;
-/// Sleep: fair minimum threshold (6.0–7.0)
-pub const SLEEP_FAIR_MIN_HOURS: f64 = 6.0;
-/// Sleep: alert threshold (< this value)
-const SLEEP_ALERT_HOURS: f64 = 6.5;
+mod adaptation;
+mod constants;
+mod distribution;
+mod load;
+mod neural;
+mod race_readiness;
+mod sleep_rhr;
+mod tsb;
 
-/// RHR: normal threshold (≤ this value)
-pub const RHR_NORMAL_BPM: f64 = 55.0;
-/// RHR: elevated threshold (56–60)
-pub const RHR_ELEVATED_MAX_BPM: f64 = 60.0;
-/// RHR: alert threshold (> this value)
-const RHR_ALERT_BPM: f64 = 60.0;
-
-/// HRV: stable threshold (≥ this value)
-pub const HRV_STABLE_MS: f64 = 60.0;
-/// HRV: low threshold (40–60)
-pub const HRV_LOW_MIN_MS: f64 = 40.0;
-/// Recovery index: alert threshold (< this value)
-const RECOVERY_INDEX_ALERT: f64 = 0.6;
-
-// =============================================================================
-// Fitness/Load Thresholds
-// =============================================================================
-
-/// TSB: fresh threshold (> this value)
-pub const TSB_FRESH: f64 = 10.0;
-/// TSB: fatigued threshold (< this value)
-pub const TSB_FATIGUED: f64 = -10.0;
-/// TSB: deep fatigue alert threshold (< this value)
-const TSB_DEEP_FATIGUE: f64 = -20.0;
-
-// =============================================================================
-// Volume Thresholds
-// =============================================================================
-
-/// Weekly average hours: low volume threshold (< this value)
-pub const WEEKLY_AVG_LOW_HOURS: f64 = 5.0;
-/// Weekly average hours: high volume threshold (> this value)
-pub const WEEKLY_AVG_HIGH_HOURS: f64 = 15.0;
-
-/// ACWR: safe zone upper bound — values above this trigger an alert.
-/// Maps to `coach_metrics::ACWR_SAFE_UPPER` (1.3).
-/// NOT the same as `coach_metrics::ACWR_WATCH_RATIO` (1.5 — overreaching threshold).
-const ACWR_ALERT_RATIO: f64 = 1.3;
-/// ACWR: overreaching threshold — values above this are critical.
-/// Maps to `coach_metrics::ACWR_WATCH_RATIO`.
-const ACWR_OVERREACH_RATIO: f64 = 1.5;
-/// Monotony: repetitive-stress threshold (Foster 1998 recommends ≤ 2.0; Seiler uses 2.5).
-/// Values above this indicate insufficient training variety → elevated injury/overtraining risk.
-const MONOTONY_ALERT: f64 = 2.5;
-/// Fatigue Index: high fatigue alert threshold (> this value)
-const FATIGUE_INDEX_ALERT: f64 = 2.5;
-/// Durability Index: low durability alert threshold (< this value)
-const DURABILITY_INDEX_ALERT: f64 = 0.85;
-
-/// Race readiness: alert threshold for suboptimal preparation (< this score)
-const RACE_READINESS_ALERT: i32 = 60;
-/// Race readiness: below this score the alert is Priority, otherwise Caution
-const RACE_READINESS_CRITICAL: i32 = 40;
+// Re-export thresholds so external call sites (e.g. `assess_recovery`) can
+// continue to refer to `crate::engines::coach_guidance::SLEEP_GOOD_HOURS` and
+// friends. The constants live in `coach_guidance::constants`; this re-export
+// restores the original public surface.
+pub use constants::*;
 
 // =============================================================================
 // Alert Generation
@@ -79,427 +32,26 @@ const RACE_READINESS_CRITICAL: i32 = 40;
 pub fn build_alerts(metrics: &CoachMetrics) -> Vec<CoachAlert> {
     let mut alerts = Vec::new();
 
-    // Deep fatigue alert (TSB < -20)
-    if let Some(fitness) = &metrics.fitness
-        && let Some(tsb) = fitness.tsb
-        && tsb < TSB_DEEP_FATIGUE
-    {
-        alerts.push(CoachAlert {
-            severity: CoachAlertSeverity::Priority,
-            code: "deep_fatigue".to_string(),
-            title: "Deep fatigue signal".to_string(),
-            evidence: vec![format!("TSB below -20 ({:.1})", tsb)],
-            section: "fitness".to_string(),
-        });
-    }
+    // Deep fatigue / fatigue alerts (TSB-driven) — see `tsb` submodule.
+    tsb::push_tsb_alerts(metrics, &mut alerts);
 
-    // Fatigue alert (TSB < -10 but >= -20)
-    if let Some(fitness) = &metrics.fitness
-        && let Some(tsb) = fitness.tsb
-        && (TSB_DEEP_FATIGUE..=TSB_FATIGUED).contains(&tsb)
-    {
-        alerts.push(CoachAlert {
-            severity: CoachAlertSeverity::Caution,
-            code: "fatigue".to_string(),
-            title: "Fatigue accumulation".to_string(),
-            evidence: vec![format!("TSB below -10 ({:.1})", tsb)],
-            section: "fitness".to_string(),
-        });
-    }
+    // Wellness alerts (sleep, RHR, HRV, recovery index) — see `sleep_rhr` submodule.
+    sleep_rhr::push_wellness_alerts(metrics, &mut alerts);
 
-    // Low sleep alert
-    if let Some(wellness) = &metrics.wellness
-        && let Some(sleep) = wellness.avg_sleep_hours
-        && sleep < SLEEP_ALERT_HOURS
-    {
-        alerts.push(CoachAlert {
-            severity: CoachAlertSeverity::Caution,
-            code: "low_sleep".to_string(),
-            title: "Low sleep support".to_string(),
-            evidence: vec![format!(
-                "Average sleep below {:.1}h ({:.1}h)",
-                SLEEP_ALERT_HOURS, sleep
-            )],
-            section: "wellness".to_string(),
-        });
-    }
+    // ACWR / monotony / fatigue / durability / volume alerts — see `load` submodule.
+    load::push_load_alerts(metrics, &mut alerts);
 
-    // Elevated RHR alert
-    if let Some(wellness) = &metrics.wellness
-        && let Some(rhr) = wellness.avg_resting_hr
-        && rhr > RHR_ALERT_BPM
-    {
-        alerts.push(CoachAlert {
-            severity: CoachAlertSeverity::Caution,
-            code: "elevated_rhr".to_string(),
-            title: "Elevated RHR signal".to_string(),
-            evidence: vec![format!(
-                "RHR above {:.0} bpm ({:.0} bpm)",
-                RHR_ALERT_BPM, rhr
-            )],
-            section: "wellness".to_string(),
-        });
-    }
+    // Distribution-side alerts (polarisation + consistency) — see `distribution` submodule.
+    distribution::push_distribution_alerts(metrics, &mut alerts);
 
-    // Personal-baseline HRV alert
-    if let Some(wellness) = &metrics.wellness
-        && let Some(hrv_state) = wellness.hrv_trend_state.as_deref()
-        && matches!(hrv_state, "suppressed" | "below_range")
-    {
-        let evidence = match (
-            wellness.hrv_deviation_pct,
-            wellness.hrv_baseline,
-            wellness.avg_hrv,
-        ) {
-            (Some(deviation_pct), Some(baseline), Some(current)) => vec![format!(
-                "HRV {:.1}% below personal baseline ({:.0} ms vs {:.0} ms)",
-                deviation_pct.abs(),
-                current,
-                baseline
-            )],
-            _ => vec!["HRV is below the athlete's recent personal range".to_string()],
-        };
+    // Neural / heat / WDRM / decoupling alerts — see `neural` submodule.
+    neural::push_neural_alerts(metrics, &mut alerts);
 
-        alerts.push(CoachAlert {
-            severity: CoachAlertSeverity::Caution,
-            code: "low_hrv".to_string(),
-            title: "HRV below personal baseline".to_string(),
-            evidence,
-            section: "wellness".to_string(),
-        });
-    }
+    // Race-readiness alert — see `race_readiness` submodule.
+    race_readiness::push_race_readiness_alerts(metrics, &mut alerts);
 
-    // Low recovery index alert
-    if let Some(wellness) = &metrics.wellness
-        && let Some(recovery_index) = wellness.recovery_index
-        && recovery_index < RECOVERY_INDEX_ALERT
-    {
-        alerts.push(CoachAlert {
-            severity: CoachAlertSeverity::Priority,
-            code: "low_recovery_index".to_string(),
-            title: "Recovery-first signal".to_string(),
-            evidence: vec![format!(
-                "Recovery index below {:.2} ({:.2})",
-                RECOVERY_INDEX_ALERT, recovery_index
-            )],
-            section: "wellness".to_string(),
-        });
-    }
-
-    // ACWR alerts
-    if let Some(load_management) = &metrics.load_management
-        && let Some(acwr) = &load_management.acwr
-    {
-        if acwr.ratio > ACWR_OVERREACH_RATIO {
-            alerts.push(CoachAlert {
-                severity: CoachAlertSeverity::Priority,
-                code: "acwr_overreaching".to_string(),
-                title: "Acute load spike".to_string(),
-                evidence: vec![format!(
-                    "ACWR {:.2} exceeds {:.1}",
-                    acwr.ratio, ACWR_OVERREACH_RATIO
-                )],
-                section: "load_management".to_string(),
-            });
-        } else if acwr.ratio > ACWR_ALERT_RATIO {
-            alerts.push(CoachAlert {
-                severity: CoachAlertSeverity::Caution,
-                code: "acwr_watch".to_string(),
-                title: "Load ramp watch".to_string(),
-                evidence: vec![format!(
-                    "ACWR {:.2} exceeds {:.1}",
-                    acwr.ratio, ACWR_ALERT_RATIO
-                )],
-                section: "load_management".to_string(),
-            });
-        }
-    }
-
-    // Monotony alert
-    if let Some(load_management) = &metrics.load_management
-        && let Some(monotony) = load_management.monotony
-        && monotony > MONOTONY_ALERT
-    {
-        alerts.push(CoachAlert {
-            severity: CoachAlertSeverity::Caution,
-            code: "high_monotony".to_string(),
-            title: "Repetitive load pattern".to_string(),
-            evidence: vec![format!(
-                "Monotony {:.2} exceeds {:.1}",
-                monotony, MONOTONY_ALERT
-            )],
-            section: "load_management".to_string(),
-        });
-    }
-
-    // Fatigue Index alert
-    if let Some(load_management) = &metrics.load_management
-        && let Some(fatigue_index) = load_management.fatigue_index
-        && fatigue_index > FATIGUE_INDEX_ALERT
-    {
-        alerts.push(CoachAlert {
-            severity: CoachAlertSeverity::Caution,
-            code: "high_fatigue_index".to_string(),
-            title: "High fatigue index".to_string(),
-            evidence: vec![format!(
-                "Fatigue Index {:.2} exceeds {:.1}",
-                fatigue_index, FATIGUE_INDEX_ALERT
-            )],
-            section: "load_management".to_string(),
-        });
-    }
-
-    // Durability Index alert
-    if let Some(load_management) = &metrics.load_management
-        && let Some(durability_index) = load_management.durability_index
-        && durability_index < DURABILITY_INDEX_ALERT
-    {
-        alerts.push(CoachAlert {
-            severity: CoachAlertSeverity::Caution,
-            code: "low_durability_index".to_string(),
-            title: "Low durability index".to_string(),
-            evidence: vec![format!(
-                "Durability Index {:.3} is below {:.2} — power curve degraded after accumulated work",
-                durability_index, DURABILITY_INDEX_ALERT
-            )],
-            section: "load_management".to_string(),
-        });
-    }
-
-    // High training load alert
-    if let Some(volume) = &metrics.volume
-        && volume.weekly_avg_hours > WEEKLY_AVG_HIGH_HOURS
-    {
-        alerts.push(CoachAlert {
-            severity: CoachAlertSeverity::Caution,
-            code: "high_training_load".to_string(),
-            title: "High training load".to_string(),
-            evidence: vec![format!(
-                "Weekly average {:.1}h exceeds {:.0}h threshold",
-                volume.weekly_avg_hours, WEEKLY_AVG_HIGH_HOURS
-            )],
-            section: "volume".to_string(),
-        });
-    }
-
-    // Threshold-biased polarisation alert
-    if let Some(polarisation) = &metrics.polarisation
-        && let Some(state) = polarisation.state.as_deref()
-        && state == "threshold_biased"
-        && let Some(z2_pct) = polarisation.z2_pct
-    {
-        alerts.push(CoachAlert {
-            severity: CoachAlertSeverity::Caution,
-            code: "threshold_biased_polarisation".to_string(),
-            title: "Threshold-biased training distribution".to_string(),
-            evidence: vec![format!(
-                "Polarisation ratio {:.2} indicates too much threshold-zone work ({:.0}% Z2)",
-                polarisation.ratio.unwrap_or(0.0),
-                z2_pct * 100.0
-            )],
-            section: "distribution".to_string(),
-        });
-    }
-
-    // NDLI — neural overload alert
-    if let Some(ndli) = &metrics.ndli
-        && ndli.supported
-        && ndli.ndli_overload_flag
-    {
-        alerts.push(CoachAlert {
-            severity: CoachAlertSeverity::Priority,
-            code: "ndli_overload".to_string(),
-            title: "Neural density overload".to_string(),
-            evidence: vec![format!(
-                "{} high-intensity days in the last 7 — NDLI state: red",
-                ndli.high_intensity_days_7d
-            )],
-            section: "ndli".to_string(),
-        });
-    }
-
-    // NDLI — elevated alert (amber)
-    if let Some(ndli) = &metrics.ndli
-        && ndli.supported
-        && ndli.ndli_state == "amber"
-    {
-        alerts.push(CoachAlert {
-            severity: CoachAlertSeverity::Caution,
-            code: "ndli_elevated".to_string(),
-            title: "Elevated neural density".to_string(),
-            evidence: vec![format!(
-                "{} high-intensity days in the last 7 — NDLI state: amber",
-                ndli.high_intensity_days_7d
-            )],
-            section: "ndli".to_string(),
-        });
-    }
-
-    // Heat — stress elevated alert
-    if let Some(heat) = &metrics.heat
-        && heat.supported
-        && heat.heat_state == "high"
-    {
-        alerts.push(CoachAlert {
-            severity: CoachAlertSeverity::Caution,
-            code: "heat_stress_elevated".to_string(),
-            title: "Heat stress elevated".to_string(),
-            evidence: vec![format!(
-                "Heat index {:.2} — high heat exposure over the last 7 days",
-                heat.heat_index_7d.unwrap_or(0.0)
-            )],
-            section: "heat".to_string(),
-        });
-    }
-
-    // Heat — moderate alert
-    if let Some(heat) = &metrics.heat
-        && heat.supported
-        && heat.heat_state == "moderate"
-    {
-        alerts.push(CoachAlert {
-            severity: CoachAlertSeverity::Info,
-            code: "heat_stress_moderate".to_string(),
-            title: "Moderate heat exposure".to_string(),
-            evidence: vec![format!(
-                "Heat index {:.2} — moderate heat over the last 7 days",
-                heat.heat_index_7d.unwrap_or(0.0)
-            )],
-            section: "heat".to_string(),
-        });
-    }
-
-    // WDRM — high W′ depletion alert
-    if let Some(wdrm) = &metrics.wdrm
-        && wdrm.supported
-        && let Some(depletion_pct) = wdrm.depletion_pct
-        && depletion_pct >= WDRM_HIGH_DEPLETION_PCT
-    {
-        alerts.push(CoachAlert {
-            severity: CoachAlertSeverity::Caution,
-            code: "high_wbal_depletion".to_string(),
-            title: "High W′ depletion".to_string(),
-            evidence: vec![format!(
-                "W′ depletion at {:.0}% — anaerobic reserves significantly drained",
-                depletion_pct * 100.0
-            )],
-            section: "wdrm".to_string(),
-        });
-    }
-
-    // ISDM — durability drifting alert
-    if let Some(workout) = &metrics.workout
-        && let Some(decoupling) = &workout.aerobic_decoupling
-        && decoupling.durability_state == "drifting"
-    {
-        alerts.push(CoachAlert {
-            severity: CoachAlertSeverity::Caution,
-            code: "durability_drifting".to_string(),
-            title: "Durability drift detected".to_string(),
-            evidence: vec![format!(
-                "Signed decoupling {:.1}% — power/HR ratio shifting across the session",
-                decoupling.signed_decoupling_pct
-            )],
-            section: "decoupling".to_string(),
-        });
-    }
-
-    // ISDM — durability improving info
-    if let Some(workout) = &metrics.workout
-        && let Some(decoupling) = &workout.aerobic_decoupling
-        && decoupling.durability_state == "improving"
-    {
-        alerts.push(CoachAlert {
-            severity: CoachAlertSeverity::Info,
-            code: "durability_improving".to_string(),
-            title: "Durability improvement".to_string(),
-            evidence: vec![format!(
-                "Signed decoupling {:.1}% — negative drift indicates improving aerobic durability",
-                decoupling.signed_decoupling_pct
-            )],
-            section: "decoupling".to_string(),
-        });
-    }
-
-    // Polarized confirmation alert
-    if let Some(polarisation) = &metrics.polarisation
-        && let Some(state) = polarisation.state.as_deref()
-        && state == "polarised"
-    {
-        alerts.push(CoachAlert {
-            severity: CoachAlertSeverity::Info,
-            code: "polarized_confirmation".to_string(),
-            title: "Polarized training distribution".to_string(),
-            evidence: vec!["Training distribution follows the 80/20 polarised model — appropriate for most endurance phases.".to_string()],
-            section: "distribution".to_string(),
-        });
-    }
-
-    // Low consistency alert
-    if let Some(consistency) = &metrics.consistency
-        && let Some(state) = consistency.state.as_deref()
-        && state == "low"
-    {
-        alerts.push(CoachAlert {
-            severity: CoachAlertSeverity::Caution,
-            code: "low_consistency".to_string(),
-            title: "Low training plan adherence".to_string(),
-            evidence: vec![format!(
-                "Only {} of {} planned sessions completed ({:.0}%)",
-                consistency.sessions_completed,
-                consistency.sessions_planned,
-                consistency.ratio.unwrap_or(0.0) * 100.0
-            )],
-            section: "adherence".to_string(),
-        });
-    }
-
-    // Low race-readiness alert (score < 60 indicates suboptimal preparation)
-    if let Some(race) = &metrics.race_readiness
-        && race.supported
-        && let Some(score) = race.readiness_score
-        && score < RACE_READINESS_ALERT
-    {
-        alerts.push(CoachAlert {
-            severity: if score < RACE_READINESS_CRITICAL {
-                CoachAlertSeverity::Priority
-            } else {
-                CoachAlertSeverity::Caution
-            },
-            code: "low_race_readiness".to_string(),
-            title: "Suboptimal race readiness".to_string(),
-            evidence: vec![format!(
-                "Readiness score {:.0}/100 (threshold: {:.0})",
-                score, RACE_READINESS_ALERT
-            )],
-            section: "readiness".to_string(),
-        });
-    }
-
-    // Adaptation state alerts — type-safe matching via parse_adaptation_state
-    if let Some(espe) = &metrics.espe_derived
-        && let Some(ref state_str) = espe.adaptation_state
-        && let Some(state) = parse_adaptation_state(state_str)
-    {
-        if state == AdaptationState::Plateau {
-            alerts.push(CoachAlert {
-                severity: CoachAlertSeverity::Caution,
-                code: "adaptation_stalled".to_string(),
-                title: "Adaptation plateau detected".to_string(),
-                evidence: vec!["Power-curve deltas below threshold — no meaningful adaptation across any system.".to_string()],
-                section: "adaptation".to_string(),
-            });
-        }
-        if state == AdaptationState::FatigueState {
-            alerts.push(CoachAlert {
-                severity: CoachAlertSeverity::Priority,
-                code: "adaptation_fatigue".to_string(),
-                title: "Fatigue-dominant adaptation pattern".to_string(),
-                evidence: vec!["Threshold and VO2max power declining — consider reducing load or adding recovery.".to_string()],
-                section: "adaptation".to_string(),
-            });
-        }
-    }
+    // Adaptation state alerts — see `adaptation` submodule.
+    adaptation::push_adaptation_alerts(metrics, &mut alerts);
 
     alerts
 }
@@ -772,9 +324,9 @@ pub fn build_guidance(metrics: &CoachMetrics, alerts: &[CoachAlert]) -> CoachGui
 mod tests {
     use super::*;
     use crate::domains::coach::{
-        AcwrMetrics, CoachMetrics, ConsistencyMetrics, DecouplingMetrics, FitnessMetrics,
-        HeatMetrics, LoadManagementMetrics, NdliMetrics, PolarisationMetrics, RaceReadinessMetrics,
-        VolumeMetrics, WdrMetrics, WellnessMetrics, WorkoutMetricsContext,
+        AcwrMetrics, CoachAlertSeverity, CoachMetrics, ConsistencyMetrics, DecouplingMetrics,
+        FitnessMetrics, HeatMetrics, LoadManagementMetrics, NdliMetrics, PolarisationMetrics,
+        RaceReadinessMetrics, VolumeMetrics, WdrMetrics, WellnessMetrics, WorkoutMetricsContext,
     };
     use crate::engines::adaptation::AdaptationState;
 

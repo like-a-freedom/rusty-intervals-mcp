@@ -336,6 +336,79 @@ mod compare_tests {
         assert!(value.contains("/km"));
     }
 
+    /// Regression test (F-8): an activity that exposes load only as `tss`
+    /// (canonical alias) should still contribute to the period "tss" and
+    /// "intensity" metrics. Prior implementation hard-coded `icu_training_load`
+    /// and silently dropped `tss`/`training_load`/`icuTrainingLoad` aliases.
+    #[test]
+    fn test_requested_metric_value_tss_picks_up_tss_alias() {
+        let mut details = std::collections::HashMap::new();
+        details.insert("a1".to_string(), serde_json::json!({"tss": 100.0}));
+        let stats = PeriodStats {
+            snapshot: crate::engines::coach_metrics::TrendSnapshot {
+                activity_count: 1,
+                total_time_secs: 3600,
+                total_distance_m: 10000.0,
+                total_elevation_m: 50.0,
+            },
+            window_days: 7,
+            activities: vec![make_activity("a1", "Long Run", "2026-03-01", Some(3600))],
+            activity_details: details,
+            planned_count: 1,
+            etvs: None,
+        };
+        let (value, _) = requested_metric_value("tss", &stats);
+        assert_eq!(value, "100.0", "tss-only detail should be picked up");
+    }
+
+    #[test]
+    fn test_requested_metric_value_intensity_picks_up_training_load_alias() {
+        let mut details = std::collections::HashMap::new();
+        details.insert("a1".to_string(), serde_json::json!({"training_load": 70.0}));
+        let stats = PeriodStats {
+            snapshot: crate::engines::coach_metrics::TrendSnapshot {
+                activity_count: 1,
+                total_time_secs: 3600,
+                total_distance_m: 10000.0,
+                total_elevation_m: 50.0,
+            },
+            window_days: 7,
+            activities: vec![make_activity("a1", "Tempo", "2026-03-01", Some(3600))],
+            activity_details: details,
+            planned_count: 1,
+            etvs: None,
+        };
+        let (value, _) = requested_metric_value("intensity", &stats);
+        assert!(value.contains("TSS/wk"), "got: {value}");
+        // 70 TSS / 1 week = 70 TSS/wk
+        assert!(value.starts_with("70"), "expected ~70 TSS/wk, got: {value}");
+    }
+
+    #[test]
+    fn test_requested_metric_value_intensity_prefers_canonical_over_alias() {
+        let mut details = std::collections::HashMap::new();
+        details.insert(
+            "a1".to_string(),
+            serde_json::json!({"icu_training_load": 88.0, "training_load": 65.0, "tss": 73.0}),
+        );
+        let stats = PeriodStats {
+            snapshot: crate::engines::coach_metrics::TrendSnapshot {
+                activity_count: 1,
+                total_time_secs: 3600,
+                total_distance_m: 10000.0,
+                total_elevation_m: 50.0,
+            },
+            window_days: 7,
+            activities: vec![make_activity("a1", "Run", "2026-03-01", Some(3600))],
+            activity_details: details,
+            planned_count: 1,
+            etvs: None,
+        };
+        let (value, _) = requested_metric_value("intensity", &stats);
+        // canonical icu_training_load wins → 88 TSS/wk
+        assert!(value.starts_with("88"), "got: {value}");
+    }
+
     #[test]
     fn test_requested_metric_label() {
         assert_eq!(requested_metric_label("hr"), "HR");

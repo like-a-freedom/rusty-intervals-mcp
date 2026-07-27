@@ -1,24 +1,76 @@
 //! HTTP client implementation for the Intervals.icu API.
 //!
 //! This module provides a reqwest-based implementation of the [`IntervalsClient`](crate::IntervalsClient) trait.
+//!
+//! The implementation is split across several submodules grouped by API
+//! surface: [`activities`], [`athlete`], [`events`], [`downloads`],
+//! [`wellness`], [`curves`], [`gear`], [`sport`], and
+//! [`weather_routes`]. The `mod.rs` here owns the [`ReqwestIntervalsClient`]
+//! struct, transport plumbing (auth, circuit breaker, error mapping), and
+//! cross-cutting helpers.
+//!
+//! The weather/route submodule methods are named with a `fetch_` prefix to
+//! avoid a name collision with the trait-method dispatchers in the
+//! `impl IntervalsClient for ReqwestIntervalsClient` block below.
+
+pub(crate) mod activities;
+pub(crate) mod athlete;
+pub(crate) mod curves;
+pub(crate) mod downloads;
+pub(crate) mod events;
+pub(crate) mod gear;
+pub(crate) mod sport;
+pub(crate) mod weather_routes;
+pub(crate) mod wellness;
 
 use crate::circuit_breaker::CircuitBreaker;
 use crate::{
-    ActivityMessage, AthleteProfile, BestEffortsOptions, IntervalsClient, IntervalsError, Result,
+    ActivityMessage, AthleteProfile, BestEffortsOptions, IntervalsError, Result, TransportError,
     ValidationError,
 };
 use ::metrics::{counter, histogram};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use chrono::{Duration, Utc};
 use futures_util::StreamExt;
 use secrecy::{ExposeSecret, SecretString};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+// ADR-0003: single conversion site from the HTTP transport to the domain error.
+// Every `reqwest::Error` produced in this module reaches `IntervalsError` via
+// these two impls — the rest of the codebase never sees `reqwest::Error`.
+// The chain is: reqwest::Error -> TransportError -> IntervalsError.
+impl From<reqwest::Error> for TransportError {
+    fn from(e: reqwest::Error) -> Self {
+        TransportError {
+            message: e.to_string(),
+            is_timeout: e.is_timeout(),
+            is_connect: e.is_connect(),
+        }
+    }
+}
+
+// Convenience: let `?` on a `Result<_, reqwest::Error>` auto-convert to
+// `Result<_, IntervalsError>` inside this module. Outside `http_client.rs`
+// callers must use `TransportError::from` explicitly so the transport detail
+// doesn't leak back into the rest of the crate.
+impl From<reqwest::Error> for IntervalsError {
+    fn from(e: reqwest::Error) -> Self {
+        Self::Transport(TransportError::from(e))
+    }
+}
+
 /// Maximum number of characters to keep in error body snippets.
+///
+/// Truncation is codepoint-safe via `chars().take(N)`. A multi-byte UTF-8
+/// character (e.g., `é`, emoji) is never split mid-byte. However, a grapheme
+/// cluster (e.g., ZWJ-joined emoji like 👨‍👩‍👧‍👦) may be split, leaving a trailing
+/// incomplete cluster. Acceptable for diagnostic-only error output.
 const ERROR_BODY_MAX: usize = 256;
 /// Maximum number of characters to keep when decoding an unexpected response body.
-const DECODE_BODY_SNIPPET_MAX: usize = 512;
+///
+/// Codepoint-safe via `chars().take(N)`; grapheme clusters may be split
+/// (see `ERROR_BODY_MAX` for rationale). Diagnostic-only.
+pub(super) const DECODE_BODY_SNIPPET_MAX: usize = 512;
 use tokio::io::AsyncWriteExt;
 
 /// Client for the Intervals.icu API using reqwest.
@@ -83,78 +135,15 @@ impl ReqwestIntervalsClient {
         url
     }
 
-    /// Build query parameters from a vector of (key, String) pairs.
+    /// Build an authenticated request with the given HTTP method.
     ///
-    /// This is a helper to avoid repeating the conversion from Vec<(&str, String)> to Vec<(&str, &str)>.
-    fn build_query<'a>(params: &'a [(&'a str, String)]) -> Vec<(&'a str, &'a str)> {
-        params.iter().map(|(k, v)| (*k, v.as_str())).collect()
-    }
-
-    async fn resolve_sport_settings_id(&self, sport_type_or_id: &str) -> Result<String> {
-        if !sport_type_or_id.is_empty() && sport_type_or_id.chars().all(|c| c.is_ascii_digit()) {
-            return Ok(sport_type_or_id.to_string());
-        }
-
-        let settings = self.get_sport_settings().await?;
-
-        Self::resolve_sport_settings_id_from_settings(&settings, sport_type_or_id)
-    }
-
-    pub(crate) fn resolve_sport_settings_id_from_settings(
-        settings: &crate::domains::workout::SportSettings,
-        sport_type_or_id: &str,
-    ) -> Result<String> {
-        let normalized = Self::normalize_sport(sport_type_or_id);
-
-        for entry in &settings.sports {
-            let matches_type = entry
-                .types
-                .as_ref()
-                .is_some_and(|types| types.iter().any(|t| t == &normalized));
-            let matches_name = entry.name.as_deref() == Some(&normalized);
-
-            if !(matches_type || matches_name) {
-                continue;
-            }
-
-            if let Some(id) = entry.id {
-                return Ok(id.to_string());
-            }
-        }
-
-        Err(IntervalsError::Validation(ValidationError::InvalidFormat {
-            field: "sport_type".to_string(),
-            value: format!(
-                "could not resolve sport settings id for sport type '{sport_type_or_id}'"
-            ),
-        }))
-    }
-
-    /// Build an authenticated GET request.
-    fn get_request(&self, url: &str) -> reqwest::RequestBuilder {
+    /// Replaces the previous `get_request`/`post_request`/`put_request`/`delete_request`
+    /// quartet — all four were identical except for the verb, and callers had to know
+    /// which `reqwest::Method` to pick. Single entry point reduces duplication and
+    /// makes future auth changes (e.g. switching from Basic to Bearer) one-line.
+    fn request(&self, method: reqwest::Method, url: &str) -> reqwest::RequestBuilder {
         self.client
-            .get(url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-    }
-
-    /// Build an authenticated POST request.
-    fn post_request(&self, url: &str) -> reqwest::RequestBuilder {
-        self.client
-            .post(url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-    }
-
-    /// Build an authenticated PUT request.
-    fn put_request(&self, url: &str) -> reqwest::RequestBuilder {
-        self.client
-            .put(url)
-            .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
-    }
-
-    /// Build an authenticated DELETE request.
-    fn delete_request(&self, url: &str) -> reqwest::RequestBuilder {
-        self.client
-            .delete(url)
+            .request(method, url)
             .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
     }
 
@@ -184,7 +173,7 @@ impl ReqwestIntervalsClient {
                 self.circuit_breaker.record_failure();
                 histogram!("intervals_icu_client_upstream_request_duration_seconds")
                     .record(duration);
-                return Err(IntervalsError::Http(e));
+                return Err(IntervalsError::Transport(e.into()));
             }
         };
 
@@ -245,9 +234,9 @@ impl ReqwestIntervalsClient {
 
     fn upstream_error_type(err: &IntervalsError) -> &'static str {
         match err {
-            IntervalsError::Http(e) if e.is_timeout() => "timeout",
-            IntervalsError::Http(e) if e.is_connect() => "network",
-            IntervalsError::Http(_) => "network",
+            IntervalsError::Transport(_) if err.is_timeout() => "timeout",
+            IntervalsError::Transport(_) if err.is_connect() => "network",
+            IntervalsError::Transport(_) => "network",
             IntervalsError::Auth(_) => "auth",
             IntervalsError::NotFound(_) => "not_found",
             IntervalsError::Api(api) if api.status >= 500 => "5xx",
@@ -290,25 +279,23 @@ impl ReqwestIntervalsClient {
         url: String,
         output_path: Option<PathBuf>,
     ) -> Result<Option<String>> {
-        let resp = self.execute_raw(self.get_request(&url)).await?;
+        let resp = self
+            .execute_raw(self.request(reqwest::Method::GET, &url))
+            .await?;
         if !resp.status().is_success() {
             return Err(self.error_from_response(resp).await);
         }
 
         if let Some(path) = output_path {
             let mut stream = resp.bytes_stream();
-            let mut file = tokio::fs::File::create(&path)
-                .await
-                .map_err(|e| IntervalsError::Config(crate::ConfigError::Other(e.to_string())))?;
+            let mut file = tokio::fs::File::create(&path).await?;
             while let Some(chunk) = stream.next().await {
-                let bytes = chunk.map_err(IntervalsError::Http)?;
-                file.write_all(&bytes).await.map_err(|e| {
-                    IntervalsError::Config(crate::ConfigError::Other(e.to_string()))
-                })?;
+                let bytes = chunk
+                    .map_err(TransportError::from)
+                    .map_err(IntervalsError::from)?;
+                file.write_all(&bytes).await?;
             }
-            file.sync_all()
-                .await
-                .map_err(|e| IntervalsError::Config(crate::ConfigError::Other(e.to_string())))?;
+            file.sync_all().await?;
             return Ok(None);
         }
 
@@ -432,7 +419,8 @@ impl ReqwestIntervalsClient {
             .add("type", sport)
             .build_owned();
         let qp: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (*k, v.as_str())).collect();
-        self.execute_json(self.get_request(&url).query(&qp)).await
+        self.execute_json(self.request(reqwest::Method::GET, &url).query(&qp))
+            .await
     }
 
     fn normalize_event_update_fields(fields: &serde_json::Value) -> Result<serde_json::Value> {
@@ -461,42 +449,50 @@ impl ReqwestIntervalsClient {
 }
 
 // ============================================================================
-// Profile Payload Types
+// Athlete profile implementation lives in [`http_client::athlete`].
+// Dispatchers below keep the trait surface intact.
 // ============================================================================
-
-#[derive(serde::Deserialize)]
-struct ProfilePayload {
-    athlete: Option<ProfileAthlete>,
-}
-
-#[derive(serde::Deserialize)]
-struct ProfileAthlete {
-    id: Option<String>,
-    name: Option<String>,
-}
 
 #[async_trait::async_trait]
 impl crate::IntervalsClient for ReqwestIntervalsClient {
     async fn get_athlete_profile(&self) -> Result<AthleteProfile> {
-        let url = self.api_url(&["athlete", &self.athlete_id, "profile"]);
-        let resp = self.execute_raw(self.get_request(&url)).await?;
-        let status = resp.status();
-        if !status.is_success() {
-            return Err(self.error_from_response(resp).await);
-        }
+        self.fetch_athlete_profile().await
+    }
 
-        let payload: ProfilePayload = resp.json().await?;
-        payload
-            .athlete
-            .map(|a| AthleteProfile {
-                id: a.id.unwrap_or_default(),
-                name: a.name,
-            })
-            .ok_or_else(|| {
-                IntervalsError::Config(crate::ConfigError::Other(
-                    "missing athlete profile data".to_string(),
-                ))
-            })
+    // Weather and routes — real implementations live in
+    // [`http_client::weather_routes`]. Dispatchers below keep the trait
+    // surface intact without duplicating the URL/query logic.
+
+    async fn get_weather_config(&self) -> Result<serde_json::Value> {
+        self.fetch_weather_config().await
+    }
+
+    async fn update_weather_config(&self, config: &serde_json::Value) -> Result<serde_json::Value> {
+        self.fetch_update_weather_config(config).await
+    }
+
+    async fn list_routes(&self) -> Result<serde_json::Value> {
+        self.fetch_list_routes().await
+    }
+
+    async fn get_route(&self, route_id: i64, include_path: bool) -> Result<serde_json::Value> {
+        self.fetch_route(route_id, include_path).await
+    }
+
+    async fn update_route(
+        &self,
+        route_id: i64,
+        route: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        self.fetch_update_route(route_id, route).await
+    }
+
+    async fn get_route_similarity(
+        &self,
+        route_id: i64,
+        other_id: i64,
+    ) -> Result<serde_json::Value> {
+        self.fetch_route_similarity(route_id, other_id).await
     }
 
     async fn get_recent_activities(
@@ -504,30 +500,15 @@ impl crate::IntervalsClient for ReqwestIntervalsClient {
         limit: Option<u32>,
         days_back: Option<i32>,
     ) -> Result<Vec<crate::ActivitySummary>> {
-        let url = self.api_url(&["athlete", &self.athlete_id, "activities"]);
-        let today = Utc::now().date_naive();
-        let oldest = today - Duration::days(i64::from(days_back.unwrap_or(7)));
-
-        let mut pairs: Vec<(&str, String)> = vec![
-            ("oldest", oldest.to_string()),
-            ("newest", today.to_string()),
-        ];
-        if let Some(limit) = limit {
-            pairs.push(("limit", limit.to_string()));
-        }
-
-        self.execute_json(self.get_request(&url).query(&Self::build_query(&pairs)))
-            .await
+        self.fetch_recent_activities(limit, days_back).await
     }
 
     async fn get_activity_details(&self, activity_id: &str) -> Result<serde_json::Value> {
-        let url = format!("{}/api/v1/activity/{}", self.base_url, activity_id);
-        self.execute_json(self.get_request(&url)).await
+        self.fetch_activity_details(activity_id).await
     }
 
     async fn get_activity_messages(&self, activity_id: &str) -> Result<Vec<ActivityMessage>> {
-        let url = format!("{}/api/v1/activity/{}/messages", self.base_url, activity_id);
-        self.execute_json(self.get_request(&url)).await
+        self.fetch_activity_messages(activity_id).await
     }
 
     async fn get_activity_streams(
@@ -535,21 +516,11 @@ impl crate::IntervalsClient for ReqwestIntervalsClient {
         activity_id: &str,
         streams: Option<Vec<String>>,
     ) -> Result<serde_json::Value> {
-        let url = format!("{}/api/v1/activity/{}/streams", self.base_url, activity_id);
-        let mut pairs: Vec<(&str, String)> = Vec::new();
-        if let Some(s) = streams {
-            pairs.push(("streams", s.join(",")));
-        }
-        let qp: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (*k, v.as_str())).collect();
-        self.execute_json(self.get_request(&url).query(&qp)).await
+        self.fetch_activity_streams(activity_id, streams).await
     }
 
     async fn get_activity_intervals(&self, activity_id: &str) -> Result<serde_json::Value> {
-        let url = format!(
-            "{}/api/v1/activity/{}/intervals",
-            self.base_url, activity_id
-        );
-        self.execute_json(self.get_request(&url)).await
+        self.fetch_activity_intervals(activity_id).await
     }
 
     async fn get_best_efforts(
@@ -557,164 +528,7 @@ impl crate::IntervalsClient for ReqwestIntervalsClient {
         activity_id: &str,
         options: Option<BestEffortsOptions>,
     ) -> Result<serde_json::Value> {
-        let url = format!(
-            "{}/api/v1/activity/{}/best-efforts",
-            self.base_url, activity_id
-        );
-
-        if let Some(opts) = options {
-            if opts.stream.is_none() {
-                return Err(IntervalsError::Validation(ValidationError::InvalidFormat {
-                    field: "stream".to_string(),
-                    value: "missing stream in best-efforts options".to_string(),
-                }));
-            }
-            if opts.duration.is_none() && opts.distance.is_none() {
-                return Err(IntervalsError::Validation(ValidationError::InvalidFormat {
-                    field: "duration/distance".to_string(),
-                    value: "missing duration or distance in best-efforts options".to_string(),
-                }));
-            }
-
-            let mut q: Vec<(&str, String)> = Vec::new();
-            if let Some(s) = opts.stream.as_deref() {
-                q.push(("stream", s.to_string()));
-            }
-            if let Some(dur) = opts.duration {
-                q.push(("duration", dur.to_string()));
-            }
-            if let Some(dist) = opts.distance {
-                q.push(("distance", dist.to_string()));
-            }
-            if let Some(cnt) = opts.count {
-                q.push(("count", cnt.to_string()));
-            }
-            if let Some(minv) = opts.min_value {
-                q.push(("minValue", minv.to_string()));
-            }
-            if let Some(ex) = opts.exclude_intervals {
-                q.push((
-                    "excludeIntervals",
-                    (if ex { "true" } else { "false" }).to_string(),
-                ));
-            }
-            if let Some(si) = opts.start_index {
-                q.push(("startIndex", si.to_string()));
-            }
-            if let Some(ei) = opts.end_index {
-                q.push(("endIndex", ei.to_string()));
-            }
-
-            let stream = opts.stream.as_deref();
-            let value = self.execute_json(self.get_request(&url).query(&q)).await?;
-            return Ok(annotate_best_efforts_payload(value, stream));
-        }
-
-        // Try default parameter combinations when no options provided
-        let attempts = [
-            vec![("stream", "power"), ("duration", "60")],
-            vec![("stream", "power"), ("distance", "1000")],
-            vec![("stream", "power"), ("duration", "300")],
-        ];
-
-        for params in &attempts {
-            let qp: Vec<(&str, &str)> = params.iter().map(|(k, v)| (*k, *v)).collect();
-            let resp = self.execute_raw(self.get_request(&url).query(&qp)).await?;
-
-            if resp.status().is_success() {
-                let value = resp.json().await?;
-                let stream = params
-                    .iter()
-                    .find(|(key, _)| *key == "stream")
-                    .map(|(_, value)| *value);
-                return Ok(annotate_best_efforts_payload(value, stream));
-            }
-
-            if resp.status().as_u16() != 422 {
-                return Err(self.error_from_response(resp).await);
-            }
-        }
-
-        // All fallbacks yielded 422 — attempt to detect available streams
-        let streams_payload = self.get_activity_streams(activity_id, None).await;
-        match streams_payload {
-            Ok(json) => {
-                let available_streams = extract_available_streams(&json);
-                let candidates = [
-                    "power",
-                    "watts",
-                    "hr",
-                    "heartrate",
-                    "pace",
-                    "speed",
-                    "distance",
-                ];
-
-                let mut ordered_streams: Vec<String> = Vec::new();
-                for &cand in &candidates {
-                    if available_streams.contains(&cand.to_string()) {
-                        ordered_streams.push(cand.to_string());
-                    }
-                }
-                for s in &available_streams {
-                    if !ordered_streams.contains(s) {
-                        ordered_streams.push(s.clone());
-                    }
-                }
-
-                for cand in &ordered_streams {
-                    let param_sets = [
-                        vec![("stream", cand.as_str()), ("duration", "60")],
-                        vec![("stream", cand.as_str()), ("distance", "1000")],
-                        vec![("stream", cand.as_str()), ("duration", "300")],
-                    ];
-                    let mut param_sets_extended: Vec<Vec<(&str, &str)>> = param_sets.to_vec();
-                    param_sets_extended.push(vec![("stream", cand.as_str()), ("count", "8")]);
-                    param_sets_extended.push(vec![("stream", cand.as_str())]);
-
-                    for params in param_sets.iter().chain(param_sets_extended.iter()) {
-                        let qp: Vec<(&str, &str)> = params.iter().map(|(k, v)| (*k, *v)).collect();
-                        let resp = self.execute_raw(self.get_request(&url).query(&qp)).await?;
-                        if resp.status().is_success() {
-                            let value = resp.json().await?;
-                            let stream = params
-                                .iter()
-                                .find(|(key, _)| *key == "stream")
-                                .map(|(_, value)| *value);
-                            return Ok(annotate_best_efforts_payload(value, stream));
-                        }
-                        let status_code = resp.status().as_u16();
-                        if status_code == 422 || status_code == 404 {
-                            if let Ok(text) = resp.text().await {
-                                tracing::trace!(
-                                    "best-efforts returned {} for stream={} params={:?} body={}",
-                                    status_code,
-                                    cand,
-                                    params,
-                                    text
-                                );
-                            }
-                            continue;
-                        }
-                        return Err(self.error_from_response(resp).await);
-                    }
-                }
-
-                Err(IntervalsError::Validation(ValidationError::InvalidFormat {
-                    field: "parameters".to_string(),
-                    value: "no suitable best efforts parameters found".to_string(),
-                }))
-            }
-            Err(e) => {
-                if let IntervalsError::NotFound(_) = &e {
-                    return Err(IntervalsError::Validation(ValidationError::InvalidFormat {
-                        field: "activity".to_string(),
-                        value: "activity has no streams".to_string(),
-                    }));
-                }
-                Err(e)
-            }
-        }
+        self.fetch_best_efforts(activity_id, options).await
     }
 
     async fn search_activities(
@@ -722,22 +536,7 @@ impl crate::IntervalsClient for ReqwestIntervalsClient {
         query: &str,
         limit: Option<u32>,
     ) -> Result<Vec<crate::ActivitySummary>> {
-        if query.trim().is_empty() {
-            return Err(IntervalsError::Validation(ValidationError::InvalidFormat {
-                field: "query".to_string(),
-                value: "query must not be empty".to_string(),
-            }));
-        }
-        let url = format!(
-            "{}/api/v1/athlete/{}/activities/search",
-            self.base_url, self.athlete_id
-        );
-        let mut pairs: Vec<(&str, String)> = vec![("q", query.to_string())];
-        if let Some(l) = limit {
-            pairs.push(("limit", l.to_string()));
-        }
-        let qp: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (*k, v.as_str())).collect();
-        self.execute_json(self.get_request(&url).query(&qp)).await
+        self.fetch_search_activities(query, limit).await
     }
 
     async fn search_activities_full(
@@ -745,30 +544,11 @@ impl crate::IntervalsClient for ReqwestIntervalsClient {
         query: &str,
         limit: Option<u32>,
     ) -> Result<serde_json::Value> {
-        if query.trim().is_empty() {
-            return Err(IntervalsError::Validation(ValidationError::InvalidFormat {
-                field: "query".to_string(),
-                value: "query must not be empty".to_string(),
-            }));
-        }
-        let url = format!(
-            "{}/api/v1/athlete/{}/activities/search-full",
-            self.base_url, self.athlete_id
-        );
-        let mut pairs: Vec<(&str, String)> = vec![("q", query.to_string())];
-        if let Some(l) = limit {
-            pairs.push(("limit", l.to_string()));
-        }
-        let qp: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (*k, v.as_str())).collect();
-        self.execute_json(self.get_request(&url).query(&qp)).await
+        self.fetch_search_activities_full(query, limit).await
     }
 
     async fn get_activities_csv(&self) -> Result<String> {
-        let url = format!(
-            "{}/api/v1/athlete/{}/activities.csv",
-            self.base_url, self.athlete_id
-        );
-        self.execute_text(self.get_request(&url)).await
+        self.fetch_activities_csv().await
     }
 
     async fn update_activity(
@@ -776,13 +556,11 @@ impl crate::IntervalsClient for ReqwestIntervalsClient {
         activity_id: &str,
         fields: &serde_json::Value,
     ) -> Result<serde_json::Value> {
-        let url = format!("{}/api/v1/activity/{}", self.base_url, activity_id);
-        self.execute_json(self.put_request(&url).json(fields)).await
+        self.fetch_update_activity(activity_id, fields).await
     }
 
     async fn delete_activity(&self, activity_id: &str) -> Result<()> {
-        let url = format!("{}/api/v1/activity/{}", self.base_url, activity_id);
-        self.execute_empty(self.delete_request(&url)).await
+        self.fetch_delete_activity(activity_id).await
     }
 
     async fn get_activities_around(
@@ -791,17 +569,8 @@ impl crate::IntervalsClient for ReqwestIntervalsClient {
         limit: Option<u32>,
         route_id: Option<i64>,
     ) -> Result<serde_json::Value> {
-        let url = self.api_url(&["athlete", &self.athlete_id, "activities-around"]);
-        let mut pairs: Vec<(&str, String)> = Vec::new();
-        pairs.push(("activity_id", activity_id.to_string()));
-        if let Some(l) = limit {
-            pairs.push(("limit", l.to_string()));
-        }
-        if let Some(r) = route_id {
-            pairs.push(("route_id", r.to_string()));
-        }
-        let qp: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (*k, v.as_str())).collect();
-        self.execute_json(self.get_request(&url).query(&qp)).await
+        self.fetch_activities_around(activity_id, limit, route_id)
+            .await
     }
 
     async fn download_activity_file(
@@ -809,8 +578,8 @@ impl crate::IntervalsClient for ReqwestIntervalsClient {
         activity_id: &str,
         output_path: Option<std::path::PathBuf>,
     ) -> Result<Option<String>> {
-        let url = format!("{}/api/v1/activity/{}/file", self.base_url, activity_id);
-        self.download_file(url, output_path).await
+        self.fetch_download_activity_file(activity_id, output_path)
+            .await
     }
 
     async fn download_activity_file_with_progress(
@@ -818,87 +587,15 @@ impl crate::IntervalsClient for ReqwestIntervalsClient {
         activity_id: &str,
         output_path: Option<std::path::PathBuf>,
         progress_tx: tokio::sync::mpsc::Sender<crate::DownloadProgress>,
-        mut cancel_rx: tokio::sync::watch::Receiver<bool>,
+        cancel_rx: tokio::sync::watch::Receiver<bool>,
     ) -> Result<Option<String>> {
-        let url = format!("{}/api/v1/activity/{}/file", self.base_url, activity_id);
-        let resp = self.execute_raw(self.get_request(&url)).await?;
-        if !resp.status().is_success() {
-            return Err(self.error_from_response(resp).await);
-        }
-
-        let total = resp
-            .headers()
-            .get(reqwest::header::CONTENT_LENGTH)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.parse::<u64>().ok());
-
-        if let Some(path) = output_path {
-            let mut stream = resp.bytes_stream();
-            let mut file = tokio::fs::File::create(&path)
-                .await
-                .map_err(|e| IntervalsError::Config(crate::ConfigError::Other(e.to_string())))?;
-            let mut downloaded: u64 = 0;
-
-            loop {
-                let chunk = tokio::select! {
-                    biased;
-                    _ = cancel_rx.changed() => {
-                        if *cancel_rx.borrow() {
-                            return Err(IntervalsError::Config(crate::ConfigError::Other("download cancelled".to_string())));
-                        }
-                        continue;
-                    }
-                    c = stream.next() => c,
-                };
-
-                let Some(chunk) = chunk else { break };
-
-                let bytes = chunk.map_err(IntervalsError::Http)?;
-                file.write_all(&bytes).await.map_err(|e| {
-                    IntervalsError::Config(crate::ConfigError::Other(e.to_string()))
-                })?;
-                downloaded = downloaded.saturating_add(bytes.len() as u64);
-
-                let _ = progress_tx.try_send(crate::DownloadProgress {
-                    bytes_downloaded: downloaded,
-                    total_bytes: total,
-                });
-
-                if *cancel_rx.borrow() {
-                    return Err(IntervalsError::Config(crate::ConfigError::Other(
-                        "download cancelled".to_string(),
-                    )));
-                }
-            }
-
-            file.sync_all()
-                .await
-                .map_err(|e| IntervalsError::Config(crate::ConfigError::Other(e.to_string())))?;
-            Ok(Some(path.to_string_lossy().to_string()))
-        } else {
-            let mut stream = resp.bytes_stream();
-            let mut downloaded: u64 = 0;
-            let mut all_bytes = Vec::new();
-
-            while let Some(chunk) = stream.next().await {
-                let bytes = chunk.map_err(IntervalsError::Http)?;
-                downloaded = downloaded.saturating_add(bytes.len() as u64);
-                all_bytes.extend_from_slice(&bytes);
-
-                let _ = progress_tx.try_send(crate::DownloadProgress {
-                    bytes_downloaded: downloaded,
-                    total_bytes: total,
-                });
-
-                if *cancel_rx.borrow() {
-                    return Err(IntervalsError::Config(crate::ConfigError::Other(
-                        "download cancelled".to_string(),
-                    )));
-                }
-            }
-
-            Ok(Some(STANDARD.encode(&all_bytes)))
-        }
+        self.fetch_download_activity_file_with_progress(
+            activity_id,
+            output_path,
+            progress_tx,
+            cancel_rx,
+        )
+        .await
     }
 
     async fn download_fit_file(
@@ -906,8 +603,7 @@ impl crate::IntervalsClient for ReqwestIntervalsClient {
         activity_id: &str,
         output_path: Option<std::path::PathBuf>,
     ) -> Result<Option<String>> {
-        let url = format!("{}/api/v1/activity/{}/fit-file", self.base_url, activity_id);
-        self.download_file(url, output_path).await
+        self.fetch_download_fit_file(activity_id, output_path).await
     }
 
     async fn download_gpx_file(
@@ -915,16 +611,11 @@ impl crate::IntervalsClient for ReqwestIntervalsClient {
         activity_id: &str,
         output_path: Option<std::path::PathBuf>,
     ) -> Result<Option<String>> {
-        let url = format!("{}/api/v1/activity/{}/gpx-file", self.base_url, activity_id);
-        self.download_file(url, output_path).await
+        self.fetch_download_gpx_file(activity_id, output_path).await
     }
 
     async fn get_gap_histogram(&self, activity_id: &str) -> Result<serde_json::Value> {
-        let url = format!(
-            "{}/api/v1/activity/{}/gap-histogram",
-            self.base_url, activity_id
-        );
-        self.execute_json(self.get_request(&url)).await
+        self.fetch_gap_histogram(activity_id).await
     }
 
     async fn search_intervals(
@@ -938,82 +629,41 @@ impl crate::IntervalsClient for ReqwestIntervalsClient {
         max_reps: Option<u32>,
         limit: Option<u32>,
     ) -> Result<serde_json::Value> {
-        let url = self.api_url(&["athlete", &self.athlete_id, "activities", "interval-search"]);
-        let pairs = crate::utils::QueryBuilder::new()
-            .add("minSecs", min_secs)
-            .add("maxSecs", max_secs)
-            .add("minIntensity", min_intensity)
-            .add("maxIntensity", max_intensity)
-            .add_opt("type", interval_type.as_ref())
-            .add_opt("minReps", min_reps)
-            .add_opt("maxReps", max_reps)
-            .add_opt("limit", limit)
-            .build_owned();
-        let qp: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (*k, v.as_str())).collect();
-        self.execute_json(self.get_request(&url).query(&qp)).await
+        self.fetch_search_intervals(
+            min_secs,
+            max_secs,
+            min_intensity,
+            max_intensity,
+            interval_type,
+            min_reps,
+            max_reps,
+            limit,
+        )
+        .await
     }
 
     async fn get_power_histogram(&self, activity_id: &str) -> Result<serde_json::Value> {
-        let url = format!(
-            "{}/api/v1/activity/{}/power-histogram",
-            self.base_url, activity_id
-        );
-        self.execute_json(self.get_request(&url)).await
+        self.fetch_power_histogram(activity_id).await
     }
 
     async fn get_hr_histogram(&self, activity_id: &str) -> Result<serde_json::Value> {
-        let url = format!(
-            "{}/api/v1/activity/{}/hr-histogram",
-            self.base_url, activity_id
-        );
-        self.execute_json(self.get_request(&url)).await
+        self.fetch_hr_histogram(activity_id).await
     }
 
     async fn get_pace_histogram(&self, activity_id: &str) -> Result<serde_json::Value> {
-        let url = format!(
-            "{}/api/v1/activity/{}/pace-histogram",
-            self.base_url, activity_id
-        );
-        self.execute_json(self.get_request(&url)).await
+        self.fetch_pace_histogram(activity_id).await
     }
 
     async fn create_event(&self, event: crate::Event) -> Result<crate::Event> {
-        let url = self.api_url(&["athlete", &self.athlete_id, "events"]);
-
-        let mut ev = event;
-        ev.start_date_local =
-            Self::normalize_event_start(&ev.start_date_local).ok_or_else(|| {
-                IntervalsError::Validation(ValidationError::InvalidFormat {
-                    field: "start_date_local".to_string(),
-                    value: format!("invalid start_date_local: {}", ev.start_date_local),
-                })
-            })?;
-
-        let resp = self.execute_raw(self.post_request(&url).json(&ev)).await?;
-        if !resp.status().is_success() {
-            return Err(self.error_from_response(resp).await);
-        }
-        Ok(resp.json().await?)
+        self.fetch_create_event(event).await
     }
 
     async fn get_event(&self, event_id: &str) -> Result<crate::Event> {
-        let url = self.api_url(&["athlete", &self.athlete_id, "events", event_id]);
-        let resp = self.execute_raw(self.get_request(&url)).await?;
-        if !resp.status().is_success() {
-            return Err(self.error_from_response(resp).await);
-        }
-        let text = resp.text().await?;
-        serde_json::from_str::<crate::Event>(&text).map_err(|e| {
-            let body_snippet: String = text.chars().take(DECODE_BODY_SNIPPET_MAX).collect();
-            IntervalsError::Config(crate::ConfigError::Other(format!(
-                "decoding event: {e} - body: {body_snippet}"
-            )))
-        })
+        self.fetch_event(event_id).await
     }
 
     async fn delete_event(&self, event_id: &str) -> Result<()> {
-        let url = self.api_url(&["athlete", &self.athlete_id, "events", event_id]);
-        self.execute_empty(self.delete_request(&url)).await
+        self.fetch_delete_event(event_id).await
     }
 
     async fn get_events(
@@ -1021,28 +671,11 @@ impl crate::IntervalsClient for ReqwestIntervalsClient {
         days_back: Option<i32>,
         limit: Option<u32>,
     ) -> Result<Vec<crate::Event>> {
-        let url = self.api_url(&["athlete", &self.athlete_id, "events"]);
-        let mut pairs: Vec<(&str, String)> = Vec::new();
-        if let Some(d) = days_back {
-            let today = Utc::now().date_naive();
-            let oldest = today - Duration::days(i64::from(d));
-            pairs.push(("oldest", oldest.to_string()));
-            pairs.push(("newest", today.to_string()));
-        }
-        if let Some(l) = limit {
-            pairs.push(("limit", l.to_string()));
-        }
-        self.execute_json(self.get_request(&url).query(&Self::build_query(&pairs)))
-            .await
+        self.fetch_events(days_back, limit).await
     }
 
     async fn bulk_create_events(&self, events: Vec<crate::Event>) -> Result<Vec<crate::Event>> {
-        let url = format!(
-            "{}/api/v1/athlete/{}/events/bulk",
-            self.base_url, self.athlete_id
-        );
-        self.execute_json(self.post_request(&url).json(&events))
-            .await
+        self.fetch_bulk_create_events(events).await
     }
 
     async fn get_upcoming_workouts(
@@ -1051,19 +684,7 @@ impl crate::IntervalsClient for ReqwestIntervalsClient {
         limit: Option<u32>,
         category: Option<String>,
     ) -> Result<serde_json::Value> {
-        let url = self.api_url(&["athlete", &self.athlete_id, "events"]);
-        let mut pairs: Vec<(&str, String)> = Vec::new();
-        let today = Utc::now().date_naive();
-        let newest = today + Duration::days(i64::from(days_ahead.unwrap_or(7)));
-        pairs.push(("oldest", today.to_string()));
-        pairs.push(("newest", newest.to_string()));
-        if let Some(l) = limit {
-            pairs.push(("limit", l.to_string()));
-        }
-        if let Some(c) = category {
-            pairs.push(("category", c));
-        }
-        self.execute_json(self.get_request(&url).query(&Self::build_query(&pairs)))
+        self.fetch_upcoming_workouts(days_ahead, limit, category)
             .await
     }
 
@@ -1072,28 +693,11 @@ impl crate::IntervalsClient for ReqwestIntervalsClient {
         event_id: &str,
         fields: &serde_json::Value,
     ) -> Result<serde_json::Value> {
-        let url = self.api_url(&["athlete", &self.athlete_id, "events", event_id]);
-        let normalized_fields = Self::normalize_event_update_fields(fields)?;
-        self.execute_json(self.put_request(&url).json(&normalized_fields))
-            .await
+        self.fetch_update_event(event_id, fields).await
     }
 
     async fn bulk_delete_events(&self, event_ids: Vec<String>) -> Result<()> {
-        let url = self.api_url(&["athlete", &self.athlete_id, "events", "bulk-delete"]);
-        let doomed: Vec<serde_json::Value> = event_ids
-            .iter()
-            .map(|id| {
-                let parsed = id.parse::<i32>().map_err(|e| {
-                    IntervalsError::Validation(ValidationError::InvalidFormat {
-                        field: "event_id".to_string(),
-                        value: format!("invalid event id '{id}': {e}"),
-                    })
-                })?;
-                Ok(serde_json::json!({ "id": parsed }))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        self.execute_empty(self.put_request(&url).json(&doomed))
-            .await
+        self.fetch_bulk_delete_events(event_ids).await
     }
 
     async fn duplicate_event(
@@ -1102,13 +706,8 @@ impl crate::IntervalsClient for ReqwestIntervalsClient {
         num_copies: Option<u32>,
         weeks_between: Option<u32>,
     ) -> Result<Vec<crate::Event>> {
-        let url = self.api_url(&["athlete", &self.athlete_id, "duplicate-events"]);
-        let body = serde_json::json!({
-            "eventIds": [event_id],
-            "numCopies": num_copies,
-            "weeksBetween": weeks_between
-        });
-        self.execute_json(self.post_request(&url).json(&body)).await
+        self.fetch_duplicate_event(event_id, num_copies, weeks_between)
+            .await
     }
 
     async fn get_fitness_summary(&self) -> Result<serde_json::Value> {
@@ -1116,7 +715,8 @@ impl crate::IntervalsClient for ReqwestIntervalsClient {
             "{}/api/v1/athlete/{}/athlete-summary.json",
             self.base_url, self.athlete_id
         );
-        self.execute_json(self.get_request(&url)).await
+        self.execute_json(self.request(reqwest::Method::GET, &url))
+            .await
     }
 
     async fn get_power_curves(
@@ -1124,7 +724,7 @@ impl crate::IntervalsClient for ReqwestIntervalsClient {
         days_back: Option<i32>,
         sport: &str,
     ) -> Result<serde_json::Value> {
-        self.get_curves(days_back, sport, "power").await
+        self.fetch_power_curves(days_back, sport).await
     }
 
     async fn get_hr_curves(
@@ -1132,7 +732,7 @@ impl crate::IntervalsClient for ReqwestIntervalsClient {
         days_back: Option<i32>,
         sport: &str,
     ) -> Result<serde_json::Value> {
-        self.get_curves(days_back, sport, "hr").await
+        self.fetch_hr_curves(days_back, sport).await
     }
 
     async fn get_pace_curves(
@@ -1140,17 +740,15 @@ impl crate::IntervalsClient for ReqwestIntervalsClient {
         days_back: Option<i32>,
         sport: &str,
     ) -> Result<serde_json::Value> {
-        self.get_curves(days_back, sport, "pace").await
+        self.fetch_pace_curves(days_back, sport).await
     }
 
     async fn get_gear_list(&self) -> Result<serde_json::Value> {
-        let url = self.api_url(&["athlete", &self.athlete_id, "gear"]);
-        self.execute_json(self.get_request(&url)).await
+        self.fetch_gear_list().await
     }
 
     async fn create_gear(&self, gear: &serde_json::Value) -> Result<serde_json::Value> {
-        let url = self.api_url(&["athlete", &self.athlete_id, "gear"]);
-        self.execute_json(self.post_request(&url).json(gear)).await
+        self.fetch_create_gear(gear).await
     }
 
     async fn update_gear(
@@ -1158,13 +756,11 @@ impl crate::IntervalsClient for ReqwestIntervalsClient {
         gear_id: &str,
         fields: &serde_json::Value,
     ) -> Result<serde_json::Value> {
-        let url = self.api_url(&["athlete", &self.athlete_id, "gear", gear_id]);
-        self.execute_json(self.put_request(&url).json(fields)).await
+        self.fetch_update_gear(gear_id, fields).await
     }
 
     async fn delete_gear(&self, gear_id: &str) -> Result<()> {
-        let url = self.api_url(&["athlete", &self.athlete_id, "gear", gear_id]);
-        self.execute_empty(self.delete_request(&url)).await
+        self.fetch_delete_gear(gear_id).await
     }
 
     async fn create_gear_reminder(
@@ -1172,9 +768,7 @@ impl crate::IntervalsClient for ReqwestIntervalsClient {
         gear_id: &str,
         reminder: &serde_json::Value,
     ) -> Result<serde_json::Value> {
-        let url = self.api_url(&["athlete", &self.athlete_id, "gear", gear_id, "reminder"]);
-        self.execute_json(self.post_request(&url).json(reminder))
-            .await
+        self.fetch_create_gear_reminder(gear_id, reminder).await
     }
 
     async fn update_gear_reminder(
@@ -1185,39 +779,16 @@ impl crate::IntervalsClient for ReqwestIntervalsClient {
         snooze_days: u32,
         fields: &serde_json::Value,
     ) -> Result<serde_json::Value> {
-        let url = self.api_url(&[
-            "athlete",
-            &self.athlete_id,
-            "gear",
-            gear_id,
-            "reminder",
-            reminder_id,
-        ]);
-        let pairs = crate::utils::QueryBuilder::new()
-            .add("reset", reset)
-            .add("snoozeDays", snooze_days)
-            .build_owned();
-        let qp: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (*k, v.as_str())).collect();
-        self.execute_json(self.put_request(&url).query(&qp).json(fields))
+        self.fetch_update_gear_reminder(gear_id, reminder_id, reset, snooze_days, fields)
             .await
     }
 
     async fn get_wellness(&self, days_back: Option<i32>) -> Result<serde_json::Value> {
-        let url = self.api_url(&["athlete", &self.athlete_id, "wellness"]);
-        let mut pairs: Vec<(&str, String)> = Vec::new();
-        if let Some(d) = days_back {
-            let today = Utc::now().date_naive();
-            let oldest = today - Duration::days(i64::from(d));
-            pairs.push(("oldest", oldest.to_string()));
-            pairs.push(("newest", today.to_string()));
-        }
-        self.execute_json(self.get_request(&url).query(&Self::build_query(&pairs)))
-            .await
+        self.fetch_wellness(days_back).await
     }
 
     async fn get_wellness_for_date(&self, date: &str) -> Result<serde_json::Value> {
-        let url = self.api_url(&["athlete", &self.athlete_id, "wellness", date]);
-        self.execute_json(self.get_request(&url)).await
+        self.fetch_wellness_for_date(date).await
     }
 
     async fn update_wellness(
@@ -1225,88 +796,29 @@ impl crate::IntervalsClient for ReqwestIntervalsClient {
         date: &str,
         payload: &serde_json::Value,
     ) -> Result<serde_json::Value> {
-        let url = self.api_url(&["athlete", &self.athlete_id, "wellness", date]);
-        self.execute_json(self.put_request(&url).json(payload))
-            .await
+        self.fetch_update_wellness(date, payload).await
     }
 
     async fn update_wellness_bulk(&self, entries: &[serde_json::Value]) -> Result<()> {
-        let url = self.api_url(&["athlete", &self.athlete_id, "wellness-bulk"]);
-        self.execute_empty(self.put_request(&url).json(entries))
-            .await
-    }
-
-    async fn get_weather_config(&self) -> Result<serde_json::Value> {
-        let url = self.api_url(&["athlete", &self.athlete_id, "weather-config"]);
-        self.execute_json(self.get_request(&url)).await
-    }
-
-    async fn update_weather_config(&self, config: &serde_json::Value) -> Result<serde_json::Value> {
-        let url = self.api_url(&["athlete", &self.athlete_id, "weather-config"]);
-        self.execute_json(self.put_request(&url).json(config)).await
-    }
-
-    async fn list_routes(&self) -> Result<serde_json::Value> {
-        let url = self.api_url(&["athlete", &self.athlete_id, "routes"]);
-        self.execute_json(self.get_request(&url)).await
-    }
-
-    async fn get_route(&self, route_id: i64, include_path: bool) -> Result<serde_json::Value> {
-        let url = self.api_url(&["athlete", &self.athlete_id, "routes", &route_id.to_string()]);
-        let pairs = crate::utils::QueryBuilder::new()
-            .add("includePath", include_path)
-            .build_owned();
-        let qp: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (*k, v.as_str())).collect();
-        self.execute_json(self.get_request(&url).query(&qp)).await
-    }
-
-    async fn update_route(
-        &self,
-        route_id: i64,
-        route: &serde_json::Value,
-    ) -> Result<serde_json::Value> {
-        let url = self.api_url(&["athlete", &self.athlete_id, "routes", &route_id.to_string()]);
-        self.execute_json(self.put_request(&url).json(route)).await
-    }
-
-    async fn get_route_similarity(
-        &self,
-        route_id: i64,
-        other_id: i64,
-    ) -> Result<serde_json::Value> {
-        let url = self.api_url(&[
-            "athlete",
-            &self.athlete_id,
-            "routes",
-            &route_id.to_string(),
-            "similarity",
-            &other_id.to_string(),
-        ]);
-        self.execute_json(self.get_request(&url)).await
+        self.fetch_update_wellness_bulk(entries).await
     }
 
     async fn get_workout_library(&self) -> Result<Vec<crate::domains::workout::WorkoutItem>> {
-        // API returns folders, plans and workouts together as a flat array
-        let url = self.api_url(&["athlete", &self.athlete_id, "folders"]);
-        self.execute_json(self.get_request(&url)).await
+        self.fetch_workout_library().await
     }
 
     async fn get_workouts_in_folder(
         &self,
-        _folder_id: &str,
+        folder_id: &str,
     ) -> Result<Vec<crate::domains::workout::WorkoutItem>> {
-        // API doesn't have a direct endpoint - return all folders and let client filter
-        // For now, return the full library response
-        self.get_workout_library().await
+        self.fetch_workouts_in_folder(folder_id).await
     }
 
     async fn create_folder(
         &self,
         folder: &serde_json::Value,
     ) -> Result<crate::domains::workout::Folder> {
-        let url = self.api_url(&["athlete", &self.athlete_id, "folders"]);
-        self.execute_json(self.post_request(&url).json(folder))
-            .await
+        self.fetch_create_folder(folder).await
     }
 
     async fn update_folder(
@@ -1314,23 +826,15 @@ impl crate::IntervalsClient for ReqwestIntervalsClient {
         folder_id: &str,
         fields: &serde_json::Value,
     ) -> Result<serde_json::Value> {
-        let url = self.api_url(&["athlete", &self.athlete_id, "folders", folder_id]);
-        self.execute_json(self.put_request(&url).json(fields)).await
+        self.fetch_update_folder(folder_id, fields).await
     }
 
     async fn delete_folder(&self, folder_id: &str) -> Result<()> {
-        let url = self.api_url(&["athlete", &self.athlete_id, "folders", folder_id]);
-        self.execute_empty(self.delete_request(&url)).await
+        self.fetch_delete_folder(folder_id).await
     }
 
     async fn get_sport_settings(&self) -> Result<crate::domains::workout::SportSettings> {
-        let url = self.api_url(&["athlete", &self.athlete_id, "sport-settings"]);
-        let value: serde_json::Value = self.execute_json(self.get_request(&url)).await?;
-        crate::domains::workout::SportSettings::from_value(&value).ok_or_else(|| {
-            IntervalsError::Config(crate::ConfigError::Other(
-                "failed to parse sport settings response".to_string(),
-            ))
-        })
+        self.fetch_sport_settings().await
     }
 
     async fn update_sport_settings(
@@ -1339,112 +843,24 @@ impl crate::IntervalsClient for ReqwestIntervalsClient {
         recalc_hr_zones: bool,
         fields: &serde_json::Value,
     ) -> Result<serde_json::Value> {
-        let sport_settings_id = self.resolve_sport_settings_id(sport_type).await?;
-        let url = self.api_url(&[
-            "athlete",
-            &self.athlete_id,
-            "sport-settings",
-            &sport_settings_id,
-        ]);
-        let mut body = fields.clone();
-        if let Some(obj) = body.as_object_mut() {
-            obj.insert(
-                "recalc_hr_zones".to_string(),
-                serde_json::json!(recalc_hr_zones),
-            );
-        }
-        self.execute_json(self.put_request(&url).json(&body)).await
+        self.fetch_update_sport_settings(sport_type, recalc_hr_zones, fields)
+            .await
     }
 
     async fn apply_sport_settings(&self, sport_type: &str) -> Result<serde_json::Value> {
-        let sport_settings_id = self.resolve_sport_settings_id(sport_type).await?;
-        let url = self.api_url(&[
-            "athlete",
-            &self.athlete_id,
-            "sport-settings",
-            &sport_settings_id,
-            "apply",
-        ]);
-        self.execute_json(self.put_request(&url)).await
+        self.fetch_apply_sport_settings(sport_type).await
     }
 
     async fn create_sport_settings(
         &self,
         settings: &serde_json::Value,
     ) -> Result<serde_json::Value> {
-        let url = self.api_url(&["athlete", &self.athlete_id, "sport-settings"]);
-        self.execute_json(self.post_request(&url).json(settings))
-            .await
+        self.fetch_create_sport_settings(settings).await
     }
 
     async fn delete_sport_settings(&self, sport_type: &str) -> Result<()> {
-        let sport_settings_id = self.resolve_sport_settings_id(sport_type).await?;
-        let url = self.api_url(&[
-            "athlete",
-            &self.athlete_id,
-            "sport-settings",
-            &sport_settings_id,
-        ]);
-        self.execute_empty(self.delete_request(&url)).await
+        self.fetch_delete_sport_settings(sport_type).await
     }
-}
-
-/// Extract available stream names from a JSON response.
-fn extract_available_streams(json: &serde_json::Value) -> Vec<String> {
-    let mut available_streams = Vec::new();
-
-    if let Some(sv) = json.get("streams") {
-        if let Some(obj) = sv.as_object() {
-            available_streams.extend(obj.keys().cloned());
-        } else if let Some(arr) = sv.as_array() {
-            for item in arr {
-                if let Some(obj) = item.as_object() {
-                    if let Some(name) = obj.get("name").and_then(|n| n.as_str()) {
-                        available_streams.push(name.to_string());
-                    } else if let Some(t) = obj.get("type").and_then(|n| n.as_str()) {
-                        available_streams.push(t.to_string());
-                    }
-                }
-            }
-        }
-    } else if let Some(arr) = json.as_array() {
-        for item in arr {
-            if let Some(obj) = item.as_object() {
-                if let Some(name) = obj.get("name").and_then(|n| n.as_str())
-                    && !name.is_empty()
-                {
-                    available_streams.push(name.to_string());
-                } else if let Some(t) = obj.get("type").and_then(|n| n.as_str()) {
-                    available_streams.push(t.to_string());
-                }
-            }
-        }
-    } else if let Some(obj) = json.as_object() {
-        for (k, v) in obj {
-            if v.is_array() {
-                available_streams.push(k.clone());
-            }
-        }
-    }
-
-    available_streams
-}
-
-fn annotate_best_efforts_payload(
-    mut value: serde_json::Value,
-    stream: Option<&str>,
-) -> serde_json::Value {
-    let Some(stream) = stream else {
-        return value;
-    };
-
-    if let Some(obj) = value.as_object_mut()
-        && !obj.contains_key("stream")
-    {
-        obj.insert("stream".to_string(), serde_json::json!(stream));
-    }
-
-    value
 }
 
 #[cfg(test)]
@@ -1674,7 +1090,7 @@ mod tests {
             }
         });
 
-        let mut streams = super::extract_available_streams(&payload);
+        let mut streams = super::activities::extract_available_streams(&payload);
         streams.sort();
 
         assert_eq!(streams, vec!["distance".to_string(), "watts".to_string()]);
@@ -1689,7 +1105,7 @@ mod tests {
             ]
         });
 
-        let mut streams = super::extract_available_streams(&payload);
+        let mut streams = super::activities::extract_available_streams(&payload);
         streams.sort();
 
         assert_eq!(streams, vec!["distance".to_string(), "watts".to_string()]);
@@ -1704,7 +1120,7 @@ mod tests {
             {"other": "ignored"}
         ]);
 
-        let mut streams = super::extract_available_streams(&payload);
+        let mut streams = super::activities::extract_available_streams(&payload);
         streams.sort();
 
         assert_eq!(streams, vec!["distance".to_string(), "watts".to_string()]);
@@ -1718,7 +1134,7 @@ mod tests {
             "meta": {"ignored": true}
         });
 
-        let mut streams = super::extract_available_streams(&payload);
+        let mut streams = super::activities::extract_available_streams(&payload);
         streams.sort();
 
         assert_eq!(streams, vec!["distance".to_string(), "watts".to_string()]);
@@ -1728,7 +1144,7 @@ mod tests {
     fn annotate_best_efforts_payload_adds_missing_stream() {
         let payload = json!({"best_efforts": [{"duration": 60, "power": 300}]});
 
-        let annotated = super::annotate_best_efforts_payload(payload, Some("power"));
+        let annotated = super::activities::annotate_best_efforts_payload(payload, Some("power"));
 
         assert_eq!(
             annotated.get("stream").and_then(serde_json::Value::as_str),
@@ -1743,7 +1159,7 @@ mod tests {
             "best_efforts": [{"distance": 1000, "power": 300}]
         });
 
-        let annotated = super::annotate_best_efforts_payload(payload, Some("power"));
+        let annotated = super::activities::annotate_best_efforts_payload(payload, Some("power"));
 
         assert_eq!(
             annotated.get("stream").and_then(serde_json::Value::as_str),
