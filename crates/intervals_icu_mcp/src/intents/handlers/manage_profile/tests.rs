@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::test_support::content_text;
 use crate::test_support::mock::MockIntervalsClient;

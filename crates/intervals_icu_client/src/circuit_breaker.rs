@@ -174,4 +174,50 @@ mod tests {
         cb.record_failure();
         assert_eq!(cb.state(), CircuitState::Open);
     }
+
+    #[test]
+    fn circuit_closes_on_success_in_half_open() {
+        let cb = CircuitBreaker::new(2, Duration::from_millis(1));
+        cb.record_failure();
+        cb.record_failure();
+        thread::sleep(Duration::from_millis(10));
+        // Probe state: one request allowed through.
+        assert_eq!(cb.state(), CircuitState::HalfOpen);
+        assert!(cb.allow_request());
+        // Probe succeeds → fully closed again, failure count reset.
+        cb.record_success();
+        assert_eq!(cb.state(), CircuitState::Closed);
+        assert!(cb.allow_request());
+        // And the next failure should start counting from zero, not immediately reopen.
+        cb.record_failure();
+        assert_eq!(cb.state(), CircuitState::Closed);
+        cb.record_failure();
+        assert_eq!(cb.state(), CircuitState::Open);
+    }
+
+    #[test]
+    fn circuit_open_blocks_requests_immediately() {
+        // Once Open, allow_request() must return false without waiting for the
+        // reset_timeout — that is the whole point of the open state.
+        let cb = CircuitBreaker::new(1, Duration::from_secs(3600));
+        cb.record_failure();
+        assert_eq!(cb.state(), CircuitState::Open);
+        assert!(!cb.allow_request());
+        assert!(!cb.allow_request());
+    }
+
+    #[test]
+    fn circuit_half_open_is_a_probe_only() {
+        // While in HalfOpen, allow_request() must return true so the probe can
+        // hit the upstream — but the next state change (success or failure)
+        // is what determines whether we go Closed or back to Open.
+        let cb = CircuitBreaker::new(1, Duration::from_millis(1));
+        cb.record_failure();
+        thread::sleep(Duration::from_millis(10));
+        assert_eq!(cb.state(), CircuitState::HalfOpen);
+        assert!(cb.allow_request());
+        // Probe failure re-opens immediately, not after another threshold.
+        cb.record_failure();
+        assert_eq!(cb.state(), CircuitState::Open);
+    }
 }

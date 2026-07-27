@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::engines::dedupe::dedupe_and_sort_events;
 use crate::test_support::content_text;

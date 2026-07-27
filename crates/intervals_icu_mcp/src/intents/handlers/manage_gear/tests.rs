@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::test_support::mock::MockIntervalsClient;
 use std::sync::Arc;

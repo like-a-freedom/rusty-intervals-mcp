@@ -1,4 +1,3 @@
-
 use super::*;
 use chrono::NaiveDate;
 use intervals_icu_client::{ActivitySummary, Event, EventCategory};
