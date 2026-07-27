@@ -23,6 +23,55 @@ impl PlanTrainingHandler {
     pub fn new() -> Self {
         Self
     }
+
+    /// Parse and validate the JSON input for the plan_training intent.
+    ///
+    /// Extracts the required `period_start` / `period_end` strings, parses
+    /// them into `NaiveDate` values, and resolves the optional `focus`,
+    /// `max_hours_per_week`, and `adaptive` fields. Returns a fully-typed
+    /// `PlanInputs` value or an `IntentError::validation` describing the
+    /// first problem found.
+    fn parse_plan_inputs(input: &Value) -> Result<PlanInputs, IntentError> {
+        let period_start = input
+            .get("period_start")
+            .and_then(Value::as_str)
+            .ok_or_else(|| IntentError::validation("Missing required field: period_start"))?;
+        let period_end = input
+            .get("period_end")
+            .and_then(Value::as_str)
+            .ok_or_else(|| IntentError::validation("Missing required field: period_end"))?;
+        let focus = TrainingFocus::parse(input.get("focus").and_then(Value::as_str));
+        let max_hours = input
+            .get("max_hours_per_week")
+            .and_then(Value::as_f64)
+            .unwrap_or(10.0);
+        let adaptive = input
+            .get("adaptive")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+
+        let start_date = parse_date(period_start, "period_start")?;
+        let end_date = parse_date(period_end, "period_end")?;
+
+        if start_date > end_date {
+            return Err(IntentError::validation(
+                "Start date must be before end date.".to_string(),
+            ));
+        }
+
+        let weeks: u32 = u32::try_from((end_date - start_date).num_days() / 7 + 1).unwrap_or(0);
+
+        Ok(PlanInputs {
+            period_start: period_start.to_string(),
+            period_end: period_end.to_string(),
+            start_date,
+            end_date,
+            focus,
+            max_hours,
+            adaptive,
+            weeks,
+        })
+    }
 }
 
 #[must_use]
@@ -111,34 +160,17 @@ impl IntentHandler for PlanTrainingHandler {
         client: Arc<dyn IntervalsClient>,
         _cache: Option<&IdempotencyCache>,
     ) -> Result<IntentOutput, IntentError> {
-        let period_start = input
-            .get("period_start")
-            .and_then(Value::as_str)
-            .ok_or_else(|| IntentError::validation("Missing required field: period_start"))?;
-        let period_end = input
-            .get("period_end")
-            .and_then(Value::as_str)
-            .ok_or_else(|| IntentError::validation("Missing required field: period_end"))?;
-        let focus = TrainingFocus::parse(input.get("focus").and_then(Value::as_str));
-        let max_hours = input
-            .get("max_hours_per_week")
-            .and_then(Value::as_f64)
-            .unwrap_or(10.0);
-        let adaptive = input
-            .get("adaptive")
-            .and_then(Value::as_bool)
-            .unwrap_or(true);
-
-        let start_date = parse_date(period_start, "period_start")?;
-        let end_date = parse_date(period_end, "period_end")?;
-
-        if start_date > end_date {
-            return Err(IntentError::validation(
-                "Start date must be before end date.".to_string(),
-            ));
-        }
-
-        let weeks: u32 = u32::try_from((end_date - start_date).num_days() / 7 + 1).unwrap_or(0);
+        let plan_inputs = Self::parse_plan_inputs(&input)?;
+        let PlanInputs {
+            period_start,
+            period_end,
+            start_date,
+            end_date,
+            focus,
+            max_hours,
+            adaptive,
+            weeks,
+        } = plan_inputs.clone();
 
         // --- Required fetches ---
         let profile = client
@@ -689,6 +721,23 @@ struct Phase {
     weeks: String,
     volume: String,
     focus: String,
+}
+
+/// Parsed and validated input for the `plan_training` intent.
+///
+/// Built by [`PlanTrainingHandler::parse_plan_inputs`] from the raw JSON
+/// `Value` produced by the MCP layer.
+#[must_use]
+#[derive(Clone, Debug)]
+struct PlanInputs {
+    period_start: String,
+    period_end: String,
+    start_date: chrono::NaiveDate,
+    end_date: chrono::NaiveDate,
+    focus: TrainingFocus,
+    max_hours: f64,
+    adaptive: bool,
+    weeks: u32,
 }
 
 // --- Task 1: Sport settings extraction ---
