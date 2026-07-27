@@ -72,31 +72,62 @@ pub async fn compare_periods(
         super::period::fetch_period_stats(client, b_window, workout_type),
     )?;
 
-    let trend = derive_trend_metrics(a_stats.snapshot, b_stats.snapshot);
-    let a_volume = derive_volume_metrics(
-        a_stats.window_days,
-        a_stats.snapshot.total_time_secs,
-        a_stats.snapshot.total_distance_m,
-        a_stats.snapshot.total_elevation_m,
-        a_stats.snapshot.activity_count,
+    // Delta convention: "later period relative to earlier period". The Δ
+    // column always reports `(later) - (earlier)`, so a positive value means
+    // the later period grew vs the earlier one. This is invariant to whether
+    // the caller labelled the newer period as A or B; otherwise users who put
+    // "this year" as `period_b` would see inverted (negative) signs.
+    //
+    // The downstream engines `derive_trend_metrics` and
+    // `AnalysisEngine::compare_periods` both treat their first argument as
+    // the reference period and subtract the second argument from it. So we
+    // swap (stats, summary, label) together so the later period always lands
+    // in the first position, and the rendered table reads
+    // `[later_label, earlier_label, Δ]` with the same sign semantics.
+    //
+    // Tiebreak by `end_date` so identical start dates resolve deterministically.
+    let a_is_later =
+        a_start_date > b_start_date || (a_start_date == b_start_date && a_end_date >= b_end_date);
+    let (later_stats, earlier_stats, later_label, earlier_label) = if a_is_later {
+        (a_stats, b_stats, a_label, b_label)
+    } else {
+        (b_stats, a_stats, b_label, a_label)
+    };
+
+    let trend = derive_trend_metrics(later_stats.snapshot, earlier_stats.snapshot);
+    let later_volume = derive_volume_metrics(
+        later_stats.window_days,
+        later_stats.snapshot.total_time_secs,
+        later_stats.snapshot.total_distance_m,
+        later_stats.snapshot.total_elevation_m,
+        later_stats.snapshot.activity_count,
     );
 
-    let a_consistency =
-        compute_consistency_index(a_stats.snapshot.activity_count, a_stats.planned_count);
-    let b_consistency =
-        compute_consistency_index(b_stats.snapshot.activity_count, b_stats.planned_count);
+    let later_consistency = compute_consistency_index(
+        later_stats.snapshot.activity_count,
+        later_stats.planned_count,
+    );
+    let earlier_consistency = compute_consistency_index(
+        earlier_stats.snapshot.activity_count,
+        earlier_stats.planned_count,
+    );
 
-    let a_summary = build_period_summary(&a_stats);
-    let b_summary = build_period_summary(&b_stats);
-    let comparison = AnalysisEngine::compare_periods(&a_summary, &b_summary, a_label, b_label);
+    let later_summary = build_period_summary(&later_stats);
+    let earlier_summary = build_period_summary(&earlier_stats);
+    let comparison = AnalysisEngine::compare_periods(
+        &later_summary,
+        &earlier_summary,
+        later_label,
+        earlier_label,
+    );
 
     let fitness_context = FitnessContext::load(client).await;
     let fitness_metrics = fitness_context.metrics().cloned();
 
     let metrics_for_guidance = CoachMetrics {
-        consistency: Some(a_consistency.clone()),
+        consistency: Some(later_consistency.clone()),
         fitness: fitness_metrics.clone(),
-        volume: Some(a_volume.clone()),
+        volume: Some(later_volume.clone()),
         ..Default::default()
     };
     let alerts = build_alerts(&metrics_for_guidance);
@@ -105,13 +136,13 @@ pub async fn compare_periods(
     let mut content = Vec::new();
     content.push(ContentBlock::markdown(format!(
         "# Comparison: {} vs {}",
-        a_label, b_label
+        later_label, earlier_label
     )));
 
     let mut rows = vec![vec![
         "Metric".into(),
-        a_label.into(),
-        b_label.into(),
+        later_label.into(),
+        earlier_label.into(),
         "Δ".into(),
     ]];
     for m in &comparison.metrics {
@@ -163,17 +194,22 @@ pub async fn compare_periods(
         let rows = requested_metrics
             .iter()
             .map(|metric| {
-                let (a_value, note) = requested_metric_value(metric, &a_stats);
-                let (b_value, _) = requested_metric_value(metric, &b_stats);
-                vec![requested_metric_label(metric), a_value, b_value, note]
+                let (later_value, note) = requested_metric_value(metric, &later_stats);
+                let (earlier_value, _) = requested_metric_value(metric, &earlier_stats);
+                vec![
+                    requested_metric_label(metric),
+                    later_value,
+                    earlier_value,
+                    note,
+                ]
             })
             .collect::<Vec<_>>();
         content.push(ContentBlock::markdown("Requested Metrics".to_string()));
         content.push(ContentBlock::table(
             vec![
                 "Metric".into(),
-                a_label.into(),
-                b_label.into(),
+                later_label.into(),
+                earlier_label.into(),
                 "Status".into(),
             ],
             rows,
@@ -189,15 +225,15 @@ pub async fn compare_periods(
         format_pct(trend.time_delta_pct),
         format_pct(trend.distance_delta_pct),
         format_pct(trend.elevation_delta_pct),
-        a_volume.weekly_avg_hours,
-        a_label,
-        a_consistency.state.as_deref().unwrap_or("unknown"),
-        a_consistency.ratio.unwrap_or(0.0) * 100.0,
-        a_stats.planned_count,
-        b_label,
-        b_consistency.state.as_deref().unwrap_or("unknown"),
-        b_consistency.ratio.unwrap_or(0.0) * 100.0,
-        b_stats.planned_count,
+        later_volume.weekly_avg_hours,
+        later_label,
+        later_consistency.state.as_deref().unwrap_or("unknown"),
+        later_consistency.ratio.unwrap_or(0.0) * 100.0,
+        later_stats.planned_count,
+        earlier_label,
+        earlier_consistency.state.as_deref().unwrap_or("unknown"),
+        earlier_consistency.ratio.unwrap_or(0.0) * 100.0,
+        earlier_stats.planned_count,
     )));
 
     let mut suggestions = vec![comparison.summary.clone()];
@@ -240,6 +276,7 @@ mod compare_tests {
     use super::*;
     use crate::test_support::mock::MockIntervalsClient;
     use intervals_icu_client::ActivitySummary;
+    use std::collections::HashMap;
 
     fn make_activity(
         id: &str,
@@ -491,5 +528,88 @@ mod compare_tests {
         });
         let result = compare_periods(&input, &client).await;
         assert!(result.is_ok());
+    }
+
+    /// Regression: when the caller labels the older period as `period_a`
+    /// and the newer period as `period_b`, the Δ column must still report
+    /// `(later) - (earlier)`. Before the fix, the engine computed
+    /// `period_a - period_b` positionally, inverting the sign for users who
+    /// put "this year" in the second slot.
+    #[tokio::test]
+    async fn test_compare_periods_delta_is_invariant_to_label_order() {
+        // The later period (March) carries 2 activities; the earlier
+        // period (February) carries 1. activity_details applies 5400s,
+        // 15000m, 300m to each activity, so the asymmetry surfaces as a
+        // detectable Δ sign.
+        let client = MockIntervalsClient::builder()
+            .with_activities(vec![
+                make_activity("mar-1", "Mar Run 1", "2026-03-01", Some(5400)),
+                make_activity("mar-2", "Mar Run 2", "2026-03-03", Some(5400)),
+                make_activity("feb-1", "Feb Run", "2026-02-25", Some(5400)),
+            ])
+            .with_activity_details_map(HashMap::from([
+                (
+                    "mar-1".to_string(),
+                    serde_json::json!({
+                        "moving_time": 5400,
+                        "distance": 15000.0,
+                        "total_elevation_gain": 300.0
+                    }),
+                ),
+                (
+                    "mar-2".to_string(),
+                    serde_json::json!({
+                        "moving_time": 5400,
+                        "distance": 15000.0,
+                        "total_elevation_gain": 300.0
+                    }),
+                ),
+                (
+                    "feb-1".to_string(),
+                    serde_json::json!({
+                        "moving_time": 5400,
+                        "distance": 15000.0,
+                        "total_elevation_gain": 300.0
+                    }),
+                ),
+            ]));
+
+        // Caller labels the OLDER period as A.
+        let input = serde_json::json!({
+            "period_a_start": "2026-02-24",
+            "period_a_end": "2026-02-28",
+            "period_b_start": "2026-03-01",
+            "period_b_end": "2026-03-07"
+        });
+        let report = compare_periods(&input, &client).await.unwrap();
+        let rendered = report
+            .content
+            .iter()
+            .map(|b| match b {
+                crate::intents::ContentBlock::Markdown { markdown } => markdown.clone(),
+                crate::intents::ContentBlock::Table { headers, rows } => {
+                    let mut s = headers.join(" | ");
+                    for row in rows {
+                        s.push('\n');
+                        s.push_str(&row.join(" | "));
+                    }
+                    s
+                }
+                _ => String::new(),
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // The header shows the later period (Period B in caller input)
+        // first, because delta is anchored to the later period.
+        assert!(
+            rendered.contains("Comparison: Period B vs Period A"),
+            "later period (Period B in caller input) should appear first; got:\n{rendered}"
+        );
+        // The Trend Context reports +1 (later period gained one activity).
+        assert!(
+            rendered.contains("Activity delta: +1"),
+            "activity delta must be +1 (later period has 1 more activity); got:\n{rendered}"
+        );
     }
 }

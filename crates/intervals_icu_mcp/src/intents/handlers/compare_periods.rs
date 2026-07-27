@@ -29,7 +29,9 @@ impl IntentHandler for ComparePeriodsHandler {
     fn description(&self) -> &'static str {
         "Compare performance between two periods (like-for-like). \
          Shows volume, time, distance, elevation, workout count, and TSS deltas. \
-         Supports filtering by workout type and requesting specific metrics (volume, pace, hr, tss, intensity, zones, etvs)."
+         Supports filtering by workout type and requesting specific metrics (volume, pace, hr, tss, intensity, zones, etvs). \
+         Δ reports (later period - earlier period) / earlier period, so a positive value means the later period grew vs the earlier one. \
+         Periods are auto-ordered by start date — either input slot may be the older or newer period."
     }
 
     fn input_schema(&self) -> Value {
@@ -38,27 +40,27 @@ impl IntentHandler for ComparePeriodsHandler {
             "properties": {
                 "period_a_start": {
                     "type": "string",
-                    "description": "Period A start date (YYYY-MM-DD)"
+                    "description": "First period start date (YYYY-MM-DD). The two periods are auto-ordered by start date: the later period is always used as the reference for delta computation, so the Δ column reports (later - earlier). Either period may be labelled A or B — labels follow each period into the rendered table."
                 },
                 "period_a_end": {
                     "type": "string",
-                    "description": "Period A end date (YYYY-MM-DD)"
+                    "description": "First period end date (YYYY-MM-DD)"
                 },
                 "period_b_start": {
                     "type": "string",
-                    "description": "Period B start date (YYYY-MM-DD)"
+                    "description": "Second period start date (YYYY-MM-DD). The two periods are auto-ordered by start date: the later period is always used as the reference for delta computation, so the Δ column reports (later - earlier). Either period may be labelled A or B — labels follow each period into the rendered table."
                 },
                 "period_b_end": {
                     "type": "string",
-                    "description": "Period B end date (YYYY-MM-DD)"
+                    "description": "Second period end date (YYYY-MM-DD)"
                 },
                 "period_a_label": {
                     "type": "string",
-                    "description": "Label for Period A (default: 'Period A')"
+                    "description": "Label for the first period (default: 'Period A'). The label appears in the rendered table regardless of whether this period ends up as the earlier or later one."
                 },
                 "period_b_label": {
                     "type": "string",
-                    "description": "Label for Period B (default: 'Period B')"
+                    "description": "Label for the second period (default: 'Period B'). The label appears in the rendered table regardless of whether this period ends up as the earlier or later one."
                 },
                 "workout_type": {
                     "type": "string",

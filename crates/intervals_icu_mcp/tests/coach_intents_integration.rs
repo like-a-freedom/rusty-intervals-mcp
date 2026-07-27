@@ -1834,6 +1834,66 @@ async fn compare_periods_includes_shared_trend_context() {
     assert!(markdown_text(&output).to_lowercase().contains("trend"));
 }
 
+/// Delta column direction must be invariant to which period the caller labels
+/// as A vs B. The convention is "later period relative to earlier period":
+/// positive values mean the later period grew vs the earlier period.
+///
+/// Regression test for the bug where putting the older period as `period_a`
+/// and the newer period as `period_b` produced inverted (negative) Δ signs,
+/// because the engine computed `period_a - period_b` positionally instead of
+/// `(later start_date) - (earlier start_date)`.
+#[tokio::test]
+async fn compare_periods_delta_sign_invariant_to_a_b_order() {
+    // `with_period_blocks()` exposes 3 activities:
+    //   a1 on 2026-03-01, a2 on 2026-03-03 (the later week)
+    //   a3 on 2026-02-25                (the earlier week)
+    // activity_details applies the same volume (5400s, 15000m, 300m elev)
+    // to every activity. So whichever period covers March has 2 activities
+    // (10800s, 30000m, 600m) and whichever covers Feb has 1 activity.
+    let client = Arc::new(MockCoachClient::with_period_blocks());
+    let handler = ComparePeriodsHandler::new();
+
+    // Caller puts the OLDER period as A (period_a=Feb, period_b=March).
+    // The Δ column must still be positive: March has grown vs Feb.
+    let output = handler
+        .execute(
+            json!({
+                "period_a_start": "2026-02-24",
+                "period_a_end": "2026-02-28",
+                "period_b_start": "2026-03-01",
+                "period_b_end": "2026-03-07"
+            }),
+            client,
+            None,
+        )
+        .await
+        .unwrap();
+
+    let markdown = markdown_text(&output);
+
+    // The activity-count delta in the Trend Context block must report
+    // "+1" (March gained one workout over February). Before the fix this
+    // came back as "-1" because period_a (Feb) was subtracted from
+    // period_b (March) — i.e. (older - newer) instead of (newer - older).
+    assert!(
+        markdown.contains("Activity delta: +1"),
+        "Activity delta should be +1 (later period has 1 more activity); got:\n{markdown}"
+    );
+    // The comparison table Δ cell for the Volume (hours) row must be a
+    // positive number — later period has 2x the moving time.
+    // 5400s → 1.5h, 10800s → 3.0h, so Δ = +1.5h (+100%).
+    assert!(
+        markdown.contains("+1.5") || markdown.contains("+1.50"),
+        "Volume Δ cell should be positive when later period grew; got:\n{markdown}"
+    );
+    // Table columns must reorder so the later period (Period B in the
+    // caller's input) appears first as the comparison reference.
+    assert!(
+        markdown.contains("Period B vs Period A"),
+        "Header should put the later period first; got:\n{markdown}"
+    );
+}
+
 #[tokio::test]
 async fn analyze_training_single_surfaces_execution_quality_and_degraded_availability() {
     let client = Arc::new(MockCoachClient::with_single_workout_degraded_streams());
