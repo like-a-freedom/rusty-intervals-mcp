@@ -1,12 +1,12 @@
+mod common;
+
 use intervals_icu_client::IntervalsClient;
-use intervals_icu_client::http_client::ReqwestIntervalsClient;
-use secrecy::SecretString;
 use wiremock::matchers::{method, path, query_param};
-use wiremock::{Mock, MockServer, ResponseTemplate};
+use wiremock::{Mock, ResponseTemplate};
 
 #[tokio::test]
 async fn best_efforts_detects_top_level_streams() {
-    let server = MockServer::start().await;
+    let server = common::setup_mock().await;
 
     // initial power attempt -> 422
     Mock::given(method("GET"))
@@ -36,8 +36,7 @@ async fn best_efforts_detects_top_level_streams() {
         .mount(&server)
         .await;
 
-    let client = ReqwestIntervalsClient::new(&server.uri(), "ath", SecretString::new("tok".into()))
-        .expect("new");
+    let client = common::setup_client(&server);
     let efforts: serde_json::Value = client
         .get_best_efforts("act7", None)
         .await
@@ -47,7 +46,7 @@ async fn best_efforts_detects_top_level_streams() {
 
 #[tokio::test]
 async fn best_efforts_detects_streams_array_form() {
-    let server = MockServer::start().await;
+    let server = common::setup_mock().await;
 
     // initial power attempt -> 422
     Mock::given(method("GET"))
@@ -76,8 +75,7 @@ async fn best_efforts_detects_streams_array_form() {
         .mount(&server)
         .await;
 
-    let client = ReqwestIntervalsClient::new(&server.uri(), "ath", SecretString::new("tok".into()))
-        .expect("new");
+    let client = common::setup_client(&server);
     let efforts: serde_json::Value = client
         .get_best_efforts("act8", None)
         .await
@@ -87,7 +85,7 @@ async fn best_efforts_detects_streams_array_form() {
 
 #[tokio::test]
 async fn best_efforts_detects_top_level_array_streams_form() {
-    let server = MockServer::start().await;
+    let server = common::setup_mock().await;
 
     Mock::given(method("GET"))
         .and(path("/api/v1/activity/act10/best-efforts"))
@@ -114,8 +112,7 @@ async fn best_efforts_detects_top_level_array_streams_form() {
         .mount(&server)
         .await;
 
-    let client = ReqwestIntervalsClient::new(&server.uri(), "ath", SecretString::new("tok".into()))
-        .expect("new");
+    let client = common::setup_client(&server);
     let efforts: serde_json::Value = client
         .get_best_efforts("act10", None)
         .await
@@ -125,7 +122,7 @@ async fn best_efforts_detects_top_level_array_streams_form() {
 
 #[tokio::test]
 async fn best_efforts_prefers_watts_over_distance_and_annotates_stream() {
-    let server = MockServer::start().await;
+    let server = common::setup_mock().await;
 
     Mock::given(method("GET"))
         .and(path("/api/v1/activity/act11/best-efforts"))
@@ -162,8 +159,7 @@ async fn best_efforts_prefers_watts_over_distance_and_annotates_stream() {
         .mount(&server)
         .await;
 
-    let client = ReqwestIntervalsClient::new(&server.uri(), "ath", SecretString::new("tok".into()))
-        .expect("new");
+    let client = common::setup_client(&server);
     let efforts: serde_json::Value = client
         .get_best_efforts("act11", None)
         .await

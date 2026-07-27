@@ -1,12 +1,14 @@
+mod common;
+
 use intervals_icu_client::IntervalsClient;
 use intervals_icu_client::http_client::ReqwestIntervalsClient;
 use secrecy::SecretString;
 use wiremock::matchers::{method, path};
-use wiremock::{Mock, MockServer, ResponseTemplate};
+use wiremock::{Mock, ResponseTemplate};
 
 #[tokio::test]
 async fn get_power_curves_normalizes_type_and_sends_curves() {
-    let mock_server = MockServer::start().await;
+    let mock_server = common::setup_mock().await;
 
     // Expect a GET to activity-power-curves endpoint
     let m = Mock::given(method("GET"))

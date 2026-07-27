@@ -1,10 +1,12 @@
+mod common;
+
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use chrono::{Duration, Utc};
 use intervals_icu_client::IntervalsClient;
 use intervals_icu_client::http_client::ReqwestIntervalsClient;
 use secrecy::SecretString;
 use wiremock::matchers::{method, path, query_param};
-use wiremock::{Mock, MockServer, ResponseTemplate};
+use wiremock::{Mock, ResponseTemplate};
 
 const LIVE_OPENAPI_SPEC_URL: &str = "https://intervals.icu/api/v1/docs";
 
@@ -53,7 +55,7 @@ fn assert_query_param(
 
 #[tokio::test]
 async fn get_activities_around_uses_activities_around_path() {
-    let mock_server = MockServer::start().await;
+    let mock_server = common::setup_mock().await;
     let athlete = "ath";
     let expected = serde_json::json!([
         {"id": "a-prev", "name": "Warmup Ride"}
@@ -79,7 +81,7 @@ async fn get_activities_around_uses_activities_around_path() {
 
 #[tokio::test]
 async fn apply_sport_settings_uses_put() {
-    let mock_server = MockServer::start().await;
+    let mock_server = common::setup_mock().await;
     let sport = "Run";
     let athlete = "ath";
 
@@ -108,7 +110,7 @@ async fn apply_sport_settings_uses_put() {
 
 #[tokio::test]
 async fn get_wellness_translates_days_back_to_oldest_and_newest() {
-    let mock_server = MockServer::start().await;
+    let mock_server = common::setup_mock().await;
     let athlete = "ath";
     let before = Utc::now().date_naive();
 
@@ -158,7 +160,7 @@ async fn get_wellness_translates_days_back_to_oldest_and_newest() {
 
 #[tokio::test]
 async fn get_events_translates_days_back_to_oldest_and_newest() {
-    let mock_server = MockServer::start().await;
+    let mock_server = common::setup_mock().await;
     let athlete = "ath";
     let before = Utc::now().date_naive();
     let event_day = before.to_string();
@@ -218,7 +220,7 @@ async fn get_events_translates_days_back_to_oldest_and_newest() {
 
 #[tokio::test]
 async fn download_fit_file_uses_fit_file_endpoint() {
-    let mock_server = MockServer::start().await;
+    let mock_server = common::setup_mock().await;
     let bytes = vec![1u8, 2, 3];
 
     Mock::given(method("GET"))
@@ -240,7 +242,7 @@ async fn download_fit_file_uses_fit_file_endpoint() {
 
 #[tokio::test]
 async fn download_gpx_file_uses_gpx_file_endpoint() {
-    let mock_server = MockServer::start().await;
+    let mock_server = common::setup_mock().await;
     let bytes = vec![4u8, 5, 6];
 
     Mock::given(method("GET"))
@@ -262,7 +264,7 @@ async fn download_gpx_file_uses_gpx_file_endpoint() {
 
 #[tokio::test]
 async fn create_gear_reminder_uses_singular_reminder_endpoint() {
-    let mock_server = MockServer::start().await;
+    let mock_server = common::setup_mock().await;
     let expected = serde_json::json!({"id":"g1"});
 
     Mock::given(method("POST"))
@@ -284,7 +286,7 @@ async fn create_gear_reminder_uses_singular_reminder_endpoint() {
 
 #[tokio::test]
 async fn update_wellness_bulk_uses_bulk_endpoint() {
-    let mock_server = MockServer::start().await;
+    let mock_server = common::setup_mock().await;
 
     Mock::given(method("PUT"))
         .and(path("/api/v1/athlete/ath/wellness-bulk"))
@@ -303,7 +305,7 @@ async fn update_wellness_bulk_uses_bulk_endpoint() {
 
 #[tokio::test]
 async fn weather_config_uses_spec_endpoints() {
-    let mock_server = MockServer::start().await;
+    let mock_server = common::setup_mock().await;
 
     Mock::given(method("GET"))
         .and(path("/api/v1/athlete/ath/weather-config"))
@@ -343,7 +345,7 @@ async fn weather_config_uses_spec_endpoints() {
 
 #[tokio::test]
 async fn routes_use_current_spec_paths() {
-    let mock_server = MockServer::start().await;
+    let mock_server = common::setup_mock().await;
 
     Mock::given(method("GET"))
         .and(path("/api/v1/athlete/ath/routes"))

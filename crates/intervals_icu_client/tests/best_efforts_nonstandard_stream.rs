@@ -1,12 +1,13 @@
+mod common;
+
+use common::setup_client;
 use intervals_icu_client::IntervalsClient;
-use intervals_icu_client::http_client::ReqwestIntervalsClient;
-use secrecy::SecretString;
 use wiremock::matchers::{method, path, query_param};
-use wiremock::{Mock, MockServer, ResponseTemplate};
+use wiremock::{Mock, ResponseTemplate};
 
 #[tokio::test]
 async fn best_efforts_uses_nonstandard_stream_name_if_present() {
-    let server = MockServer::start().await;
+    let server = common::setup_mock().await;
 
     // initial default power attempt -> 422
     Mock::given(method("GET"))
@@ -35,8 +36,7 @@ async fn best_efforts_uses_nonstandard_stream_name_if_present() {
         .mount(&server)
         .await;
 
-    let client = ReqwestIntervalsClient::new(&server.uri(), "ath", SecretString::new("tok".into()))
-        .expect("new");
+    let client = setup_client(&server);
     let res: serde_json::Value = client
         .get_best_efforts("act9", None)
         .await
