@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::domains::coach::{AcwrMetrics, LoadManagementMetrics};
 use crate::domains::interval_segment::SportPresentation;
