@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 /// Post-race analysis: results, strategy, comparison to plan.
 use std::sync::Arc;
 
+use crate::content::date::{data_availability_block, filter_activities_by_description};
 use crate::domains::coach::{AnalysisKind, AnalysisWindow, CoachContext, RaceMetrics};
 use crate::engines::analysis_audit::build_data_audit;
 use crate::engines::analysis_fetch::{RaceFetchRequest, fetch_race_data};
@@ -16,7 +17,6 @@ use crate::engines::coach_metrics::{extract_ctl_series, parse_wellness_metrics};
 use crate::engines::fitness_context::FitnessContext;
 use crate::engines::race_readiness::{compute_ctl_drop, compute_race_readiness};
 use crate::engines::shared::parse_activity_date;
-use crate::intents::utils::{data_availability_block, filter_activities_by_description};
 
 pub struct AnalyzeRaceHandler;
 impl AnalyzeRaceHandler {

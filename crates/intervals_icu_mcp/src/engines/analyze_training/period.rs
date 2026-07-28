@@ -3,6 +3,10 @@ use serde_json::Value;
 
 use super::render::*;
 use super::shared::*;
+use crate::content::date::{
+    data_availability_block, filter_activities_by_range, filter_events_by_range, format_pct,
+    parse_date,
+};
 use crate::content::{ContentBlock, IntentError, OutputMetadata};
 use crate::domains::activity_analysis::{back_to_back_load, vert_per_week};
 use crate::domains::coach::{AnalysisKind, AnalysisWindow, CoachContext};
@@ -25,10 +29,6 @@ use crate::engines::endurance_evidence::{CyclingSessionInput, compute_endurance_
 use crate::engines::interval_analysis::is_planned_workout_id;
 use crate::engines::metric_streams::parse_metric_streams;
 use crate::engines::shared::parse_activity_date;
-use crate::intents::utils::{
-    data_availability_block, filter_activities_by_range, filter_events_by_range, format_pct,
-    parse_date,
-};
 use intervals_icu_client::EventCategory;
 
 pub(crate) async fn fetch_period_stats(

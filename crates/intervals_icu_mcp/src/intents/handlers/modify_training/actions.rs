@@ -8,9 +8,9 @@
 //! (notably `find_matching_events`, `fetch_events_*`,
 //! `event_matches_description`, and `parse_duration_to_seconds`).
 
+use crate::content::date::parse_date;
 use crate::domains::events::{validate_and_prepare_event, validation_error_to_string};
 use crate::domains::workout_validator::{format_duration_short, validate_workout_description};
-use crate::intents::utils::parse_date;
 use crate::intents::{ContentBlock, IntentError, IntentOutput, OutputMetadata};
 use intervals_icu_client::IntervalsClient;
 use serde_json::Value;

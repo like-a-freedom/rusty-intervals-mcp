@@ -3,6 +3,7 @@ use serde_json::Value;
 
 use super::render::*;
 use super::shared::*;
+use crate::content::date::{data_availability_block, filter_activities_by_date, parse_date};
 use crate::content::{ContentBlock, IntentError};
 use crate::domains::coach::{AnalysisKind, AnalysisWindow, CoachContext};
 use crate::domains::interval_detection::{self};
@@ -31,7 +32,6 @@ use crate::engines::interval_analysis::{
 use crate::engines::interval_segment_metrics::{compute_structured_consistency, enrich_segments};
 use crate::engines::metric_streams::parse_metric_streams;
 use crate::engines::trail_execution::compute_terrain_context;
-use crate::intents::utils::{data_availability_block, filter_activities_by_date, parse_date};
 
 pub async fn analyze_single(
     input: &Value,

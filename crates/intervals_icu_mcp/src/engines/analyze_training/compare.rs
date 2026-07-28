@@ -2,6 +2,7 @@ use intervals_icu_client::IntervalsClient;
 use serde_json::Value;
 
 use super::shared::*;
+use crate::content::date::{format_pct, parse_date};
 use crate::content::{ContentBlock, IntentError};
 use crate::domains::coach::CoachMetrics;
 use crate::engines::analysis::AnalysisEngine;
@@ -10,7 +11,6 @@ use crate::engines::coach_metrics::{
     compute_consistency_index, derive_trend_metrics, derive_volume_metrics,
 };
 use crate::engines::fitness_context::FitnessContext;
-use crate::intents::utils::{format_pct, parse_date};
 
 pub async fn compare_periods(
     input: &Value,

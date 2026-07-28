@@ -10,9 +10,9 @@ use serde_json::{Value, json};
 /// Modifies existing training (CRUD: modify, create, delete).
 use std::sync::Arc;
 
+use crate::content::date::{filter_events_by_date, filter_events_by_range};
 use crate::engines::analysis_fetch::fetch_calendar_events_between;
 use crate::engines::dedupe::dedupe_and_sort_events;
-use crate::intents::utils::{filter_events_by_date, filter_events_by_range};
 
 pub struct ModifyTrainingHandler;
 

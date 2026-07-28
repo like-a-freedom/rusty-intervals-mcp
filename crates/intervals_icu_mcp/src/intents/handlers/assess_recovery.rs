@@ -1,7 +1,5 @@
-use crate::intents::{
-    ContentBlock, IdempotencyCache, IntentError, IntentHandler, IntentOutput,
-    data_availability_block,
-};
+use crate::content::date::data_availability_block;
+use crate::intents::{ContentBlock, IdempotencyCache, IntentError, IntentHandler, IntentOutput};
 use async_trait::async_trait;
 use intervals_icu_client::IntervalsClient;
 use serde_json::{Value, json};

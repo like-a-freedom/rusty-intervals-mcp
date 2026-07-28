@@ -1,14 +1,19 @@
-/// Shared utilities for intent handlers
-///
-/// Provides common functionality used across multiple intent handlers:
-/// - Date parsing and validation
-/// - Activity filtering
-/// - Period calculations
+//! Shared date and format helpers for intent handlers and engines.
+//!
+//! Provides common functionality used across multiple modules:
+//! - Date parsing and validation
+//! - Activity and event filtering
+//! - Period calculations
+//! - Compact markdown and percentage formatting
+//!
+//! These were extracted from `intents::utils` (deleted) to eliminate a DDD
+//! direction inversion: lower layers (engines, domains) imported from a
+//! higher-layer utility module. See ADR-0006.
 use chrono::{DateTime, Duration, Local, NaiveDate, NaiveDateTime};
 use intervals_icu_client::{ActivitySummary, Event};
 
+use crate::content::{ContentBlock, IntentError};
 use crate::engines::shared::parse_activity_date;
-use crate::intents::{ContentBlock, IntentError};
 
 fn resolve_relative_day_alias(date_str: &str) -> Option<NaiveDate> {
     let today = Local::now().date_naive();

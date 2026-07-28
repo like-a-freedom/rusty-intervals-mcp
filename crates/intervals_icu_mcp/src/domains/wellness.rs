@@ -31,7 +31,7 @@ pub const DEFAULT_FIELDS: &[&str] = &[
 /// This follows the **Information Expert** principle by keeping
 /// date normalization logic in the domain module.
 pub fn normalize_date(date_str: &str) -> Option<String> {
-    crate::intents::utils::normalize_date_str(date_str)
+    crate::content::date::normalize_date_str(date_str)
 }
 
 pub fn transform_wellness(value: &Value, summary_only: bool, fields: Option<&[String]>) -> Value {

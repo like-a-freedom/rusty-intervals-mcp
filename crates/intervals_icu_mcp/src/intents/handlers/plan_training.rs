@@ -10,12 +10,12 @@ use serde_json::{Value, json};
 /// Plans training across various horizons (microcycle to annual plan).
 use std::sync::Arc;
 
+use crate::content::date::parse_date;
 use crate::domains::events::validate_and_prepare_event;
 use crate::engines::fitness_context::FitnessContext;
 use crate::engines::forecast::{
     TAPER_ACTUAL_REDUCTION_PCT, TAPER_TARGET_REDUCTION_PCT, parameterized_load, project_tsb,
 };
-use crate::intents::utils::parse_date;
 
 pub struct PlanTrainingHandler;
 impl PlanTrainingHandler {
