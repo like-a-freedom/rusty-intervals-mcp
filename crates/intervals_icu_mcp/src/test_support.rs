@@ -2061,6 +2061,479 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn test_content_text_with_text_blocks() {
+        use crate::intents::ContentBlock;
+        let content = vec![
+            ContentBlock::Text {
+                text: "hello".to_string(),
+            },
+            ContentBlock::Text {
+                text: "world".to_string(),
+            },
+        ];
+        let result = content_text(&content);
+        assert_eq!(result, "hello\nworld");
+    }
+
+    #[test]
+    fn test_content_text_with_markdown_blocks() {
+        use crate::intents::ContentBlock;
+        let content = vec![ContentBlock::Markdown {
+            markdown: "# Title".to_string(),
+        }];
+        let result = content_text(&content);
+        assert_eq!(result, "# Title");
+    }
+
+    #[test]
+    fn test_content_text_with_table_blocks() {
+        use crate::intents::ContentBlock;
+        let content = vec![ContentBlock::Table {
+            headers: vec!["Name".to_string(), "Value".to_string()],
+            rows: vec![vec!["a".to_string(), "1".to_string()]],
+        }];
+        let result = content_text(&content);
+        assert!(result.contains("Name"));
+        assert!(result.contains("Value"));
+        assert!(result.contains("a"));
+        assert!(result.contains("1"));
+    }
+
+    #[test]
+    fn test_content_text_empty() {
+        use crate::intents::ContentBlock;
+        let content: Vec<ContentBlock> = vec![];
+        let result = content_text(&content);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_mock_scenario_adaptive_wellness_series() {
+        let value =
+            MockIntervalsClient::adaptive_wellness_series(28800.0, 50.0, 60.0, 25200.0, 55.0, 45.0);
+        assert!(value.is_array());
+        assert_eq!(value.as_array().unwrap().len(), 35);
+    }
+
+    #[test]
+    fn test_mock_scenario_fitness_snapshot() {
+        let value = MockIntervalsClient::fitness_snapshot(50.0, 70.0, -20.0);
+        assert!(value.is_array());
+        let arr = value.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["fitness"], 50.0);
+        assert_eq!(arr[0]["fatigue"], 70.0);
+        assert_eq!(arr[0]["form"], -20.0);
+    }
+
+    #[test]
+    fn test_mock_scenario_activity() {
+        let act = MockIntervalsClient::activity("a1", "Run 1", "2026-03-01");
+        assert_eq!(act.id, "a1");
+        assert_eq!(act.name.as_deref(), Some("Run 1"));
+        assert_eq!(act.start_date_local, "2026-03-01");
+    }
+
+    #[test]
+    fn test_mock_scenario_mock_event() {
+        let event = MockIntervalsClient::mock_event(Some("e1"));
+        assert_eq!(event.id.as_deref(), Some("e1"));
+        assert_eq!(event.name, "Mock event");
+    }
+
+    #[test]
+    fn test_mock_scenario_mock_event_no_id() {
+        let event = MockIntervalsClient::mock_event(None);
+        assert!(event.id.is_none());
+    }
+
+    #[test]
+    fn test_mock_scenario_relative_date() {
+        let date = MockIntervalsClient::relative_date(0);
+        assert!(!date.is_empty());
+        assert!(date.contains('-'));
+    }
+
+    #[test]
+    fn test_mock_scenario_with_tsb() {
+        let client = MockIntervalsClient::with_tsb(10.0);
+        assert_eq!(client.activities.len(), 1);
+        assert!(client.fitness_summary.is_some());
+    }
+
+    #[test]
+    fn test_mock_scenario_with_race_activity() {
+        let client = MockIntervalsClient::with_race_activity();
+        assert_eq!(client.activities.len(), 1);
+        assert_eq!(client.events.len(), 1);
+        assert!(client.fitness_summary.is_some());
+    }
+
+    #[test]
+    fn test_mock_scenario_with_period_blocks() {
+        let client = MockIntervalsClient::with_period_blocks();
+        assert_eq!(client.activities.len(), 3);
+        assert!(client.fitness_summary.is_some());
+    }
+
+    #[test]
+    fn test_mock_scenario_with_single_workout_degraded_streams() {
+        let client = MockIntervalsClient::with_single_workout_degraded_streams();
+        assert_eq!(client.activities.len(), 1);
+        assert!(client.fitness_summary.is_some());
+        assert!(client.intervals.is_some());
+    }
+
+    #[test]
+    fn test_mock_scenario_with_race_degraded_context() {
+        let client = MockIntervalsClient::with_race_degraded_context();
+        assert_eq!(client.activities.len(), 1);
+        assert!(client.fitness_summary.is_some());
+    }
+
+    #[test]
+    fn test_mock_scenario_with_positive_tsb_and_low_sleep() {
+        let client = MockIntervalsClient::with_positive_tsb_and_low_sleep();
+        assert_eq!(client.activities.len(), 1);
+        assert!(client.fitness_summary.is_some());
+        assert!(client.wellness.is_some());
+    }
+
+    #[test]
+    fn test_mock_scenario_with_supportive_recovery_metrics() {
+        let client = MockIntervalsClient::with_supportive_recovery_metrics();
+        assert_eq!(client.activities.len(), 1);
+        assert!(client.fitness_summary.is_some());
+        assert!(client.wellness.is_some());
+    }
+
+    #[test]
+    fn test_mock_scenario_with_personal_hrv_drop_profile() {
+        let client = MockIntervalsClient::with_personal_hrv_drop_profile();
+        assert_eq!(client.activities.len(), 1);
+        assert!(client.wellness.is_some());
+        let wellness = client.wellness.as_ref().unwrap();
+        assert!(wellness.is_array());
+        assert_eq!(wellness.as_array().unwrap().len(), 35);
+    }
+
+    #[test]
+    fn test_mock_scenario_with_personal_hrv_norm_profile() {
+        let client = MockIntervalsClient::with_personal_hrv_norm_profile();
+        assert_eq!(client.activities.len(), 1);
+        assert!(client.wellness.is_some());
+    }
+
+    #[test]
+    fn test_mock_scenario_with_load_ramp_block() {
+        let client = MockIntervalsClient::with_load_ramp_block();
+        assert_eq!(client.activities.len(), 28);
+        assert!(client.fitness_summary.is_some());
+    }
+
+    #[test]
+    fn test_mock_scenario_with_stream_supported_workout() {
+        let client = MockIntervalsClient::with_stream_supported_workout();
+        assert_eq!(client.activities.len(), 1);
+        assert!(client.intervals.is_some());
+        assert!(client.streams.is_some());
+        assert!(client.pace_histogram.is_some());
+    }
+
+    #[test]
+    fn test_mock_scenario_with_api_load_snapshot() {
+        let client = MockIntervalsClient::with_api_load_snapshot();
+        assert!(client.wellness_for_date_data.is_some());
+    }
+
+    #[test]
+    fn test_mock_scenario_with_profile_metrics() {
+        let client = MockIntervalsClient::with_profile_metrics();
+        assert!(client.fitness_summary.is_some());
+        assert!(client.sport_settings.is_some());
+    }
+
+    #[test]
+    fn test_mock_scenario_with_mode_collapse_single_workout() {
+        let client = MockIntervalsClient::with_mode_collapse_single_workout();
+        assert_eq!(client.activities.len(), 1);
+        assert!(client.fitness_summary.is_some());
+    }
+
+    #[test]
+    fn test_mock_scenario_with_future_workouts_only() {
+        let client = MockIntervalsClient::with_future_workouts_only();
+        assert!(client.upcoming_workouts.is_some());
+    }
+
+    #[test]
+    fn test_mock_scenario_with_future_calendar_events_only() {
+        let client = MockIntervalsClient::with_future_calendar_events_only();
+        assert!(client.upcoming_workouts.is_some());
+    }
+
+    #[test]
+    fn test_mock_scenario_with_paired_activity_and_calendar_duplicate() {
+        let client = MockIntervalsClient::with_paired_activity_and_calendar_duplicate();
+        assert_eq!(client.activities.len(), 1);
+        assert!(client.upcoming_workouts.is_some());
+    }
+
+    #[test]
+    fn test_mock_scenario_with_profile_metrics_and_wellness_weight() {
+        let client = MockIntervalsClient::with_profile_metrics_and_wellness_weight();
+        assert!(client.wellness_for_date_data.is_some());
+    }
+
+    #[test]
+    fn test_mock_scenario_with_recent_non_race_then_race_activity() {
+        let client = MockIntervalsClient::with_recent_non_race_then_race_activity();
+        assert_eq!(client.activities.len(), 2);
+        assert!(client.events.len() == 1);
+    }
+
+    #[test]
+    fn test_mock_scenario_with_mixed_period_workouts() {
+        let client = MockIntervalsClient::with_mixed_period_workouts();
+        assert_eq!(client.activities.len(), 3);
+    }
+
+    #[test]
+    fn test_mock_scenario_with_mode_sensitive_single_workout() {
+        let client = MockIntervalsClient::with_mode_sensitive_single_workout();
+        assert_eq!(client.activities.len(), 1);
+        assert!(client.intervals.is_some());
+        assert!(client.streams.is_some());
+    }
+
+    #[test]
+    fn test_mock_scenario_with_object_shaped_interval_payload() {
+        let client = MockIntervalsClient::with_object_shaped_interval_payload();
+        assert!(client.intervals.is_some());
+    }
+
+    #[test]
+    fn test_mock_scenario_with_interval_power_only_in_streams() {
+        let client = MockIntervalsClient::with_interval_power_only_in_streams();
+        assert!(client.streams.is_some());
+    }
+
+    #[test]
+    fn test_mock_scenario_with_noncanonical_stream_payload() {
+        let client = MockIntervalsClient::with_noncanonical_stream_payload();
+        assert!(client.streams.is_some());
+    }
+
+    #[test]
+    fn test_mock_scenario_with_rich_detailed_workout() {
+        let client = MockIntervalsClient::with_rich_detailed_workout();
+        assert_eq!(client.activities.len(), 1);
+    }
+
+    #[test]
+    fn test_mock_scenario_with_interval_power_stream_alias() {
+        let client = MockIntervalsClient::with_interval_power_stream_alias();
+        assert!(client.streams.is_some());
+    }
+
+    #[test]
+    fn test_mock_scenario_with_interval_output_only_in_speed_streams() {
+        let client = MockIntervalsClient::with_interval_output_only_in_speed_streams();
+        assert!(client.streams.is_some());
+    }
+
+    #[test]
+    fn test_mock_scenario_with_many_intervals() {
+        let client = MockIntervalsClient::with_many_intervals();
+        assert!(client.intervals.is_some());
+    }
+
+    #[test]
+    fn test_mock_scenario_with_priority_streams_without_power() {
+        let client = MockIntervalsClient::with_priority_streams_without_power();
+        assert!(client.streams.is_some());
+    }
+
+    #[test]
+    fn test_mock_scenario_with_best_efforts_and_bucket_histograms() {
+        let client = MockIntervalsClient::with_best_efforts_and_bucket_histograms();
+        assert!(client.best_efforts.is_some());
+        assert!(client.hr_histogram.is_some());
+        assert!(client.power_histogram.is_some());
+        assert!(client.pace_histogram.is_some());
+    }
+
+    #[test]
+    fn test_mock_scenario_with_full_histogram_ranges() {
+        let client = MockIntervalsClient::with_full_histogram_ranges();
+        assert!(client.hr_histogram.is_some());
+        assert!(client.power_histogram.is_some());
+        assert!(client.pace_histogram.is_some());
+    }
+
+    #[test]
+    fn test_mock_scenario_with_live_best_efforts_shape() {
+        let client = MockIntervalsClient::with_live_best_efforts_shape();
+        assert!(client.best_efforts.is_some());
+    }
+
+    #[test]
+    fn test_mock_scenario_with_streams_and_interval_error() {
+        let client = MockIntervalsClient::with_streams_and_interval_error();
+        assert!(client.streams.is_some());
+        assert!(client.intervals_error.is_some());
+    }
+
+    #[test]
+    fn test_mock_scenario_with_stream_error() {
+        let client = MockIntervalsClient::with_stream_error();
+        assert!(client.streams_error.is_some());
+    }
+
+    #[test]
+    fn test_mock_scenario_with_fartlek_streams_and_upstream_intervals() {
+        let client = MockIntervalsClient::with_fartlek_streams_and_upstream_intervals();
+        assert!(client.streams.is_some());
+        assert!(client.intervals.is_some());
+    }
+
+    #[test]
+    fn test_mock_observation_wellness_call_count() {
+        let client = MockIntervalsClient::default();
+        let observations = client.observations();
+        assert_eq!(observations.wellness_call_count(), 0);
+    }
+
+    #[test]
+    fn test_mock_observation_wellness_last_days_back_none() {
+        let client = MockIntervalsClient::default();
+        let observations = client.observations();
+        assert!(observations.wellness_last_days_back().is_none());
+    }
+
+    #[test]
+    fn test_mock_with_stream_for_id() {
+        let client =
+            MockIntervalsClient::default().with_stream_for_id("a1", json!({"watts": [100, 200]}));
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt
+            .block_on(client.get_activity_streams("a1", None))
+            .unwrap();
+        assert_eq!(result, json!({"watts": [100, 200]}));
+    }
+
+    #[test]
+    fn test_mock_with_activity_details_map() {
+        let mut map = std::collections::HashMap::new();
+        map.insert("a1".to_string(), json!({"distance": 5000}));
+        let client = MockIntervalsClient::default().with_activity_details_map(map);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(client.get_activity_details("a1")).unwrap();
+        assert_eq!(result, json!({"distance": 5000}));
+    }
+
+    #[test]
+    fn test_mock_with_activity_details_map_not_found() {
+        let mut map = std::collections::HashMap::new();
+        map.insert("a1".to_string(), json!({"distance": 5000}));
+        let client = MockIntervalsClient::default().with_activity_details_map(map);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(client.get_activity_details("missing"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_mock_with_failing_activity_details() {
+        let client = MockIntervalsClient::default().with_failing_activity_details(vec!["a1"]);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(client.get_activity_details("a1"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_mock_requested_activity_detail_ids() {
+        let client = MockIntervalsClient::default().with_activity_detail("a1", json!({}));
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let _ = rt.block_on(client.get_activity_details("a1"));
+        assert_eq!(client.requested_activity_detail_ids(), vec!["a1"]);
+    }
+
+    #[test]
+    fn test_mock_activity_call_count() {
+        let client = MockIntervalsClient::default();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let _ = rt.block_on(client.get_recent_activities(None, None));
+        assert_eq!(client.activity_call_count(), 1);
+    }
+
+    #[test]
+    fn test_mock_activity_calls_snapshot() {
+        let client = MockIntervalsClient::default();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let _ = rt.block_on(client.get_recent_activities(Some(10), Some(7)));
+        let calls = client.activity_calls_snapshot();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0], (Some(10), Some(7)));
+    }
+
+    #[test]
+    fn test_mock_with_intervals_error() {
+        let client = MockIntervalsClient::default().with_intervals_error("test error");
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(client.get_activity_intervals("a1"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_mock_with_streams_error() {
+        let client = MockIntervalsClient::default().with_streams_error("test error");
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(client.get_activity_streams("a1", None));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_mock_with_wellness_for_date() {
+        let client = MockIntervalsClient::default().with_wellness_for_date(json!({"sleep": 8}));
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt
+            .block_on(client.get_wellness_for_date("2026-03-21"))
+            .unwrap();
+        assert_eq!(result, json!({"sleep": 8}));
+    }
+
+    #[test]
+    fn test_mock_endurance_stream_calls() {
+        let client = MockIntervalsClient::default();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let _ = rt.block_on(client.get_activity_streams("ride-1", None));
+        assert_eq!(client.endurance_stream_calls(), 1);
+    }
+
+    #[test]
+    fn test_mock_observations_wellness_days() {
+        let client = MockIntervalsClient::default();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let _ = rt.block_on(client.get_wellness(Some(7)));
+        let days = client.observations_wellness_days();
+        assert_eq!(days, vec![Some(7)]);
+    }
+
+    #[test]
+    fn test_mock_get_activity_messages_from_details() {
+        let mut details = std::collections::HashMap::new();
+        details.insert(
+            "__activity_messages".to_string(),
+            json!([{"id": 1, "name": "Msg"}]),
+        );
+        let client = MockIntervalsClient::default()
+            .with_activity_detail("__activity_messages", json!([{"id": 1, "name": "Msg"}]));
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(client.get_activity_messages("a1")).unwrap();
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
     fn test_snapshot_env_captures_vars() {
         let keys: &[&str] = &["PATH", "HOME"];
         let snap = snapshot_env(keys);
@@ -2229,6 +2702,225 @@ mod tests {
                 assert_eq!(api.message, "json decode");
             }
             other => panic!("expected API fallback clone, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_clone_intervals_error_preserves_transport() {
+        let original = IntervalsError::Transport(intervals_icu_client::TransportError {
+            message: "conn refused".to_string(),
+            is_timeout: false,
+            is_connect: true,
+        });
+        let cloned = clone_intervals_error(&original);
+
+        match cloned {
+            IntervalsError::Api(api) => {
+                assert_eq!(api.status, 500);
+                assert!(api.message.contains("conn refused"));
+            }
+            other => panic!("expected API fallback for transport clone, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_clone_intervals_error_preserves_config_missing_env_var() {
+        let original = IntervalsError::Config(ConfigError::MissingEnvVar("API_KEY".into()));
+        let cloned = clone_intervals_error(&original);
+
+        match cloned {
+            IntervalsError::Config(ConfigError::MissingEnvVar(key)) => {
+                assert_eq!(key, "API_KEY");
+            }
+            other => panic!("expected MissingEnvVar config error clone, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_clone_intervals_error_preserves_config_invalid_value() {
+        let original = IntervalsError::Config(ConfigError::InvalidValue {
+            key: "TIMEOUT".into(),
+            message: "must be positive".into(),
+        });
+        let cloned = clone_intervals_error(&original);
+
+        match cloned {
+            IntervalsError::Config(ConfigError::InvalidValue { key, message }) => {
+                assert_eq!(key, "TIMEOUT");
+                assert_eq!(message, "must be positive");
+            }
+            other => panic!("expected InvalidValue config error clone, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_clone_intervals_error_preserves_config_unsupported() {
+        let original = IntervalsError::Config(ConfigError::Unsupported { method: "PATCH" });
+        let cloned = clone_intervals_error(&original);
+
+        match cloned {
+            IntervalsError::Config(ConfigError::Unsupported { method }) => {
+                assert_eq!(method, "PATCH");
+            }
+            other => panic!("expected Unsupported config error clone, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_clone_intervals_error_preserves_config_other() {
+        let original = IntervalsError::Config(ConfigError::Other("custom error".into()));
+        let cloned = clone_intervals_error(&original);
+
+        match cloned {
+            IntervalsError::Config(ConfigError::Other(msg)) => {
+                assert_eq!(msg, "custom error");
+            }
+            other => panic!("expected Other config error clone, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_clone_intervals_error_preserves_validation_empty_field() {
+        let original = IntervalsError::Validation(ValidationError::EmptyField {
+            field: "name".into(),
+        });
+        let cloned = clone_intervals_error(&original);
+
+        match cloned {
+            IntervalsError::Validation(ValidationError::EmptyField { field }) => {
+                assert_eq!(field, "name");
+            }
+            other => panic!("expected EmptyField validation error clone, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_clone_intervals_error_preserves_validation_unknown_variant() {
+        let original = IntervalsError::Validation(ValidationError::UnknownVariant {
+            field: "sport".into(),
+            value: "swimming".into(),
+        });
+        let cloned = clone_intervals_error(&original);
+
+        match cloned {
+            IntervalsError::Validation(ValidationError::UnknownVariant { field, value }) => {
+                assert_eq!(field, "sport");
+                assert_eq!(value, "swimming");
+            }
+            other => panic!("expected UnknownVariant validation error clone, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_clone_intervals_error_preserves_validation_missing_parameter() {
+        let original =
+            IntervalsError::Validation(ValidationError::MissingParameter("target_date".into()));
+        let cloned = clone_intervals_error(&original);
+
+        match cloned {
+            IntervalsError::Validation(ValidationError::MissingParameter(param)) => {
+                assert_eq!(param, "target_date");
+            }
+            other => {
+                panic!("expected MissingParameter validation error clone, got {other:?}")
+            }
+        }
+    }
+
+    #[test]
+    fn test_clone_intervals_error_preserves_validation_invalid_param_comb() {
+        let original = IntervalsError::Validation(ValidationError::InvalidParameterCombination(
+            "cannot combine x and y".into(),
+        ));
+        let cloned = clone_intervals_error(&original);
+
+        match cloned {
+            IntervalsError::Validation(ValidationError::InvalidParameterCombination(msg)) => {
+                assert_eq!(msg, "cannot combine x and y");
+            }
+            other => {
+                panic!("expected InvalidParameterCombination validation error clone, got {other:?}")
+            }
+        }
+    }
+
+    #[test]
+    fn test_clone_intervals_error_preserves_io() {
+        let original = IntervalsError::Io(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "request timed out",
+        ));
+        let cloned = clone_intervals_error(&original);
+
+        match cloned {
+            IntervalsError::Io(io_err) => {
+                assert_eq!(io_err.kind(), std::io::ErrorKind::TimedOut);
+            }
+            other => panic!("expected IO error clone, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_clone_intervals_error_preserves_cancelled() {
+        let original = IntervalsError::Cancelled {
+            reason: "user abort".to_string(),
+        };
+        let cloned = clone_intervals_error(&original);
+
+        match cloned {
+            IntervalsError::Cancelled { reason } => {
+                assert_eq!(reason, "user abort");
+            }
+            other => panic!("expected Cancelled error clone, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_clone_intervals_error_preserves_cancelled_empty_reason() {
+        let original = IntervalsError::Cancelled {
+            reason: String::new(),
+        };
+        let cloned = clone_intervals_error(&original);
+
+        match cloned {
+            IntervalsError::Cancelled { reason } => {
+                assert!(reason.is_empty());
+            }
+            other => panic!("expected Cancelled error clone, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_clone_intervals_error_preserves_decode() {
+        let original = IntervalsError::Decode {
+            message: "unexpected token".to_string(),
+            snippet: "<<< raw >>>".to_string(),
+        };
+        let cloned = clone_intervals_error(&original);
+
+        match cloned {
+            IntervalsError::Decode { message, snippet } => {
+                assert_eq!(message, "unexpected token");
+                assert_eq!(snippet, "<<< raw >>>");
+            }
+            other => panic!("expected Decode error clone, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_clone_intervals_error_preserves_decode_empty_snippet() {
+        let original = IntervalsError::Decode {
+            message: "parse error".to_string(),
+            snippet: String::new(),
+        };
+        let cloned = clone_intervals_error(&original);
+
+        match cloned {
+            IntervalsError::Decode { message, snippet } => {
+                assert_eq!(message, "parse error");
+                assert!(snippet.is_empty());
+            }
+            other => panic!("expected Decode error clone, got {other:?}"),
         }
     }
 

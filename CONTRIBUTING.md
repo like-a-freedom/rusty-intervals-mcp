@@ -22,7 +22,7 @@ Starting with version 2.0, this project implements an **intent-driven architectu
 
 ### Adding New Intents
 
-1. **Define the intent contract** in `INTENT_DRIVEN_SKILLS.md`:
+1. **Define the intent contract**:
    - Business purpose (outcome, not operation)
    - Input parameters (flattened, primitives only)
    - Output format (Markdown + guidance hints)
@@ -54,13 +54,12 @@ Starting with version 2.0, this project implements an **intent-driven architectu
 ### Modifying Existing Intents
 
 - Preserve backward compatibility when possible
-- Update `INTENT_DRIVEN_SKILLS.md` with changes
 - Add migration notes to `CHANGELOG.md`
 - Bump major version for breaking changes
 
 ### Token Efficiency
 
-- Prefer 8 intents over 146 low-level tools
+- Prefer 9 intents over 146 low-level tools
 - Use compact responses by default
 - Aggregate data instead of raw payloads
 - Include guidance hints in all responses
@@ -102,8 +101,7 @@ Linux (x86_64/aarch64), macOS (x86_64/aarch64) and Windows (x86_64).
 When preparing a release manually:
 1. Ensure all checks pass locally (format, clippy, tests).
 2. Update `CHANGELOG.md` with intent changes and migration notes.
-3. Update `INTENT_DRIVEN_SKILLS.md` if intent specifications changed.
-4. Create a GitHub release (tag `vX.Y.Z`) — the workflow will produce and
+3. Create a GitHub release (tag `vX.Y.Z`) — the workflow will produce and
    attach binary artifacts and checksums.
 
 **Version numbering:**
@@ -133,7 +131,7 @@ Security notes
 - Add documentation comments for public types/functions.
 - Run the strict format/lint/test gate before pushing.
 - **Intent-specific**:
-  - Document all 8 intents in `INTENT_DRIVEN_SKILLS.md`
+  - Document all 9 intents
   - Include `///` doc comments for public intent handlers
   - Preserve existing public behavior unless explicitly changed
 

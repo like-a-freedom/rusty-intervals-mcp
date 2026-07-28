@@ -2,7 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
-## [2.14.0] - 2026-07-04
+## [2.20.0] - 2026-07-28
+
+### Added
+- Comprehensive unit tests for `adaptation.rs` (18.92% → 100%), `heat.rs` (52.73% → 100%), `test_support.rs` (63.28% → 98.97%), `metrics.rs` (50.32% → 84.71%)
+- Unit tests for `AthleteTracker`, `init_prometheus_recorder`, and all `record_*` metrics functions
+- Unit tests for `content_text` helper and all MockIntervalsClient scenario constructors
+- Unit tests for `clone_intervals_error` covering all error variants (Transport, Config, Validation, Io, Cancelled, Decode)
+- Unit tests for `IntervalsMcpHandler` methods: `new_multi_tenant`, `webhook_service`, `process_webhook`, `preload_dynamic_registry`
+- Fix: `e2e_stdio` test now explicitly sets `MCP_TRANSPORT=stdio` to prevent inheriting host env
+
+### Fixed
+- `e2e_stdio` integration test hung when `MCP_TRANSPORT=http` was set in the host environment
+
+### Changed
+- Documentation cleanup: removed stale references to non-existent `INTENT_DRIVEN_SKILLS.md` and `docs/OBSERVABILITY_SRS.md`
+- Documentation cleanup: fixed intent count from 8 to 9 in CONTRIBUTING.md
+- Removed completed planning artifacts: `.scratch/`, `.superpowers/`, superseded superpowers plans
+- Updated `docs/agents/issue-tracker.md` to reflect GitHub Issues (replaced `.scratch/` workflow)
+
+## [2.19.1] - 2026-07-27
 
 ### Changed
 - Migrate `rmcp` from 1.8.0 to 2.1.0 (major version bump).

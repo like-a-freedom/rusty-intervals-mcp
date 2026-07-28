@@ -375,7 +375,7 @@ pub async fn metrics_middleware(
 
 #[cfg(test)]
 mod tests {
-    use super::{record_mcp_session, validate_metrics_token};
+    use super::*;
 
     #[test]
     fn validate_metrics_token_fails_without_header_when_token_required() {
@@ -413,12 +413,162 @@ mod tests {
 
     #[test]
     fn record_mcp_session_does_not_panic() {
-        // Exercises the metrics function that the ServerHandler::initialize
-        // override calls. The override itself can't be invoked in a unit test
-        // because rmcp's Peer::new is pub(crate), making RequestContext
-        // impossible to construct without a live transport. This test verifies
-        // the function is callable and handles the no-Prometheus-handle case.
         record_mcp_session("started");
         record_mcp_session("stopped");
+    }
+
+    #[test]
+    fn record_tool_call_does_not_panic() {
+        record_tool_call("test_tool", true, 0.5);
+        record_tool_call("test_tool", false, 1.2);
+    }
+
+    #[test]
+    fn record_token_issued_does_not_panic() {
+        record_token_issued();
+    }
+
+    #[test]
+    fn record_token_issued_with_source_does_not_panic() {
+        record_token_issued_with_source("jwt");
+        record_token_issued_with_source("oauth");
+        record_token_issued_with_source("ui");
+    }
+
+    #[test]
+    fn record_ui_action_does_not_panic() {
+        record_ui_action("token_created");
+        record_ui_action("token_revoked");
+    }
+
+    #[test]
+    fn record_token_verification_does_not_panic() {
+        record_token_verification("success");
+        record_token_verification("failure");
+    }
+
+    #[test]
+    fn record_rate_limited_does_not_panic() {
+        record_rate_limited("mcp");
+        record_rate_limited("auth");
+    }
+
+    #[test]
+    fn record_auth_failure_does_not_panic() {
+        record_auth_failure("invalid_token");
+        record_auth_failure("expired_token");
+    }
+
+    #[test]
+    fn record_mcp_method_call_does_not_panic() {
+        record_mcp_method_call("tools/list");
+        record_mcp_method_call("tools/call");
+        record_mcp_method_call("resources/list");
+    }
+
+    #[test]
+    fn record_idempotency_does_not_panic() {
+        record_idempotency("hit");
+        record_idempotency("miss");
+    }
+
+    #[test]
+    fn record_dynamic_dispatch_does_not_panic() {
+        record_dynamic_dispatch("GET /activities", "dispatched");
+        record_dynamic_dispatch("POST /events", "fallback");
+        record_dynamic_dispatch("GET /unknown", "registry_unavailable");
+        record_dynamic_dispatch("GET /broken", "dispatch_error");
+        record_dynamic_dispatch("GET /bad", "http_error");
+        record_dynamic_dispatch("GET /decode", "decode_error");
+    }
+
+    #[test]
+    fn record_http_request_does_not_panic() {
+        record_http_request("GET", "/api/activities", 200, 0.1);
+        record_http_request("POST", "/api/events", 201, 0.5);
+        record_http_request("GET", "/api/error", 500, 1.0);
+    }
+
+    #[test]
+    fn increment_and_decrement_active_requests_do_not_panic() {
+        increment_active_requests();
+        increment_active_requests();
+        decrement_active_requests();
+    }
+
+    #[test]
+    fn record_athlete_activity_does_not_panic() {
+        record_athlete_activity("athlete-1");
+        record_athlete_activity("athlete-2");
+    }
+
+    #[test]
+    fn get_prometheus_handle_returns_none_when_not_initialized() {
+        let _ = get_prometheus_handle();
+    }
+
+    #[test]
+    fn create_metrics_router_returns_axum_router() {
+        let _router = create_metrics_router();
+    }
+
+    #[test]
+    fn athlete_tracker_new_creates_empty_tracker() {
+        let tracker = AthleteTracker::new(300);
+        assert!(tracker.athletes.lock().unwrap().is_empty());
+        assert_eq!(tracker.window_duration, Duration::from_secs(300));
+    }
+
+    #[test]
+    fn athlete_tracker_record_activity_increments_count() {
+        let tracker = AthleteTracker::new(300);
+        let count = tracker.record_activity("athlete-1");
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn athlete_tracker_record_activity_same_athlete_no_increment() {
+        let tracker = AthleteTracker::new(300);
+        tracker.record_activity("athlete-1");
+        let count = tracker.record_activity("athlete-1");
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn athlete_tracker_record_multiple_athletes() {
+        let tracker = AthleteTracker::new(300);
+        tracker.record_activity("athlete-1");
+        tracker.record_activity("athlete-2");
+        let count = tracker.record_activity("athlete-3");
+        assert_eq!(count, 3);
+    }
+
+    #[test]
+    fn athlete_tracker_cleanup_removes_old_entries() {
+        let tracker = AthleteTracker::new(300);
+        tracker.record_activity("athlete-1");
+        std::thread::sleep(Duration::from_millis(10));
+        let count = tracker.record_activity("athlete-2");
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn init_prometheus_recorder_stdio_mode_returns_error() {
+        let _guard = crate::test_support::EnvVarGuard::acquire_blocking(&["MCP_TRANSPORT"]);
+        unsafe {
+            std::env::remove_var("MCP_TRANSPORT");
+        }
+        let result = init_prometheus_recorder();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn init_prometheus_recorder_http_mode_succeeds() {
+        let _guard = crate::test_support::EnvVarGuard::acquire_blocking(&["MCP_TRANSPORT"]);
+        unsafe {
+            std::env::set_var("MCP_TRANSPORT", "http");
+        }
+        let result = init_prometheus_recorder();
+        assert!(result.is_ok());
     }
 }

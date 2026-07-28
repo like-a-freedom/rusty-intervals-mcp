@@ -28,7 +28,6 @@ A high-performance **Rust MCP server for Intervals.icu** designed around one ide
 - [Runtime configuration](#runtime-configuration)
 - [Development](#development)
 - [Docker and remote deployment](#docker-and-remote-deployment)
-- [Documentation map](#documentation-map)
 - [License](#license)
 - [Disclaimer](#disclaimer)
 
@@ -602,8 +601,6 @@ The example includes both:
 - a protected `/metrics` target using `authorization.credentials_file`
 
 For production, prefer `credentials_file` over inline bearer tokens so secrets stay outside versioned config.
-
-For full metrics specification, see [`docs/OBSERVABILITY_SRS.md`](docs/OBSERVABILITY_SRS.md).
 
 ## Architecture & Reliability
 

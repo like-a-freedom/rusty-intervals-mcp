@@ -113,6 +113,7 @@ async fn e2e_stdio_lists_tools_and_calls_profile() {
     cmd.env("INTERVALS_ICU_BASE_URL", mock.uri());
     cmd.env("INTERVALS_ICU_ATHLETE_ID", "ath123");
     cmd.env("INTERVALS_ICU_API_KEY", "tok");
+    cmd.env("MCP_TRANSPORT", "stdio");
     // keep child stderr quieter to avoid stdio backpressure during long e2e runs
     cmd.env("RUST_LOG", "info");
 

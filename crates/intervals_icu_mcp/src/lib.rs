@@ -1085,4 +1085,233 @@ mod tests {
         // Even with 0 duration, keepalive should be set (OS will use minimum)
         assert!(socket.keepalive().unwrap());
     }
+
+    // ── dynamic_dispatch_enabled tests ─────────────────────────────────
+
+    #[test]
+    fn dynamic_dispatch_enabled_returns_false_by_default() {
+        let _guard = crate::test_support::EnvVarGuard::acquire_blocking(&[
+            "INTERVALS_ICU_DYNAMIC_DISPATCH_ENABLED",
+        ]);
+        unsafe {
+            std::env::remove_var("INTERVALS_ICU_DYNAMIC_DISPATCH_ENABLED");
+        }
+        assert!(!super::dynamic_dispatch_enabled());
+    }
+
+    #[test]
+    fn dynamic_dispatch_enabled_true_value() {
+        let _guard = crate::test_support::EnvVarGuard::acquire_blocking(&[
+            "INTERVALS_ICU_DYNAMIC_DISPATCH_ENABLED",
+        ]);
+        unsafe {
+            std::env::set_var("INTERVALS_ICU_DYNAMIC_DISPATCH_ENABLED", "1");
+        }
+        assert!(super::dynamic_dispatch_enabled());
+    }
+
+    #[test]
+    fn dynamic_dispatch_enabled_true_string() {
+        let _guard = crate::test_support::EnvVarGuard::acquire_blocking(&[
+            "INTERVALS_ICU_DYNAMIC_DISPATCH_ENABLED",
+        ]);
+        unsafe {
+            std::env::set_var("INTERVALS_ICU_DYNAMIC_DISPATCH_ENABLED", "true");
+        }
+        assert!(super::dynamic_dispatch_enabled());
+    }
+
+    #[test]
+    fn dynamic_dispatch_enabled_true_uppercase() {
+        let _guard = crate::test_support::EnvVarGuard::acquire_blocking(&[
+            "INTERVALS_ICU_DYNAMIC_DISPATCH_ENABLED",
+        ]);
+        unsafe {
+            std::env::set_var("INTERVALS_ICU_DYNAMIC_DISPATCH_ENABLED", "TRUE");
+        }
+        assert!(super::dynamic_dispatch_enabled());
+    }
+
+    #[test]
+    fn dynamic_dispatch_enabled_other_value_returns_false() {
+        let _guard = crate::test_support::EnvVarGuard::acquire_blocking(&[
+            "INTERVALS_ICU_DYNAMIC_DISPATCH_ENABLED",
+        ]);
+        unsafe {
+            std::env::set_var("INTERVALS_ICU_DYNAMIC_DISPATCH_ENABLED", "yes");
+        }
+        assert!(!super::dynamic_dispatch_enabled());
+    }
+
+    // ── build_mcp_rmcp_config tests ───────────────────────────────────
+
+    #[test]
+    fn build_mcp_rmcp_config_empty_uses_default() {
+        let config = super::build_mcp_rmcp_config("");
+        // Default config should work without panicking
+        let _ = config;
+    }
+
+    #[test]
+    fn build_mcp_rmcp_config_with_hosts() {
+        let config = super::build_mcp_rmcp_config("example.com, api.example.com");
+        let _ = config;
+    }
+
+    // ── all_intent_handlers tests ──────────────────────────────────────
+
+    #[test]
+    fn all_intent_handlers_returns_nine_handlers() {
+        let handlers = super::all_intent_handlers();
+        assert_eq!(handlers.len(), 9);
+    }
+
+    #[test]
+    fn all_intent_handlers_have_distinct_names() {
+        let handlers = super::all_intent_handlers();
+        let names: Vec<String> = handlers.iter().map(|h| h.name().to_string()).collect();
+        let unique: std::collections::HashSet<_> = names.iter().collect();
+        assert_eq!(unique.len(), names.len(), "handler names should be unique");
+    }
+
+    // ── IntervalsMcpHandler construction tests ─────────────────────────
+
+    #[test]
+    fn handler_new_returns_valid_handler() {
+        use intervals_icu_client::IntervalsClient;
+        use std::sync::Arc;
+
+        let client: Arc<dyn IntervalsClient> =
+            Arc::new(crate::test_support::mock::MockIntervalsClient::default());
+        let handler = IntervalsMcpHandler::new(client);
+        assert!(handler.tool_count() > 0);
+    }
+
+    #[test]
+    fn handler_tool_count_matches_all_intent_handlers() {
+        use intervals_icu_client::IntervalsClient;
+        use std::sync::Arc;
+
+        let client: Arc<dyn IntervalsClient> =
+            Arc::new(crate::test_support::mock::MockIntervalsClient::default());
+        let handler = IntervalsMcpHandler::new(client);
+        assert_eq!(handler.tool_count(), 9);
+    }
+
+    #[test]
+    fn handler_get_tool_returns_none() {
+        use intervals_icu_client::IntervalsClient;
+        use rmcp::ServerHandler;
+        use std::sync::Arc;
+
+        let client: Arc<dyn IntervalsClient> =
+            Arc::new(crate::test_support::mock::MockIntervalsClient::default());
+        let handler = IntervalsMcpHandler::new(client);
+        assert!(handler.get_tool("any_name").is_none());
+    }
+
+    #[test]
+    fn handler_get_info_returns_server_info() {
+        use intervals_icu_client::IntervalsClient;
+        use rmcp::ServerHandler;
+        use std::sync::Arc;
+
+        let client: Arc<dyn IntervalsClient> =
+            Arc::new(crate::test_support::mock::MockIntervalsClient::default());
+        let handler = IntervalsMcpHandler::new(client);
+        let info = handler.get_info();
+        let info_str = format!("{info:?}");
+        assert!(
+            !info_str.is_empty(),
+            "get_info should return non-empty debug representation"
+        );
+    }
+
+    #[test]
+    fn handler_webhook_service_creates_service() {
+        use intervals_icu_client::IntervalsClient;
+        use std::sync::Arc;
+
+        let client: Arc<dyn IntervalsClient> =
+            Arc::new(crate::test_support::mock::MockIntervalsClient::default());
+        let handler = IntervalsMcpHandler::new(client);
+        let _service = handler.webhook_service();
+    }
+
+    #[tokio::test]
+    async fn handler_set_webhook_secret_value() {
+        use intervals_icu_client::IntervalsClient;
+        use std::sync::Arc;
+
+        let client: Arc<dyn IntervalsClient> =
+            Arc::new(crate::test_support::mock::MockIntervalsClient::default());
+        let handler = IntervalsMcpHandler::new(client);
+        handler.set_webhook_secret_value("test_secret").await;
+    }
+
+    #[tokio::test]
+    async fn handler_process_webhook_without_secret() {
+        use intervals_icu_client::IntervalsClient;
+        use std::sync::Arc;
+
+        let client: Arc<dyn IntervalsClient> =
+            Arc::new(crate::test_support::mock::MockIntervalsClient::default());
+        let handler = IntervalsMcpHandler::new(client);
+        let result = handler.process_webhook("sig", serde_json::json!({})).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn handler_process_webhook_with_invalid_signature() {
+        use intervals_icu_client::IntervalsClient;
+        use std::sync::Arc;
+
+        let client: Arc<dyn IntervalsClient> =
+            Arc::new(crate::test_support::mock::MockIntervalsClient::default());
+        let handler = IntervalsMcpHandler::new(client);
+        handler.set_webhook_secret_value("test_secret").await;
+        let result = handler
+            .process_webhook("invalid_sig", serde_json::json!({}))
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn handler_preload_dynamic_registry_does_not_panic() {
+        use intervals_icu_client::IntervalsClient;
+        use std::sync::Arc;
+
+        let client: Arc<dyn IntervalsClient> =
+            Arc::new(crate::test_support::mock::MockIntervalsClient::default());
+        let handler = IntervalsMcpHandler::new(client);
+        let _count = handler.preload_dynamic_registry().await;
+    }
+
+    #[test]
+    fn handler_new_multi_tenant_succeeds() {
+        let result = IntervalsMcpHandler::new_multi_tenant();
+        assert!(result.is_ok());
+        let handler = result.unwrap();
+        assert!(handler.tool_count() > 0);
+    }
+
+    #[test]
+    fn handler_with_dynamic_runtime_dispatch_enabled_branch() {
+        use intervals_icu_client::IntervalsClient;
+        use std::sync::Arc;
+
+        let _guard = crate::test_support::EnvVarGuard::acquire_blocking(&[
+            "INTERVALS_ICU_DYNAMIC_DISPATCH_ENABLED",
+        ]);
+        unsafe {
+            std::env::set_var("INTERVALS_ICU_DYNAMIC_DISPATCH_ENABLED", "1");
+        }
+        let client: Arc<dyn IntervalsClient> =
+            Arc::new(crate::test_support::mock::MockIntervalsClient::default());
+        let handler = IntervalsMcpHandler::with_dynamic_runtime(
+            client,
+            crate::dynamic::DynamicRuntime::from_env(),
+        );
+        assert!(handler.tool_count() > 0);
+    }
 }
