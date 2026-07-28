@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use chrono::{Duration, Utc};
+use chrono::{Duration, Local, Utc};
 use intervals_icu_client::{
     ActivityMessage, ActivitySummary, AthleteProfile, BestEffortsOptions, DownloadProgress, Event,
     IntervalsClient, IntervalsError,
@@ -1633,7 +1633,7 @@ async fn analyze_training_period_includes_trend_context() {
 
 #[tokio::test]
 async fn analyze_training_single_accepts_today_date_alias() {
-    let today = Utc::now().date_naive();
+    let today = Local::now().date_naive();
     let client = Arc::new(MockCoachClient {
         activities: vec![MockCoachClient::activity(
             "today-training-1",
@@ -1781,7 +1781,7 @@ async fn analyze_race_adds_post_race_recovery_guidance() {
 
 #[tokio::test]
 async fn analyze_race_accepts_target_date_alias() {
-    let today = Utc::now().date_naive();
+    let today = Local::now().date_naive();
     let client = Arc::new(MockCoachClient {
         activities: vec![
             MockCoachClient::activity("older-race-1", "Mountain 50K", "2026-02-21T08:23:41"),
