@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+- Migrate `rmcp` from 2.x to 3.x (major version bump). `ServerHandler::call_tool` / `read_resource` now return `CallToolResponse` / `ReadResourceResponse` (always the `Complete` variant), and `ListToolsResult` / `ListResourcesResult` are built with `with_all_items` for the new `result_type` / `ttl_ms` / `cache_scope` fields.
+- Bump MSRV to 1.88 (declared by rmcp 3.x). `rust-version = "1.88"` added to `intervals_icu_mcp/Cargo.toml`.
+
 ## [2.20.0] - 2026-07-28
 
 ### Added

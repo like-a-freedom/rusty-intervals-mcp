@@ -18,9 +18,9 @@ use std::sync::Arc;
 
 use rmcp::ErrorData;
 use rmcp::model::{
-    CallToolRequestParams, CallToolResult, ListResourcesResult, ListToolsResult,
-    PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResult, ResourceContents,
-    ServerCapabilities, ServerInfo,
+    CallToolRequestParams, CallToolResponse, ListResourcesResult, ListToolsResult,
+    PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult,
+    ResourceContents, ServerCapabilities, ServerInfo,
 };
 use rmcp::service::RequestContext;
 use rmcp::{RoleServer, ServerHandler};
@@ -291,18 +291,14 @@ impl ServerHandler for IntervalsMcpHandler {
             public_tools.push(tool);
         }
 
-        Ok(ListToolsResult {
-            tools: public_tools,
-            next_cursor: None,
-            meta: None,
-        })
+        Ok(ListToolsResult::with_all_items(public_tools))
     }
 
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, ErrorData> {
+    ) -> Result<CallToolResponse, ErrorData> {
         metrics::record_mcp_method_call("tools/call");
         let client_for_request = Self::client_for_extensions(&context.extensions);
         let athlete_id = Self::request_credentials(&context.extensions).map(|c| c.athlete_id);
@@ -342,6 +338,7 @@ impl ServerHandler for IntervalsMcpHandler {
 
         match intent_result {
             Ok(output) => intent_output_to_call_tool_result(&output)
+                .map(CallToolResponse::from)
                 .map_err(|e| ErrorData::internal_error(e.to_string(), None)),
             Err(e) => Err(intent_error_to_error_data(&e)),
         }
@@ -364,18 +361,14 @@ impl ServerHandler for IntervalsMcpHandler {
             resources.push(stream_res);
         }
 
-        Ok(ListResourcesResult {
-            resources,
-            next_cursor: None,
-            meta: None,
-        })
+        Ok(ListResourcesResult::with_all_items(resources))
     }
 
     async fn read_resource(
         &self,
         request: ReadResourceRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> Result<ReadResourceResult, ErrorData> {
+    ) -> Result<ReadResourceResponse, ErrorData> {
         metrics::record_mcp_method_call("resources/read");
         let client =
             Self::client_for_extensions(&context.extensions).unwrap_or_else(|| self.client.clone());
@@ -389,7 +382,8 @@ impl ServerHandler for IntervalsMcpHandler {
             return Ok(ReadResourceResult::new(vec![ResourceContents::text(
                 request.uri.clone(),
                 text,
-            )]));
+            )])
+            .into());
         }
 
         if request.uri == "intervals-icu://athlete/profile" {
@@ -400,7 +394,8 @@ impl ServerHandler for IntervalsMcpHandler {
             Ok(ReadResourceResult::new(vec![
                 ResourceContents::text(request.uri.clone(), text)
                     .with_mime_type("application/json"),
-            ]))
+            ])
+            .into())
         } else {
             Err(ErrorData::invalid_params(
                 format!("unknown resource URI: {}", request.uri),
