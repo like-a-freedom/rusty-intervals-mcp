@@ -98,31 +98,23 @@ async fn test_plan_training_intent() {
 Releases are published using GitHub Actions and produce pre-built binaries for
 Linux (x86_64/aarch64), macOS (x86_64/aarch64) and Windows (x86_64).
 
-When preparing a release manually:
+The full step-by-step release guide — version numbering, checklist, tag/push,
+GHCR publishing — lives in [`RELEASING.md`](RELEASING.md). In short:
+
 1. Ensure all checks pass locally (format, clippy, tests).
 2. Update `CHANGELOG.md` with intent changes and migration notes.
-3. Create a GitHub release (tag `vX.Y.Z`) — the workflow will produce and
-   attach binary artifacts and checksums.
+3. Bump the version in `crates/intervals_icu_mcp/Cargo.toml`.
+4. Create a GitHub release (tag `vX.Y.Z`) — the workflow will produce and
+   attach binary artifacts and checksums, and push multi-arch images to GHCR
+   (`ghcr.io/<your-org-or-user>/rusty-intervals-mcp`).
 
 **Version numbering:**
 - Major version (v2.0.0): Breaking changes to intent API
 - Minor version (v2.1.0): New intents or features, backward compatible
 - Patch version (v2.1.1): Bug fixes, no API changes
 
-Note on container publishing
-
-- The release workflow builds and pushes multi-architecture images to **GHCR** by
-  default (using `GITHUB_TOKEN`). The image path is
-  `ghcr.io/<your-org-or-user>/rusty-intervals-mcp` and tagged with the release
-  tag and `latest` as applicable.
-
-Security notes
-
-- Do not store secrets in the repository. Use GitHub repository secrets for
-  `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` (or a personal access token with
-  the appropriate scope).
-- GHCR publishing uses `GITHUB_TOKEN` and requires `packages: write` permission
-  which the workflow already requests.
+Security: do not store secrets in the repository; GHCR publishing uses
+`GITHUB_TOKEN` and the workflow already requests `packages: write`.
 
 ## Code style
 
