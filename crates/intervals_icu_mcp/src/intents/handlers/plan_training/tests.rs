@@ -441,6 +441,24 @@ fn test_wellness_snapshot_accepts_integer_metrics() {
 }
 
 #[test]
+fn test_wellness_snapshot_rejects_implausible_hrv() {
+    // A dropout (0) or glitch spike on the latest day must not poison the
+    // plan context — same plausibility bar as the wellness parser.
+    for hrv in [0.0, -5.0, 9999.0] {
+        let value = json!([
+            {"id": "2026-03-16", "readiness": 8.0, "hrv": hrv, "sleepSecs": 28800}
+        ]);
+        let snap = WellnessSnapshot::from_value(&value);
+        assert!(
+            snap.hrv.is_none(),
+            "hrv {hrv} must be rejected, got {:?}",
+            snap.hrv
+        );
+        assert_eq!(snap.sleep_avg, Some(8.0));
+    }
+}
+
+#[test]
 fn test_wellness_snapshot_empty() {
     let value = json!([]);
     let snap = WellnessSnapshot::from_value(&value);

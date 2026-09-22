@@ -12,7 +12,9 @@ use std::sync::Arc;
 
 use crate::content::date::parse_date;
 use crate::domains::events::validate_and_prepare_event;
-use crate::engines::coach_metrics::parse::{parse_entry_date, sleep_hours_from_entry};
+use crate::engines::coach_metrics::parse::{
+    is_plausible_hrv, parse_entry_date, sleep_hours_from_entry,
+};
 use crate::engines::fitness_context::FitnessContext;
 use crate::engines::forecast::{
     TAPER_ACTUAL_REDUCTION_PCT, TAPER_TARGET_REDUCTION_PCT, parameterized_load, project_tsb,
@@ -790,7 +792,12 @@ impl WellnessSnapshot {
 
         Self {
             readiness: latest.get("readiness").and_then(as_number),
-            hrv: latest.get("hrv").and_then(as_number),
+            // A dropout/glitch HRV on the latest day must not poison the plan
+            // context — same plausibility bar as the wellness parser.
+            hrv: latest
+                .get("hrv")
+                .and_then(as_number)
+                .filter(|value| is_plausible_hrv(*value)),
             sleep_avg: latest.as_object().and_then(sleep_hours_from_entry),
         }
     }

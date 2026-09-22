@@ -70,9 +70,11 @@ pub(super) fn build_recovery_metric_rows(
     });
 
     let (tsb_value, tsb_status) = render_optional(fitness.tsb, |tsb| {
+        // Band edges mirror `interpret_fitness_metrics` (fatigued only below
+        // -10): `>=` keeps tsb == -10.0 Balanced in both paths.
         let status = if tsb > crate::engines::coach_guidance::TSB_FRESH {
             "✅ Fresh"
-        } else if tsb > crate::engines::coach_guidance::TSB_FATIGUED {
+        } else if tsb >= crate::engines::coach_guidance::TSB_FATIGUED {
             "⚪ Balanced"
         } else {
             "❌ Fatigued"

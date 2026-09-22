@@ -1345,6 +1345,32 @@ mod tests {
     }
 
     #[test]
+    fn recovery_rows_tsb_boundary_minus_ten_is_balanced() {
+        // Band parity with `interpret_fitness_metrics` (fatigued only
+        // strictly below -10): the exact edge must read Balanced, not flip
+        // between "balanced" load_state and a "Fatigued" row.
+        let rows = AssessRecoveryHandler::build_recovery_metric_rows(
+            &WellnessMetrics {
+                avg_sleep_hours: Some(7.5),
+                avg_resting_hr: Some(50.0),
+                avg_hrv: Some(65.0),
+                wellness_days_count: 5,
+                ..Default::default()
+            },
+            &FitnessMetrics {
+                tsb: Some(-10.0),
+                ..Default::default()
+            },
+        );
+        let tsb_row = rows.iter().find(|r| r[0] == "TSB").expect("TSB row");
+        assert!(
+            tsb_row[2].contains("Balanced"),
+            "tsb == -10 must be Balanced, got {}",
+            tsb_row[2]
+        );
+    }
+
+    #[test]
     fn recovery_rows_recovery_index_watch() {
         let rows = AssessRecoveryHandler::build_recovery_metric_rows(
             &WellnessMetrics {

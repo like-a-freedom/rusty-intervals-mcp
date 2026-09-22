@@ -34,6 +34,65 @@ fn tsb_between_minus_10_and_10_is_classified_as_balanced() {
 }
 
 #[test]
+fn tsb_boundary_values_are_balanced_in_interpret() {
+    // Parity anchor for the recovery-rows band: exactly ±10 is balanced on
+    // both sides, only strictly-outside values flip the band.
+    for tsb in [10.0, -10.0] {
+        let fitness = interpret_fitness_metrics(Some(50.0), Some(47.0), Some(tsb), None);
+        assert_eq!(
+            fitness.load_state.as_deref(),
+            Some("balanced"),
+            "tsb {tsb} must be balanced"
+        );
+    }
+    assert_eq!(
+        interpret_fitness_metrics(Some(50.0), Some(47.0), Some(10.1), None)
+            .load_state
+            .as_deref(),
+        Some("fresh")
+    );
+    assert_eq!(
+        interpret_fitness_metrics(Some(50.0), Some(47.0), Some(-10.1), None)
+            .load_state
+            .as_deref(),
+        Some("fatigued")
+    );
+}
+
+#[test]
+fn parse_fitness_metrics_selects_latest_dated_object_from_array() {
+    // The wellness endpoint returns one object per day: a multi-day array
+    // must resolve the latest day regardless of API order.
+    let oldest_first = json!([
+        {"id": "2026-02-01", "ctl": 40.0, "atl": 50.0, "form": -10.0},
+        {"id": "2026-03-16", "ctl": 60.0, "atl": 55.0, "form": 5.0},
+    ]);
+    let newest_first = json!([
+        {"id": "2026-03-16", "ctl": 60.0, "atl": 55.0, "form": 5.0},
+        {"id": "2026-02-01", "ctl": 40.0, "atl": 50.0, "form": -10.0},
+    ]);
+    for payload in [&oldest_first, &newest_first] {
+        let metrics = parse_fitness_metrics(Some(payload)).unwrap();
+        assert_eq!(
+            metrics.ctl,
+            Some(60.0),
+            "must pin latest day, not array order"
+        );
+        assert_eq!(metrics.tsb, Some(5.0));
+    }
+}
+
+#[test]
+fn parse_fitness_metrics_undated_array_keeps_first_object() {
+    let payload = json!([
+        {"ctl": 40.0},
+        {"ctl": 60.0},
+    ]);
+    let metrics = parse_fitness_metrics(Some(&payload)).unwrap();
+    assert_eq!(metrics.ctl, Some(40.0));
+}
+
+#[test]
 fn empty_fitness_values_stay_optional() {
     let fitness = FitnessMetrics::default();
 
@@ -307,6 +366,130 @@ fn parse_wellness_metrics_malformed_date_does_not_defeat_ordering() {
     assert!(
         (avg - 8.0).abs() < 0.5,
         "expected ~8.0h from latest days, got {avg} (malformed date defeated ordering)"
+    );
+}
+
+#[test]
+fn parse_wellness_metrics_filters_implausible_rhr_and_hrv() {
+    // Dropouts (0) and glitch spikes (250 bpm, 9999 ms) must not corrupt
+    // averages — the same artifact class as implausible sleep.
+    let mut entries: Vec<Value> = (0..35)
+        .map(|i| {
+            let day = 1 + (i % 28);
+            let month = if i < 28 { 2 } else { 3 };
+            json!({
+                "id": format!("2026-{:02}-{:02}", month, day),
+                "sleepSecs": 28800.0,
+                "restingHR": 50.0,
+                "hrv": 60.0,
+            })
+        })
+        .collect();
+    entries[3]["restingHR"] = json!(0.0);
+    entries[5]["hrv"] = json!(9999.0);
+    // Recent window after oldest-first sort is indices 28..35 (March days).
+    entries[29]["restingHR"] = json!(0.0);
+    entries[30]["hrv"] = json!(0.0);
+    entries[31]["restingHR"] = json!(250.0);
+    entries[32]["hrv"] = json!(9999.0);
+    entries[33]["restingHR"] = json!(-4.0);
+    entries[34]["hrv"] = json!(-2.0);
+    let metrics = parse_wellness_metrics(Some(&Value::Array(entries))).unwrap();
+    assert_eq!(
+        metrics.avg_resting_hr,
+        Some(50.0),
+        "RHR artifacts must be excluded, got {:?}",
+        metrics.avg_resting_hr
+    );
+    assert_eq!(
+        metrics.avg_hrv,
+        Some(60.0),
+        "HRV artifacts must be excluded, got {:?}",
+        metrics.avg_hrv
+    );
+    assert_eq!(metrics.resting_hr_baseline, Some(50.0));
+    assert_eq!(metrics.hrv_baseline, Some(60.0));
+}
+
+#[test]
+fn parse_wellness_metrics_baseline_requires_minimum_samples() {
+    // 10 entries leave a 3-point baseline: too short to benchmark the recent
+    // window, so baseline, deviation, and ratio must stay None instead of
+    // fabricating precision from noise.
+    let entries: Vec<Value> = (0..10)
+        .map(|i| {
+            json!({
+                "id": format!("2026-03-{:02}", i + 1),
+                "sleepSecs": 28800.0,
+                "restingHR": 50.0,
+                "hrv": 60.0,
+            })
+        })
+        .collect();
+    let metrics = parse_wellness_metrics(Some(&Value::Array(entries))).unwrap();
+    assert!(
+        metrics.hrv_baseline.is_none(),
+        "3-point baseline must not publish, got {:?}",
+        metrics.hrv_baseline
+    );
+    assert!(metrics.hrv_deviation_pct.is_none());
+    assert!(metrics.hrv_ratio.is_none());
+    // The recent average itself is still the best available data.
+    assert_eq!(metrics.avg_hrv, Some(60.0));
+    assert_eq!(metrics.wellness_days_count, 7);
+}
+
+#[test]
+fn parse_wellness_metrics_empty_entries_do_not_inflate_day_count() {
+    let mut entries: Vec<Value> = (0..5)
+        .map(|i| {
+            json!({
+                "id": format!("2026-03-{:02}", i + 1),
+                "sleepSecs": 28800.0,
+                "restingHR": 50.0,
+                "hrv": 60.0,
+            })
+        })
+        .collect();
+    entries.push(json!({}));
+    entries.push(json!({"id": "2026-03-06"}));
+    entries.push(json!({"unrelated": 1.0}));
+    let metrics = parse_wellness_metrics(Some(&Value::Array(entries))).unwrap();
+    assert_eq!(
+        metrics.wellness_days_count, 5,
+        "entries without metrics must not count as days"
+    );
+}
+
+#[test]
+fn parse_wellness_metrics_rqi_clamped_under_extreme_ratio() {
+    // A tiny-but-plausible baseline (5 ms) against a 150 ms recent week is a
+    // 30x ratio: without a clamp the score explodes to ~12.6 and displays as
+    // a fabricated-precision "12.60". Every component shares the RQI band.
+    let mut entries: Vec<Value> = (0..28)
+        .map(|i| {
+            json!({
+                "id": format!("2026-02-{:02}", (i % 28) + 1),
+                "sleepSecs": 28800.0,
+                "restingHR": 50.0,
+                "hrv": 5.0,
+            })
+        })
+        .collect();
+    entries.extend((0..7).map(|i| {
+        json!({
+            "id": format!("2026-03-{:02}", 10 + i),
+            "sleepSecs": 28800.0,
+            "restingHR": 50.0,
+            "hrv": 150.0,
+        })
+    }));
+    let metrics = parse_wellness_metrics(Some(&Value::Array(entries))).unwrap();
+    let rqi = metrics.recovery_quality_index.unwrap();
+    // 1.5*0.4 + 1.0*0.3 + 1.0*0.3 = 1.2 with the ratio clamped at 1.5.
+    assert!(
+        (rqi - 1.2).abs() < 1e-9,
+        "RQI must clamp the extreme ratio, got {rqi}"
     );
 }
 

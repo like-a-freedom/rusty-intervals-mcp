@@ -11,8 +11,9 @@ use crate::domains::progress::{
 };
 use crate::engines::analysis_fetch::{activity_load, build_daily_load_series};
 use crate::engines::changepoint::detect_trailing_ctl_plateau;
-use crate::engines::coach_metrics::helpers::get_number;
-use crate::engines::coach_metrics::parse::parse_entry_date;
+use crate::engines::coach_metrics::parse::{
+    extract_wellness_observations, is_plausible_hrv, is_plausible_resting_hr,
+};
 use crate::engines::coach_metrics::{
     compute_acwr, compute_lnrmssd_rollup, compute_monotony, compute_strain, compute_tid_entropy,
     extract_ctl_series, extract_hrv_series, parse_wellness_metrics,
@@ -469,26 +470,13 @@ pub fn build_progress_report_with_ctl_fallback(
             .push("Wellness HRV history unavailable; lnRMSSD rollup and HRV ratio skipped.".into());
     }
 
-    // Personal baseline from wellness history
+    // Personal baseline from wellness history. Observations flow through the
+    // shared extractor so progress tracking applies the same plausibility
+    // filters as the wellness parser (no local copies of this logic).
     if let Some(entries) = wellness.as_array() {
-        let hrv_observations: Vec<(chrono::NaiveDate, f64)> = entries
-            .iter()
-            .filter_map(|entry| {
-                let obj = entry.as_object()?;
-                let date = parse_entry_date(obj)?;
-                let hrv = get_number(obj, HRV_KEYS)?;
-                Some((date, hrv))
-            })
-            .collect();
-        let rhr_observations: Vec<(chrono::NaiveDate, f64)> = entries
-            .iter()
-            .filter_map(|entry| {
-                let obj = entry.as_object()?;
-                let date = parse_entry_date(obj)?;
-                let rhr = get_number(obj, RESTING_HR_KEYS)?;
-                Some((date, rhr))
-            })
-            .collect();
+        let hrv_observations = extract_wellness_observations(entries, HRV_KEYS, is_plausible_hrv);
+        let rhr_observations =
+            extract_wellness_observations(entries, RESTING_HR_KEYS, is_plausible_resting_hr);
         report.hrv_personal_baseline =
             compute_personal_baseline(&hrv_observations, BaselineTransform::LogLnRmssd);
         report.resting_hr_personal_baseline =

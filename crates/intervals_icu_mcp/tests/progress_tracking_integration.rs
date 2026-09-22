@@ -272,3 +272,35 @@ fn personal_baselines_accept_canonical_resting_hr_keys() {
         "RHR baseline should build from resting_hr_bpm/avgSleepingHR keys"
     );
 }
+
+#[test]
+fn personal_baseline_ignores_rhr_sensor_dropouts() {
+    // Weekly zero-dropouts must not drag the resting-HR personal baseline:
+    // 61 days at 55 bpm with every 7th day at 0 still means ~55.
+    let start = chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+    let mut entries = Vec::new();
+    for day in 0..61 {
+        let date = start + chrono::Duration::days(day);
+        let rhr = if day % 7 == 0 { 0.0 } else { 55.0 };
+        entries.push(json!({
+            "id": date.format("%Y-%m-%d").to_string(),
+            "hrv": 60.0,
+            "restingHR": rhr,
+        }));
+    }
+    let wellness = json!(entries);
+    let window = AnalysisWindow::new(
+        chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+        chrono::NaiveDate::from_ymd_opt(2026, 3, 3).unwrap(),
+    );
+
+    let report = build_progress_report(&wellness, &[], &HashMap::new(), &window);
+    let baseline = report
+        .resting_hr_personal_baseline
+        .expect("RHR baseline should build despite dropouts");
+    assert!(
+        (baseline.baseline_mean_60d - 55.0).abs() < 1.0,
+        "dropouts must be excluded, got mean {}",
+        baseline.baseline_mean_60d
+    );
+}

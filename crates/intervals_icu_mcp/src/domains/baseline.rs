@@ -38,23 +38,43 @@ pub fn compute_personal_baseline(
         return None;
     }
 
-    // Sort and deduplicate by date, keeping last valid observation per date
+    // Sort ascending (stable) and deduplicate by date, keeping the LAST
+    // observation per date: later syncs correct earlier ones. `dedup_by_key`
+    // keeps the first of each run, so fold manually instead.
     let mut sorted = observations.to_vec();
     sorted.sort_by_key(|(date, _)| *date);
-    sorted.dedup_by_key(|(date, _)| *date);
+    let mut deduped: Vec<(NaiveDate, f64)> = Vec::with_capacity(sorted.len());
+    for obs in sorted {
+        if deduped.last().map(|(date, _)| *date) == Some(obs.0) {
+            let last = deduped.last_mut().expect("non-empty after push");
+            *last = obs;
+        } else {
+            deduped.push(obs);
+        }
+    }
+    let sorted = deduped;
 
     // Apply transform
     let transformed: Vec<(NaiveDate, f64)> = sorted
         .into_iter()
         .filter_map(|(date, value)| match transform {
             BaselineTransform::LogLnRmssd => {
-                if value > 0.0 {
+                if value > 0.0 && value.is_finite() {
                     Some((date, value.ln()))
                 } else {
                     None
                 }
             }
-            BaselineTransform::RawBpm => Some((date, value)),
+            // A non-positive resting HR is a sensor dropout, never a
+            // measurement — mirroring the HRV arm. Non-finite values cannot
+            // arise from JSON but are rejected for the same reason.
+            BaselineTransform::RawBpm => {
+                if value > 0.0 && value.is_finite() {
+                    Some((date, value))
+                } else {
+                    None
+                }
+            }
         })
         .collect();
 
@@ -327,8 +347,31 @@ mod tests {
         // Add duplicate date with different value
         observations.push((date(2026, 1, 15), 70.0));
         let result = compute_personal_baseline(&observations, BaselineTransform::RawBpm).unwrap();
-        // The duplicate should be resolved by keeping the last one
+        // The duplicate must resolve to the LAST value: (59*60 + 70)/60.
+        // First-wins would leave the mean at exactly 60.0.
+        assert!(
+            (result.baseline_mean_60d - 60.166_666_7).abs() < 1e-6,
+            "expected last-wins mean 60.1667, got {}",
+            result.baseline_mean_60d
+        );
         assert!(result.baseline_sample_count <= 60);
+    }
+
+    #[test]
+    fn zero_negative_nonfinite_rhr_values_are_ignored() {
+        let mut observations: Vec<(NaiveDate, f64)> = (0..60)
+            .map(|i| (date(2026, 1, 1) + chrono::Duration::days(i), 60.0))
+            .collect();
+        // Sensor dropouts must not drag the resting-HR baseline down.
+        observations[10].1 = 0.0;
+        observations[20].1 = -5.0;
+        observations[30].1 = f64::INFINITY;
+        let result = compute_personal_baseline(&observations, BaselineTransform::RawBpm).unwrap();
+        assert!(
+            (result.baseline_mean_60d - 60.0).abs() < 1e-9,
+            "dropouts must be excluded, got mean {}",
+            result.baseline_mean_60d
+        );
     }
 
     #[test]
@@ -340,6 +383,7 @@ mod tests {
         observations[10].1 = 0.0;
         observations[20].1 = -5.0;
         observations[30].1 = f64::NAN;
+        observations[40].1 = f64::INFINITY;
         let result = compute_personal_baseline(&observations, BaselineTransform::LogLnRmssd);
         assert!(result.is_some());
     }

@@ -56,10 +56,6 @@ pub const IDEAL_SLEEP_HOURS: f64 = 8.0;
 pub const RECOVERY_QUALITY_HRV_WEIGHT: f64 = 0.4;
 pub const RECOVERY_QUALITY_RHR_WEIGHT: f64 = 0.3;
 pub const RECOVERY_QUALITY_SLEEP_WEIGHT: f64 = 0.3;
-pub const RHR_COMPONENT_MIN: f64 = 0.5;
-pub const RHR_COMPONENT_MAX: f64 = 1.5;
-pub const SLEEP_COMPONENT_MIN: f64 = 0.5;
-pub const SLEEP_COMPONENT_MAX: f64 = 1.5;
 pub const SECONDS_PER_HOUR: f64 = 3600.0;
 pub const DAYS_PER_WEEK: f64 = 7.0;
 pub const ACWR_ACUTE_LAMBDA: f64 = 2.0 / 8.0;
@@ -85,6 +81,28 @@ pub const WELLNESS_SLEEP_MIN_PLAUSIBLE_HOURS: f64 = 1.0;
 /// 12h is the practical upper bound for true sleep; higher values are time-in-bed
 /// or bad watch data (the reported 12.8h/day artifact falls in this band).
 pub const WELLNESS_SLEEP_TYPICAL_MAX_HOURS: f64 = 12.0;
+/// Resting-HR values below this are sensor dropouts, not bradycardia:
+/// sustained resting rates under 20 bpm are not survivable, and single
+/// glitch readings (0, negative) otherwise drag averages and baselines down.
+pub const WELLNESS_RHR_MIN_PLAUSIBLE_BPM: f64 = 20.0;
+/// Resting-HR values above this are sensor glitches (250/1000 bpm spikes),
+/// not training data: even febrile resting rates stay far below this.
+/// Applied to averages and baseline observations, mirroring the sleep filter.
+pub const WELLNESS_RHR_MAX_PLAUSIBLE_BPM: f64 = 130.0;
+/// HRV (RMSSD, ms) values above this are sensor glitches, not physiology:
+/// even elite endurance athletes rarely exceed ~250 ms. The lower bound is
+/// implicitly exclusive of zero (a zero RMSSD is a dropout and would also
+/// poison ratios and log transforms).
+pub const WELLNESS_HRV_MAX_PLAUSIBLE_MS: f64 = 500.0;
+/// A rolling average baseline needs at least one full recent-window of
+/// samples: fewer points is noise, not a baseline. Mirrors the data-quality
+/// floors of the personal-baseline engine (14 obs / 28 days, stricter).
+pub const WELLNESS_BASELINE_MIN_SAMPLES: usize = 7;
+/// Recovery Quality Index clamps every component — including the HRV ratio —
+/// into a shared band so one glitchy-baseline day cannot explode the score
+/// (e.g. ratio 60 from a ~1 ms artifact baseline displaying as "24.00").
+pub const RQI_COMPONENT_MIN: f64 = 0.5;
+pub const RQI_COMPONENT_MAX: f64 = 1.5;
 pub const ROUNDING_DECIMAL_FACTOR: f64 = 10.0;
 pub const READINESS_MOOD_WEIGHT: f64 = 0.3;
 pub const READINESS_SLEEP_WEIGHT: f64 = 0.3;
@@ -183,20 +201,13 @@ mod tests {
         );
     }
 
-    /// RHR / sleep component clamps must define a positive range and the
-    /// minimum must be strictly less than the maximum.
+    /// RHR / sleep / HRV-ratio component clamps must define a positive range
+    /// and the minimum must be strictly less than the maximum.
     #[allow(clippy::assertions_on_constants)]
     #[test]
-    fn sleep_component_min_less_than_max() {
-        assert!(SLEEP_COMPONENT_MIN < SLEEP_COMPONENT_MAX);
-        assert!(SLEEP_COMPONENT_MIN >= 0.0);
-    }
-
-    #[allow(clippy::assertions_on_constants)]
-    #[test]
-    fn rhr_component_min_less_than_max() {
-        assert!(RHR_COMPONENT_MIN < RHR_COMPONENT_MAX);
-        assert!(RHR_COMPONENT_MIN >= 0.0);
+    fn rqi_component_min_less_than_max() {
+        assert!(RQI_COMPONENT_MIN < RQI_COMPONENT_MAX);
+        assert!(RQI_COMPONENT_MIN >= 0.0);
     }
 
     /// Sleep clamp must yield a non-negative range \u2014 negative sleep hours

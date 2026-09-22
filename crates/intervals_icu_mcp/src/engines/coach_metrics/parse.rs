@@ -16,10 +16,31 @@ use super::trend::interpret_fitness_metrics;
 pub fn parse_fitness_metrics(payload: Option<&Value>) -> Option<FitnessMetrics> {
     let value = payload?;
     let object = if let Some(items) = value.as_array() {
-        items.iter().find_map(Value::as_object)
+        // The wellness endpoint returns one object per day (carrying
+        // ctl/atl/rampRate per the vendored OpenAPI `Wellness` schema), so a
+        // multi-day array must resolve the latest day by date — the
+        // historical first-object pick silently pinned stale fitness whenever
+        // the API order put an older day first. Fully undated payloads keep
+        // the first object.
+        let mut latest: Option<&serde_json::Map<String, Value>> = None;
+        let mut first: Option<&serde_json::Map<String, Value>> = None;
+        for obj in items.iter().filter_map(Value::as_object) {
+            if first.is_none() {
+                first = Some(obj);
+            }
+            let is_later = match (parse_entry_date(obj), latest.and_then(parse_entry_date)) {
+                (Some(date), Some(current)) => date > current,
+                (Some(_), None) => true,
+                (None, _) => false,
+            };
+            if is_later {
+                latest = Some(obj);
+            }
+        }
+        latest.or(first)?
     } else {
-        value.as_object()
-    }?;
+        value.as_object()?
+    };
 
     let ctl = get_number(object, FITNESS_CTL_KEYS);
     let atl = get_number(object, FITNESS_ATL_KEYS);
@@ -47,13 +68,16 @@ pub fn parse_wellness_metrics(payload: Option<&Value>) -> Option<WellnessMetrics
         .filter_map(Value::as_object)
         .filter_map(sleep_hours_from_entry)
         .collect::<Vec<_>>();
-    let rhr_values = collect_numbers(recent_entries, RESTING_HR_KEYS);
-    let hrv_values = collect_numbers(recent_entries, HRV_KEYS);
-    let baseline_hrv_values = collect_numbers(baseline_entries, HRV_KEYS);
-    let baseline_rhr_values = collect_numbers(baseline_entries, RESTING_HR_KEYS);
+    let rhr_values = plausible_numbers(recent_entries, RESTING_HR_KEYS, is_plausible_resting_hr);
+    let hrv_values = plausible_numbers(recent_entries, HRV_KEYS, is_plausible_hrv);
+    let baseline_hrv_values = plausible_numbers(baseline_entries, HRV_KEYS, is_plausible_hrv);
+    let baseline_rhr_values =
+        plausible_numbers(baseline_entries, RESTING_HR_KEYS, is_plausible_resting_hr);
 
     let avg_hrv = average(&hrv_values);
-    let hrv_baseline = average(&baseline_hrv_values);
+    // A baseline shorter than the window it benchmarks is noise, not a
+    // baseline: single-day denominators fabricate huge deviations/ratios.
+    let hrv_baseline = gated_average(&baseline_hrv_values);
     let hrv_deviation_pct = hrv_baseline.zip(avg_hrv).and_then(|(baseline, current)| {
         percent_delta(baseline, current)
             .map(|delta| (delta * ROUNDING_DECIMAL_FACTOR).round() / ROUNDING_DECIMAL_FACTOR)
@@ -61,7 +85,7 @@ pub fn parse_wellness_metrics(payload: Option<&Value>) -> Option<WellnessMetrics
 
     let avg_sleep_hours = average(&sleep_values);
     let avg_resting_hr = average(&rhr_values);
-    let resting_hr_baseline = average(&baseline_rhr_values);
+    let resting_hr_baseline = gated_average(&baseline_rhr_values);
     let hrv_trend_state = classify_hrv_trend_state(hrv_deviation_pct);
     let recovery_index = avg_hrv.zip(avg_resting_hr).and_then(|(hrv, resting_hr)| {
         compute_recovery_index(hrv, resting_hr, hrv_baseline, resting_hr_baseline)
@@ -103,8 +127,9 @@ pub fn parse_wellness_metrics(payload: Option<&Value>) -> Option<WellnessMetrics
                 )
             });
 
-    let hrv_observations = extract_wellness_observations(entries, HRV_KEYS);
-    let rhr_observations = extract_wellness_observations(entries, RESTING_HR_KEYS);
+    let hrv_observations = extract_wellness_observations(entries, HRV_KEYS, is_plausible_hrv);
+    let rhr_observations =
+        extract_wellness_observations(entries, RESTING_HR_KEYS, is_plausible_resting_hr);
 
     Some(WellnessMetrics {
         avg_sleep_hours,
@@ -115,7 +140,13 @@ pub fn parse_wellness_metrics(payload: Option<&Value>) -> Option<WellnessMetrics
         hrv_deviation_pct,
         hrv_trend_state,
         recovery_index,
-        wellness_days_count: recent_entries.len(),
+        // Days with data, not raw rows: empty `{}` entries must not inflate
+        // the count (presence, not plausibility — a 12.8 h artifact day is
+        // still a day, its sleep just doesn't enter the average).
+        wellness_days_count: recent_entries
+            .iter()
+            .filter(|entry| entry.as_object().is_some_and(entry_has_wellness_data))
+            .count(),
         avg_mood,
         avg_stress,
         avg_fatigue,
@@ -134,6 +165,56 @@ pub fn parse_wellness_metrics(payload: Option<&Value>) -> Option<WellnessMetrics
             BaselineTransform::RawBpm,
         ),
     })
+}
+
+/// Collect numbers for `keys`, keeping only physiologically plausible samples.
+/// Sensor dropouts (0) and glitch spikes otherwise corrupt averages,
+/// baselines, and ratios — the same artifact class as implausible sleep.
+fn plausible_numbers(entries: &[Value], keys: &[&str], plausible: fn(f64) -> bool) -> Vec<f64> {
+    collect_numbers(entries, keys)
+        .into_iter()
+        .filter(|value| plausible(*value))
+        .collect()
+}
+
+/// Average over a baseline window, gated on sample count: a baseline shorter
+/// than [`WELLNESS_BASELINE_MIN_SAMPLES`] is noise, not a baseline —
+/// single-day denominators fabricate huge deviations and ratios.
+fn gated_average(values: &[f64]) -> Option<f64> {
+    if values.len() >= WELLNESS_BASELINE_MIN_SAMPLES {
+        average(values)
+    } else {
+        None
+    }
+}
+
+/// A recent entry counts as a wellness day when it carries at least one
+/// recognized metric value.
+fn entry_has_wellness_data(obj: &serde_json::Map<String, Value>) -> bool {
+    const ALL_WELLNESS_KEYS: &[&[&str]] = &[
+        SLEEP_KEYS,
+        RESTING_HR_KEYS,
+        HRV_KEYS,
+        READINESS_KEYS,
+        MOOD_KEYS,
+        STRESS_KEYS,
+        FATIGUE_KEYS,
+    ];
+    ALL_WELLNESS_KEYS
+        .iter()
+        .any(|keys| get_number(obj, keys).is_some())
+}
+
+/// Resting-HR plausibility band (bpm). Shared by the parser, progress
+/// tracking, and the training-plan snapshot so all paths agree.
+pub(crate) fn is_plausible_resting_hr(value: f64) -> bool {
+    (WELLNESS_RHR_MIN_PLAUSIBLE_BPM..=WELLNESS_RHR_MAX_PLAUSIBLE_BPM).contains(&value)
+}
+
+/// HRV (RMSSD, ms) plausibility: strictly positive (zero is a dropout that
+/// also poisons ratios and log transforms) and below the glitch ceiling.
+pub(crate) fn is_plausible_hrv(value: f64) -> bool {
+    value > 0.0 && value <= WELLNESS_HRV_MAX_PLAUSIBLE_MS
 }
 
 /// Convert a raw sleep value to hours using the >24 heuristic
@@ -193,16 +274,20 @@ pub(crate) fn parse_entry_date(obj: &serde_json::Map<String, Value>) -> Option<N
     NaiveDate::parse_from_str(entry_date_str(obj)?, "%Y-%m-%d").ok()
 }
 
-fn extract_wellness_observations(entries: &[Value], keys: &[&str]) -> Vec<(NaiveDate, f64)> {
+/// Extract dated numeric observations for the personal-baseline engine,
+/// keeping only plausible samples so artifacts cannot poison long-window
+/// means. Shared by the wellness parser and progress tracking.
+pub(crate) fn extract_wellness_observations(
+    entries: &[Value],
+    keys: &[&str],
+    plausible: fn(f64) -> bool,
+) -> Vec<(NaiveDate, f64)> {
     entries
         .iter()
         .filter_map(|entry| {
             let obj = entry.as_object()?;
             let date = parse_entry_date(obj)?;
-            let value = keys.iter().find_map(|key| {
-                let v = obj.get(*key)?;
-                v.as_f64().or_else(|| v.as_i64().map(|i| i as f64))
-            })?;
+            let value = get_number(obj, keys).filter(|value| plausible(*value))?;
             Some((date, value))
         })
         .collect()
@@ -238,7 +323,7 @@ pub fn extract_hrv_series(payload: Option<&Value>) -> Option<Vec<f64>> {
         .filter_map(Value::as_object)
         .filter_map(|object| {
             let date = entry_date_str(object)?.to_string();
-            let hrv = get_number(object, HRV_KEYS)?;
+            let hrv = get_number(object, HRV_KEYS).filter(|value| is_plausible_hrv(*value))?;
             Some((date, hrv))
         })
         .collect::<Vec<_>>();
