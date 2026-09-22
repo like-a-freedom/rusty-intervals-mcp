@@ -785,9 +785,30 @@ impl WellnessSnapshot {
         Self {
             readiness: latest.get("readiness").and_then(|v| v.as_f64()),
             hrv: latest.get("hrv").and_then(|v| v.as_f64()),
-            sleep_avg: latest.get("sleep").and_then(|v| v.as_f64()),
+            sleep_avg: extract_sleep_hours(latest),
         }
     }
+}
+
+/// Extract sleep in hours from a wellness entry.
+/// Real API returns `sleepSecs` (seconds); normalized payloads may use `sleep` or `sleep_hours`.
+fn extract_sleep_hours(entry: &Value) -> Option<f64> {
+    // Prefer explicit hours fields
+    if let Some(v) = entry.get("sleep_hours").and_then(|v| v.as_f64()) {
+        return Some(v);
+    }
+    // sleepSecs → hours
+    if let Some(v) = entry.get("sleepSecs").and_then(|v| v.as_f64()) {
+        return Some(if v > 24.0 { v / 3600.0 } else { v });
+    }
+    if let Some(v) = entry.get("sleep_secs").and_then(|v| v.as_f64()) {
+        return Some(if v > 24.0 { v / 3600.0 } else { v });
+    }
+    // Legacy/normalized `sleep` key — may be seconds or hours
+    entry
+        .get("sleep")
+        .and_then(|v| v.as_f64())
+        .map(|v| if v > 24.0 { v / 3600.0 } else { v })
 }
 
 // --- Task 5: Event generation ---

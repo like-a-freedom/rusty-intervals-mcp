@@ -389,6 +389,19 @@ fn test_wellness_snapshot_from_value() {
 }
 
 #[test]
+fn test_wellness_snapshot_reads_sleep_secs_from_api() {
+    // Real Intervals.icu API returns sleepSecs, not sleep.
+    let value = json!([
+        {"id": "2026-03-15", "readiness": 3.0, "hrv": 30.0, "sleepSecs": 18000},
+        {"id": "2026-03-16", "readiness": 8.0, "hrv": 70.0, "sleepSecs": 28800}
+    ]);
+    let snap = WellnessSnapshot::from_value(&value);
+    assert_eq!(snap.readiness, Some(8.0));
+    assert_eq!(snap.hrv, Some(70.0));
+    assert_eq!(snap.sleep_avg, Some(8.0), "sleepSecs must convert to hours");
+}
+
+#[test]
 fn test_wellness_snapshot_empty() {
     let value = json!([]);
     let snap = WellnessSnapshot::from_value(&value);

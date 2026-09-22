@@ -1223,6 +1223,31 @@ mod tests {
     }
 
     #[test]
+    fn recovery_rows_sleep_missing_renders_zero_poor() {
+        // When every sleep sample is filtered as implausible, avg_sleep_hours is
+        // None and the row pins the current missing-data rendering (0.0 / Poor).
+        let rows = AssessRecoveryHandler::build_recovery_metric_rows(
+            &WellnessMetrics {
+                avg_sleep_hours: None,
+                avg_resting_hr: Some(50.0),
+                avg_hrv: Some(65.0),
+                wellness_days_count: 5,
+                ..Default::default()
+            },
+            &FitnessMetrics {
+                tsb: Some(5.0),
+                ..Default::default()
+            },
+        );
+        let sleep_row = rows
+            .iter()
+            .find(|r| r[0] == "Avg Sleep")
+            .expect("Sleep row");
+        assert_eq!(sleep_row[1], "0.0 hrs");
+        assert!(sleep_row[2].contains("Poor"));
+    }
+
+    #[test]
     fn recovery_rows_tsb_fresh() {
         let rows = AssessRecoveryHandler::build_recovery_metric_rows(
             &WellnessMetrics {

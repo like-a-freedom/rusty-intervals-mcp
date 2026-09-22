@@ -76,6 +76,12 @@ pub const CONSISTENCY_MODERATE_THRESHOLD: f64 = 0.5;
 pub const POLARISATION_BIASED_THRESHOLD: f64 = 0.75;
 pub const WELLNESS_SLEEP_HEURISTIC_THRESHOLD: f64 = 24.0;
 pub const WELLNESS_DEFAULT_SLEEP_HOURS: f64 = 7.0;
+/// Sleep values below this are treated as sensor artifacts and excluded from averages.
+pub const WELLNESS_SLEEP_MIN_PLAUSIBLE_HOURS: f64 = 1.0;
+/// Values above this are excluded from `avg_sleep_hours` even if technically possible.
+/// 12h is the practical upper bound for true sleep; higher values are time-in-bed
+/// or bad watch data (the reported 12.8h/day artifact falls in this band).
+pub const WELLNESS_SLEEP_TYPICAL_MAX_HOURS: f64 = 12.0;
 pub const ROUNDING_DECIMAL_FACTOR: f64 = 10.0;
 pub const READINESS_MOOD_WEIGHT: f64 = 0.3;
 pub const READINESS_SLEEP_WEIGHT: f64 = 0.3;

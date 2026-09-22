@@ -132,6 +132,101 @@ fn parse_wellness_metrics_supports_seconds_and_snake_case() {
 }
 
 #[test]
+fn parse_wellness_metrics_filters_implausible_sleep_artifacts() {
+    // 12.8 h/day is an artifact (time-in-bed or bad watch data).
+    // Average must not report it as a plausible sleep metric.
+    let payload = json!([
+        {"sleepSecs": 46080.0, "restingHR": 50.0, "hrv": 60.0}, // 12.8 h
+        {"sleep_hours": 7.5, "resting_hr": 52.0, "hrv": 66.0}
+    ]);
+    let metrics = parse_wellness_metrics(Some(&payload)).unwrap();
+    let avg = metrics.avg_sleep_hours.unwrap();
+    assert!(
+        avg <= 10.0,
+        "avg_sleep_hours {avg} must not retain implausible 12.8h artifact"
+    );
+}
+
+#[test]
+fn parse_wellness_metrics_all_implausible_sleep_returns_none() {
+    let payload = json!([
+        {"sleepSecs": 46080.0, "restingHR": 50.0, "hrv": 60.0},
+        {"sleepSecs": 50400.0, "restingHR": 51.0, "hrv": 61.0}
+    ]);
+    let metrics = parse_wellness_metrics(Some(&payload)).unwrap();
+    assert!(
+        metrics.avg_sleep_hours.is_none(),
+        "all-artifact sleep must yield None, not 12.8/14.0"
+    );
+}
+
+#[test]
+fn parse_wellness_metrics_sleep_plausibility_boundary() {
+    // 12.0 h is the inclusive upper bound of plausible sleep; 12.1 h is not.
+    let payload = json!([
+        {"sleep_hours": 12.0, "restingHR": 50.0, "hrv": 60.0},
+        {"sleep_hours": 12.1, "restingHR": 50.0, "hrv": 60.0},
+        {"sleep_hours": 7.0, "restingHR": 50.0, "hrv": 60.0}
+    ]);
+    let metrics = parse_wellness_metrics(Some(&payload)).unwrap();
+    let avg = metrics.avg_sleep_hours.unwrap();
+    assert!(
+        (avg - 9.5).abs() < 1e-9,
+        "expected (12.0 + 7.0) / 2 = 9.5h with 12.1h excluded, got {avg}"
+    );
+}
+
+#[test]
+fn extract_wellness_observations_accepts_id_as_date() {
+    // compute_personal_baseline requires ≥14 obs spanning ≥28 days.
+    let payload: Vec<Value> = (0..35)
+        .map(|i| {
+            let day = 1 + (i % 28);
+            let month = if i < 28 { 2 } else { 3 };
+            json!({
+                "id": format!("2026-{:02}-{:02}", month, day),
+                "hrv": 60.0 + (i as f64 * 0.1),
+                "restingHR": 50.0 + (i as f64 * 0.05)
+            })
+        })
+        .collect();
+    let metrics = parse_wellness_metrics(Some(&Value::Array(payload))).unwrap();
+    assert!(
+        metrics.hrv_personal_baseline.is_some(),
+        "real API uses id (date) not date — baseline must build"
+    );
+    assert!(metrics.resting_hr_personal_baseline.is_some());
+}
+
+#[test]
+fn parse_wellness_metrics_newest_first_order_uses_latest_window() {
+    // API may return newest-first. Recent window must still be the latest days.
+    let mut payload = Vec::new();
+    // newest first: sleep 8h each for last 7 days
+    for i in 0..7 {
+        payload.push(json!({"id": format!("2026-03-{:02}", 22 - i), "sleepSecs": 28800.0, "hrv": 60.0, "restingHR": 50.0}));
+    }
+    // older baseline: sleep 10h (but still plausible) and different hrv
+    for i in 0..28 {
+        payload.push(json!({"id": format!("2026-02-{:02}", (i % 28) + 1), "sleepSecs": 36000.0, "hrv": 80.0, "restingHR": 45.0}));
+    }
+    let metrics = parse_wellness_metrics(Some(&Value::Array(payload))).unwrap();
+    // If order is handled: recent = last 7 in array after sort = the 8h days
+    // If order ignored: recent = last 7 in raw array = old 10h baseline days
+    let avg = metrics.avg_sleep_hours.unwrap();
+    assert!(
+        (avg - 8.0).abs() < 0.5,
+        "expected ~8.0h from latest days, got {avg} (order bug)"
+    );
+    // HRV recent should be ~60 not ~80
+    let hrv = metrics.avg_hrv.unwrap();
+    assert!(
+        hrv < 70.0,
+        "recent HRV {hrv} should come from latest entries"
+    );
+}
+
+#[test]
 fn parse_wellness_metrics_derives_adaptive_hrv_baseline_and_recent_deviation() {
     let mut entries = Vec::new();
     entries.extend((0..28).map(|_| wellness_entry(28_800.0, 50.0, 80.0)));
@@ -846,6 +941,31 @@ fn extract_hrv_series_sorts_entries_by_date() {
     let payload = json!([
         {"date": "2026-01-02", "hrv": 64.0},
         {"date": "2026-01-01", "hrv": 62.0}
+    ]);
+
+    let values = extract_hrv_series(Some(&payload)).unwrap();
+    assert_eq!(values, vec![62.0, 64.0]);
+}
+
+#[test]
+fn extract_ctl_series_accepts_id_as_date() {
+    // Real Intervals.icu wellness entries carry the day in `id`, not `date`.
+    let payload = json!([
+        {"id": "2026-01-03", "fitness": 62.0},
+        {"id": "2026-01-01", "fitness": 60.0},
+        {"id": "2026-01-02", "ctl": 61.0}
+    ]);
+
+    let (dates, values) = extract_ctl_series(Some(&payload)).unwrap();
+    assert_eq!(dates, vec!["2026-01-01", "2026-01-02", "2026-01-03"]);
+    assert_eq!(values, vec![60.0, 61.0, 62.0]);
+}
+
+#[test]
+fn extract_hrv_series_accepts_id_as_date() {
+    let payload = json!([
+        {"id": "2026-01-02", "hrv": 64.0},
+        {"id": "2026-01-01", "hrv": 62.0}
     ]);
 
     let values = extract_hrv_series(Some(&payload)).unwrap();

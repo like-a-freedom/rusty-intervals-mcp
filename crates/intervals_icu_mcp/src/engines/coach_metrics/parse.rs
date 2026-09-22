@@ -35,17 +35,17 @@ pub fn parse_wellness_metrics(payload: Option<&Value>) -> Option<WellnessMetrics
         return None;
     }
 
+    // Normalize entry order: oldest-first so recent window = last N entries.
+    // Real API may return newest-first; without this we average the wrong window.
+    let ordered = order_entries_oldest_first(entries);
+    let entries: &[Value] = ordered.as_deref().unwrap_or(entries);
+
     let (recent_entries, baseline_entries) = split_recent_and_baseline(entries);
 
     let sleep_values = collect_numbers(recent_entries, SLEEP_KEYS)
         .into_iter()
-        .map(|value| {
-            if value > WELLNESS_SLEEP_HEURISTIC_THRESHOLD {
-                value / SECONDS_PER_HOUR
-            } else {
-                value
-            }
-        })
+        .map(normalize_sleep_to_hours)
+        .filter(|value| is_plausible_sleep_hours(*value))
         .collect::<Vec<_>>();
     let rhr_values = collect_numbers(recent_entries, RESTING_HR_KEYS);
     let hrv_values = collect_numbers(recent_entries, HRV_KEYS);
@@ -130,12 +130,55 @@ pub fn parse_wellness_metrics(payload: Option<&Value>) -> Option<WellnessMetrics
     })
 }
 
+/// Convert a raw sleep value to hours using the >24 heuristic
+/// (values >24 are treated as seconds, ≤24 as already-hours).
+fn normalize_sleep_to_hours(value: f64) -> f64 {
+    if value > WELLNESS_SLEEP_HEURISTIC_THRESHOLD {
+        value / SECONDS_PER_HOUR
+    } else {
+        value
+    }
+}
+
+/// Filter out sensor artifacts / time-in-bed values outside physiological range.
+fn is_plausible_sleep_hours(value: f64) -> bool {
+    (WELLNESS_SLEEP_MIN_PLAUSIBLE_HOURS..=WELLNESS_SLEEP_TYPICAL_MAX_HOURS).contains(&value)
+}
+
+/// Return a copy of entries sorted oldest-first when date can be resolved
+/// from `date` or `id` (API uses `id` as ISO date). Returns `None` if any
+/// entry lacks a parseable date — caller keeps original order.
+fn order_entries_oldest_first(entries: &[Value]) -> Option<Vec<Value>> {
+    let mut indexed: Vec<(NaiveDate, usize, &Value)> = Vec::with_capacity(entries.len());
+    for (idx, entry) in entries.iter().enumerate() {
+        let obj = entry.as_object()?;
+        let date_str = entry_date_str(obj)?;
+        let date = NaiveDate::parse_from_str(date_str, "%Y-%m-%d").ok()?;
+        indexed.push((date, idx, entry));
+    }
+    indexed.sort_by_key(|(date, idx, _)| (*date, *idx));
+    Some(
+        indexed
+            .into_iter()
+            .map(|(_, _, entry)| entry.clone())
+            .collect(),
+    )
+}
+
+/// Resolve the ISO date string from a wellness entry: prefer `date`, fall back to `id`
+/// (Intervals.icu uses `id` as the day).
+fn entry_date_str(obj: &serde_json::Map<String, Value>) -> Option<&str> {
+    obj.get("date")
+        .and_then(Value::as_str)
+        .or_else(|| obj.get("id").and_then(Value::as_str))
+}
+
 fn extract_wellness_observations(entries: &[Value], keys: &[&str]) -> Vec<(NaiveDate, f64)> {
     entries
         .iter()
         .filter_map(|entry| {
             let obj = entry.as_object()?;
-            let date_str = obj.get("date")?.as_str()?;
+            let date_str = entry_date_str(obj)?;
             let date = NaiveDate::parse_from_str(date_str, "%Y-%m-%d").ok()?;
             let value = keys.iter().find_map(|key| {
                 let v = obj.get(*key)?;
@@ -152,10 +195,10 @@ pub fn extract_ctl_series(payload: Option<&Value>) -> Option<(Vec<String>, Vec<f
         .iter()
         .filter_map(Value::as_object)
         .filter_map(|object| {
-            let date = object.get("date").and_then(Value::as_str)?;
+            let date = entry_date_str(object)?.to_string();
             let ctl = get_number(object, FITNESS_CTL_KEYS)
                 .or_else(|| get_number(object, API_LOAD_CHRONIC_KEYS))?;
-            Some((date.to_string(), ctl))
+            Some((date, ctl))
         })
         .collect::<Vec<_>>();
 
@@ -175,9 +218,9 @@ pub fn extract_hrv_series(payload: Option<&Value>) -> Option<Vec<f64>> {
         .iter()
         .filter_map(Value::as_object)
         .filter_map(|object| {
-            let date = object.get("date").and_then(Value::as_str)?;
+            let date = entry_date_str(object)?.to_string();
             let hrv = get_number(object, HRV_KEYS)?;
-            Some((date.to_string(), hrv))
+            Some((date, hrv))
         })
         .collect::<Vec<_>>();
 

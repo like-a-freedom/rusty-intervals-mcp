@@ -208,3 +208,34 @@ fn personal_baselines_absent_with_too_few_days() {
         "RHR baseline should be None with only 10 days of data"
     );
 }
+
+#[test]
+fn personal_baselines_computed_from_id_dates() {
+    // Real Intervals.icu wellness entries carry the day in `id`, not `date`.
+    let start = chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+    let mut entries = Vec::new();
+    for day in 0..61 {
+        let date = start + chrono::Duration::days(day);
+        entries.push(json!({
+            "id": date.format("%Y-%m-%d").to_string(),
+            "hrv": 60.0,
+            "resting_hr": 55.0,
+            "ctl": if day < 35 { 50.0 } else { 55.0 },
+        }));
+    }
+    let wellness = json!(entries);
+    let window = AnalysisWindow::new(
+        chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+        chrono::NaiveDate::from_ymd_opt(2026, 3, 3).unwrap(),
+    );
+
+    let report = build_progress_report(&wellness, &[], &HashMap::new(), &window);
+    assert!(
+        report.hrv_personal_baseline.is_some(),
+        "HRV baseline should be computed from id-dated entries"
+    );
+    assert!(
+        report.resting_hr_personal_baseline.is_some(),
+        "RHR baseline should be computed from id-dated entries"
+    );
+}
