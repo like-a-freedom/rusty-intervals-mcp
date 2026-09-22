@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.22.0] - 2026-09-22
+
+### Fixed
+- Inflated sleep metrics (e.g. "Sleep = 12.8 h/day"): wellness sleep values outside the plausible 1.0–12.0 h range are now excluded from `avg_sleep_hours`; when every sample is an artifact the field is `None` instead of a bogus average.
+- Wellness date resolution: entries from the real Intervals.icu API carry the day in `id`, not `date` — `extract_wellness_observations`, `extract_ctl_series`, `extract_hrv_series`, and the `track_progress` personal-baseline extraction now fall back to `id`.
+- Wellness entry order is now normalized oldest-first before splitting the recent window from the baseline, so newest-first API responses no longer skew recent averages.
+- `plan_training` wellness snapshot now reads `sleepSecs`/`sleep_secs`/`sleep_hours` (converting seconds > 24 to hours) instead of only the normalized `sleep` key.
+
+### Added
+- Regression tests for implausible-sleep filtering (including the 12.0/12.1 h boundary), `id`-as-date handling in CTL/HRV series and personal baselines, entry-order normalization, `sleepSecs` snapshot parsing, and the missing-sleep recovery row rendering.
+
 ## [2.21.0] - 2026-08-02
 
 ### Changed
