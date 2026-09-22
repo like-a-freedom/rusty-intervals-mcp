@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.23.1] - 2026-09-22
+
+### Fixed
+- Fitness parsing from multi-day arrays resolves the latest day by date instead of taking the first object, so stale CTL/ATL/TSB can no longer pin when the API order puts an older day first (fully undated payloads keep the first object).
+- Resting-HR and HRV sensor artifacts are now filtered like implausible sleep: dropouts (0), negatives, RHR outside 20–130 bpm, and HRV above 500 ms no longer corrupt recent averages, rolling baselines, personal-baseline observations, the lnRMSSD rollup input, or the training-plan snapshot.
+- Rolling HRV/RHR baselines require at least 7 samples: shorter windows left deviation, ratio, and recovery-index denominators to single-day noise.
+- Recovery Quality Index clamps the HRV ratio into the shared component band, so a glitchy-baseline day can no longer explode the score (e.g. 30x ratio displaying as "12.60").
+- TSB band edge parity: exactly -10.0 renders Balanced, matching `interpret_fitness_metrics` (fatigued only strictly below -10).
+- Personal-baseline duplicates resolve last-wins (later syncs correct earlier ones); the resting-HR arm drops non-positive/non-finite observations like the HRV arm.
+- `wellness_days_count` counts days with data instead of raw rows, so empty entries no longer inflate it.
+
 ## [2.23.0] - 2026-09-22
 
 ### Changed
