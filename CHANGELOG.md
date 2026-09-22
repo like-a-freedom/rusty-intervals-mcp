@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.23.0] - 2026-09-22
+
+### Changed
+- Internal crypto helper refactor: `fill_random` now returns a fixed-size array (`fill_random::<12>()`), removing the zero-initialized AES-GCM nonce buffer from `encrypt_api_key` that CodeQL flagged as a hard-coded cryptographic value. No behavior change — the nonce is still filled by the OS CSPRNG.
+
 ## [2.22.1] - 2026-09-22
 
 ### Fixed

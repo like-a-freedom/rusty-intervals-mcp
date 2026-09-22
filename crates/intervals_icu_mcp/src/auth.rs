@@ -28,8 +28,10 @@ use crate::metrics;
 use secrecy::ExposeSecret;
 
 /// Generate random bytes using OS CSPRNG
-fn fill_random(buf: &mut [u8]) -> Result<(), AuthError> {
-    getrandom::fill(buf).map_err(|_| AuthError::EncryptionError)
+fn fill_random<const N: usize>() -> Result<[u8; N], AuthError> {
+    let mut buf = [0u8; N];
+    getrandom::fill(&mut buf).map_err(|_| AuthError::EncryptionError)?;
+    Ok(buf)
 }
 
 /// Custom claims for JWT tokens
@@ -229,8 +231,7 @@ impl JwtManager {
 
     fn encrypt_api_key(&self, api_key: &str) -> Result<String, AuthError> {
         let cipher = Aes256Gcm::new((&self.encryption_key).into());
-        let mut nonce = [0u8; 12];
-        fill_random(&mut nonce)?;
+        let nonce = fill_random::<12>()?;
 
         let ciphertext = cipher
             .encrypt(Nonce::from_slice(&nonce), api_key.as_bytes())
