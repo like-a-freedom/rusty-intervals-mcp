@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.22.1] - 2026-09-22
+
+### Fixed
+- Recovery table no longer fabricates readings for missing metrics (`0.0 hrs / Poor`): absent sleep, resting HR, HRV, and TSB now render as `n/a`, and zero sleep/RHR/HRV is treated as missing (0.0 remains a legitimate balanced TSB).
+- Training-plan wellness snapshot resolves the latest entry by date instead of array position, so newest-first API responses no longer yield the oldest day; it shares the sleep pipeline (constants, plausibility filter, legacy `sleep` key) with the wellness parser.
+- Recovery Quality Index stays `None` when sleep is entirely implausible instead of silently defaulting to neutral 7h.
+- Progress-tracking baselines accept the canonical resting-HR key set (`resting_hr_bpm`, `avgSleepingHR`).
+- Entry ordering is no longer defeated by a single dateless row: dated entries sort oldest-first, dateless ones sort first.
+
 ## [2.22.0] - 2026-09-22
 
 ### Fixed
