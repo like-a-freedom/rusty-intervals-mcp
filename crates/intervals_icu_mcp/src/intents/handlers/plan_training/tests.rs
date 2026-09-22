@@ -459,6 +459,17 @@ fn test_wellness_snapshot_rejects_implausible_hrv() {
 }
 
 #[test]
+fn test_wellness_snapshot_rejects_negative_readiness() {
+    // Readiness is zero-floored on every scale: a negative is corruption.
+    let value = json!([
+        {"id": "2026-03-16", "readiness": -2.0, "hrv": 70.0, "sleepSecs": 28800}
+    ]);
+    let snap = WellnessSnapshot::from_value(&value);
+    assert_eq!(snap.readiness, None);
+    assert_eq!(snap.hrv, Some(70.0));
+}
+
+#[test]
 fn test_wellness_snapshot_empty() {
     let value = json!([]);
     let snap = WellnessSnapshot::from_value(&value);

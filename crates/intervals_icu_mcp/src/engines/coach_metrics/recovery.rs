@@ -68,6 +68,12 @@ pub fn compute_recovery_quality_index(
     )
 }
 
+/// Recovery index: baseline-relative (`hrv ratio / rhr ratio`, ~1.0-centered)
+/// when both baselines exist, else the raw `hrv / resting_hr` ratio as a
+/// degraded fallback. The fallback is NOT on the same scale — it confounds
+/// absolute levels (an athlete at 40 ms / 60 bpm reads 0.67 with no history)
+/// — so render bands treat it as directional only. Prefer the personal
+/// baseline (`hrv_personal_baseline`) for athlete-relative judgements.
 pub fn compute_recovery_index(
     hrv: f64,
     resting_hr: f64,

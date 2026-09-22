@@ -93,6 +93,64 @@ fn parse_fitness_metrics_undated_array_keeps_first_object() {
 }
 
 #[test]
+fn parse_fitness_metrics_rejects_negative_ctl_atl_keeps_negative_tsb() {
+    // CTL/ATL are EWMAs of non-negative loads; TSB and ramp rate are
+    // legitimately negative and must pass through.
+    let payload = json!({"ctl": -5.0, "atl": -3.0, "form": -15.0, "rampRate": -2.0});
+    let metrics = parse_fitness_metrics(Some(&payload)).unwrap();
+    assert_eq!(metrics.ctl, None);
+    assert_eq!(metrics.atl, None);
+    assert_eq!(metrics.tsb, Some(-15.0));
+    assert_eq!(metrics.ramp_rate, Some(-2.0));
+    assert_eq!(metrics.load_state.as_deref(), Some("fatigued"));
+}
+
+#[test]
+fn parse_wellness_metrics_rejects_negative_ratings() {
+    // Rating scales are zero-floored: negatives are corruption, not "very
+    // bad". Recent window after oldest-first sort is indices 28..35.
+    let mut entries: Vec<Value> = (0..35)
+        .map(|i| {
+            let day = 1 + (i % 28);
+            let month = if i < 28 { 2 } else { 3 };
+            json!({
+                "id": format!("2026-{:02}-{:02}", month, day),
+                "mood": 6.0,
+                "stress": 5.0,
+                "fatigue": 4.0,
+                "readiness": 7.0,
+            })
+        })
+        .collect();
+    entries[30]["mood"] = json!(-1.0);
+    entries[31]["stress"] = json!(-2.0);
+    entries[32]["fatigue"] = json!(-3.0);
+    entries[33]["readiness"] = json!(-4.0);
+    let metrics = parse_wellness_metrics(Some(&Value::Array(entries))).unwrap();
+    assert_eq!(metrics.avg_mood, Some(6.0));
+    assert_eq!(metrics.avg_stress, Some(5.0));
+    assert_eq!(metrics.avg_fatigue, Some(4.0));
+}
+
+#[test]
+fn parse_wellness_metrics_all_negative_mood_yields_none() {
+    let entries: Vec<Value> = (0..7)
+        .map(|i| {
+            json!({
+                "id": format!("2026-03-{:02}", i + 1),
+                "mood": -1.0,
+                "sleepSecs": 28800.0,
+            })
+        })
+        .collect();
+    let metrics = parse_wellness_metrics(Some(&Value::Array(entries))).unwrap();
+    assert_eq!(metrics.avg_mood, None);
+    // Computed readiness needs all four inputs: without mood it stays None
+    // instead of averaging garbage.
+    assert_eq!(metrics.readiness_score, None);
+}
+
+#[test]
 fn empty_fitness_values_stay_optional() {
     let fitness = FitnessMetrics::default();
 
@@ -543,6 +601,14 @@ fn parse_api_load_snapshot_supports_integer_load_fields() {
 
     assert_eq!(metrics.acute_load, 432.0);
     assert_eq!(metrics.chronic_load, 360.0);
+}
+
+#[test]
+fn parse_api_load_snapshot_rejects_negative_loads() {
+    // Loads are non-negative by construction; a negative acute or chronic
+    // load is corruption and must yield no metrics, not a bogus ratio.
+    assert!(parse_api_load_snapshot(Some(&json!({"atlLoad": -10.0, "ctlLoad": 360.0}))).is_none());
+    assert!(parse_api_load_snapshot(Some(&json!({"atlLoad": 432.0, "ctlLoad": -5.0}))).is_none());
 }
 
 #[test]

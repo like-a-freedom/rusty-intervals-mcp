@@ -103,6 +103,11 @@ pub fn detect_trailing_ctl_plateau(dates: &[String], ctl_values: &[f64]) -> Chan
     if dates.len() != ctl_values.len() || ctl_values.len() < PLATEAU_WINDOW_DAYS {
         return ChangepointResult::unsupported();
     }
+    // Non-finite samples are never data: without this guard a NaN slope
+    // misclassifies as Declining and an infinite slope as Rising/Flat.
+    if !ctl_values.iter().all(|value| value.is_finite()) {
+        return ChangepointResult::unsupported();
+    }
 
     let recent = &ctl_values[ctl_values.len() - PLATEAU_WINDOW_DAYS..];
     let flat_band = athlete_flat_slope_band(ctl_values);
@@ -206,5 +211,22 @@ mod tests {
         assert!(result.supported);
         assert!(!result.plateau_detected);
         assert_eq!(result.trend, crate::domains::progress::TrendState::Rising);
+    }
+
+    #[test]
+    fn non_finite_ctl_values_are_unsupported() {
+        // A NaN slope misclassifies as Declining, an infinite one as
+        // Rising/Flat: non-finite samples are never data, so the whole
+        // detection must decline instead of reporting a confident direction.
+        for poison in [f64::NAN, f64::INFINITY] {
+            let dates = dates(42);
+            let mut values: Vec<f64> = (0..42).map(|i| 50.0 + (i as f64 * 0.3)).collect();
+            values[20] = poison;
+            let result = detect_trailing_ctl_plateau(&dates, &values);
+            assert!(
+                !result.supported,
+                "non-finite input {poison} must be unsupported"
+            );
+        }
     }
 }

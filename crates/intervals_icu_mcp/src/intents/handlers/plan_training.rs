@@ -791,7 +791,11 @@ impl WellnessSnapshot {
         };
 
         Self {
-            readiness: latest.get("readiness").and_then(as_number),
+            // Readiness is zero-floored on every scale the API uses.
+            readiness: latest
+                .get("readiness")
+                .and_then(as_number)
+                .filter(|value| *value >= 0.0),
             // A dropout/glitch HRV on the latest day must not poison the plan
             // context — same plausibility bar as the wellness parser.
             hrv: latest

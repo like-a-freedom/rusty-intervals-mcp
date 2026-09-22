@@ -42,8 +42,11 @@ pub fn parse_fitness_metrics(payload: Option<&Value>) -> Option<FitnessMetrics> 
         value.as_object()?
     };
 
-    let ctl = get_number(object, FITNESS_CTL_KEYS);
-    let atl = get_number(object, FITNESS_ATL_KEYS);
+    // CTL/ATL are EWMAs of non-negative daily loads, so negatives are
+    // corruption, never measurements. TSB and ramp rate are legitimately
+    // negative (fatigue / declining fitness) and pass through unfiltered.
+    let ctl = get_number(object, FITNESS_CTL_KEYS).filter(|value| *value >= 0.0);
+    let atl = get_number(object, FITNESS_ATL_KEYS).filter(|value| *value >= 0.0);
     let tsb = get_number(object, FITNESS_TSB_KEYS);
     let ramp_rate = get_number(object, FITNESS_RAMP_RATE_KEYS);
 
@@ -91,11 +94,11 @@ pub fn parse_wellness_metrics(payload: Option<&Value>) -> Option<WellnessMetrics
         compute_recovery_index(hrv, resting_hr, hrv_baseline, resting_hr_baseline)
     });
 
-    let readiness_values = collect_numbers(recent_entries, READINESS_KEYS);
+    let readiness_values = non_negative_numbers(recent_entries, READINESS_KEYS);
     let api_readiness = average(&readiness_values);
-    let mood_values = collect_numbers(recent_entries, MOOD_KEYS);
-    let stress_values = collect_numbers(recent_entries, STRESS_KEYS);
-    let fatigue_values = collect_numbers(recent_entries, FATIGUE_KEYS);
+    let mood_values = non_negative_numbers(recent_entries, MOOD_KEYS);
+    let stress_values = non_negative_numbers(recent_entries, STRESS_KEYS);
+    let fatigue_values = non_negative_numbers(recent_entries, FATIGUE_KEYS);
     let avg_mood = average(&mood_values);
     let avg_stress = average(&stress_values);
     let avg_fatigue = average(&fatigue_values);
@@ -177,6 +180,14 @@ fn plausible_numbers(entries: &[Value], keys: &[&str], plausible: fn(f64) -> boo
         .collect()
 }
 
+/// Collect rating-scale numbers (mood, stress, fatigue, readiness), rejecting
+/// impossible negatives: every scale the API uses is zero-floored, so a
+/// negative is corruption, not "very bad". Zero is kept — it may be a
+/// legitimate worst rating.
+fn non_negative_numbers(entries: &[Value], keys: &[&str]) -> Vec<f64> {
+    plausible_numbers(entries, keys, |value| value >= 0.0)
+}
+
 /// Average over a baseline window, gated on sample count: a baseline shorter
 /// than [`WELLNESS_BASELINE_MIN_SAMPLES`] is noise, not a baseline —
 /// single-day denominators fabricate huge deviations and ratios.
@@ -203,6 +214,17 @@ fn entry_has_wellness_data(obj: &serde_json::Map<String, Value>) -> bool {
     ALL_WELLNESS_KEYS
         .iter()
         .any(|keys| get_number(obj, keys).is_some())
+}
+
+/// CTL/fitness value for one wellness day across both key families
+/// (`FITNESS_CTL_KEYS`, then `API_LOAD_CHRONIC_KEYS`), rejecting impossible
+/// negatives — CTL is an EWMA of non-negative daily loads. Shared by the
+/// series extractor and the point counter so both agree on what counts
+/// (same keys, same integer handling, same non-negative rule).
+pub(crate) fn ctl_value_from_entry(obj: &serde_json::Map<String, Value>) -> Option<f64> {
+    get_number(obj, FITNESS_CTL_KEYS)
+        .or_else(|| get_number(obj, API_LOAD_CHRONIC_KEYS))
+        .filter(|value| *value >= 0.0)
 }
 
 /// Resting-HR plausibility band (bpm). Shared by the parser, progress
@@ -300,8 +322,7 @@ pub fn extract_ctl_series(payload: Option<&Value>) -> Option<(Vec<String>, Vec<f
         .filter_map(Value::as_object)
         .filter_map(|object| {
             let date = entry_date_str(object)?.to_string();
-            let ctl = get_number(object, FITNESS_CTL_KEYS)
-                .or_else(|| get_number(object, API_LOAD_CHRONIC_KEYS))?;
+            let ctl = ctl_value_from_entry(object)?;
             Some((date, ctl))
         })
         .collect::<Vec<_>>();

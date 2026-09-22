@@ -12,7 +12,7 @@ use crate::domains::progress::{
 use crate::engines::analysis_fetch::{activity_load, build_daily_load_series};
 use crate::engines::changepoint::detect_trailing_ctl_plateau;
 use crate::engines::coach_metrics::parse::{
-    extract_wellness_observations, is_plausible_hrv, is_plausible_resting_hr,
+    ctl_value_from_entry, extract_wellness_observations, is_plausible_hrv, is_plausible_resting_hr,
 };
 use crate::engines::coach_metrics::{
     compute_acwr, compute_lnrmssd_rollup, compute_monotony, compute_strain, compute_tid_entropy,
@@ -39,7 +39,9 @@ pub const MIN_DAYS_FOR_PERSONALIZATION: usize = 56;
 pub const MAX_WELLNESS_DAYS_FALLBACK: i32 = 168;
 
 /// Count the number of daily CTL/fitness points actually present in a wellness payload.
-/// Empty entries and entries missing CTL are ignored.
+/// Empty entries and entries missing CTL are ignored. Uses the shared
+/// `ctl_value_from_entry` extractor so the count agrees with
+/// `extract_ctl_series` on keys, integer handling, and the non-negative rule.
 #[must_use]
 pub fn count_ctl_points(wellness: &Value) -> usize {
     let Some(entries) = wellness.as_array() else {
@@ -48,13 +50,7 @@ pub fn count_ctl_points(wellness: &Value) -> usize {
     entries
         .iter()
         .filter_map(Value::as_object)
-        .filter(|object| {
-            // Reuse the same key precedence as extract_ctl_series: ["fitness", "ctl"] or ["ctlLoad", "icu_ctl"].
-            object.get("fitness").and_then(Value::as_f64).is_some()
-                || object.get("ctl").and_then(Value::as_f64).is_some()
-                || object.get("ctlLoad").and_then(Value::as_f64).is_some()
-                || object.get("icu_ctl").and_then(Value::as_f64).is_some()
-        })
+        .filter(|object| ctl_value_from_entry(object).is_some())
         .count()
 }
 
@@ -608,6 +604,23 @@ mod tests {
                 {"date": "2026-01-04", "icu_ctl": 63.0}
             ])),
             4
+        );
+    }
+
+    #[test]
+    fn count_ctl_points_accepts_integers_and_rejects_negatives() {
+        // Integer CTL must count exactly like floats (real payloads mix both
+        // — the API schema types several wellness fields as int32), and
+        // impossible negatives must not, mirroring the series extractor.
+        assert_eq!(count_ctl_points(&json!([{"ctl": 50}, {"ctlLoad": 55}])), 2);
+        assert_eq!(
+            count_ctl_points(&json!([
+                {"ctl": 50.0},
+                {"ctl": -5.0},
+                {"fitness": -1.0},
+                {},
+            ])),
+            1
         );
     }
 

@@ -28,8 +28,10 @@ pub fn compute_acwr(loads: &[f64]) -> Option<AcwrMetrics> {
 #[must_use]
 pub fn parse_api_load_snapshot(payload: Option<&Value>) -> Option<AcwrMetrics> {
     let object = payload?.as_object()?;
-    let acute_load = get_number(object, API_LOAD_ACUTE_KEYS)?;
-    let chronic_load = get_number(object, API_LOAD_CHRONIC_KEYS)?;
+    // Training loads are non-negative by construction; negatives are
+    // corruption, never measurements (mirrors `LoadObservation::new`).
+    let acute_load = get_number(object, API_LOAD_ACUTE_KEYS).filter(|value| *value >= 0.0)?;
+    let chronic_load = get_number(object, API_LOAD_CHRONIC_KEYS).filter(|value| *value >= 0.0)?;
 
     build_acwr_metrics(acute_load, chronic_load)
 }
