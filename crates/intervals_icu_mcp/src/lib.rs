@@ -20,7 +20,7 @@ use rmcp::ErrorData;
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, ListResourcesResult, ListToolsResult,
     PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult,
-    ResourceContents, ServerCapabilities, ServerInfo,
+    ResourceContents, ServerCapabilities, ServerConfig,
 };
 use rmcp::service::RequestContext;
 use rmcp::{RoleServer, ServerHandler};
@@ -233,14 +233,14 @@ impl ServerHandler for IntervalsMcpHandler {
         &self,
         request: rmcp::model::InitializeRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> Result<ServerInfo, ErrorData> {
+    ) -> Result<ServerConfig, ErrorData> {
         metrics::record_mcp_session("started");
         context.peer.set_peer_info(request);
         Ok(self.get_info())
     }
 
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_resources()

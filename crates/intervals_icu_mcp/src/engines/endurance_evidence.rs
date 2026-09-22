@@ -757,9 +757,7 @@ mod tests {
             }
         }
         let mut gapped = session("g", "2026-07-09", 200.0, 145.0, 600);
-        for value in gapped.streams.power_w.as_mut().unwrap() {
-            *value = f64::NAN;
-        }
+        gapped.streams.power_w.as_mut().unwrap().fill(f64::NAN);
         let report = compute_endurance_evidence(
             &[variable, gapped],
             NaiveDate::from_ymd_opt(2026, 7, 13).unwrap(),
@@ -775,9 +773,7 @@ mod tests {
         // Extend HR=155 over the full late-window span (including the
         // boundary sample at index 7200) so the closed-interval window
         // average is exactly 155, not 154.98.
-        for hr in &mut long.streams.heartrate_bpm.as_mut().unwrap()[6_600..7_201] {
-            *hr = 155.0;
-        }
+        long.streams.heartrate_bpm.as_mut().unwrap()[6_600..7_201].fill(155.0);
         let report = compute_endurance_evidence(
             &[long],
             NaiveDate::from_ymd_opt(2026, 7, 13).unwrap(),
@@ -849,18 +845,10 @@ mod tests {
         let mut older_b = session("old-a", "2026-05-05", 200.0, 148.0, 1_800);
         let mut newer_a = session("new-z", "2026-07-08", 200.0, 144.0, 1_800);
         let mut newer_b = session("new-a", "2026-07-08", 200.0, 146.0, 1_800);
-        for hr in older_a.streams.heartrate_bpm.as_mut().unwrap() {
-            *hr = 152.0;
-        }
-        for hr in older_b.streams.heartrate_bpm.as_mut().unwrap() {
-            *hr = 148.0;
-        }
-        for hr in newer_a.streams.heartrate_bpm.as_mut().unwrap() {
-            *hr = 144.0;
-        }
-        for hr in newer_b.streams.heartrate_bpm.as_mut().unwrap() {
-            *hr = 146.0;
-        }
+        older_a.streams.heartrate_bpm.as_mut().unwrap().fill(152.0);
+        older_b.streams.heartrate_bpm.as_mut().unwrap().fill(148.0);
+        newer_a.streams.heartrate_bpm.as_mut().unwrap().fill(144.0);
+        newer_b.streams.heartrate_bpm.as_mut().unwrap().fill(146.0);
         let date = NaiveDate::from_ymd_opt(2026, 7, 13).unwrap();
         let report =
             compute_endurance_evidence(&[older_a, older_b, newer_a, newer_b], date, Some(300.0));
