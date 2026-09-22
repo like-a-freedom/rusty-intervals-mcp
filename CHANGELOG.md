@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.23.2] - 2026-09-23
+
+### Fixed
+- Rating-scale metrics (mood, stress, fatigue, API readiness, snapshot readiness) reject impossible negatives; zero is kept as a legitimate worst rating.
+- CTL/ATL reject impossible negatives in fitness parsing, CTL series extraction, and the API load snapshot; the CTL point counter shares the series extractor, fixing key-list drift and integer blindness.
+- Plateau detection declines non-finite CTL series as unsupported instead of misclassifying a NaN slope as Declining.
+
 ## [2.23.1] - 2026-09-22
 
 ### Fixed
