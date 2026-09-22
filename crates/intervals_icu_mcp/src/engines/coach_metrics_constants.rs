@@ -9,7 +9,11 @@ pub const FITNESS_TSB_KEYS: &[&str] = &["form", "tsb"];
 /// Keys for the ramp rate (CTL/wk) — Intervals.icu uses `rampRate`, some
 /// normalized payloads use `ramp_rate`.
 pub const FITNESS_RAMP_RATE_KEYS: &[&str] = &["rampRate", "ramp_rate"];
-pub const SLEEP_KEYS: &[&str] = &["sleep_hours", "sleepSecs", "sleep_secs"];
+/// Sleep keys in priority order (first match wins): explicit hours first,
+/// raw seconds last. Legacy/normalized `sleep` is accepted with the same
+/// over-24-means-seconds heuristic as the training-plan snapshot, so both
+/// parsing paths agree on the same payload.
+pub const SLEEP_KEYS: &[&str] = &["sleep_hours", "sleepSecs", "sleep_secs", "sleep"];
 pub const RESTING_HR_KEYS: &[&str] =
     &["resting_hr", "restingHR", "resting_hr_bpm", "avgSleepingHR"];
 pub const HRV_KEYS: &[&str] = &["hrv"];

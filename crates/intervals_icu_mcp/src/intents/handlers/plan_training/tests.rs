@@ -402,6 +402,33 @@ fn test_wellness_snapshot_reads_sleep_secs_from_api() {
 }
 
 #[test]
+fn test_wellness_snapshot_uses_latest_by_date_not_position() {
+    // Newest-first API order must not make the snapshot read the oldest day.
+    let value = json!([
+        {"id": "2026-03-16", "readiness": 8.0, "hrv": 70.0, "sleepSecs": 28800},
+        {"id": "2026-03-15", "readiness": 3.0, "hrv": 30.0, "sleepSecs": 18000}
+    ]);
+    let snap = WellnessSnapshot::from_value(&value);
+    assert_eq!(snap.readiness, Some(8.0));
+    assert_eq!(snap.hrv, Some(70.0));
+    assert_eq!(snap.sleep_avg, Some(8.0));
+}
+
+#[test]
+fn test_wellness_snapshot_filters_implausible_sleep() {
+    // 12.8 h artifact must not flow into the snapshot average.
+    let value = json!([
+        {"id": "2026-03-16", "readiness": 8.0, "hrv": 70.0, "sleepSecs": 46080}
+    ]);
+    let snap = WellnessSnapshot::from_value(&value);
+    assert!(
+        snap.sleep_avg.is_none(),
+        "implausible 12.8h sleep must yield None, got {:?}",
+        snap.sleep_avg
+    );
+}
+
+#[test]
 fn test_wellness_snapshot_empty() {
     let value = json!([]);
     let snap = WellnessSnapshot::from_value(&value);

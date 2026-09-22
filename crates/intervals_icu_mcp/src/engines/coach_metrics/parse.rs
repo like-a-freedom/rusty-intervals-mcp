@@ -88,14 +88,20 @@ pub fn parse_wellness_metrics(payload: Option<&Value>) -> Option<WellnessMetrics
     } else {
         None
     };
-    let recovery_quality_index = hrv_ratio.zip(avg_resting_hr).and_then(|(ratio, rhr)| {
-        compute_recovery_quality_index(
-            ratio,
-            resting_hr_baseline.unwrap_or(rhr),
-            rhr,
-            avg_sleep_hours.unwrap_or(WELLNESS_DEFAULT_SLEEP_HOURS),
-        )
-    });
+    // No silent sleep default: when every sample is filtered as implausible,
+    // sleep is unknown and RQI must stay None rather than invent neutral 7h.
+    let recovery_quality_index =
+        hrv_ratio
+            .zip(avg_resting_hr)
+            .zip(avg_sleep_hours)
+            .and_then(|((ratio, rhr), sleep)| {
+                compute_recovery_quality_index(
+                    ratio,
+                    resting_hr_baseline.unwrap_or(rhr),
+                    rhr,
+                    sleep,
+                )
+            });
 
     let hrv_observations = extract_wellness_observations(entries, HRV_KEYS);
     let rhr_observations = extract_wellness_observations(entries, RESTING_HR_KEYS);
@@ -141,7 +147,7 @@ fn normalize_sleep_to_hours(value: f64) -> f64 {
 }
 
 /// Filter out sensor artifacts / time-in-bed values outside physiological range.
-fn is_plausible_sleep_hours(value: f64) -> bool {
+pub(crate) fn is_plausible_sleep_hours(value: f64) -> bool {
     (WELLNESS_SLEEP_MIN_PLAUSIBLE_HOURS..=WELLNESS_SLEEP_TYPICAL_MAX_HOURS).contains(&value)
 }
 
@@ -152,8 +158,7 @@ fn order_entries_oldest_first(entries: &[Value]) -> Option<Vec<Value>> {
     let mut indexed: Vec<(NaiveDate, usize, &Value)> = Vec::with_capacity(entries.len());
     for (idx, entry) in entries.iter().enumerate() {
         let obj = entry.as_object()?;
-        let date_str = entry_date_str(obj)?;
-        let date = NaiveDate::parse_from_str(date_str, "%Y-%m-%d").ok()?;
+        let date = parse_entry_date(obj)?;
         indexed.push((date, idx, entry));
     }
     indexed.sort_by_key(|(date, idx, _)| (*date, *idx));
@@ -167,10 +172,17 @@ fn order_entries_oldest_first(entries: &[Value]) -> Option<Vec<Value>> {
 
 /// Resolve the ISO date string from a wellness entry: prefer `date`, fall back to `id`
 /// (Intervals.icu uses `id` as the day).
-fn entry_date_str(obj: &serde_json::Map<String, Value>) -> Option<&str> {
+pub(crate) fn entry_date_str(obj: &serde_json::Map<String, Value>) -> Option<&str> {
     obj.get("date")
         .and_then(Value::as_str)
         .or_else(|| obj.get("id").and_then(Value::as_str))
+}
+
+/// Parse the entry date (`date` preferred, `id` fallback) as an ISO day.
+/// Shared by the wellness parser, progress tracking, and training-plan snapshot
+/// so all paths resolve real-API entries identically.
+pub(crate) fn parse_entry_date(obj: &serde_json::Map<String, Value>) -> Option<NaiveDate> {
+    NaiveDate::parse_from_str(entry_date_str(obj)?, "%Y-%m-%d").ok()
 }
 
 fn extract_wellness_observations(entries: &[Value], keys: &[&str]) -> Vec<(NaiveDate, f64)> {
@@ -178,8 +190,7 @@ fn extract_wellness_observations(entries: &[Value], keys: &[&str]) -> Vec<(Naive
         .iter()
         .filter_map(|entry| {
             let obj = entry.as_object()?;
-            let date_str = entry_date_str(obj)?;
-            let date = NaiveDate::parse_from_str(date_str, "%Y-%m-%d").ok()?;
+            let date = parse_entry_date(obj)?;
             let value = keys.iter().find_map(|key| {
                 let v = obj.get(*key)?;
                 v.as_f64().or_else(|| v.as_i64().map(|i| i as f64))

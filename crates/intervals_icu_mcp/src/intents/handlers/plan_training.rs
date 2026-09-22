@@ -12,6 +12,10 @@ use std::sync::Arc;
 
 use crate::content::date::parse_date;
 use crate::domains::events::validate_and_prepare_event;
+use crate::engines::coach_metrics::parse::{is_plausible_sleep_hours, parse_entry_date};
+use crate::engines::coach_metrics_constants::{
+    SECONDS_PER_HOUR, WELLNESS_SLEEP_HEURISTIC_THRESHOLD,
+};
 use crate::engines::fitness_context::FitnessContext;
 use crate::engines::forecast::{
     TAPER_ACTUAL_REDUCTION_PCT, TAPER_TARGET_REDUCTION_PCT, parameterized_load, project_tsb,
@@ -776,10 +780,15 @@ struct WellnessSnapshot {
 impl WellnessSnapshot {
     fn from_value(value: &Value) -> Self {
         let entries = value.as_array().cloned().unwrap_or_default();
-        // Use the latest entry (most recent reading)
-        let latest = match entries.last() {
-            Some(e) => e,
-            None => return Self::default(),
+        // Resolve the latest entry by date: the API may return newest-first,
+        // so positional `last()` can point at the oldest day. Entries without
+        // a parseable date sort first, so a fully undated payload keeps the
+        // historical last-entry behavior.
+        let latest = entries
+            .iter()
+            .max_by_key(|entry| entry.as_object().and_then(parse_entry_date));
+        let Some(latest) = latest else {
+            return Self::default();
         };
 
         Self {
@@ -792,23 +801,26 @@ impl WellnessSnapshot {
 
 /// Extract sleep in hours from a wellness entry.
 /// Real API returns `sleepSecs` (seconds); normalized payloads may use `sleep` or `sleep_hours`.
+/// Values use the shared >24-means-seconds heuristic and the shared plausibility
+/// filter, matching `parse_wellness_metrics`: artifacts yield `None`, not a bogus average.
 fn extract_sleep_hours(entry: &Value) -> Option<f64> {
+    fn as_number(value: &Value) -> Option<f64> {
+        value.as_f64().or_else(|| value.as_i64().map(|i| i as f64))
+    }
     // Prefer explicit hours fields
-    if let Some(v) = entry.get("sleep_hours").and_then(|v| v.as_f64()) {
-        return Some(v);
-    }
-    // sleepSecs → hours
-    if let Some(v) = entry.get("sleepSecs").and_then(|v| v.as_f64()) {
-        return Some(if v > 24.0 { v / 3600.0 } else { v });
-    }
-    if let Some(v) = entry.get("sleep_secs").and_then(|v| v.as_f64()) {
-        return Some(if v > 24.0 { v / 3600.0 } else { v });
-    }
-    // Legacy/normalized `sleep` key — may be seconds or hours
-    entry
-        .get("sleep")
-        .and_then(|v| v.as_f64())
-        .map(|v| if v > 24.0 { v / 3600.0 } else { v })
+    let raw = entry
+        .get("sleep_hours")
+        .and_then(as_number)
+        .or_else(|| entry.get("sleepSecs").and_then(as_number))
+        .or_else(|| entry.get("sleep_secs").and_then(as_number))
+        // Legacy/normalized `sleep` key — may be seconds or hours
+        .or_else(|| entry.get("sleep").and_then(as_number))?;
+    let hours = if raw > WELLNESS_SLEEP_HEURISTIC_THRESHOLD {
+        raw / SECONDS_PER_HOUR
+    } else {
+        raw
+    };
+    is_plausible_sleep_hours(hours).then_some(hours)
 }
 
 // --- Task 5: Event generation ---

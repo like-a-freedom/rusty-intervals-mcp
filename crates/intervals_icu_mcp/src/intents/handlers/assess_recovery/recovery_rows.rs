@@ -7,6 +7,17 @@
 
 use crate::domains::coach::{FitnessMetrics, WellnessMetrics};
 
+/// Render a maybe-missing metric: `None` becomes `n/a` instead of a fabricated
+/// zero (e.g. `0.0 hrs` sleep reads as measured, not missing).
+fn render_optional(
+    value: Option<f64>,
+    render: impl FnOnce(f64) -> (String, String),
+) -> (String, String) {
+    value
+        .map(render)
+        .unwrap_or_else(|| ("n/a".into(), "n/a".into()))
+}
+
 /// Build the recovery-metric rows for the assess_recovery table.
 ///
 /// The first four rows (Avg Sleep, Resting HR, HRV, TSB) are always emitted.
@@ -17,56 +28,55 @@ pub(super) fn build_recovery_metric_rows(
     wellness: &WellnessMetrics,
     fitness: &FitnessMetrics,
 ) -> Vec<Vec<String>> {
-    let avg_sleep = wellness.avg_sleep_hours.unwrap_or(0.0);
-    let resting_hr = wellness.avg_resting_hr.unwrap_or(0.0);
-    let hrv = wellness.avg_hrv.unwrap_or(0.0);
-    let tsb = fitness.tsb.unwrap_or(0.0);
+    let (sleep_value, sleep_status) = render_optional(wellness.avg_sleep_hours, |avg_sleep| {
+        let status = if avg_sleep >= crate::engines::coach_guidance::SLEEP_GOOD_HOURS {
+            "✅ Good"
+        } else if avg_sleep >= crate::engines::coach_guidance::SLEEP_FAIR_MIN_HOURS {
+            "⚠️ Fair"
+        } else {
+            "❌ Poor"
+        };
+        (format!("{avg_sleep:.1} hrs"), status.into())
+    });
 
-    let sleep_status = if avg_sleep >= crate::engines::coach_guidance::SLEEP_GOOD_HOURS {
-        "✅ Good"
-    } else if avg_sleep >= crate::engines::coach_guidance::SLEEP_FAIR_MIN_HOURS {
-        "⚠️ Fair"
-    } else {
-        "❌ Poor"
-    };
+    let (rhr_value, rhr_status) = render_optional(wellness.avg_resting_hr, |resting_hr| {
+        let status = if resting_hr <= crate::engines::coach_guidance::RHR_NORMAL_BPM {
+            "✅ Normal"
+        } else if resting_hr <= crate::engines::coach_guidance::RHR_ELEVATED_MAX_BPM {
+            "⚠️ Elevated"
+        } else {
+            "❌ High"
+        };
+        (format!("{} bpm", resting_hr as u32), status.into())
+    });
 
-    let rhr_status = if resting_hr <= crate::engines::coach_guidance::RHR_NORMAL_BPM {
-        "✅ Normal"
-    } else if resting_hr <= crate::engines::coach_guidance::RHR_ELEVATED_MAX_BPM {
-        "⚠️ Elevated"
-    } else {
-        "❌ High"
-    };
+    let (hrv_value, hrv_status) = render_optional(wellness.avg_hrv, |hrv| {
+        let status = match wellness.hrv_trend_state.as_deref() {
+            Some("suppressed") => "❌ Suppressed vs personal baseline",
+            Some("below_range") => "⚠️ Below personal baseline",
+            Some("within_range") => "✅ Within personal range",
+            _ if hrv > 0.0 => "⚪ Build personal baseline",
+            _ => "n/a",
+        };
+        (format!("{hrv:.0} ms"), status.into())
+    });
 
-    let hrv_status = match wellness.hrv_trend_state.as_deref() {
-        Some("suppressed") => "❌ Suppressed vs personal baseline",
-        Some("below_range") => "⚠️ Below personal baseline",
-        Some("within_range") => "✅ Within personal range",
-        _ if hrv > 0.0 => "⚪ Build personal baseline",
-        _ => "n/a",
-    };
-
-    let tsb_status = if tsb > crate::engines::coach_guidance::TSB_FRESH {
-        "✅ Fresh"
-    } else if tsb > crate::engines::coach_guidance::TSB_FATIGUED {
-        "⚪ Balanced"
-    } else {
-        "❌ Fatigued"
-    };
+    let (tsb_value, tsb_status) = render_optional(fitness.tsb, |tsb| {
+        let status = if tsb > crate::engines::coach_guidance::TSB_FRESH {
+            "✅ Fresh"
+        } else if tsb > crate::engines::coach_guidance::TSB_FATIGUED {
+            "⚪ Balanced"
+        } else {
+            "❌ Fatigued"
+        };
+        (format!("{tsb:.0}"), status.into())
+    });
 
     let mut rows = vec![
-        vec![
-            "Avg Sleep".into(),
-            format!("{:.1} hrs", avg_sleep),
-            sleep_status.into(),
-        ],
-        vec![
-            "Resting HR".into(),
-            format!("{} bpm", resting_hr as u32),
-            rhr_status.into(),
-        ],
-        vec!["HRV".into(), format!("{:.0} ms", hrv), hrv_status.into()],
-        vec!["TSB".into(), format!("{:.0}", tsb), tsb_status.into()],
+        vec!["Avg Sleep".into(), sleep_value, sleep_status],
+        vec!["Resting HR".into(), rhr_value, rhr_status],
+        vec!["HRV".into(), hrv_value, hrv_status],
+        vec!["TSB".into(), tsb_value, tsb_status],
     ];
 
     if let Some(ctl) = fitness.ctl {

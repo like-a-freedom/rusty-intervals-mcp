@@ -177,6 +177,70 @@ fn parse_wellness_metrics_sleep_plausibility_boundary() {
 }
 
 #[test]
+fn parse_wellness_metrics_accepts_legacy_sleep_key() {
+    // Normalized payloads may carry `sleep` (seconds or hours) instead of
+    // `sleepSecs`; both paths must agree via the same >24 heuristic.
+    let payload = json!([
+        {"sleep": 28800.0, "restingHR": 50.0, "hrv": 60.0},
+        {"sleep": 8.0, "restingHR": 50.0, "hrv": 60.0}
+    ]);
+    let metrics = parse_wellness_metrics(Some(&payload)).unwrap();
+    assert_eq!(metrics.avg_sleep_hours.unwrap(), 8.0);
+}
+
+#[test]
+fn parse_wellness_metrics_sleep_key_priority_prefers_explicit_hours() {
+    // First matching key wins: explicit fields beat legacy `sleep`.
+    let payload = json!([
+        {"sleepSecs": 25200.0, "sleep": 36000.0, "restingHR": 50.0, "hrv": 60.0}
+    ]);
+    let metrics = parse_wellness_metrics(Some(&payload)).unwrap();
+    assert_eq!(metrics.avg_sleep_hours.unwrap(), 7.0);
+}
+
+#[test]
+fn parse_wellness_metrics_recovery_quality_absent_without_plausible_sleep() {
+    // 35 entries fill recent (7) + baseline (28) windows with valid HRV/RHR.
+    // With all sleep implausible, RQI must stay None, not invent neutral 7h.
+    let entries: Vec<Value> = (0..35)
+        .map(|i| {
+            let day = 1 + (i % 28);
+            let month = if i < 28 { 2 } else { 3 };
+            json!({
+                "id": format!("2026-{:02}-{:02}", month, day),
+                "sleepSecs": 46080.0,
+                "restingHR": 50.0,
+                "hrv": 60.0
+            })
+        })
+        .collect();
+    let metrics = parse_wellness_metrics(Some(&Value::Array(entries))).unwrap();
+    assert!(metrics.avg_sleep_hours.is_none());
+    assert!(
+        metrics.recovery_quality_index.is_none(),
+        "RQI must not default missing sleep to neutral"
+    );
+}
+
+#[test]
+fn parse_wellness_metrics_recovery_quality_present_with_plausible_sleep() {
+    let entries: Vec<Value> = (0..35)
+        .map(|i| {
+            let day = 1 + (i % 28);
+            let month = if i < 28 { 2 } else { 3 };
+            json!({
+                "id": format!("2026-{:02}-{:02}", month, day),
+                "sleepSecs": 28800.0,
+                "restingHR": 50.0,
+                "hrv": 60.0
+            })
+        })
+        .collect();
+    let metrics = parse_wellness_metrics(Some(&Value::Array(entries))).unwrap();
+    assert!(metrics.recovery_quality_index.is_some());
+}
+
+#[test]
 fn extract_wellness_observations_accepts_id_as_date() {
     // compute_personal_baseline requires ≥14 obs spanning ≥28 days.
     let payload: Vec<Value> = (0..35)

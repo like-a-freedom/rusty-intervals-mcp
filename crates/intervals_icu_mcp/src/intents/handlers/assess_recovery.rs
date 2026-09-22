@@ -1223,9 +1223,9 @@ mod tests {
     }
 
     #[test]
-    fn recovery_rows_sleep_missing_renders_zero_poor() {
+    fn recovery_rows_sleep_missing_renders_na() {
         // When every sleep sample is filtered as implausible, avg_sleep_hours is
-        // None and the row pins the current missing-data rendering (0.0 / Poor).
+        // None and the row must not fabricate a 0.0 hrs reading.
         let rows = AssessRecoveryHandler::build_recovery_metric_rows(
             &WellnessMetrics {
                 avg_sleep_hours: None,
@@ -1243,8 +1243,21 @@ mod tests {
             .iter()
             .find(|r| r[0] == "Avg Sleep")
             .expect("Sleep row");
-        assert_eq!(sleep_row[1], "0.0 hrs");
-        assert!(sleep_row[2].contains("Poor"));
+        assert_eq!(sleep_row[1], "n/a");
+        assert_eq!(sleep_row[2], "n/a");
+    }
+
+    #[test]
+    fn recovery_rows_all_missing_metrics_render_na() {
+        let rows = AssessRecoveryHandler::build_recovery_metric_rows(
+            &WellnessMetrics::default(),
+            &FitnessMetrics::default(),
+        );
+        for name in ["Avg Sleep", "Resting HR", "HRV", "TSB"] {
+            let row = rows.iter().find(|r| r[0] == name).expect("row present");
+            assert_eq!(row[1], "n/a", "{name} value must be n/a when missing");
+            assert_eq!(row[2], "n/a", "{name} status must be n/a when missing");
+        }
     }
 
     #[test]

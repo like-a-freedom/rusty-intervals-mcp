@@ -11,6 +11,7 @@ use crate::domains::progress::{
 };
 use crate::engines::analysis_fetch::{activity_load, build_daily_load_series};
 use crate::engines::changepoint::detect_trailing_ctl_plateau;
+use crate::engines::coach_metrics::parse::parse_entry_date;
 use crate::engines::coach_metrics::{
     compute_acwr, compute_lnrmssd_rollup, compute_monotony, compute_strain, compute_tid_entropy,
     extract_ctl_series, extract_hrv_series, parse_wellness_metrics,
@@ -468,19 +469,11 @@ pub fn build_progress_report_with_ctl_fallback(
 
     // Personal baseline from wellness history
     if let Some(entries) = wellness.as_array() {
-        let extract_date =
-            |obj: &serde_json::Map<String, serde_json::Value>| -> Option<chrono::NaiveDate> {
-                let date_str = obj
-                    .get("date")
-                    .and_then(|v| v.as_str())
-                    .or_else(|| obj.get("id").and_then(|v| v.as_str()))?;
-                chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d").ok()
-            };
         let hrv_observations: Vec<(chrono::NaiveDate, f64)> = entries
             .iter()
             .filter_map(|entry| {
                 let obj = entry.as_object()?;
-                let date = extract_date(obj)?;
+                let date = parse_entry_date(obj)?;
                 let hrv = obj.get("hrv")?.as_f64()?;
                 Some((date, hrv))
             })
@@ -489,7 +482,7 @@ pub fn build_progress_report_with_ctl_fallback(
             .iter()
             .filter_map(|entry| {
                 let obj = entry.as_object()?;
-                let date = extract_date(obj)?;
+                let date = parse_entry_date(obj)?;
                 let rhr = obj
                     .get("resting_hr")
                     .or_else(|| obj.get("restingHR"))
