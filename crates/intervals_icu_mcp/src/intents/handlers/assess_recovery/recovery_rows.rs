@@ -18,6 +18,12 @@ fn render_optional(
         .unwrap_or_else(|| ("n/a".into(), "n/a".into()))
 }
 
+/// Physiologically positive-only metrics: zero (or negative) is missing data,
+/// not a measurement. TSB is excluded — 0.0 is a legitimate balanced value.
+fn positive(value: Option<f64>) -> Option<f64> {
+    value.filter(|v| *v > 0.0)
+}
+
 /// Build the recovery-metric rows for the assess_recovery table.
 ///
 /// The first four rows (Avg Sleep, Resting HR, HRV, TSB) are always emitted.
@@ -28,35 +34,37 @@ pub(super) fn build_recovery_metric_rows(
     wellness: &WellnessMetrics,
     fitness: &FitnessMetrics,
 ) -> Vec<Vec<String>> {
-    let (sleep_value, sleep_status) = render_optional(wellness.avg_sleep_hours, |avg_sleep| {
-        let status = if avg_sleep >= crate::engines::coach_guidance::SLEEP_GOOD_HOURS {
-            "✅ Good"
-        } else if avg_sleep >= crate::engines::coach_guidance::SLEEP_FAIR_MIN_HOURS {
-            "⚠️ Fair"
-        } else {
-            "❌ Poor"
-        };
-        (format!("{avg_sleep:.1} hrs"), status.into())
-    });
+    let (sleep_value, sleep_status) =
+        render_optional(positive(wellness.avg_sleep_hours), |avg_sleep| {
+            let status = if avg_sleep >= crate::engines::coach_guidance::SLEEP_GOOD_HOURS {
+                "✅ Good"
+            } else if avg_sleep >= crate::engines::coach_guidance::SLEEP_FAIR_MIN_HOURS {
+                "⚠️ Fair"
+            } else {
+                "❌ Poor"
+            };
+            (format!("{avg_sleep:.1} hrs"), status.into())
+        });
 
-    let (rhr_value, rhr_status) = render_optional(wellness.avg_resting_hr, |resting_hr| {
-        let status = if resting_hr <= crate::engines::coach_guidance::RHR_NORMAL_BPM {
-            "✅ Normal"
-        } else if resting_hr <= crate::engines::coach_guidance::RHR_ELEVATED_MAX_BPM {
-            "⚠️ Elevated"
-        } else {
-            "❌ High"
-        };
-        (format!("{} bpm", resting_hr as u32), status.into())
-    });
+    let (rhr_value, rhr_status) =
+        render_optional(positive(wellness.avg_resting_hr), |resting_hr| {
+            let status = if resting_hr <= crate::engines::coach_guidance::RHR_NORMAL_BPM {
+                "✅ Normal"
+            } else if resting_hr <= crate::engines::coach_guidance::RHR_ELEVATED_MAX_BPM {
+                "⚠️ Elevated"
+            } else {
+                "❌ High"
+            };
+            (format!("{} bpm", resting_hr as u32), status.into())
+        });
 
-    let (hrv_value, hrv_status) = render_optional(wellness.avg_hrv, |hrv| {
+    let (hrv_value, hrv_status) = render_optional(positive(wellness.avg_hrv), |hrv| {
         let status = match wellness.hrv_trend_state.as_deref() {
             Some("suppressed") => "❌ Suppressed vs personal baseline",
             Some("below_range") => "⚠️ Below personal baseline",
             Some("within_range") => "✅ Within personal range",
-            _ if hrv > 0.0 => "⚪ Build personal baseline",
-            _ => "n/a",
+            // Non-positive HRV is normalized to missing by `positive()` above.
+            _ => "⚪ Build personal baseline",
         };
         (format!("{hrv:.0} ms"), status.into())
     });

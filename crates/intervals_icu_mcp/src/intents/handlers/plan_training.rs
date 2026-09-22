@@ -12,10 +12,7 @@ use std::sync::Arc;
 
 use crate::content::date::parse_date;
 use crate::domains::events::validate_and_prepare_event;
-use crate::engines::coach_metrics::parse::{is_plausible_sleep_hours, parse_entry_date};
-use crate::engines::coach_metrics_constants::{
-    SECONDS_PER_HOUR, WELLNESS_SLEEP_HEURISTIC_THRESHOLD,
-};
+use crate::engines::coach_metrics::parse::{parse_entry_date, sleep_hours_from_entry};
 use crate::engines::fitness_context::FitnessContext;
 use crate::engines::forecast::{
     TAPER_ACTUAL_REDUCTION_PCT, TAPER_TARGET_REDUCTION_PCT, parameterized_load, project_tsb,
@@ -792,35 +789,17 @@ impl WellnessSnapshot {
         };
 
         Self {
-            readiness: latest.get("readiness").and_then(|v| v.as_f64()),
-            hrv: latest.get("hrv").and_then(|v| v.as_f64()),
-            sleep_avg: extract_sleep_hours(latest),
+            readiness: latest.get("readiness").and_then(as_number),
+            hrv: latest.get("hrv").and_then(as_number),
+            sleep_avg: latest.as_object().and_then(sleep_hours_from_entry),
         }
     }
 }
 
-/// Extract sleep in hours from a wellness entry.
-/// Real API returns `sleepSecs` (seconds); normalized payloads may use `sleep` or `sleep_hours`.
-/// Values use the shared >24-means-seconds heuristic and the shared plausibility
-/// filter, matching `parse_wellness_metrics`: artifacts yield `None`, not a bogus average.
-fn extract_sleep_hours(entry: &Value) -> Option<f64> {
-    fn as_number(value: &Value) -> Option<f64> {
-        value.as_f64().or_else(|| value.as_i64().map(|i| i as f64))
-    }
-    // Prefer explicit hours fields
-    let raw = entry
-        .get("sleep_hours")
-        .and_then(as_number)
-        .or_else(|| entry.get("sleepSecs").and_then(as_number))
-        .or_else(|| entry.get("sleep_secs").and_then(as_number))
-        // Legacy/normalized `sleep` key — may be seconds or hours
-        .or_else(|| entry.get("sleep").and_then(as_number))?;
-    let hours = if raw > WELLNESS_SLEEP_HEURISTIC_THRESHOLD {
-        raw / SECONDS_PER_HOUR
-    } else {
-        raw
-    };
-    is_plausible_sleep_hours(hours).then_some(hours)
+/// Read a plain metric that may arrive as float or integer (mirrors the
+/// shared numeric extractors, which accept both).
+fn as_number(value: &Value) -> Option<f64> {
+    value.as_f64().or_else(|| value.as_i64().map(|i| i as f64))
 }
 
 // --- Task 5: Event generation ---

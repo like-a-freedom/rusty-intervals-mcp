@@ -79,7 +79,6 @@ pub const CONSISTENCY_GOOD_THRESHOLD: f64 = 0.7;
 pub const CONSISTENCY_MODERATE_THRESHOLD: f64 = 0.5;
 pub const POLARISATION_BIASED_THRESHOLD: f64 = 0.75;
 pub const WELLNESS_SLEEP_HEURISTIC_THRESHOLD: f64 = 24.0;
-pub const WELLNESS_DEFAULT_SLEEP_HOURS: f64 = 7.0;
 /// Sleep values below this are treated as sensor artifacts and excluded from averages.
 pub const WELLNESS_SLEEP_MIN_PLAUSIBLE_HOURS: f64 = 1.0;
 /// Values above this are excluded from `avg_sleep_hours` even if technically possible.

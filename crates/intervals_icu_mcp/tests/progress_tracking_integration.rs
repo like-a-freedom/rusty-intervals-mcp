@@ -239,3 +239,36 @@ fn personal_baselines_computed_from_id_dates() {
         "RHR baseline should be computed from id-dated entries"
     );
 }
+
+#[test]
+fn personal_baselines_accept_canonical_resting_hr_keys() {
+    // The progress engine must honor the same resting-HR key set as the
+    // wellness parser (`resting_hr_bpm`, `avgSleepingHR`), not just the
+    // two most common aliases.
+    let start = chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+    let mut entries = Vec::new();
+    for day in 0..61 {
+        let date = start + chrono::Duration::days(day);
+        let rhr_key = if day % 2 == 0 {
+            "resting_hr_bpm"
+        } else {
+            "avgSleepingHR"
+        };
+        let mut entry = serde_json::Map::new();
+        entry.insert("id".to_string(), json!(date.format("%Y-%m-%d").to_string()));
+        entry.insert("hrv".to_string(), json!(60.0));
+        entry.insert(rhr_key.to_string(), json!(55.0));
+        entries.push(serde_json::Value::Object(entry));
+    }
+    let wellness = json!(entries);
+    let window = AnalysisWindow::new(
+        chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+        chrono::NaiveDate::from_ymd_opt(2026, 3, 3).unwrap(),
+    );
+
+    let report = build_progress_report(&wellness, &[], &HashMap::new(), &window);
+    assert!(
+        report.resting_hr_personal_baseline.is_some(),
+        "RHR baseline should build from resting_hr_bpm/avgSleepingHR keys"
+    );
+}

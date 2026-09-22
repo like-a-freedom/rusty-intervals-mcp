@@ -38,14 +38,14 @@ pub fn parse_wellness_metrics(payload: Option<&Value>) -> Option<WellnessMetrics
     // Normalize entry order: oldest-first so recent window = last N entries.
     // Real API may return newest-first; without this we average the wrong window.
     let ordered = order_entries_oldest_first(entries);
-    let entries: &[Value] = ordered.as_deref().unwrap_or(entries);
+    let entries: &[Value] = &ordered;
 
     let (recent_entries, baseline_entries) = split_recent_and_baseline(entries);
 
-    let sleep_values = collect_numbers(recent_entries, SLEEP_KEYS)
-        .into_iter()
-        .map(normalize_sleep_to_hours)
-        .filter(|value| is_plausible_sleep_hours(*value))
+    let sleep_values = recent_entries
+        .iter()
+        .filter_map(Value::as_object)
+        .filter_map(sleep_hours_from_entry)
         .collect::<Vec<_>>();
     let rhr_values = collect_numbers(recent_entries, RESTING_HR_KEYS);
     let hrv_values = collect_numbers(recent_entries, HRV_KEYS);
@@ -146,28 +146,36 @@ fn normalize_sleep_to_hours(value: f64) -> f64 {
     }
 }
 
+/// Extract sleep hours from a single wellness entry with the shared pipeline:
+/// first matching `SLEEP_KEYS` (f64 or i64), the over-24-means-seconds
+/// heuristic, then the plausibility filter. Returns `None` when absent or
+/// an artifact — never a bogus average component.
+/// Shared by the wellness parser and the training-plan snapshot so both
+/// paths agree on the same payload.
+pub(crate) fn sleep_hours_from_entry(obj: &serde_json::Map<String, Value>) -> Option<f64> {
+    let hours = normalize_sleep_to_hours(get_number(obj, SLEEP_KEYS)?);
+    is_plausible_sleep_hours(hours).then_some(hours)
+}
+
 /// Filter out sensor artifacts / time-in-bed values outside physiological range.
 pub(crate) fn is_plausible_sleep_hours(value: f64) -> bool {
     (WELLNESS_SLEEP_MIN_PLAUSIBLE_HOURS..=WELLNESS_SLEEP_TYPICAL_MAX_HOURS).contains(&value)
 }
 
-/// Return a copy of entries sorted oldest-first when date can be resolved
-/// from `date` or `id` (API uses `id` as ISO date). Returns `None` if any
-/// entry lacks a parseable date — caller keeps original order.
-fn order_entries_oldest_first(entries: &[Value]) -> Option<Vec<Value>> {
-    let mut indexed: Vec<(NaiveDate, usize, &Value)> = Vec::with_capacity(entries.len());
+/// Return a copy of entries sorted oldest-first (stable). Dates resolve from
+/// `date` or `id`; entries without a parseable date sort first, so one
+/// malformed row can no longer defeat normalization for the whole payload.
+fn order_entries_oldest_first(entries: &[Value]) -> Vec<Value> {
+    let mut indexed: Vec<(Option<NaiveDate>, usize, &Value)> = Vec::with_capacity(entries.len());
     for (idx, entry) in entries.iter().enumerate() {
-        let obj = entry.as_object()?;
-        let date = parse_entry_date(obj)?;
+        let date = entry.as_object().and_then(parse_entry_date);
         indexed.push((date, idx, entry));
     }
     indexed.sort_by_key(|(date, idx, _)| (*date, *idx));
-    Some(
-        indexed
-            .into_iter()
-            .map(|(_, _, entry)| entry.clone())
-            .collect(),
-    )
+    indexed
+        .into_iter()
+        .map(|(_, _, entry)| entry.clone())
+        .collect()
 }
 
 /// Resolve the ISO date string from a wellness entry: prefer `date`, fall back to `id`

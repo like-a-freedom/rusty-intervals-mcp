@@ -429,6 +429,18 @@ fn test_wellness_snapshot_filters_implausible_sleep() {
 }
 
 #[test]
+fn test_wellness_snapshot_accepts_integer_metrics() {
+    // Integer payloads convert like floats (mirrors shared extractors).
+    let value = json!([
+        {"id": "2026-03-16", "readiness": 8, "hrv": 70, "sleepSecs": 28800}
+    ]);
+    let snap = WellnessSnapshot::from_value(&value);
+    assert_eq!(snap.readiness, Some(8.0));
+    assert_eq!(snap.hrv, Some(70.0));
+    assert_eq!(snap.sleep_avg, Some(8.0));
+}
+
+#[test]
 fn test_wellness_snapshot_empty() {
     let value = json!([]);
     let snap = WellnessSnapshot::from_value(&value);

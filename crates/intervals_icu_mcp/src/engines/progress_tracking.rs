@@ -11,11 +11,13 @@ use crate::domains::progress::{
 };
 use crate::engines::analysis_fetch::{activity_load, build_daily_load_series};
 use crate::engines::changepoint::detect_trailing_ctl_plateau;
+use crate::engines::coach_metrics::helpers::get_number;
 use crate::engines::coach_metrics::parse::parse_entry_date;
 use crate::engines::coach_metrics::{
     compute_acwr, compute_lnrmssd_rollup, compute_monotony, compute_strain, compute_tid_entropy,
     extract_ctl_series, extract_hrv_series, parse_wellness_metrics,
 };
+use crate::engines::coach_metrics_constants::{HRV_KEYS, RESTING_HR_KEYS};
 use crate::engines::shared::{compute_zone_distribution, parse_activity_date};
 
 const DEFAULT_TID_DRIFT_DELTA_THRESHOLD: f64 = 0.15;
@@ -474,7 +476,7 @@ pub fn build_progress_report_with_ctl_fallback(
             .filter_map(|entry| {
                 let obj = entry.as_object()?;
                 let date = parse_entry_date(obj)?;
-                let hrv = obj.get("hrv")?.as_f64()?;
+                let hrv = get_number(obj, HRV_KEYS)?;
                 Some((date, hrv))
             })
             .collect();
@@ -483,12 +485,7 @@ pub fn build_progress_report_with_ctl_fallback(
             .filter_map(|entry| {
                 let obj = entry.as_object()?;
                 let date = parse_entry_date(obj)?;
-                let rhr = obj
-                    .get("resting_hr")
-                    .or_else(|| obj.get("restingHR"))
-                    .or_else(|| obj.get("resting_hr_bpm"))
-                    .or_else(|| obj.get("avgSleepingHR"))?
-                    .as_f64()?;
+                let rhr = get_number(obj, RESTING_HR_KEYS)?;
                 Some((date, rhr))
             })
             .collect();

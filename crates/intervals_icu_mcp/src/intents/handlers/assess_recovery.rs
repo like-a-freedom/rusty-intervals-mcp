@@ -1261,6 +1261,33 @@ mod tests {
     }
 
     #[test]
+    fn recovery_rows_zero_metrics_render_na_except_tsb() {
+        // Zero sleep/RHR/HRV is missing data, not a measurement — but 0.0 is
+        // a legitimate balanced TSB and must keep its status.
+        let rows = AssessRecoveryHandler::build_recovery_metric_rows(
+            &WellnessMetrics {
+                avg_sleep_hours: Some(0.0),
+                avg_resting_hr: Some(0.0),
+                avg_hrv: Some(0.0),
+                wellness_days_count: 5,
+                ..Default::default()
+            },
+            &FitnessMetrics {
+                tsb: Some(0.0),
+                ..Default::default()
+            },
+        );
+        for name in ["Avg Sleep", "Resting HR", "HRV"] {
+            let row = rows.iter().find(|r| r[0] == name).expect("row present");
+            assert_eq!(row[1], "n/a", "{name} value must be n/a when zero");
+            assert_eq!(row[2], "n/a", "{name} status must be n/a when zero");
+        }
+        let tsb_row = rows.iter().find(|r| r[0] == "TSB").expect("TSB row");
+        assert_eq!(tsb_row[1], "0");
+        assert!(tsb_row[2].contains("Balanced"));
+    }
+
+    #[test]
     fn recovery_rows_tsb_fresh() {
         let rows = AssessRecoveryHandler::build_recovery_metric_rows(
             &WellnessMetrics {

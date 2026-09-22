@@ -291,6 +291,26 @@ fn parse_wellness_metrics_newest_first_order_uses_latest_window() {
 }
 
 #[test]
+fn parse_wellness_metrics_malformed_date_does_not_defeat_ordering() {
+    // One dateless entry must not disable normalization for the whole payload:
+    // dated entries still sort oldest-first, the dateless one sorts first.
+    let mut payload = Vec::new();
+    for i in 0..7 {
+        payload.push(json!({"id": format!("2026-03-{:02}", 22 - i), "sleepSecs": 28800.0}));
+    }
+    for i in 0..28 {
+        payload.push(json!({"id": format!("2026-02-{:02}", (i % 28) + 1), "sleepSecs": 36000.0}));
+    }
+    payload.push(json!({"sleepSecs": 18000.0}));
+    let metrics = parse_wellness_metrics(Some(&Value::Array(payload))).unwrap();
+    let avg = metrics.avg_sleep_hours.unwrap();
+    assert!(
+        (avg - 8.0).abs() < 0.5,
+        "expected ~8.0h from latest days, got {avg} (malformed date defeated ordering)"
+    );
+}
+
+#[test]
 fn parse_wellness_metrics_derives_adaptive_hrv_baseline_and_recent_deviation() {
     let mut entries = Vec::new();
     entries.extend((0..28).map(|_| wellness_entry(28_800.0, 50.0, 80.0)));
