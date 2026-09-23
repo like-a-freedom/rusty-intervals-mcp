@@ -12,7 +12,7 @@
 //! - [`metrics`] — Prometheus metrics recording
 //! - [`dynamic`] — dynamic OpenAPI-driven tool registry
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -25,7 +25,6 @@ use rmcp::model::{
 use rmcp::service::RequestContext;
 use rmcp::{RoleServer, ServerHandler};
 use secrecy::SecretString;
-use tokio::sync::Mutex;
 
 use crate::auth::{DecryptedCredentials, HttpBaseUrl};
 
@@ -47,17 +46,10 @@ pub mod content;
 pub mod domains;
 pub mod dynamic;
 pub mod engines;
-mod event_id;
 pub mod intents;
 pub mod metrics;
-mod services;
-mod state;
+#[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
-pub mod types;
-
-pub use event_id::{EventId, FolderId};
-pub use state::{DownloadState, DownloadStatus, WebhookEvent};
-pub use types::*;
 
 fn all_intent_handlers() -> Vec<Box<dyn intents::IntentHandler>> {
     vec![
@@ -78,8 +70,6 @@ pub struct IntervalsMcpHandler {
     client: Arc<dyn IntervalsClient>,
     dynamic_runtime: dynamic::DynamicRuntime,
     intent_router: Arc<IntentRouter>,
-    webhooks: Arc<Mutex<HashMap<String, WebhookEvent>>>,
-    webhook_secret: Arc<Mutex<Option<String>>>,
 }
 
 impl IntervalsMcpHandler {
@@ -140,8 +130,6 @@ impl IntervalsMcpHandler {
             client,
             dynamic_runtime,
             intent_router,
-            webhooks: Arc::new(Mutex::new(HashMap::new())),
-            webhook_secret: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -163,31 +151,6 @@ impl IntervalsMcpHandler {
                 0
             }
         }
-    }
-
-    #[must_use]
-    fn webhook_service(&self) -> services::WebhookService {
-        services::WebhookService::new(self.webhooks.clone(), self.webhook_secret.clone())
-    }
-
-    /// Process an incoming webhook payload after signature verification.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error string when the webhook secret is missing, the signature
-    /// is invalid, the payload cannot be processed, or the event is rejected.
-    pub async fn process_webhook(
-        &self,
-        signature: &str,
-        payload: serde_json::Value,
-    ) -> Result<ObjectResult, String> {
-        self.webhook_service()
-            .process_webhook(signature, payload)
-            .await
-    }
-
-    pub async fn set_webhook_secret_value(&self, secret: impl Into<String>) {
-        self.webhook_service().set_secret(secret.into()).await;
     }
 
     #[must_use]
@@ -819,8 +782,7 @@ fn configure_tcp_keepalive(
 
 #[cfg(test)]
 mod tests {
-    // Inline tests for private symbols of `lib.rs`. Public-API tests
-    // live in `src/tests.rs` (sibling). See audit F-4.
+    // Inline tests for private symbols of `lib.rs`.
     use crate::auth::{DecryptedCredentials, HttpBaseUrl};
     use crate::{
         AthleteKeyExtractor, IntervalsMcpHandler, configure_tcp_keepalive, parse_rate_limit_values,
@@ -1220,55 +1182,6 @@ mod tests {
             !info_str.is_empty(),
             "get_info should return non-empty debug representation"
         );
-    }
-
-    #[test]
-    fn handler_webhook_service_creates_service() {
-        use intervals_icu_client::IntervalsClient;
-        use std::sync::Arc;
-
-        let client: Arc<dyn IntervalsClient> =
-            Arc::new(crate::test_support::mock::MockIntervalsClient::default());
-        let handler = IntervalsMcpHandler::new(client);
-        let _service = handler.webhook_service();
-    }
-
-    #[tokio::test]
-    async fn handler_set_webhook_secret_value() {
-        use intervals_icu_client::IntervalsClient;
-        use std::sync::Arc;
-
-        let client: Arc<dyn IntervalsClient> =
-            Arc::new(crate::test_support::mock::MockIntervalsClient::default());
-        let handler = IntervalsMcpHandler::new(client);
-        handler.set_webhook_secret_value("test_secret").await;
-    }
-
-    #[tokio::test]
-    async fn handler_process_webhook_without_secret() {
-        use intervals_icu_client::IntervalsClient;
-        use std::sync::Arc;
-
-        let client: Arc<dyn IntervalsClient> =
-            Arc::new(crate::test_support::mock::MockIntervalsClient::default());
-        let handler = IntervalsMcpHandler::new(client);
-        let result = handler.process_webhook("sig", serde_json::json!({})).await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn handler_process_webhook_with_invalid_signature() {
-        use intervals_icu_client::IntervalsClient;
-        use std::sync::Arc;
-
-        let client: Arc<dyn IntervalsClient> =
-            Arc::new(crate::test_support::mock::MockIntervalsClient::default());
-        let handler = IntervalsMcpHandler::new(client);
-        handler.set_webhook_secret_value("test_secret").await;
-        let result = handler
-            .process_webhook("invalid_sig", serde_json::json!({}))
-            .await;
-        assert!(result.is_err());
     }
 
     #[tokio::test]

@@ -22,22 +22,9 @@ pub fn parse_fitness_metrics(payload: Option<&Value>) -> Option<FitnessMetrics> 
         // historical first-object pick silently pinned stale fitness whenever
         // the API order put an older day first. Fully undated payloads keep
         // the first object.
-        let mut latest: Option<&serde_json::Map<String, Value>> = None;
-        let mut first: Option<&serde_json::Map<String, Value>> = None;
-        for obj in items.iter().filter_map(Value::as_object) {
-            if first.is_none() {
-                first = Some(obj);
-            }
-            let is_later = match (parse_entry_date(obj), latest.and_then(parse_entry_date)) {
-                (Some(date), Some(current)) => date > current,
-                (Some(_), None) => true,
-                (None, _) => false,
-            };
-            if is_later {
-                latest = Some(obj);
-            }
-        }
-        latest.or(first)?
+        latest_entry_by_date(items)
+            .and_then(Value::as_object)
+            .or_else(|| items.iter().filter_map(Value::as_object).next())?
     } else {
         value.as_object()?
     };
@@ -294,6 +281,26 @@ pub(crate) fn entry_date_str(obj: &serde_json::Map<String, Value>) -> Option<&st
 /// so all paths resolve real-API entries identically.
 pub(crate) fn parse_entry_date(obj: &serde_json::Map<String, Value>) -> Option<NaiveDate> {
     NaiveDate::parse_from_str(entry_date_str(obj)?, "%Y-%m-%d").ok()
+}
+
+/// Return the entry carrying the strictly latest parseable date.
+///
+/// Undated entries never win over dated ones; on a dated tie the first
+/// matching entry is kept (first-wins). Returns `None` for an empty slice
+/// or when no entry carries a parseable date — callers decide their own
+/// undated fallback (first object vs last entry).
+pub(crate) fn latest_entry_by_date(entries: &[Value]) -> Option<&Value> {
+    let mut latest: Option<(NaiveDate, &Value)> = None;
+    for entry in entries {
+        let Some(date) = entry.as_object().and_then(parse_entry_date) else {
+            continue;
+        };
+        match latest {
+            Some((current, _)) if date <= current => {}
+            _ => latest = Some((date, entry)),
+        }
+    }
+    latest.map(|(_, entry)| entry)
 }
 
 /// Extract dated numeric observations for the personal-baseline engine,

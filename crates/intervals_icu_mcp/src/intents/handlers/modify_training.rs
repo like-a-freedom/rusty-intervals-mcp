@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 /// Modifies existing training (CRUD: modify, create, delete).
 use std::sync::Arc;
 
-use crate::content::date::{filter_events_by_date, filter_events_by_range};
+use crate::content::date::{filter_events_by_date, filter_events_by_range, validate_date_range};
 use crate::engines::analysis_fetch::fetch_calendar_events_between;
 use crate::engines::dedupe::dedupe_and_sort_events;
 
@@ -54,11 +54,7 @@ impl ModifyTrainingHandler {
         start_date: &NaiveDate,
         end_date: &NaiveDate,
     ) -> Result<Vec<Event>, IntentError> {
-        if start_date > end_date {
-            return Err(IntentError::validation(
-                "Start date must be before end date.".to_string(),
-            ));
-        }
+        validate_date_range(start_date, end_date, None)?;
 
         self.fetch_events_between(client, start_date, end_date, RANGE_SCOPE_LIMIT)
             .await

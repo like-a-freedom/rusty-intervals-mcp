@@ -4,7 +4,13 @@ target/
 .cargo/
 
 dev/
-docs/
+docs/*
+!docs/ARCHITECTURE.md
+!docs/HTTP_RELIABILITY.md
+!docs/METRIC_METHODS.md
+!docs/adr
+!docs/agents
+!docs/superpowers
 .vscode/
 .opencode/
 .pi/
@@ -19,7 +25,6 @@ coverage/
 **/Cargo.lock
 .env
 .DS_Store
-AGENTS.md
 
 # MSVC debug symbols
 *.pdb

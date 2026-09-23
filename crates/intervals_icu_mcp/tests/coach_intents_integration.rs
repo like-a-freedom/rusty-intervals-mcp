@@ -1,1540 +1,14 @@
-use async_trait::async_trait;
-use chrono::{Duration, Local, Utc};
-use intervals_icu_client::{
-    ActivityMessage, ActivitySummary, AthleteProfile, BestEffortsOptions, DownloadProgress, Event,
-    IntervalsClient, IntervalsError,
-};
+use chrono::Local;
+use intervals_icu_client::ActivitySummary;
 use intervals_icu_mcp::intents::handlers::{
     AnalyzeRaceHandler, AnalyzeTrainingHandler, AssessRecoveryHandler, ComparePeriodsHandler,
     ManageProfileHandler, PlanTrainingHandler,
 };
 use intervals_icu_mcp::intents::{ContentBlock, IntentHandler};
+use intervals_icu_mcp::test_support::mock::MockIntervalsClient;
 use serde_json::{Value, json};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock};
-
-fn wellness_days_requests() -> &'static Mutex<Vec<Option<i32>>> {
-    static WELLNESS_DAYS_REQUESTS: OnceLock<Mutex<Vec<Option<i32>>>> = OnceLock::new();
-    WELLNESS_DAYS_REQUESTS.get_or_init(|| Mutex::new(Vec::new()))
-}
-
-struct MockCoachClient {
-    activities: Vec<ActivitySummary>,
-    events: Vec<Event>,
-    fitness: Value,
-    wellness: Value,
-    wellness_for_date: Value,
-    upcoming_workouts: Value,
-    activity_details: Value,
-    intervals: Value,
-    streams: Value,
-    best_efforts: Value,
-    sport_settings: intervals_icu_client::domains::workout::SportSettings,
-    hr_histogram: Value,
-    power_histogram: Value,
-    pace_histogram: Value,
-    intervals_error: Option<String>,
-    streams_error: Option<String>,
-    /// MockCoachClient duplicate slated for removal in Phase 3B mock
-    /// consolidation (see `.scratch/execution-plan-2026-07-25.md`).
-    /// Counters retained for fixture parity with the canonical
-    /// `MockIntervalsClient` once it gains `with_recorded_calls()`.
-    #[allow(clippy::type_complexity, dead_code)]
-    activity_calls: Arc<Mutex<Vec<(Option<u32>, Option<i32>)>>>,
-    activity_details_map: HashMap<String, Value>,
-    /// Per-activity-id stream payload overrides. Falls back to
-    /// `streams` when an id is missing.
-    streams_map: HashMap<String, Value>,
-    /// Endurance-evidence detail/stream call counters.
-    #[allow(dead_code)]
-    profile_detail_calls: Arc<Mutex<usize>>,
-    profile_stream_calls: Arc<Mutex<usize>>,
-}
-
-impl Default for MockCoachClient {
-    fn default() -> Self {
-        Self {
-            activities: vec![],
-            events: vec![],
-            fitness: json!([]),
-            wellness: json!([]),
-            wellness_for_date: json!({}),
-            upcoming_workouts: json!([]),
-            activity_details: json!({}),
-            intervals: json!([]),
-            streams: json!({}),
-            best_efforts: json!([]),
-            sport_settings: intervals_icu_client::domains::workout::SportSettings::default(),
-            hr_histogram: json!({}),
-            power_histogram: json!({}),
-            pace_histogram: json!({}),
-            intervals_error: None,
-            streams_error: None,
-            activity_calls: Arc::new(Mutex::new(Vec::new())),
-            activity_details_map: HashMap::new(),
-            streams_map: HashMap::new(),
-            profile_detail_calls: Arc::new(Mutex::new(0)),
-            profile_stream_calls: Arc::new(Mutex::new(0)),
-        }
-    }
-}
-
-impl MockCoachClient {
-    fn adaptive_wellness_series(
-        baseline_sleep_secs: f64,
-        baseline_resting_hr: f64,
-        baseline_hrv: f64,
-        recent_sleep_secs: f64,
-        recent_resting_hr: f64,
-        recent_hrv: f64,
-    ) -> Value {
-        let mut entries = Vec::new();
-        entries.extend((0..28).map(|_| {
-            json!({
-                "sleepSecs": baseline_sleep_secs,
-                "restingHR": baseline_resting_hr,
-                "hrv": baseline_hrv
-            })
-        }));
-        entries.extend((0..7).map(|_| {
-            json!({
-                "sleepSecs": recent_sleep_secs,
-                "restingHR": recent_resting_hr,
-                "hrv": recent_hrv
-            })
-        }));
-        Value::Array(entries)
-    }
-
-    fn relative_date(days_from_today: i64) -> String {
-        (Utc::now().date_naive() + Duration::days(days_from_today))
-            .format("%Y-%m-%d")
-            .to_string()
-    }
-
-    fn mock_event(event_id: Option<&str>) -> Event {
-        Event {
-            id: event_id.map(str::to_owned),
-            start_date_local: "2026-03-04".to_string(),
-            name: "Mock event".to_string(),
-            category: intervals_icu_client::EventCategory::Workout,
-            description: None,
-            r#type: None,
-        }
-    }
-
-    fn activity(activity_id: &str, name: &str, start_date_local: &str) -> ActivitySummary {
-        ActivitySummary {
-            id: activity_id.to_string(),
-            name: Some(name.to_string()),
-            start_date_local: start_date_local.to_string(),
-            ..Default::default()
-        }
-    }
-
-    fn fitness_snapshot(fitness: f64, fatigue: f64, form: f64) -> Value {
-        json!([{ "fitness": fitness, "fatigue": fatigue, "form": form }])
-    }
-
-    /// Number of `get_activity_streams` calls observed for `ride-`
-    /// prefixed ids during endurance evidence retrieval. Tests use
-    /// this to confirm bounded, optional behaviour.
-    ///
-    /// Currently unused on every test path; the assertion it supported
-    /// was retired when the endurance fetch was made best-effort. Kept
-    /// until Phase 3B mock consolidation folds MockCoachClient into the
-    /// canonical `MockIntervalsClient` builder.
-    #[allow(dead_code)]
-    fn endurance_stream_calls(&self) -> usize {
-        *self.profile_stream_calls.lock().unwrap()
-    }
-
-    fn with_tsb(tsb: f64) -> Self {
-        Self {
-            activities: vec![Self::activity("activity-1", "Hard Session", "2026-03-04")],
-            fitness: Self::fitness_snapshot(50.0, 75.0, tsb),
-            activity_details: json!({
-                "distance": 10000.0,
-                "moving_time": 3600,
-                "average_heartrate": 150.0,
-                "average_watts": 220.0,
-                "total_elevation_gain": 200.0
-            }),
-            ..Self::default()
-        }
-    }
-
-    fn with_race_activity() -> Self {
-        Self {
-            activities: vec![Self::activity("race-1", "Mountain 50K", "2026-03-01")],
-            events: vec![Event {
-                id: Some("event-race-1".to_string()),
-                start_date_local: "2026-03-01".to_string(),
-                name: "Mountain 50K Plan".to_string(),
-                category: intervals_icu_client::EventCategory::RaceA,
-                description: Some("Planned race target".to_string()),
-                r#type: Some("Race".to_string()),
-            }],
-            fitness: Self::fitness_snapshot(42.0, 68.0, -18.0),
-            wellness: json!([
-                {"sleepSecs": 21600.0, "restingHR": 58.0, "hrv": 45.0},
-                {"sleepSecs": 21000.0, "restingHR": 60.0, "hrv": 42.0}
-            ]),
-            activity_details: json!({
-                "distance": 50000.0,
-                "moving_time": 18000,
-                "average_heartrate": 148.0,
-                "total_elevation_gain": 1800.0
-            }),
-            intervals: json!([
-                {"moving_time": 1800, "average_heartrate": 145.0, "average_watts": 210.0},
-                {"moving_time": 1800, "average_heartrate": 152.0, "average_watts": 205.0}
-            ]),
-            streams: json!({
-                "velocity_smooth": [3.0, 3.0, 3.0, 3.0, 3.0, 3.0],
-                "heartrate": [140.0, 141.0, 142.0, 150.0, 151.0, 152.0],
-                "watts": [220.0, 220.0, 220.0, 220.0, 220.0, 220.0]
-            }),
-            ..Self::default()
-        }
-    }
-
-    fn with_period_blocks() -> Self {
-        Self {
-            activities: vec![
-                Self::activity("a1", "Run 1", "2026-03-01"),
-                Self::activity("a2", "Run 2", "2026-03-03"),
-                Self::activity("a3", "Run 3", "2026-02-25"),
-            ],
-            fitness: Self::fitness_snapshot(55.0, 45.0, 10.0),
-            activity_details: json!({
-                "distance": 15000.0,
-                "moving_time": 5400,
-                "average_heartrate": 145.0,
-                "average_watts": 210.0,
-                "total_elevation_gain": 300.0
-            }),
-            ..Self::default()
-        }
-    }
-
-    fn with_single_workout_degraded_streams() -> Self {
-        Self {
-            activities: vec![Self::activity("single-1", "Track Intervals", "2026-03-04")],
-            fitness: json!({}),
-            activity_details: json!({
-                "distance": 12000.0,
-                "moving_time": 4200,
-                "average_heartrate": 158.0,
-                "average_watts": 245.0,
-                "total_elevation_gain": 90.0
-            }),
-            intervals: json!([
-                {"moving_time": 300, "average_heartrate": 162.0, "average_watts": 265.0},
-                {"moving_time": 300, "average_heartrate": 164.0, "average_watts": 268.0}
-            ]),
-            ..Self::default()
-        }
-    }
-
-    fn with_race_degraded_context() -> Self {
-        Self {
-            activities: vec![Self::activity(
-                "race-degraded-1",
-                "Spring Marathon",
-                "2026-03-02",
-            )],
-            fitness: json!({}),
-            activity_details: json!({
-                "distance": 42195.0,
-                "moving_time": 12600,
-                "average_heartrate": 151.0,
-                "total_elevation_gain": 180.0
-            }),
-            ..Self::default()
-        }
-    }
-
-    fn with_positive_tsb_and_low_sleep() -> Self {
-        Self {
-            activities: vec![Self::activity(
-                "activity-1",
-                "Sharpening Session",
-                "2026-03-04",
-            )],
-            fitness: Self::fitness_snapshot(62.0, 48.0, 14.0),
-            wellness: json!([
-                {"sleepSecs": 19800.0, "restingHR": 58.0, "hrv": 30.0},
-                {"sleepSecs": 20700.0, "restingHR": 60.0, "hrv": 34.0}
-            ]),
-            activity_details: json!({
-                "distance": 12000.0,
-                "moving_time": 4300,
-                "average_heartrate": 150.0,
-                "average_watts": 230.0,
-                "total_elevation_gain": 120.0
-            }),
-            ..Self::default()
-        }
-    }
-
-    fn with_supportive_recovery_metrics() -> Self {
-        Self {
-            activities: vec![Self::activity(
-                "supportive-1",
-                "Pre-race tune-up",
-                "2026-03-04",
-            )],
-            fitness: Self::fitness_snapshot(64.0, 46.0, 15.0),
-            wellness: json!([
-                {"sleepSecs": 28800.0, "restingHR": 48.0, "hrv": 74.0},
-                {"sleepSecs": 28200.0, "restingHR": 49.0, "hrv": 71.0}
-            ]),
-            activity_details: json!({
-                "distance": 10000.0,
-                "moving_time": 3300,
-                "average_heartrate": 142.0,
-                "average_watts": 225.0,
-                "total_elevation_gain": 80.0
-            }),
-            ..Self::default()
-        }
-    }
-
-    fn with_personal_hrv_drop_profile() -> Self {
-        Self {
-            activities: vec![Self::activity(
-                "adaptive-drop-1",
-                "Quality Session",
-                "2026-03-04",
-            )],
-            fitness: Self::fitness_snapshot(62.0, 48.0, 14.0),
-            wellness: Self::adaptive_wellness_series(28_800.0, 50.0, 60.0, 28_800.0, 50.0, 45.0),
-            activity_details: json!({
-                "distance": 12000.0,
-                "moving_time": 4300,
-                "average_heartrate": 150.0,
-                "average_watts": 230.0,
-                "total_elevation_gain": 120.0
-            }),
-            ..Self::default()
-        }
-    }
-
-    fn with_personal_hrv_norm_profile() -> Self {
-        Self {
-            activities: vec![Self::activity(
-                "adaptive-norm-1",
-                "Quality Session",
-                "2026-03-04",
-            )],
-            fitness: Self::fitness_snapshot(62.0, 48.0, 14.0),
-            wellness: Self::adaptive_wellness_series(28_800.0, 50.0, 44.0, 28_800.0, 50.0, 45.0),
-            activity_details: json!({
-                "distance": 12000.0,
-                "moving_time": 4300,
-                "average_heartrate": 150.0,
-                "average_watts": 230.0,
-                "total_elevation_gain": 120.0
-            }),
-            ..Self::default()
-        }
-    }
-
-    fn with_load_ramp_block() -> Self {
-        let activities = (1..=28)
-            .map(|day| ActivitySummary {
-                id: format!("load-{day}"),
-                name: Some(format!("Run {day}")),
-                start_date_local: format!("2026-03-{day:02}"),
-                ..Default::default()
-            })
-            .collect();
-
-        Self {
-            activities,
-            fitness: Self::fitness_snapshot(58.0, 50.0, 8.0),
-            activity_details: json!({
-                "distance": 12000.0,
-                "moving_time": 3600,
-                "average_heartrate": 145.0,
-                "average_watts": 215.0,
-                "total_elevation_gain": 120.0,
-                "icu_training_load": 55.0
-            }),
-            ..Self::default()
-        }
-    }
-
-    fn with_stream_supported_workout() -> Self {
-        Self {
-            activities: vec![Self::activity("stream-1", "Tempo Session", "2026-03-04")],
-            fitness: Self::fitness_snapshot(55.0, 47.0, 8.0),
-            activity_details: json!({
-                "distance": 14000.0,
-                "moving_time": 3600,
-                "average_heartrate": 145.0,
-                "average_watts": 220.0,
-                "total_elevation_gain": 80.0
-            }),
-            intervals: json!([]),
-            streams: json!({
-                "heartrate": [140.0, 141.0, 142.0, 144.0, 145.0, 146.0],
-                "watts": [220.0, 221.0, 222.0, 224.0, 225.0, 226.0]
-            }),
-            pace_histogram: json!({
-                "zones": {
-                    "z1": 600,
-                    "z2": 1200,
-                    "z3": 300
-                }
-            }),
-            ..Self::default()
-        }
-    }
-
-    fn with_api_load_snapshot() -> Self {
-        let mut client = Self::with_load_ramp_block();
-        client.wellness_for_date = json!({"atlLoad": 444.0, "ctlLoad": 333.0});
-        client
-    }
-
-    fn with_profile_metrics() -> Self {
-        Self {
-            fitness: json!([
-                {
-                    "fitness": 61.0,
-                    "fatigue": 47.0,
-                    "form": 14.0
-                }
-            ]),
-            sport_settings: intervals_icu_client::domains::workout::SportSettings {
-                sports: vec![intervals_icu_client::domains::workout::SportSetting {
-                    id: Some(1783043),
-                    types: Some(vec!["Run".into(), "VirtualRun".into(), "TrailRun".into()]),
-                    lthr: Some(171.0),
-                    max_hr: Some(180.0),
-                    hr_zones: vec![json!(144), json!(160), json!(167), json!(173), json!(180)],
-                    threshold_pace: Some(3.7037036),
-                    pace_units: Some("MINS_KM".into()),
-                    load_order: Some("HR_PACE_POWER".into()),
-                    ..Default::default()
-                }],
-                age: None,
-                weight: None,
-            },
-            ..Self::default()
-        }
-    }
-
-    fn with_mode_collapse_single_workout() -> Self {
-        Self {
-            activities: vec![Self::activity(
-                "mode-collapse-1",
-                "Uphill intervals",
-                "2026-02-18",
-            )],
-            fitness: Self::fitness_snapshot(54.0, 47.0, 7.0),
-            activity_details: json!({
-                "distance": 12240.0,
-                "moving_time": 4740,
-                "average_heartrate": 145.0,
-                "total_elevation_gain": 0.0
-            }),
-            ..Self::default()
-        }
-    }
-
-    fn with_future_workouts_only() -> Self {
-        let first_date = Self::relative_date(1);
-        let second_date = Self::relative_date(2);
-
-        Self {
-            fitness: Self::fitness_snapshot(57.0, 43.0, 14.0),
-            upcoming_workouts: json!([
-                {
-                    "id": 94131802,
-                    "category": "WORKOUT",
-                    "start_date_local": format!("{first_date}T00:00:00"),
-                    "description": "Recovery Run Z1",
-                    "moving_time": 2700,
-                    "icu_training_load": 30.0,
-                    "paired_activity_id": null
-                },
-                {
-                    "id": 94131803,
-                    "category": "WORKOUT",
-                    "start_date_local": format!("{second_date}T00:00:00"),
-                    "description": "Endurance Run Z2 — Pre-Trip",
-                    "moving_time": 6300,
-                    "icu_training_load": 82.0,
-                    "paired_activity_id": null
-                }
-            ]),
-            ..Self::default()
-        }
-    }
-
-    fn with_future_calendar_events_only() -> Self {
-        let race_date = Self::relative_date(1);
-        let sick_date = Self::relative_date(2);
-
-        Self {
-            upcoming_workouts: json!([
-                {
-                    "id": 99131991,
-                    "category": "RACE_A",
-                    "start_date_local": format!("{race_date}T00:00:00"),
-                    "description": "Race day",
-                    "name": "City Marathon",
-                    "type": "Race",
-                    "moving_time": 14400,
-                    "paired_activity_id": null
-                },
-                {
-                    "id": 99131992,
-                    "category": "SICK",
-                    "start_date_local": format!("{sick_date}T00:00:00"),
-                    "description": "Out sick, rest only",
-                    "name": "Sick day",
-                    "type": null,
-                    "moving_time": 0,
-                    "paired_activity_id": null
-                }
-            ]),
-            ..Self::default()
-        }
-    }
-
-    fn with_paired_activity_and_calendar_duplicate() -> Self {
-        let planned_date = Self::relative_date(0);
-
-        Self {
-            activities: vec![Self::activity(
-                "i130349092",
-                "Completed Endurance Run",
-                &format!("{planned_date}T07:00:00"),
-            )],
-            fitness: Self::fitness_snapshot(57.0, 43.0, 14.0),
-            upcoming_workouts: json!([
-                {
-                    "id": 94131804,
-                    "category": "WORKOUT",
-                    "start_date_local": format!("{planned_date}T00:00:00"),
-                    "description": "Endurance Run Z2 — Key Workout",
-                    "moving_time": 6300,
-                    "icu_training_load": 82.0,
-                    "paired_activity_id": "i130349092"
-                }
-            ]),
-            activity_details: json!({
-                "distance": 18000.0,
-                "moving_time": 6300,
-                "icu_training_load": 82.0,
-                "total_elevation_gain": 220.0
-            }),
-            ..Self::default()
-        }
-    }
-
-    fn with_profile_metrics_and_wellness_weight() -> Self {
-        let mut client = Self::with_profile_metrics();
-        client.wellness_for_date = json!({
-            "weight": 86.0,
-            "restingHR": 54,
-            "ctl": 40.13324,
-            "atl": 40.22276
-        });
-        client
-    }
-
-    fn with_recent_non_race_then_race_activity() -> Self {
-        Self {
-            activities: vec![
-                Self::activity("activity-regular-1", "Easy Run", "2026-03-06"),
-                Self::activity("race-2", "City Marathon Race", "2026-03-01"),
-            ],
-            events: vec![Event {
-                id: Some("planned-race-2".to_string()),
-                start_date_local: "2026-03-01".to_string(),
-                name: "City Marathon Race Plan".to_string(),
-                category: intervals_icu_client::EventCategory::RaceA,
-                description: Some("Goal marathon plan".to_string()),
-                r#type: Some("Race".to_string()),
-            }],
-            fitness: Self::fitness_snapshot(45.0, 60.0, -8.0),
-            activity_details: json!({
-                "distance": 42195.0,
-                "moving_time": 13200,
-                "average_heartrate": 149.0,
-                "total_elevation_gain": 120.0
-            }),
-            intervals: json!([
-                {"moving_time": 1800, "average_heartrate": 145.0, "average_watts": 210.0},
-                {"moving_time": 1800, "average_heartrate": 152.0, "average_watts": 205.0}
-            ]),
-            streams: json!({
-                "velocity_smooth": [3.1, 3.0, 2.9, 2.8],
-                "heartrate": [145.0, 148.0, 151.0, 154.0],
-                "watts": [220.0, 218.0, 210.0, 205.0]
-            }),
-            ..Self::default()
-        }
-    }
-
-    fn with_mixed_period_workouts() -> Self {
-        Self {
-            activities: vec![
-                Self::activity("tempo-1", "Tempo Builder", "2026-03-01"),
-                Self::activity("long-1", "Long Run", "2026-03-03"),
-                Self::activity("tempo-2", "Tempo Cruise Intervals", "2026-02-25"),
-            ],
-            fitness: Self::fitness_snapshot(55.0, 45.0, 10.0),
-            activity_details: json!({
-                "distance": 15000.0,
-                "moving_time": 5400,
-                "average_heartrate": 145.0,
-                "average_watts": 210.0,
-                "total_elevation_gain": 300.0,
-                "tss": 77.0
-            }),
-            ..Self::default()
-        }
-    }
-
-    fn with_mode_sensitive_single_workout() -> Self {
-        Self {
-            activities: vec![Self::activity("mode-1", "Progression Run", "2026-03-08")],
-            fitness: Self::fitness_snapshot(58.0, 46.0, 12.0),
-            activity_details: json!({
-                "distance": 7040.0,
-                "moving_time": 2880,
-                "average_heartrate": 127.0,
-                "average_watts": 188.0,
-                "total_elevation_gain": 66.0,
-                "decoupling": 2.8,
-                "icu_efficiency_factor": 1.74
-            }),
-            intervals: json!([
-                {"moving_time": 600, "average_heartrate": 122.0, "average_watts": 175.0},
-                {"moving_time": 600, "average_heartrate": 129.0, "average_watts": 192.0}
-            ]),
-            streams: json!({
-                "heartrate": [120.0, 122.0, 124.0, 126.0, 128.0, 130.0],
-                "watts": [170.0, 176.0, 182.0, 188.0, 194.0, 200.0],
-                "velocity_smooth": [2.9, 3.0, 3.1, 3.1, 3.0, 2.9]
-            }),
-            ..Self::default()
-        }
-    }
-
-    fn with_object_shaped_interval_payload() -> Self {
-        Self {
-            activities: vec![Self::activity(
-                "i126027814",
-                "Uphill intervals",
-                "2026-02-18",
-            )],
-            fitness: Self::fitness_snapshot(54.0, 47.0, 7.0),
-            activity_details: json!({
-                "distance": 12240.0,
-                "moving_time": 4740,
-                "average_heartrate": 145.0,
-                "total_elevation_gain": 0.0
-            }),
-            intervals: json!({
-                "id": "i126027814",
-                "icu_intervals": [
-                    {
-                        "moving_time": 601,
-                        "average_heartrate": 126,
-                        "average_watts": null,
-                        "type": "WORK"
-                    },
-                    {
-                        "moving_time": 300,
-                        "average_heartrate": 142,
-                        "average_watts": null,
-                        "type": "WORK"
-                    },
-                    {
-                        "moving_time": 360,
-                        "average_heartrate": 158,
-                        "average_watts": null,
-                        "type": "WORK"
-                    }
-                ],
-                "icu_groups": [
-                    {
-                        "moving_time": 300,
-                        "average_heartrate": 138,
-                        "count": 6
-                    }
-                ]
-            }),
-            ..Self::default()
-        }
-    }
-
-    fn with_interval_power_only_in_streams() -> Self {
-        Self {
-            activities: vec![Self::activity(
-                "power-fallback-1",
-                "Hill reps",
-                "2026-02-18",
-            )],
-            fitness: Self::fitness_snapshot(54.0, 47.0, 7.0),
-            activity_details: json!({
-                "distance": 6400.0,
-                "moving_time": 1800,
-                "average_heartrate": 152.0,
-                "total_elevation_gain": 120.0,
-                "average_cadence": 86.0,
-                "icu_training_load": 74.0
-            }),
-            intervals: json!({
-                "id": "power-fallback-1",
-                "icu_intervals": [
-                    {
-                        "start_index": 0,
-                        "end_index": 4,
-                        "moving_time": 240,
-                        "average_heartrate": 150.0,
-                        "average_watts": null,
-                        "type": "WORK"
-                    },
-                    {
-                        "start_index": 4,
-                        "end_index": 8,
-                        "moving_time": 240,
-                        "average_heartrate": 162.0,
-                        "average_watts": null,
-                        "type": "WORK"
-                    }
-                ]
-            }),
-            streams: json!({
-                "watts": [210.0, 220.0, 230.0, 240.0, 280.0, 290.0, 300.0, 310.0],
-                "heartrate": [148.0, 149.0, 150.0, 151.0, 158.0, 160.0, 162.0, 164.0]
-            }),
-            ..Self::default()
-        }
-    }
-
-    fn with_noncanonical_stream_payload() -> Self {
-        Self {
-            activities: vec![Self::activity(
-                "streams-weird-1",
-                "Tempo with sensors",
-                "2026-02-18",
-            )],
-            fitness: Self::fitness_snapshot(54.0, 47.0, 7.0),
-            activity_details: json!({
-                "distance": 10000.0,
-                "moving_time": 2700,
-                "average_heartrate": 148.0,
-                "average_watts": 225.0,
-                "average_cadence": 85.0,
-                "total_elevation_gain": 40.0,
-                "icu_training_load": 63.0
-            }),
-            intervals: json!([
-                {"moving_time": 300, "average_heartrate": 150.0, "average_watts": 240.0}
-            ]),
-            streams: json!({
-                "streams": [
-                    {"type": "heartrate", "data": [138.0, 142.0, 147.0, 151.0]},
-                    {"type": "watts", "data": [205.0, 218.0, 231.0, 244.0]},
-                    {"type": "cadence", "data": [82.0, 84.0, 86.0, 88.0]}
-                ]
-            }),
-            ..Self::default()
-        }
-    }
-
-    fn with_rich_detailed_workout() -> Self {
-        Self {
-            activities: vec![Self::activity(
-                "detail-rich-1",
-                "Steady aerobic run",
-                "2026-03-08",
-            )],
-            fitness: Self::fitness_snapshot(58.0, 46.0, 12.0),
-            activity_details: json!({
-                "distance": 12000.0,
-                "moving_time": 3600,
-                "average_heartrate": 141.0,
-                "average_watts": 212.0,
-                "average_cadence": 84.5,
-                "average_speed": 3.3333333,
-                "average_temp": 19.4,
-                "total_elevation_gain": 95.0,
-                "tss": 78.5,
-                "icu_training_load": 81.0
-            }),
-            ..Self::default()
-        }
-    }
-
-    fn with_interval_power_stream_alias() -> Self {
-        Self {
-            activities: vec![Self::activity(
-                "power-alias-1",
-                "Threshold reps",
-                "2026-02-18",
-            )],
-            fitness: Self::fitness_snapshot(54.0, 47.0, 7.0),
-            activity_details: json!({
-                "distance": 9000.0,
-                "moving_time": 2700,
-                "average_heartrate": 151.0,
-                "average_speed": 3.2,
-                "total_elevation_gain": 70.0
-            }),
-            intervals: json!({
-                "id": "power-alias-1",
-                "icu_intervals": [
-                    {
-                        "start_index": 0,
-                        "end_index": 3,
-                        "moving_time": 180,
-                        "average_heartrate": 148.0,
-                        "average_watts": null,
-                        "type": "WORK"
-                    },
-                    {
-                        "start_index": 3,
-                        "end_index": 6,
-                        "moving_time": 180,
-                        "average_heartrate": 156.0,
-                        "average_watts": null,
-                        "type": "WORK"
-                    }
-                ]
-            }),
-            streams: json!({
-                "power": [250.0, 255.0, 260.0, 300.0, 305.0, 310.0],
-                "heartrate": [145.0, 148.0, 151.0, 153.0, 156.0, 159.0],
-                "velocity_smooth": [2.9, 3.0, 3.1, 3.2, 3.3, 3.4]
-            }),
-            ..Self::default()
-        }
-    }
-
-    fn with_interval_output_only_in_speed_streams() -> Self {
-        Self {
-            activities: vec![Self::activity(
-                "speed-fallback-1",
-                "Run intervals from pace stream",
-                "2026-02-18",
-            )],
-            fitness: Self::fitness_snapshot(54.0, 47.0, 7.0),
-            activity_details: json!({
-                "distance": 11000.0,
-                "moving_time": 3600,
-                "average_heartrate": 148.0,
-                "total_elevation_gain": 0.0
-            }),
-            intervals: json!({
-                "id": "speed-fallback-1",
-                "icu_intervals": [
-                    {
-                        "start_index": 0,
-                        "end_index": 4,
-                        "moving_time": 240,
-                        "average_heartrate": 146.0,
-                        "average_watts": null,
-                        "average_speed": 3.0,
-                        "type": "WORK"
-                    },
-                    {
-                        "start_index": 4,
-                        "end_index": 8,
-                        "moving_time": 240,
-                        "average_heartrate": 156.0,
-                        "average_watts": null,
-                        "average_speed": 3.2,
-                        "type": "WORK"
-                    }
-                ]
-            }),
-            streams: json!({
-                "velocity_smooth": [3.0, 3.0, 3.0, 3.0, 3.2, 3.2, 3.2, 3.2],
-                "heartrate": [144.0, 145.0, 146.0, 147.0, 153.0, 155.0, 156.0, 158.0]
-            }),
-            ..Self::default()
-        }
-    }
-
-    fn with_many_intervals() -> Self {
-        let intervals = (0..15)
-            .map(|idx| {
-                let start = idx * 4;
-                json!({
-                    "start_index": start,
-                    "end_index": start + 4,
-                    "moving_time": if idx % 2 == 0 { 300 } else { 360 },
-                    "average_heartrate": 140.0 + idx as f64,
-                    "average_watts": 220.0 + idx as f64,
-                    "type": "WORK"
-                })
-            })
-            .collect::<Vec<_>>();
-
-        Self {
-            activities: vec![Self::activity(
-                "many-intervals-1",
-                "Big interval session",
-                "2026-02-18",
-            )],
-            fitness: Self::fitness_snapshot(54.0, 47.0, 7.0),
-            activity_details: json!({
-                "distance": 16000.0,
-                "moving_time": 5400,
-                "average_heartrate": 149.0,
-                "total_elevation_gain": 120.0
-            }),
-            intervals: json!({
-                "id": "many-intervals-1",
-                "icu_intervals": intervals
-            }),
-            streams: json!({
-                "watts": (0..60).map(|idx| 220.0 + idx as f64).collect::<Vec<_>>(),
-                "heartrate": (0..60).map(|idx| 135.0 + idx as f64 * 0.5).collect::<Vec<_>>()
-            }),
-            ..Self::default()
-        }
-    }
-
-    fn with_priority_streams_without_power() -> Self {
-        Self {
-            activities: vec![Self::activity(
-                "priority-streams-1",
-                "Uphill intervals",
-                "2026-02-18",
-            )],
-            fitness: Self::fitness_snapshot(54.0, 47.0, 7.0),
-            activity_details: json!({
-                "distance": 12240.0,
-                "moving_time": 4740,
-                "average_heartrate": 145.0,
-                "average_speed": 2.5822785,
-                "average_cadence": 82.0,
-                "total_elevation_gain": 0.0
-            }),
-            intervals: json!([]),
-            streams: json!([
-                {"type": "time", "data": [0, 1, 2, 3]},
-                {"type": "cadence", "data": [80.0, 81.0, 82.0, 83.0]},
-                {"type": "heartrate", "data": [138.0, 142.0, 147.0, 151.0]},
-                {"type": "distance", "data": [0.0, 100.0, 200.0, 300.0]},
-                {"type": "altitude", "data": [152.2, 152.2, 152.2, 152.2]},
-                {"type": "velocity_smooth", "data": [2.50, 2.55, 2.60, 2.68]},
-                {"type": "temp", "data": [26.0, 26.2, 26.4, 26.5]},
-                {"type": "GroundContactTime", "data": [250.0, 255.0, 260.0, 265.0]},
-                {"type": "VerticalOscillation", "data": [70.0, 72.0, 74.0, 76.0]}
-            ]),
-            ..Self::default()
-        }
-    }
-
-    fn with_best_efforts_and_bucket_histograms() -> Self {
-        Self {
-            activities: vec![Self::activity(
-                "payload-1",
-                "Structured Long Run",
-                "2026-03-08",
-            )],
-            fitness: Self::fitness_snapshot(60.0, 44.0, 16.0),
-            activity_details: json!({
-                "distance": 18000.0,
-                "moving_time": 5400,
-                "average_heartrate": 138.0,
-                "average_watts": 215.0,
-                "total_elevation_gain": 110.0
-            }),
-            best_efforts: json!({
-                "best_efforts": [
-                    {"seconds": 60, "watts": 310.0, "heartrate": 171.0},
-                    {"seconds": 300, "watts": 282.0, "heartrate": 165.0}
-                ]
-            }),
-            hr_histogram: json!([
-                {"min": 120, "max": 124, "secs": 469},
-                {"min": 125, "max": 129, "secs": 1150}
-            ]),
-            power_histogram: json!([
-                {"min": 200, "max": 224, "secs": 1525},
-                {"min": 225, "max": 249, "secs": 1021}
-            ]),
-            pace_histogram: json!([
-                {"min": 2.2593105, "max": 2.354023, "secs": 295},
-                {"min": 2.354023, "max": 2.4487357, "secs": 353}
-            ]),
-            ..Self::default()
-        }
-    }
-
-    fn with_full_histogram_ranges() -> Self {
-        Self {
-            activities: vec![Self::activity(
-                "hist-full-1",
-                "Recovery Run Z1",
-                "2026-03-08",
-            )],
-            fitness: Self::fitness_snapshot(58.0, 46.0, 12.0),
-            activity_details: json!({
-                "distance": 7040.0,
-                "moving_time": 2880,
-                "average_heartrate": 127.0,
-                "average_watts": 219.0,
-                "total_elevation_gain": 66.0
-            }),
-            hr_histogram: json!([
-                {"min": 80, "max": 84, "secs": 1},
-                {"min": 85, "max": 89, "secs": 5},
-                {"min": 90, "max": 94, "secs": 8},
-                {"min": 95, "max": 99, "secs": 17},
-                {"min": 100, "max": 104, "secs": 29},
-                {"min": 105, "max": 109, "secs": 40},
-                {"min": 110, "max": 114, "secs": 54},
-                {"min": 115, "max": 119, "secs": 190},
-                {"min": 120, "max": 124, "secs": 469},
-                {"min": 125, "max": 129, "secs": 1150},
-                {"min": 130, "max": 134, "secs": 720},
-                {"min": 135, "max": 139, "secs": 151},
-                {"min": 140, "max": 144, "secs": 22},
-                {"min": 145, "max": 149, "secs": 9},
-                {"min": 150, "max": 154, "secs": 3}
-            ]),
-            power_histogram: json!([
-                {"min": 0, "max": 24, "secs": 71},
-                {"min": 25, "max": 49, "secs": 9},
-                {"min": 50, "max": 74, "secs": 8},
-                {"min": 75, "max": 99, "secs": 7},
-                {"min": 100, "max": 124, "secs": 6},
-                {"min": 125, "max": 149, "secs": 5},
-                {"min": 150, "max": 174, "secs": 4},
-                {"min": 175, "max": 199, "secs": 84},
-                {"min": 200, "max": 224, "secs": 1525},
-                {"min": 225, "max": 249, "secs": 1021},
-                {"min": 250, "max": 274, "secs": 91},
-                {"min": 275, "max": 299, "secs": 24},
-                {"min": 300, "max": 324, "secs": 3},
-                {"min": 325, "max": 349, "secs": 1}
-            ]),
-            pace_histogram: json!([
-                {"min": 0.93333334, "max": 1.028046, "secs": 3},
-                {"min": 1.028046, "max": 1.1227586, "secs": 12},
-                {"min": 1.1227586, "max": 1.2174712, "secs": 18},
-                {"min": 1.2174712, "max": 1.3121839, "secs": 22},
-                {"min": 1.3121839, "max": 1.4068965, "secs": 27},
-                {"min": 1.4068965, "max": 1.5016091, "secs": 31},
-                {"min": 1.5016091, "max": 1.5963217, "secs": 36},
-                {"min": 1.5963217, "max": 1.6910343, "secs": 41},
-                {"min": 1.6910343, "max": 1.785747, "secs": 48},
-                {"min": 1.785747, "max": 1.8804595, "secs": 55},
-                {"min": 1.8804595, "max": 1.9751722, "secs": 58},
-                {"min": 1.9751722, "max": 2.0698848, "secs": 59},
-                {"min": 2.0698848, "max": 2.1645975, "secs": 61},
-                {"min": 2.1645975, "max": 2.2593105, "secs": 74},
-                {"min": 2.2593105, "max": 2.354023, "secs": 295},
-                {"min": 2.354023, "max": 2.4487357, "secs": 353},
-                {"min": 2.4487357, "max": 2.5434482, "secs": 166},
-                {"min": 2.5434482, "max": 2.6381607, "secs": 117},
-                {"min": 2.6381607, "max": 2.7328734, "secs": 89},
-                {"min": 2.7328734, "max": 2.8275862, "secs": 61},
-                {"min": 2.8275862, "max": 2.922299, "secs": 44},
-                {"min": 2.922299, "max": 3.0170114, "secs": 29},
-                {"min": 3.0170114, "max": 3.1117241, "secs": 17},
-                {"min": 3.1117241, "max": 3.2064366, "secs": 8},
-                {"min": 3.2064366, "max": 3.3011494, "secs": 4},
-                {"min": 3.3011494, "max": 3.395862, "secs": 2},
-                {"min": 3.395862, "max": 3.4905746, "secs": 1},
-                {"min": 3.4905746, "max": 3.5852873, "secs": 1},
-                {"min": 3.5852873, "max": 3.68, "secs": 1},
-                {"min": 3.68, "max": 3.77, "secs": 1}
-            ]),
-            ..Self::default()
-        }
-    }
-
-    fn with_live_best_efforts_shape() -> Self {
-        Self {
-            activities: vec![Self::activity(
-                "live-efforts-1",
-                "Recovery Run Z1",
-                "2026-03-08",
-            )],
-            fitness: Self::fitness_snapshot(58.0, 46.0, 12.0),
-            activity_details: json!({
-                "distance": 7040.0,
-                "moving_time": 2880,
-                "average_heartrate": 127.0,
-                "average_watts": 219.0,
-                "total_elevation_gain": 66.0
-            }),
-            best_efforts: json!({
-                "stream": "watts",
-                "efforts": [
-                    {"start_index": 2723, "end_index": 2783, "average": 303.51666, "duration": 60, "distance": null},
-                    {"start_index": 1320, "end_index": 1380, "average": 241.98334, "duration": 60, "distance": null}
-                ]
-            }),
-            ..Self::default()
-        }
-    }
-
-    /// Streams present (structured 4x180s work / 3x120s recovery, 1 Hz) but the
-    /// upstream interval endpoint fails. Used to verify local detection runs as
-    /// a fallback when the upstream interval source is unavailable.
-    fn with_streams_and_interval_error() -> Self {
-        let mut time_s = Vec::new();
-        let mut speed = Vec::new();
-        let mut heartrate = Vec::new();
-        let mut power = Vec::new();
-        let mut t = 0.0f64;
-        for rep in 0..4 {
-            for _ in 0..180 {
-                time_s.push(t);
-                speed.push(6.0);
-                heartrate.push(175.0);
-                power.push(300.0);
-                t += 1.0;
-            }
-            if rep < 3 {
-                for _ in 0..120 {
-                    time_s.push(t);
-                    speed.push(2.5);
-                    heartrate.push(140.0);
-                    power.push(120.0);
-                    t += 1.0;
-                }
-            }
-        }
-
-        Self {
-            activities: vec![Self::activity(
-                "streams-int-1",
-                "Track Intervals",
-                "2026-02-18",
-            )],
-            fitness: Self::fitness_snapshot(54.0, 47.0, 7.0),
-            activity_details: json!({
-                "distance": 12240.0,
-                "moving_time": 4740,
-                "average_heartrate": 145.0,
-                "total_elevation_gain": 0.0
-            }),
-            intervals: json!([]),
-            intervals_error: Some("HTTP 503 from Intervals.icu interval endpoint".to_string()),
-            streams: json!({
-                "time": time_s,
-                "velocity_smooth": speed,
-                "heartrate": heartrate,
-                "watts": power
-            }),
-            ..Self::default()
-        }
-    }
-
-    /// Streams fetch fails (and upstream intervals are empty). Used to verify
-    /// interval detection cannot run and does not claim any detected result.
-    fn with_stream_error() -> Self {
-        Self {
-            activities: vec![Self::activity(
-                "stream-err-1",
-                "Tempo Session",
-                "2026-02-18",
-            )],
-            fitness: Self::fitness_snapshot(55.0, 47.0, 8.0),
-            activity_details: json!({
-                "distance": 14000.0,
-                "moving_time": 3600,
-                "average_heartrate": 145.0,
-                "average_watts": 220.0,
-                "total_elevation_gain": 80.0
-            }),
-            intervals: json!([]),
-            streams_error: Some("HTTP 504 from Intervals.icu stream endpoint".to_string()),
-            ..Self::default()
-        }
-    }
-
-    fn with_fartlek_streams_and_upstream_intervals() -> Self {
-        let mut time = Vec::new();
-        let mut velocity_smooth = Vec::new();
-        let mut heartrate = Vec::new();
-        let mut watts = Vec::new();
-        for (duration, speed, hr, power) in [
-            (20, 6.0, 178.0, 320.0),
-            (250, 3.0, 145.0, 150.0),
-            (90, 6.5, 182.0, 340.0),
-            (50, 2.8, 140.0, 130.0),
-            (40, 5.5, 172.0, 300.0),
-        ] {
-            for _ in 0..duration {
-                time.push(time.len() as f64);
-                velocity_smooth.push(speed);
-                heartrate.push(hr);
-                watts.push(power);
-            }
-        }
-
-        Self {
-            activities: vec![Self::activity("fartlek-1", "Fartlek", "2026-02-18")],
-            fitness: Self::fitness_snapshot(54.0, 47.0, 7.0),
-            activity_details: json!({"distance": 6000.0, "moving_time": 450}),
-            intervals: json!([
-                {"moving_time": 60, "average_heartrate": 170, "average_watts": 300}
-            ]),
-            streams: json!({"time": time, "velocity_smooth": velocity_smooth, "heartrate": heartrate, "watts": watts}),
-            ..Self::default()
-        }
-    }
-}
-
-#[async_trait]
-impl IntervalsClient for MockCoachClient {
-    async fn get_athlete_profile(&self) -> Result<AthleteProfile, IntervalsError> {
-        Ok(AthleteProfile {
-            id: "athlete-1".into(),
-            name: Some("Coach Test".into()),
-        })
-    }
-
-    async fn get_recent_activities(
-        &self,
-        limit: Option<u32>,
-        days_back: Option<i32>,
-    ) -> Result<Vec<ActivitySummary>, IntervalsError> {
-        self.activity_calls.lock().unwrap().push((limit, days_back));
-        Ok(self.activities.clone())
-    }
-
-    async fn get_activity_details(&self, activity_id: &str) -> Result<Value, IntervalsError> {
-        if !self.activity_details_map.is_empty() {
-            self.activity_details_map
-                .get(activity_id)
-                .cloned()
-                .ok_or_else(|| {
-                    IntervalsError::NotFound(format!("Activity {activity_id} not found"))
-                })
-        } else {
-            Ok(self.activity_details.clone())
-        }
-    }
-
-    async fn get_activity_messages(
-        &self,
-        _activity_id: &str,
-    ) -> Result<Vec<ActivityMessage>, IntervalsError> {
-        self.activity_details
-            .get("__activity_messages")
-            .cloned()
-            .map(serde_json::from_value)
-            .transpose()
-            .map(|messages| messages.unwrap_or_default())
-            .map_err(|error| {
-                IntervalsError::Config(intervals_icu_client::ConfigError::Other(error.to_string()))
-            })
-    }
-
-    async fn get_activity_intervals(&self, _activity_id: &str) -> Result<Value, IntervalsError> {
-        if let Some(reason) = &self.intervals_error {
-            return Err(IntervalsError::Config(
-                intervals_icu_client::ConfigError::Other(reason.clone()),
-            ));
-        }
-        Ok(self.intervals.clone())
-    }
-
-    async fn get_activity_streams(
-        &self,
-        activity_id: &str,
-        _streams: Option<Vec<String>>,
-    ) -> Result<Value, IntervalsError> {
-        if let Some(reason) = &self.streams_error {
-            return Err(IntervalsError::Config(
-                intervals_icu_client::ConfigError::Other(reason.clone()),
-            ));
-        }
-        if activity_id.starts_with("ride-") {
-            *self.profile_stream_calls.lock().unwrap() += 1;
-        }
-        Ok(self
-            .streams_map
-            .get(activity_id)
-            .cloned()
-            .unwrap_or_else(|| self.streams.clone()))
-    }
-
-    async fn get_best_efforts(
-        &self,
-        _activity_id: &str,
-        _options: Option<BestEffortsOptions>,
-    ) -> Result<Value, IntervalsError> {
-        Ok(self.best_efforts.clone())
-    }
-
-    async fn get_hr_histogram(&self, _activity_id: &str) -> Result<Value, IntervalsError> {
-        Ok(self.hr_histogram.clone())
-    }
-
-    async fn get_power_histogram(&self, _activity_id: &str) -> Result<Value, IntervalsError> {
-        Ok(self.power_histogram.clone())
-    }
-
-    async fn get_fitness_summary(&self) -> Result<Value, IntervalsError> {
-        Ok(self.fitness.clone())
-    }
-
-    async fn get_wellness(&self, days_back: Option<i32>) -> Result<Value, IntervalsError> {
-        wellness_days_requests().lock().unwrap().push(days_back);
-        Ok(self.wellness.clone())
-    }
-
-    async fn create_event(&self, event: Event) -> Result<Event, IntervalsError> {
-        Ok(event)
-    }
-    async fn get_event(&self, event_id: &str) -> Result<Event, IntervalsError> {
-        Ok(Self::mock_event(Some(event_id)))
-    }
-    async fn delete_event(&self, _event_id: &str) -> Result<(), IntervalsError> {
-        Ok(())
-    }
-    async fn get_events(
-        &self,
-        _days_back: Option<i32>,
-        _limit: Option<u32>,
-    ) -> Result<Vec<Event>, IntervalsError> {
-        Ok(self.events.clone())
-    }
-    async fn bulk_create_events(&self, _events: Vec<Event>) -> Result<Vec<Event>, IntervalsError> {
-        Ok(vec![])
-    }
-    async fn search_activities(
-        &self,
-        _query: &str,
-        _limit: Option<u32>,
-    ) -> Result<Vec<ActivitySummary>, IntervalsError> {
-        Ok(vec![])
-    }
-    async fn search_activities_full(
-        &self,
-        _query: &str,
-        _limit: Option<u32>,
-    ) -> Result<Value, IntervalsError> {
-        Ok(json!([]))
-    }
-    async fn get_activities_csv(&self) -> Result<String, IntervalsError> {
-        Ok(String::new())
-    }
-    async fn update_activity(
-        &self,
-        _activity_id: &str,
-        _fields: &Value,
-    ) -> Result<Value, IntervalsError> {
-        Ok(json!({}))
-    }
-    async fn download_activity_file(
-        &self,
-        _activity_id: &str,
-        _output_path: Option<std::path::PathBuf>,
-    ) -> Result<Option<String>, IntervalsError> {
-        Ok(None)
-    }
-    async fn download_activity_file_with_progress(
-        &self,
-        _activity_id: &str,
-        _output_path: Option<std::path::PathBuf>,
-        _progress_tx: tokio::sync::mpsc::Sender<DownloadProgress>,
-        _cancel_rx: tokio::sync::watch::Receiver<bool>,
-    ) -> Result<Option<String>, IntervalsError> {
-        Ok(None)
-    }
-    async fn download_fit_file(
-        &self,
-        _activity_id: &str,
-        _output_path: Option<std::path::PathBuf>,
-    ) -> Result<Option<String>, IntervalsError> {
-        Ok(None)
-    }
-    async fn download_gpx_file(
-        &self,
-        _activity_id: &str,
-        _output_path: Option<std::path::PathBuf>,
-    ) -> Result<Option<String>, IntervalsError> {
-        Ok(None)
-    }
-    async fn get_gear_list(&self) -> Result<Value, IntervalsError> {
-        Ok(json!([]))
-    }
-    async fn get_sport_settings(
-        &self,
-    ) -> Result<intervals_icu_client::domains::workout::SportSettings, IntervalsError> {
-        Ok(self.sport_settings.clone())
-    }
-    async fn get_power_curves(
-        &self,
-        _days_back: Option<i32>,
-        _sport: &str,
-    ) -> Result<Value, IntervalsError> {
-        Ok(json!([]))
-    }
-    async fn get_gap_histogram(&self, _activity_id: &str) -> Result<Value, IntervalsError> {
-        Ok(json!([]))
-    }
-    async fn delete_activity(&self, _activity_id: &str) -> Result<(), IntervalsError> {
-        Ok(())
-    }
-    async fn get_activities_around(
-        &self,
-        _activity_id: &str,
-        _limit: Option<u32>,
-        _route_id: Option<i64>,
-    ) -> Result<Value, IntervalsError> {
-        Ok(json!([]))
-    }
-    async fn search_intervals(
-        &self,
-        _min_secs: u32,
-        _max_secs: u32,
-        _min_intensity: u32,
-        _max_intensity: u32,
-        _interval_type: Option<String>,
-        _min_reps: Option<u32>,
-        _max_reps: Option<u32>,
-        _limit: Option<u32>,
-    ) -> Result<Value, IntervalsError> {
-        Ok(json!([]))
-    }
-    async fn get_pace_histogram(&self, _activity_id: &str) -> Result<Value, IntervalsError> {
-        Ok(self.pace_histogram.clone())
-    }
-    async fn get_wellness_for_date(&self, _date: &str) -> Result<Value, IntervalsError> {
-        Ok(self.wellness_for_date.clone())
-    }
-    async fn update_wellness(&self, _date: &str, _data: &Value) -> Result<Value, IntervalsError> {
-        Ok(json!({}))
-    }
-    async fn get_upcoming_workouts(
-        &self,
-        _days_ahead: Option<u32>,
-        _limit: Option<u32>,
-        _category: Option<String>,
-    ) -> Result<Value, IntervalsError> {
-        Ok(self.upcoming_workouts.clone())
-    }
-    async fn update_event(
-        &self,
-        _event_id: &str,
-        _fields: &Value,
-    ) -> Result<Value, IntervalsError> {
-        Ok(json!({}))
-    }
-    async fn bulk_delete_events(&self, _event_ids: Vec<String>) -> Result<(), IntervalsError> {
-        Ok(())
-    }
-    async fn duplicate_event(
-        &self,
-        _event_id: &str,
-        _num_copies: Option<u32>,
-        _weeks_between: Option<u32>,
-    ) -> Result<Vec<Event>, IntervalsError> {
-        Ok(vec![])
-    }
-    async fn get_hr_curves(
-        &self,
-        _days_back: Option<i32>,
-        _sport: &str,
-    ) -> Result<Value, IntervalsError> {
-        Ok(json!([]))
-    }
-    async fn get_pace_curves(
-        &self,
-        _days_back: Option<i32>,
-        _sport: &str,
-    ) -> Result<Value, IntervalsError> {
-        Ok(json!([]))
-    }
-    async fn get_workout_library(
-        &self,
-    ) -> Result<Vec<intervals_icu_client::domains::workout::WorkoutItem>, IntervalsError> {
-        Ok(vec![])
-    }
-    async fn get_workouts_in_folder(
-        &self,
-        _folder_id: &str,
-    ) -> Result<Vec<intervals_icu_client::domains::workout::WorkoutItem>, IntervalsError> {
-        Ok(vec![])
-    }
-    async fn create_folder(
-        &self,
-        _folder: &Value,
-    ) -> Result<intervals_icu_client::domains::workout::Folder, IntervalsError> {
-        Ok(intervals_icu_client::domains::workout::Folder {
-            id: 0,
-            name: String::new(),
-            description: None,
-            parent_id: None,
-            children: vec![],
-        })
-    }
-    async fn update_folder(
-        &self,
-        _folder_id: &str,
-        _fields: &Value,
-    ) -> Result<Value, IntervalsError> {
-        Ok(json!({}))
-    }
-    async fn delete_folder(&self, _folder_id: &str) -> Result<(), IntervalsError> {
-        Ok(())
-    }
-    async fn create_gear(&self, _gear: &Value) -> Result<Value, IntervalsError> {
-        Ok(json!({}))
-    }
-    async fn update_gear(&self, _gear_id: &str, _fields: &Value) -> Result<Value, IntervalsError> {
-        Ok(json!({}))
-    }
-    async fn delete_gear(&self, _gear_id: &str) -> Result<(), IntervalsError> {
-        Ok(())
-    }
-    async fn create_gear_reminder(
-        &self,
-        _gear_id: &str,
-        _reminder: &Value,
-    ) -> Result<Value, IntervalsError> {
-        Ok(json!({}))
-    }
-    async fn update_gear_reminder(
-        &self,
-        _gear_id: &str,
-        _reminder_id: &str,
-        _reset: bool,
-        _snooze_days: u32,
-        _fields: &Value,
-    ) -> Result<Value, IntervalsError> {
-        Ok(json!({}))
-    }
-    async fn update_sport_settings(
-        &self,
-        _sport_type: &str,
-        _recalc_hr_zones: bool,
-        _fields: &Value,
-    ) -> Result<Value, IntervalsError> {
-        Ok(json!({}))
-    }
-    async fn apply_sport_settings(&self, _sport_type: &str) -> Result<Value, IntervalsError> {
-        Ok(json!({}))
-    }
-    async fn create_sport_settings(&self, _settings: &Value) -> Result<Value, IntervalsError> {
-        Ok(json!({}))
-    }
-    async fn delete_sport_settings(&self, _sport_type: &str) -> Result<(), IntervalsError> {
-        Ok(())
-    }
-}
+use std::sync::Arc;
 
 fn markdown_text(output: &intervals_icu_mcp::intents::IntentOutput) -> String {
     output
@@ -1554,7 +28,7 @@ fn output_text(output: &intervals_icu_mcp::intents::IntentOutput) -> String {
 }
 
 async fn execute_interval_analysis(
-    client: MockCoachClient,
+    client: MockIntervalsClient,
 ) -> intervals_icu_mcp::intents::IntentOutput {
     let handler = AnalyzeTrainingHandler::new();
     handler
@@ -1574,23 +48,24 @@ async fn execute_interval_analysis(
 #[tokio::test]
 async fn streams_available_upstream_intervals_failed_reports_local_result_and_warning() {
     let output =
-        execute_interval_analysis(MockCoachClient::with_streams_and_interval_error()).await;
+        execute_interval_analysis(MockIntervalsClient::with_streams_and_interval_error()).await;
     assert!(output_text(&output).contains("Local detection completed"));
     assert!(output_text(&output).contains("upstream interval endpoint unavailable"));
 }
 
 #[tokio::test]
 async fn unavailable_streams_do_not_claim_zero_detected_intervals() {
-    let output = execute_interval_analysis(MockCoachClient::with_stream_error()).await;
+    let output = execute_interval_analysis(MockIntervalsClient::with_stream_error()).await;
     assert!(output_text(&output).contains("Interval detection unavailable"));
     assert!(!output_text(&output).contains("Completed 0 work intervals"));
 }
 
 #[tokio::test]
 async fn local_fartlek_classification_overrides_upstream_interval_rows() {
-    let output =
-        execute_interval_analysis(MockCoachClient::with_fartlek_streams_and_upstream_intervals())
-            .await;
+    let output = execute_interval_analysis(
+        MockIntervalsClient::with_fartlek_streams_and_upstream_intervals(),
+    )
+    .await;
     let text = output_text(&output);
 
     assert!(text.contains("fartlek / non-structured"));
@@ -1599,7 +74,7 @@ async fn local_fartlek_classification_overrides_upstream_interval_rows() {
 
 #[tokio::test]
 async fn assess_recovery_uses_shared_guidance_for_deep_fatigue() {
-    let client = Arc::new(MockCoachClient::with_tsb(-25.0));
+    let client = Arc::new(MockIntervalsClient::with_tsb(-25.0));
     let handler = AssessRecoveryHandler::new();
 
     let output = handler
@@ -1612,7 +87,7 @@ async fn assess_recovery_uses_shared_guidance_for_deep_fatigue() {
 
 #[tokio::test]
 async fn analyze_training_period_includes_trend_context() {
-    let client = Arc::new(MockCoachClient::with_period_blocks());
+    let client = Arc::new(MockIntervalsClient::with_period_blocks());
     let handler = AnalyzeTrainingHandler::new();
 
     let output = handler
@@ -1634,20 +109,20 @@ async fn analyze_training_period_includes_trend_context() {
 #[tokio::test]
 async fn analyze_training_single_accepts_today_date_alias() {
     let today = Local::now().date_naive();
-    let client = Arc::new(MockCoachClient {
-        activities: vec![MockCoachClient::activity(
+    let client = Arc::new(MockIntervalsClient {
+        activities: vec![MockIntervalsClient::activity(
             "today-training-1",
             "Today's Endurance Run",
             &format!("{}T07:30:00", today.format("%Y-%m-%d")),
         )],
-        fitness: MockCoachClient::fitness_snapshot(55.0, 47.0, 8.0),
-        activity_details: json!({
+        fitness_summary: Some(MockIntervalsClient::fitness_snapshot(55.0, 47.0, 8.0)),
+        default_activity_detail: Some(json!({
             "distance": 18050.0,
             "moving_time": 7742,
             "average_heartrate": 141.0,
             "total_elevation_gain": 233.0
-        }),
-        ..MockCoachClient::default()
+        })),
+        ..MockIntervalsClient::default()
     });
     let handler = AnalyzeTrainingHandler::new();
 
@@ -1670,10 +145,10 @@ async fn analyze_training_single_accepts_today_date_alias() {
 
 #[tokio::test]
 async fn analyze_training_period_surfaces_future_planned_workouts() {
-    let client = Arc::new(MockCoachClient::with_future_workouts_only());
+    let client = Arc::new(MockIntervalsClient::with_future_workouts_only());
     let handler = AnalyzeTrainingHandler::new();
-    let period_start = MockCoachClient::relative_date(1);
-    let period_end = MockCoachClient::relative_date(2);
+    let period_start = MockIntervalsClient::relative_date(1);
+    let period_end = MockIntervalsClient::relative_date(2);
 
     let output = handler
         .execute(
@@ -1697,10 +172,10 @@ async fn analyze_training_period_surfaces_future_planned_workouts() {
 
 #[tokio::test]
 async fn analyze_training_period_surfaces_future_calendar_events() {
-    let client = Arc::new(MockCoachClient::with_future_calendar_events_only());
+    let client = Arc::new(MockIntervalsClient::with_future_calendar_events_only());
     let handler = AnalyzeTrainingHandler::new();
-    let period_start = MockCoachClient::relative_date(1);
-    let period_end = MockCoachClient::relative_date(3);
+    let period_start = MockIntervalsClient::relative_date(1);
+    let period_end = MockIntervalsClient::relative_date(3);
 
     let output = handler
         .execute(
@@ -1725,9 +200,9 @@ async fn analyze_training_period_surfaces_future_calendar_events() {
 
 #[tokio::test]
 async fn analyze_training_period_skips_calendar_duplicates_with_paired_activity_id() {
-    let client = Arc::new(MockCoachClient::with_paired_activity_and_calendar_duplicate());
+    let client = Arc::new(MockIntervalsClient::with_paired_activity_and_calendar_duplicate());
     let handler = AnalyzeTrainingHandler::new();
-    let target_date = MockCoachClient::relative_date(0);
+    let target_date = MockIntervalsClient::relative_date(0);
 
     let output = handler
         .execute(
@@ -1749,7 +224,7 @@ async fn analyze_training_period_skips_calendar_duplicates_with_paired_activity_
 
 #[tokio::test]
 async fn analyze_race_adds_post_race_recovery_guidance() {
-    let client = Arc::new(MockCoachClient::with_race_activity());
+    let client = Arc::new(MockIntervalsClient::with_race_activity());
     let handler = AnalyzeRaceHandler::new();
 
     let output = handler
@@ -1782,22 +257,22 @@ async fn analyze_race_adds_post_race_recovery_guidance() {
 #[tokio::test]
 async fn analyze_race_accepts_target_date_alias() {
     let today = Local::now().date_naive();
-    let client = Arc::new(MockCoachClient {
+    let client = Arc::new(MockIntervalsClient {
         activities: vec![
-            MockCoachClient::activity("older-race-1", "Mountain 50K", "2026-02-21T08:23:41"),
-            MockCoachClient::activity(
+            MockIntervalsClient::activity("older-race-1", "Mountain 50K", "2026-02-21T08:23:41"),
+            MockIntervalsClient::activity(
                 "today-run-1",
                 "Today's Long Run",
                 &format!("{}T08:00:00", today.format("%Y-%m-%d")),
             ),
         ],
-        fitness: MockCoachClient::fitness_snapshot(42.0, 68.0, -18.0),
-        activity_details: json!({
+        fitness_summary: Some(MockIntervalsClient::fitness_snapshot(42.0, 68.0, -18.0)),
+        default_activity_detail: Some(json!({
             "distance": 18040.0,
             "moving_time": 7742,
             "average_heartrate": 140.0
-        }),
-        ..MockCoachClient::default()
+        })),
+        ..MockIntervalsClient::default()
     });
     let handler = AnalyzeRaceHandler::new();
 
@@ -1814,7 +289,7 @@ async fn analyze_race_accepts_target_date_alias() {
 
 #[tokio::test]
 async fn compare_periods_includes_shared_trend_context() {
-    let client = Arc::new(MockCoachClient::with_period_blocks());
+    let client = Arc::new(MockIntervalsClient::with_period_blocks());
     let handler = ComparePeriodsHandler::new();
 
     let output = handler
@@ -1850,7 +325,7 @@ async fn compare_periods_delta_sign_invariant_to_a_b_order() {
     // activity_details applies the same volume (5400s, 15000m, 300m elev)
     // to every activity. So whichever period covers March has 2 activities
     // (10800s, 30000m, 600m) and whichever covers Feb has 1 activity.
-    let client = Arc::new(MockCoachClient::with_period_blocks());
+    let client = Arc::new(MockIntervalsClient::with_period_blocks());
     let handler = ComparePeriodsHandler::new();
 
     // Caller puts the OLDER period as A (period_a=Feb, period_b=March).
@@ -1896,7 +371,7 @@ async fn compare_periods_delta_sign_invariant_to_a_b_order() {
 
 #[tokio::test]
 async fn analyze_training_single_surfaces_execution_quality_and_degraded_availability() {
-    let client = Arc::new(MockCoachClient::with_single_workout_degraded_streams());
+    let client = Arc::new(MockIntervalsClient::with_single_workout_degraded_streams());
     let handler = AnalyzeTrainingHandler::new();
 
     let output = handler
@@ -1922,7 +397,7 @@ async fn analyze_training_single_surfaces_execution_quality_and_degraded_availab
 
 #[tokio::test]
 async fn analyze_race_degraded_mode_reports_missing_supporting_data() {
-    let client = Arc::new(MockCoachClient::with_race_degraded_context());
+    let client = Arc::new(MockIntervalsClient::with_race_degraded_context());
     let handler = AnalyzeRaceHandler::new();
 
     let output = handler
@@ -1944,14 +419,14 @@ async fn analyze_race_degraded_mode_reports_missing_supporting_data() {
 
 #[tokio::test]
 async fn assess_recovery_with_fatigue_alert_tsb_minus_15() {
-    let client = Arc::new(MockCoachClient {
-        activities: vec![MockCoachClient::activity(
+    let client = Arc::new(MockIntervalsClient {
+        activities: vec![MockIntervalsClient::activity(
             "activity-1",
             "Easy Run",
             "2026-03-04",
         )],
-        fitness: MockCoachClient::fitness_snapshot(50.0, 65.0, -15.0),
-        ..MockCoachClient::default()
+        fitness_summary: Some(MockIntervalsClient::fitness_snapshot(50.0, 65.0, -15.0)),
+        ..MockIntervalsClient::default()
     });
     let handler = AssessRecoveryHandler::new();
 
@@ -1967,24 +442,24 @@ async fn assess_recovery_with_fatigue_alert_tsb_minus_15() {
 
 #[tokio::test]
 async fn assess_recovery_with_high_training_load() {
-    let client = Arc::new(MockCoachClient {
-        activities: vec![MockCoachClient::activity(
+    let client = Arc::new(MockIntervalsClient {
+        activities: vec![MockIntervalsClient::activity(
             "activity-1",
             "Hard Session",
             "2026-03-04",
         )],
-        fitness: MockCoachClient::fitness_snapshot(80.0, 60.0, 20.0),
-        wellness: json!([
+        fitness_summary: Some(MockIntervalsClient::fitness_snapshot(80.0, 60.0, 20.0)),
+        wellness: Some(json!([
             {"sleepSecs": 28800.0, "restingHR": 48.0, "hrv": 75.0},
             {"sleepSecs": 27000.0, "restingHR": 50.0, "hrv": 70.0}
-        ]),
-        activity_details: json!({
+        ])),
+        default_activity_detail: Some(json!({
             "distance": 15000.0,
             "moving_time": 7200,
             "average_heartrate": 140.0,
             "total_elevation_gain": 300.0
-        }),
-        ..MockCoachClient::default()
+        })),
+        ..MockIntervalsClient::default()
     });
     let handler = AssessRecoveryHandler::new();
 
@@ -2000,7 +475,7 @@ async fn assess_recovery_with_high_training_load() {
 
 #[tokio::test]
 async fn assess_recovery_shows_recovery_index_and_blocks_ready_language_when_sleep_is_poor() {
-    let client = Arc::new(MockCoachClient::with_positive_tsb_and_low_sleep());
+    let client = Arc::new(MockIntervalsClient::with_positive_tsb_and_low_sleep());
     let handler = AssessRecoveryHandler::new();
 
     let output = handler
@@ -2021,9 +496,8 @@ async fn assess_recovery_shows_recovery_index_and_blocks_ready_language_when_sle
 
 #[tokio::test]
 async fn assess_recovery_requests_long_enough_wellness_history_for_adaptive_hrv() {
-    wellness_days_requests().lock().unwrap().clear();
-
-    let client = Arc::new(MockCoachClient::with_personal_hrv_drop_profile());
+    let client = Arc::new(MockIntervalsClient::with_personal_hrv_drop_profile());
+    let observations = client.observations();
     let handler = AssessRecoveryHandler::new();
 
     handler
@@ -2031,15 +505,15 @@ async fn assess_recovery_requests_long_enough_wellness_history_for_adaptive_hrv(
         .await
         .unwrap();
 
-    let requests = wellness_days_requests().lock().unwrap().clone();
+    let requests = observations.wellness_days_history();
     // Personal baseline requires 60 calendar days of wellness history
     assert!(requests.contains(&Some(60)));
 }
 
 #[tokio::test]
 async fn assess_recovery_treats_same_absolute_hrv_relative_to_each_athlete_baseline() {
-    let high_baseline_client = Arc::new(MockCoachClient::with_personal_hrv_drop_profile());
-    let low_baseline_client = Arc::new(MockCoachClient::with_personal_hrv_norm_profile());
+    let high_baseline_client = Arc::new(MockIntervalsClient::with_personal_hrv_drop_profile());
+    let low_baseline_client = Arc::new(MockIntervalsClient::with_personal_hrv_norm_profile());
     let handler = AssessRecoveryHandler::new();
 
     let high_baseline_output = handler
@@ -2070,7 +544,7 @@ async fn assess_recovery_treats_same_absolute_hrv_relative_to_each_athlete_basel
 
 #[tokio::test]
 async fn analyze_training_period_renders_acwr_and_monotony_context() {
-    let client = Arc::new(MockCoachClient::with_load_ramp_block());
+    let client = Arc::new(MockIntervalsClient::with_load_ramp_block());
     let handler = AnalyzeTrainingHandler::new();
 
     let output = handler
@@ -2093,7 +567,7 @@ async fn analyze_training_period_renders_acwr_and_monotony_context() {
 
 #[tokio::test]
 async fn analyze_training_period_prefers_api_load_snapshot_for_acwr_loads() {
-    let client = Arc::new(MockCoachClient::with_api_load_snapshot());
+    let client = Arc::new(MockIntervalsClient::with_api_load_snapshot());
     let handler = AnalyzeTrainingHandler::new();
 
     let output = handler
@@ -2115,7 +589,7 @@ async fn analyze_training_period_prefers_api_load_snapshot_for_acwr_loads() {
 
 #[tokio::test]
 async fn analyze_training_single_renders_execution_metrics_when_streams_exist() {
-    let client = Arc::new(MockCoachClient::with_stream_supported_workout());
+    let client = Arc::new(MockIntervalsClient::with_stream_supported_workout());
     let handler = AnalyzeTrainingHandler::new();
 
     let output = handler
@@ -2138,15 +612,16 @@ async fn analyze_training_single_renders_execution_metrics_when_streams_exist() 
 
 #[tokio::test]
 async fn analyze_training_prefers_api_decoupling_over_stream_recalculation() {
-    let mut client = MockCoachClient::with_stream_supported_workout();
-    client.activity_details = json!({
+    let mut client = MockIntervalsClient::with_stream_supported_workout();
+    client.default_activity_detail = Some(json!({
         "distance": 14000.0,
         "moving_time": 3600,
         "average_heartrate": 145.0,
         "average_watts": 220.0,
         "total_elevation_gain": 80.0,
         "decoupling": 2.7809474
-    });
+    }));
+    client.activity_details.clear();
     let handler = AnalyzeTrainingHandler::new();
 
     let output = handler
@@ -2169,7 +644,7 @@ async fn analyze_training_prefers_api_decoupling_over_stream_recalculation() {
 
 #[tokio::test]
 async fn manage_profile_renders_requested_metrics_section_from_fitness_summary() {
-    let client = Arc::new(MockCoachClient::with_profile_metrics());
+    let client = Arc::new(MockIntervalsClient::with_profile_metrics());
     let handler = ManageProfileHandler::new();
 
     let output = handler
@@ -2192,7 +667,7 @@ async fn manage_profile_renders_requested_metrics_section_from_fitness_summary()
 
 #[tokio::test]
 async fn manage_profile_supports_real_sport_settings_array_for_zones_and_thresholds() {
-    let client = Arc::new(MockCoachClient::with_profile_metrics());
+    let client = Arc::new(MockIntervalsClient::with_profile_metrics());
     let handler = ManageProfileHandler::new();
 
     let output = handler
@@ -2218,7 +693,7 @@ async fn manage_profile_supports_real_sport_settings_array_for_zones_and_thresho
 
 #[tokio::test]
 async fn manage_profile_surfaces_lthr_directly_from_sport_settings() {
-    let client = Arc::new(MockCoachClient::with_profile_metrics());
+    let client = Arc::new(MockIntervalsClient::with_profile_metrics());
     let handler = ManageProfileHandler::new();
 
     let output = handler
@@ -2240,7 +715,7 @@ async fn manage_profile_surfaces_lthr_directly_from_sport_settings() {
 
 #[tokio::test]
 async fn manage_profile_overview_uses_wellness_weight_when_profile_has_none() {
-    let client = Arc::new(MockCoachClient::with_profile_metrics_and_wellness_weight());
+    let client = Arc::new(MockIntervalsClient::with_profile_metrics_and_wellness_weight());
     let handler = ManageProfileHandler::new();
 
     let output = handler
@@ -2261,7 +736,7 @@ async fn manage_profile_overview_uses_wellness_weight_when_profile_has_none() {
 
 #[tokio::test]
 async fn analyze_training_single_renders_pace_histogram_when_requested() {
-    let client = Arc::new(MockCoachClient::with_stream_supported_workout());
+    let client = Arc::new(MockIntervalsClient::with_stream_supported_workout());
     let handler = AnalyzeTrainingHandler::new();
 
     let output = handler
@@ -2284,8 +759,8 @@ async fn analyze_training_single_renders_pace_histogram_when_requested() {
 
 #[tokio::test]
 async fn analyze_training_single_surfaces_workout_comments() {
-    let mut client = MockCoachClient::with_rich_detailed_workout();
-    client.activity_details = json!({
+    let mut client = MockIntervalsClient::with_rich_detailed_workout();
+    client.default_activity_detail = Some(json!({
         "distance": 12000.0,
         "moving_time": 3600,
         "average_heartrate": 141.0,
@@ -2316,7 +791,7 @@ async fn analyze_training_single_surfaces_workout_comments() {
                 "activity_id": "detail-rich-1"
             }
         ]
-    });
+    }));
 
     let handler = AnalyzeTrainingHandler::new();
 
@@ -2342,7 +817,7 @@ async fn analyze_training_single_surfaces_workout_comments() {
 
 #[tokio::test]
 async fn analyze_training_single_modes_render_distinct_sections() {
-    let client = Arc::new(MockCoachClient::with_mode_sensitive_single_workout());
+    let client = Arc::new(MockIntervalsClient::with_mode_sensitive_single_workout());
     let handler = AnalyzeTrainingHandler::new();
 
     let summary = handler
@@ -2408,7 +883,7 @@ async fn analyze_training_single_modes_render_distinct_sections() {
 
 #[tokio::test]
 async fn analyze_training_single_modes_do_not_collapse_when_interval_data_is_missing() {
-    let client = Arc::new(MockCoachClient::with_mode_collapse_single_workout());
+    let client = Arc::new(MockIntervalsClient::with_mode_collapse_single_workout());
     let handler = AnalyzeTrainingHandler::new();
 
     let summary = handler
@@ -2479,7 +954,7 @@ async fn analyze_training_single_modes_do_not_collapse_when_interval_data_is_mis
 
 #[tokio::test]
 async fn analyze_training_single_intervals_reads_object_shaped_intervals_payload() {
-    let client = Arc::new(MockCoachClient::with_object_shaped_interval_payload());
+    let client = Arc::new(MockIntervalsClient::with_object_shaped_interval_payload());
     let handler = AnalyzeTrainingHandler::new();
 
     let output = handler
@@ -2504,7 +979,7 @@ async fn analyze_training_single_intervals_reads_object_shaped_intervals_payload
 
 #[tokio::test]
 async fn analyze_training_detailed_adds_expanded_workout_breakdown() {
-    let client = Arc::new(MockCoachClient::with_rich_detailed_workout());
+    let client = Arc::new(MockIntervalsClient::with_rich_detailed_workout());
     let handler = AnalyzeTrainingHandler::new();
 
     let summary = handler
@@ -2543,7 +1018,7 @@ async fn analyze_training_detailed_adds_expanded_workout_breakdown() {
 #[tokio::test]
 async fn analyze_training_intervals_backfills_power_from_streams_when_interval_payload_has_null_power()
  {
-    let client = Arc::new(MockCoachClient::with_interval_power_only_in_streams());
+    let client = Arc::new(MockIntervalsClient::with_interval_power_only_in_streams());
     let handler = AnalyzeTrainingHandler::new();
 
     let output = handler
@@ -2569,7 +1044,7 @@ async fn analyze_training_intervals_backfills_power_from_streams_when_interval_p
 #[tokio::test]
 async fn analyze_training_streams_mode_renders_streams_from_noncanonical_payload_without_interval_table()
  {
-    let client = Arc::new(MockCoachClient::with_noncanonical_stream_payload());
+    let client = Arc::new(MockIntervalsClient::with_noncanonical_stream_payload());
     let handler = AnalyzeTrainingHandler::new();
 
     let output = handler
@@ -2599,7 +1074,7 @@ async fn analyze_training_streams_mode_renders_streams_from_noncanonical_payload
 
 #[tokio::test]
 async fn analyze_training_streams_prioritizes_key_streams_ahead_of_secondary_metrics() {
-    let client = Arc::new(MockCoachClient::with_priority_streams_without_power());
+    let client = Arc::new(MockIntervalsClient::with_priority_streams_without_power());
     let handler = AnalyzeTrainingHandler::new();
 
     let output = handler
@@ -2624,7 +1099,7 @@ async fn analyze_training_streams_prioritizes_key_streams_ahead_of_secondary_met
 
 #[tokio::test]
 async fn analyze_training_streams_quality_findings_fall_back_to_pace_when_power_is_missing() {
-    let client = Arc::new(MockCoachClient::with_priority_streams_without_power());
+    let client = Arc::new(MockIntervalsClient::with_priority_streams_without_power());
     let handler = AnalyzeTrainingHandler::new();
 
     let output = handler
@@ -2648,7 +1123,7 @@ async fn analyze_training_streams_quality_findings_fall_back_to_pace_when_power_
 
 #[tokio::test]
 async fn analyze_training_intervals_backfills_power_from_power_stream_alias() {
-    let client = Arc::new(MockCoachClient::with_interval_power_stream_alias());
+    let client = Arc::new(MockIntervalsClient::with_interval_power_stream_alias());
     let handler = AnalyzeTrainingHandler::new();
 
     let output = handler
@@ -2672,7 +1147,7 @@ async fn analyze_training_intervals_backfills_power_from_power_stream_alias() {
 
 #[tokio::test]
 async fn analyze_training_intervals_falls_back_to_pace_when_run_streams_have_no_power() {
-    let client = Arc::new(MockCoachClient::with_interval_output_only_in_speed_streams());
+    let client = Arc::new(MockIntervalsClient::with_interval_output_only_in_speed_streams());
     let handler = AnalyzeTrainingHandler::new();
 
     let output = handler
@@ -2697,7 +1172,7 @@ async fn analyze_training_intervals_falls_back_to_pace_when_run_streams_have_no_
 
 #[tokio::test]
 async fn analyze_training_intervals_renders_all_intervals_without_collapsing_tail() {
-    let client = Arc::new(MockCoachClient::with_many_intervals());
+    let client = Arc::new(MockIntervalsClient::with_many_intervals());
     let handler = AnalyzeTrainingHandler::new();
 
     let output = handler
@@ -2720,7 +1195,7 @@ async fn analyze_training_intervals_renders_all_intervals_without_collapsing_tai
 
 #[tokio::test]
 async fn analyze_training_single_renders_best_efforts_object_payload_and_bucket_histograms() {
-    let client = Arc::new(MockCoachClient::with_best_efforts_and_bucket_histograms());
+    let client = Arc::new(MockIntervalsClient::with_best_efforts_and_bucket_histograms());
     let handler = AnalyzeTrainingHandler::new();
 
     let output = handler
@@ -2752,7 +1227,7 @@ async fn analyze_training_single_renders_best_efforts_object_payload_and_bucket_
 
 #[tokio::test]
 async fn analyze_training_single_summary_renders_best_efforts_when_requested() {
-    let client = Arc::new(MockCoachClient::with_best_efforts_and_bucket_histograms());
+    let client = Arc::new(MockIntervalsClient::with_best_efforts_and_bucket_histograms());
     let handler = AnalyzeTrainingHandler::new();
 
     let output = handler
@@ -2778,7 +1253,7 @@ async fn analyze_training_single_summary_renders_best_efforts_when_requested() {
 
 #[tokio::test]
 async fn analyze_training_single_summary_renders_live_efforts_shape_when_requested() {
-    let client = Arc::new(MockCoachClient::with_live_best_efforts_shape());
+    let client = Arc::new(MockIntervalsClient::with_live_best_efforts_shape());
     let handler = AnalyzeTrainingHandler::new();
 
     let output = handler
@@ -2804,7 +1279,7 @@ async fn analyze_training_single_summary_renders_live_efforts_shape_when_request
 
 #[tokio::test]
 async fn analyze_training_single_histograms_include_all_buckets_and_seconds() {
-    let client = Arc::new(MockCoachClient::with_full_histogram_ranges());
+    let client = Arc::new(MockIntervalsClient::with_full_histogram_ranges());
     let handler = AnalyzeTrainingHandler::new();
 
     let output = handler
@@ -2832,7 +1307,7 @@ async fn analyze_training_single_histograms_include_all_buckets_and_seconds() {
 
 #[tokio::test]
 async fn analyze_training_period_rejects_histograms_flag() {
-    let client = Arc::new(MockCoachClient::with_period_blocks());
+    let client = Arc::new(MockIntervalsClient::with_period_blocks());
     let handler = AnalyzeTrainingHandler::new();
 
     let err = handler
@@ -2854,7 +1329,7 @@ async fn analyze_training_period_rejects_histograms_flag() {
 
 #[tokio::test]
 async fn analyze_training_period_reports_requested_tss_when_it_cannot_be_computed() {
-    let client = Arc::new(MockCoachClient::with_period_blocks());
+    let client = Arc::new(MockIntervalsClient::with_period_blocks());
     let handler = AnalyzeTrainingHandler::new();
 
     let output = handler
@@ -2881,7 +1356,7 @@ async fn analyze_training_period_reports_requested_tss_when_it_cannot_be_compute
 
 #[tokio::test]
 async fn analyze_race_surfaces_decoupling_warning_when_drift_is_high() {
-    let client = Arc::new(MockCoachClient::with_race_activity());
+    let client = Arc::new(MockIntervalsClient::with_race_activity());
     let handler = AnalyzeRaceHandler::new();
 
     let output = handler
@@ -2896,7 +1371,7 @@ async fn analyze_race_surfaces_decoupling_warning_when_drift_is_high() {
 
 #[tokio::test]
 async fn analyze_training_period_summary_omits_trend_and_load_sections() {
-    let client = Arc::new(MockCoachClient::with_period_blocks());
+    let client = Arc::new(MockIntervalsClient::with_period_blocks());
     let handler = AnalyzeTrainingHandler::new();
 
     let output = handler
@@ -2920,7 +1395,7 @@ async fn analyze_training_period_summary_omits_trend_and_load_sections() {
 
 #[tokio::test]
 async fn compare_periods_filters_by_workout_type_and_renders_requested_metrics() {
-    let client = Arc::new(MockCoachClient::with_mixed_period_workouts());
+    let client = Arc::new(MockIntervalsClient::with_mixed_period_workouts());
     let handler = ComparePeriodsHandler::new();
 
     let output = handler
@@ -2951,7 +1426,7 @@ async fn compare_periods_filters_by_workout_type_and_renders_requested_metrics()
 
 #[tokio::test]
 async fn analyze_race_last_race_selects_race_instead_of_latest_regular_activity() {
-    let client = Arc::new(MockCoachClient::with_recent_non_race_then_race_activity());
+    let client = Arc::new(MockIntervalsClient::with_recent_non_race_then_race_activity());
     let handler = AnalyzeRaceHandler::new();
 
     let output = handler
@@ -2974,7 +1449,7 @@ async fn analyze_race_last_race_selects_race_instead_of_latest_regular_activity(
 
 #[tokio::test]
 async fn analyze_race_compare_to_planned_adds_plan_section_when_enabled() {
-    let client = Arc::new(MockCoachClient::with_race_activity());
+    let client = Arc::new(MockIntervalsClient::with_race_activity());
     let handler = AnalyzeRaceHandler::new();
 
     let output = handler
@@ -2996,7 +1471,7 @@ async fn analyze_race_compare_to_planned_adds_plan_section_when_enabled() {
 
 #[tokio::test]
 async fn analyze_race_modes_render_distinct_sections() {
-    let client = Arc::new(MockCoachClient::with_race_activity());
+    let client = Arc::new(MockIntervalsClient::with_race_activity());
     let handler = AnalyzeRaceHandler::new();
 
     let performance = handler
@@ -3047,7 +1522,7 @@ async fn analyze_race_modes_render_distinct_sections() {
 
 #[tokio::test]
 async fn assess_recovery_for_activity_changes_readiness_guidance() {
-    let client = Arc::new(MockCoachClient::with_supportive_recovery_metrics());
+    let client = Arc::new(MockIntervalsClient::with_supportive_recovery_metrics());
     let handler = AssessRecoveryHandler::new();
 
     let easy = handler
@@ -3094,7 +1569,7 @@ async fn assess_recovery_for_activity_changes_readiness_guidance() {
 
 #[tokio::test]
 async fn plan_training_focus_modes_do_not_collapse() {
-    let client = Arc::new(MockCoachClient::with_profile_metrics());
+    let client = Arc::new(MockIntervalsClient::with_profile_metrics());
     let handler = PlanTrainingHandler::new();
 
     let intensity = handler
@@ -3155,18 +1630,18 @@ async fn plan_training_focus_modes_do_not_collapse() {
     assert_ne!(specific_md, recovery_md);
 }
 
-fn with_p0_performance_intelligence_client() -> MockCoachClient {
-    MockCoachClient {
-        activities: vec![MockCoachClient::activity(
+fn with_p0_performance_intelligence_client() -> MockIntervalsClient {
+    MockIntervalsClient {
+        activities: vec![MockIntervalsClient::activity(
             "p0-activity-1",
             "P0 Test Workout",
             "2026-05-01",
         )],
-        fitness: MockCoachClient::fitness_snapshot(55.0, 47.0, 8.0),
-        wellness: json!([
+        fitness_summary: Some(MockIntervalsClient::fitness_snapshot(55.0, 47.0, 8.0)),
+        wellness: Some(json!([
             {"type": "Ride", "eftp": 260.0, "wPrime": 20000.0, "pMax": 850.0}
-        ]),
-        activity_details: json!({
+        ])),
+        default_activity_detail: Some(json!({
             "distance": 32000.0,
             "moving_time": 5400,
             "average_heartrate": 148.0,
@@ -3178,40 +1653,40 @@ fn with_p0_performance_intelligence_client() -> MockCoachClient {
             "icu_pm_p_max": 850.0,
             "icu_max_wbal_depletion": 6000.0,
             "icu_joules_above_ftp": 35000.0
-        }),
-        intervals: json!([
+        })),
+        intervals: Some(json!([
             {"wbal_start": 20000.0, "wbal_end": 14000.0, "joules_above_ftp": 35000.0},
             {"wbal_start": 14000.0, "wbal_end": 9000.0, "joules_above_ftp": 28000.0}
-        ]),
-        streams: json!({
+        ])),
+        streams: Some(json!({
             "heartrate": [140.0, 142.0, 144.0, 146.0, 148.0, 150.0, 152.0, 154.0],
             "watts": [235.0, 235.0, 234.0, 234.0, 233.0, 233.0, 232.0, 232.0]
-        }),
-        ..MockCoachClient::default()
+        })),
+        ..MockIntervalsClient::default()
     }
 }
 
 #[tokio::test]
 async fn analyze_training_single_includes_hr_drift_and_pace_variance_from_streams() {
-    let client = Arc::new(MockCoachClient {
-        activities: vec![MockCoachClient::activity(
+    let client = Arc::new(MockIntervalsClient {
+        activities: vec![MockIntervalsClient::activity(
             "drift-1",
             "Long Steady Run",
             "2026-03-04",
         )],
-        activity_details: json!({
+        default_activity_detail: Some(json!({
             "distance": 20000.0,
             "moving_time": 5400,
             "average_heartrate": 150.0,
             "average_watts": 220.0,
             "total_elevation_gain": 100.0
-        }),
-        streams: json!({
+        })),
+        streams: Some(json!({
             "heartrate": [140.0, 141.0, 142.0, 143.0, 144.0, 145.0, 155.0, 156.0, 157.0, 158.0],
             "velocity_smooth": [4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0],
             "watts": [220.0, 220.0, 220.0, 220.0, 220.0, 220.0, 220.0, 220.0, 220.0, 220.0]
-        }),
-        ..MockCoachClient::default()
+        })),
+        ..MockIntervalsClient::default()
     });
     let handler = AnalyzeTrainingHandler::new();
 
@@ -3236,7 +1711,7 @@ async fn analyze_training_single_includes_hr_drift_and_pace_variance_from_stream
     );
 }
 
-fn with_full_period_analysis_client() -> MockCoachClient {
+fn with_full_period_analysis_client() -> MockIntervalsClient {
     let mut details_map = HashMap::new();
     details_map.insert(
         "pa-1".into(),
@@ -3281,17 +1756,17 @@ fn with_full_period_analysis_client() -> MockCoachClient {
         }),
     );
 
-    MockCoachClient {
+    MockIntervalsClient {
         activities: vec![
-            MockCoachClient::activity("pa-1", "Week 1 Ride", "2026-04-01"),
-            MockCoachClient::activity("pa-2", "Week 4 Ride", "2026-04-28"),
+            MockIntervalsClient::activity("pa-1", "Week 1 Ride", "2026-04-01"),
+            MockIntervalsClient::activity("pa-2", "Week 4 Ride", "2026-04-28"),
         ],
-        fitness: MockCoachClient::fitness_snapshot(55.0, 47.0, 8.0),
-        wellness: json!([
+        fitness_summary: Some(MockIntervalsClient::fitness_snapshot(55.0, 47.0, 8.0)),
+        wellness: Some(json!([
             {"type": "Ride", "eftp": 260.0, "wPrime": 20000.0, "pMax": 850.0}
-        ]),
+        ])),
         activity_details_map: details_map,
-        ..MockCoachClient::default()
+        ..MockIntervalsClient::default()
     }
 }
 
@@ -3373,20 +1848,20 @@ async fn analyze_training_period_renders_full_performance_pipeline() {
 
 #[tokio::test]
 async fn analyze_training_single_hr_drift_absent_when_no_streams() {
-    let client = Arc::new(MockCoachClient {
-        activities: vec![MockCoachClient::activity(
+    let client = Arc::new(MockIntervalsClient {
+        activities: vec![MockIntervalsClient::activity(
             "nodrift-1",
             "Short Session",
             "2026-03-04",
         )],
-        activity_details: json!({
+        default_activity_detail: Some(json!({
             "distance": 5000.0,
             "moving_time": 1800,
             "average_heartrate": 145.0,
             "total_elevation_gain": 30.0
-        }),
-        streams: json!({}),
-        ..MockCoachClient::default()
+        })),
+        streams: Some(json!({})),
+        ..MockIntervalsClient::default()
     });
     let handler = AnalyzeTrainingHandler::new();
 
@@ -3489,17 +1964,17 @@ async fn period_analysis_shows_adaptation_state() {
         }),
     );
 
-    let client = Arc::new(MockCoachClient {
+    let client = Arc::new(MockIntervalsClient {
         activities: vec![
-            MockCoachClient::activity("adapt-1", "Week 1 Ride", "2026-04-01"),
-            MockCoachClient::activity("adapt-2", "Week 4 Ride", "2026-04-28"),
+            MockIntervalsClient::activity("adapt-1", "Week 1 Ride", "2026-04-01"),
+            MockIntervalsClient::activity("adapt-2", "Week 4 Ride", "2026-04-28"),
         ],
-        fitness: MockCoachClient::fitness_snapshot(55.0, 47.0, 8.0),
-        wellness: json!([
+        fitness_summary: Some(MockIntervalsClient::fitness_snapshot(55.0, 47.0, 8.0)),
+        wellness: Some(json!([
             {"type": "Ride", "eftp": 260.0, "wPrime": 20000.0, "pMax": 850.0}
-        ]),
+        ])),
         activity_details_map: details_map,
-        ..MockCoachClient::default()
+        ..MockIntervalsClient::default()
     });
 
     let handler = AnalyzeTrainingHandler::new();
@@ -3527,17 +2002,17 @@ async fn period_analysis_shows_adaptation_state() {
 
 #[tokio::test]
 async fn single_activity_analysis_does_not_show_adaptation_state() {
-    let client = Arc::new(MockCoachClient {
-        activities: vec![MockCoachClient::activity(
+    let client = Arc::new(MockIntervalsClient {
+        activities: vec![MockIntervalsClient::activity(
             "single-1",
             "Single Ride",
             "2026-05-01",
         )],
-        fitness: MockCoachClient::fitness_snapshot(55.0, 47.0, 8.0),
-        wellness: json!([
+        fitness_summary: Some(MockIntervalsClient::fitness_snapshot(55.0, 47.0, 8.0)),
+        wellness: Some(json!([
             {"type": "Ride", "eftp": 260.0, "wPrime": 20000.0, "pMax": 850.0}
-        ]),
-        activity_details: json!({
+        ])),
+        default_activity_detail: Some(json!({
             "distance": 32000.0,
             "moving_time": 5400,
             "average_heartrate": 148.0,
@@ -3547,8 +2022,8 @@ async fn single_activity_analysis_does_not_show_adaptation_state() {
             "icu_pm_ftp": 260.0,
             "icu_pm_w_prime": 20000.0,
             "icu_pm_p_max": 850.0
-        }),
-        ..MockCoachClient::default()
+        })),
+        ..MockIntervalsClient::default()
     });
 
     let handler = AnalyzeTrainingHandler::new();
@@ -3577,7 +2052,7 @@ async fn single_activity_analysis_does_not_show_adaptation_state() {
 async fn historical_yoy_comparison() {
     let mut q2_2025_activities: Vec<ActivitySummary> = (1..=5)
         .map(|day| {
-            MockCoachClient::activity(
+            MockIntervalsClient::activity(
                 &format!("q2-2025-{day}"),
                 &format!("Spring Run {day}"),
                 &format!("2025-04-{day:02}"),
@@ -3586,7 +2061,7 @@ async fn historical_yoy_comparison() {
         .collect();
     let mut q2_2026_activities: Vec<ActivitySummary> = (1..=5)
         .map(|day| {
-            MockCoachClient::activity(
+            MockIntervalsClient::activity(
                 &format!("q2-2026-{day}"),
                 &format!("Summer Run {day}"),
                 &format!("2026-04-{day:02}"),
@@ -3608,11 +2083,11 @@ async fn historical_yoy_comparison() {
         .map(|a| (a.id.clone(), detail.clone()))
         .collect();
 
-    let client = Arc::new(MockCoachClient {
+    let client = Arc::new(MockIntervalsClient {
         activities,
-        fitness: MockCoachClient::fitness_snapshot(50.0, 45.0, 5.0),
+        fitness_summary: Some(MockIntervalsClient::fitness_snapshot(50.0, 45.0, 5.0)),
         activity_details_map: details_map,
-        ..MockCoachClient::default()
+        ..MockIntervalsClient::default()
     });
     let handler = ComparePeriodsHandler::new();
 
@@ -3668,7 +2143,7 @@ async fn high_volume_period() {
     for idx in 0u32..250 {
         let day_offset = (idx as i64) % total_days;
         let date = base_date + chrono::Duration::days(day_offset);
-        activities.push(MockCoachClient::activity(
+        activities.push(MockIntervalsClient::activity(
             &format!("hv-{idx}"),
             &format!("Workout {}", idx + 1),
             &date.format("%Y-%m-%d").to_string(),
@@ -3686,11 +2161,11 @@ async fn high_volume_period() {
         .map(|a| (a.id.clone(), detail.clone()))
         .collect();
 
-    let client = Arc::new(MockCoachClient {
+    let client = Arc::new(MockIntervalsClient {
         activities,
-        fitness: MockCoachClient::fitness_snapshot(60.0, 50.0, 10.0),
+        fitness_summary: Some(MockIntervalsClient::fitness_snapshot(60.0, 50.0, 10.0)),
         activity_details_map: details_map,
-        ..MockCoachClient::default()
+        ..MockIntervalsClient::default()
     });
     let handler = AnalyzeTrainingHandler::new();
 
@@ -3723,9 +2198,9 @@ async fn high_volume_period() {
 #[tokio::test]
 async fn partial_detail() {
     let activities = vec![
-        MockCoachClient::activity("pd-1", "Complete Detail Run", "2026-03-01"),
-        MockCoachClient::activity("pd-2", "Partial Run", "2026-03-03"),
-        MockCoachClient::activity("pd-3", "Missing Detail Run", "2026-03-05"),
+        MockIntervalsClient::activity("pd-1", "Complete Detail Run", "2026-03-01"),
+        MockIntervalsClient::activity("pd-2", "Partial Run", "2026-03-03"),
+        MockIntervalsClient::activity("pd-3", "Missing Detail Run", "2026-03-05"),
     ];
 
     let full_detail = json!({
@@ -3747,11 +2222,11 @@ async fn partial_detail() {
     details_map.insert("pd-2".to_string(), partial_detail_value);
     // pd-3 is intentionally missing — get_activity_details will return NotFound
 
-    let client = Arc::new(MockCoachClient {
+    let client = Arc::new(MockIntervalsClient {
         activities,
-        fitness: MockCoachClient::fitness_snapshot(55.0, 47.0, 8.0),
+        fitness_summary: Some(MockIntervalsClient::fitness_snapshot(55.0, 47.0, 8.0)),
         activity_details_map: details_map,
-        ..MockCoachClient::default()
+        ..MockIntervalsClient::default()
     });
     let handler = AnalyzeTrainingHandler::new();
 
@@ -3796,27 +2271,27 @@ async fn partial_detail() {
 // Task 5: Load provenance and coverage rendering tests
 // ===========================================================================
 
-fn with_complete_icu_training_load_block() -> MockCoachClient {
-    MockCoachClient {
+fn with_complete_icu_training_load_block() -> MockIntervalsClient {
+    MockIntervalsClient {
         activities: vec![
-            MockCoachClient::activity("a1", "Run 1", "2026-03-01"),
-            MockCoachClient::activity("a2", "Run 2", "2026-03-02"),
-            MockCoachClient::activity("a3", "Run 3", "2026-03-03"),
+            MockIntervalsClient::activity("a1", "Run 1", "2026-03-01"),
+            MockIntervalsClient::activity("a2", "Run 2", "2026-03-02"),
+            MockIntervalsClient::activity("a3", "Run 3", "2026-03-03"),
         ],
-        fitness: MockCoachClient::fitness_snapshot(55.0, 45.0, 10.0),
-        activity_details: json!({
+        fitness_summary: Some(MockIntervalsClient::fitness_snapshot(55.0, 45.0, 10.0)),
+        default_activity_detail: Some(json!({
             "distance": 15000.0,
             "moving_time": 5400,
             "average_heartrate": 145.0,
             "average_watts": 210.0,
             "total_elevation_gain": 300.0,
             "icu_training_load": 80.0
-        }),
-        ..MockCoachClient::default()
+        })),
+        ..MockIntervalsClient::default()
     }
 }
 
-fn with_mixed_load_alias_block() -> MockCoachClient {
+fn with_mixed_load_alias_block() -> MockIntervalsClient {
     let mut details_map = HashMap::new();
     details_map.insert(
         "a1".to_string(),
@@ -3842,19 +2317,19 @@ fn with_mixed_load_alias_block() -> MockCoachClient {
             "moving_time": 2400
         }),
     );
-    MockCoachClient {
+    MockIntervalsClient {
         activities: vec![
-            MockCoachClient::activity("a1", "Hard Session", "2026-03-01"),
-            MockCoachClient::activity("a2", "Tempo Run", "2026-03-02"),
-            MockCoachClient::activity("a3", "Easy Jog", "2026-03-03"),
+            MockIntervalsClient::activity("a1", "Hard Session", "2026-03-01"),
+            MockIntervalsClient::activity("a2", "Tempo Run", "2026-03-02"),
+            MockIntervalsClient::activity("a3", "Easy Jog", "2026-03-03"),
         ],
-        fitness: MockCoachClient::fitness_snapshot(55.0, 45.0, 10.0),
+        fitness_summary: Some(MockIntervalsClient::fitness_snapshot(55.0, 45.0, 10.0)),
         activity_details_map: details_map,
-        ..MockCoachClient::default()
+        ..MockIntervalsClient::default()
     }
 }
 
-fn with_moving_time_only_activity() -> MockCoachClient {
+fn with_moving_time_only_activity() -> MockIntervalsClient {
     let mut details_map = HashMap::new();
     details_map.insert(
         "a1".to_string(),
@@ -3871,14 +2346,14 @@ fn with_moving_time_only_activity() -> MockCoachClient {
             "moving_time": 2400
         }),
     );
-    MockCoachClient {
+    MockIntervalsClient {
         activities: vec![
-            MockCoachClient::activity("a1", "Hard Session", "2026-03-01"),
-            MockCoachClient::activity("a2", "Recovery Walk", "2026-03-02"),
+            MockIntervalsClient::activity("a1", "Hard Session", "2026-03-01"),
+            MockIntervalsClient::activity("a2", "Recovery Walk", "2026-03-02"),
         ],
-        fitness: MockCoachClient::fitness_snapshot(55.0, 45.0, 10.0),
+        fitness_summary: Some(MockIntervalsClient::fitness_snapshot(55.0, 45.0, 10.0)),
         activity_details_map: details_map,
-        ..MockCoachClient::default()
+        ..MockIntervalsClient::default()
     }
 }
 
@@ -4020,7 +2495,11 @@ async fn track_progress_does_not_derive_ctl_from_duration_only_activities() {
         }),
     );
 
-    let activities = vec![MockCoachClient::activity("walk-1", "Walk", "2026-03-01")];
+    let activities = vec![MockIntervalsClient::activity(
+        "walk-1",
+        "Walk",
+        "2026-03-01",
+    )];
     let window = AnalysisWindow::new(
         chrono::NaiveDate::from_ymd_opt(2026, 3, 1).unwrap(),
         chrono::NaiveDate::from_ymd_opt(2026, 3, 1).unwrap(),
@@ -4079,7 +2558,7 @@ fn endurance_long_ride_streams() -> Value {
     })
 }
 
-fn build_period_window(days: &[(&str, &str, f64, f64)]) -> MockCoachClient {
+fn build_period_window(days: &[(&str, &str, f64, f64)]) -> MockIntervalsClient {
     let mut details_map = HashMap::new();
     let mut streams_map = HashMap::new();
     let activities: Vec<ActivitySummary> = days
@@ -4095,16 +2574,16 @@ fn build_period_window(days: &[(&str, &str, f64, f64)]) -> MockCoachClient {
                 }),
             );
             streams_map.insert(id.to_string(), endurance_ride_streams(*hr));
-            MockCoachClient::activity(id, "Endurance Ride", date)
+            MockIntervalsClient::activity(id, "Endurance Ride", date)
         })
         .collect();
-    MockCoachClient {
+    MockIntervalsClient {
         activities,
-        fitness: json!([{ "fitness": 50.0, "fatigue": 30.0, "form": 20.0 }]),
-        wellness: json!([{ "type": "Ride", "eftp": 300.0 }]),
+        fitness_summary: Some(json!([{ "fitness": 50.0, "fatigue": 30.0, "form": 20.0 }])),
+        wellness: Some(json!([{ "type": "Ride", "eftp": 300.0 }])),
         activity_details_map: details_map,
         streams_map,
-        ..MockCoachClient::default()
+        ..MockIntervalsClient::default()
     }
 }
 
@@ -4206,16 +2685,16 @@ async fn endurance_long_ride_pair_marks_late_window_at_or_after_120_minutes() {
         json!({ "type": "Ride", "moving_time": 6000_i64, "icu_pm_ftp": 300.0 }),
     );
     streams_map.insert("ride-long".to_string(), endurance_long_ride_streams());
-    let client = MockCoachClient {
+    let client = MockIntervalsClient {
         activities: vec![
-            MockCoachClient::activity("ride-rec-1", "Steady", "2026-07-08"),
-            MockCoachClient::activity("ride-long", "Long", "2026-07-10"),
+            MockIntervalsClient::activity("ride-rec-1", "Steady", "2026-07-08"),
+            MockIntervalsClient::activity("ride-long", "Long", "2026-07-10"),
         ],
-        fitness: json!([{ "fitness": 50.0, "fatigue": 30.0, "form": 20.0 }]),
-        wellness: json!([{ "type": "Ride", "eftp": 300.0 }]),
+        fitness_summary: Some(json!([{ "fitness": 50.0, "fatigue": 30.0, "form": 20.0 }])),
+        wellness: Some(json!([{ "type": "Ride", "eftp": 300.0 }])),
         activity_details_map: details_map,
         streams_map,
-        ..MockCoachClient::default()
+        ..MockIntervalsClient::default()
     };
 
     let handler = AnalyzeTrainingHandler::new();
@@ -4245,13 +2724,13 @@ async fn incomplete_or_running_data_renders_an_honest_reason_not_a_score() {
     // No streams at all → bounded fetch returns empty profile → renderer
     // shows availability reason.
     let details_map: HashMap<String, Value> = HashMap::new();
-    let client = MockCoachClient {
-        activities: vec![MockCoachClient::activity("run-1", "Run", "2026-07-08")],
-        fitness: json!([{ "fitness": 50.0, "fatigue": 30.0, "form": 20.0 }]),
-        wellness: json!([{ "type": "Run", "eftp": 250.0 }]),
-        activity_details: json!({ "type": "Run" }),
+    let client = MockIntervalsClient {
+        activities: vec![MockIntervalsClient::activity("run-1", "Run", "2026-07-08")],
+        fitness_summary: Some(json!([{ "fitness": 50.0, "fatigue": 30.0, "form": 20.0 }])),
+        wellness: Some(json!([{ "type": "Run", "eftp": 250.0 }])),
+        default_activity_detail: Some(json!({ "type": "Run" })),
         activity_details_map: details_map,
-        ..MockCoachClient::default()
+        ..MockIntervalsClient::default()
     };
 
     let handler = AnalyzeTrainingHandler::new();

@@ -3,14 +3,16 @@
 Minimal MCP server scaffold for Intervals.icu using the `rmcp` SDK.
 
 Current status:
-- Implements an `IntervalsMcpHandler` with many tools exposed via `rmcp` including:
-	- Athlete/profile: `get_athlete_profile`
-	- Activities: `get_recent_activities`, `get_activity_details`, `search_activities`, `update_activity`
-	- Events: `get_events`, `create_event`, `get_event`, `delete_event`, `bulk_create_events`
-	- Coach analysis: period analysis now carries calendar events alongside activity data so race, sick, injured, note, and planned workout items can be retrieved without collapsing them into training load metrics
-	- Streams & intervals: `get_activity_streams`, `get_activity_intervals`, `get_best_efforts`
-	- Files: `start_download`, `get_download_status`, `list_downloads`, `cancel_download` (progress & cancellation supported)
-	- Webhooks: `receive_webhook` (HMAC verification + dedupe) and a programmatic `process_webhook`
+- Implements an `IntervalsMcpHandler` exposing 9 curated intents via `rmcp`:
+	- `plan_training` — build a training plan for a date range
+	- `analyze_training` — analyze recent training load and fitness
+	- `modify_training` — create/adjust/delete planned workouts
+	- `compare_periods` — compare two training periods
+	- `assess_recovery` — assess readiness and recovery
+	- `manage_profile` — read/update athlete profile
+	- `manage_gear` — manage bikes and gear
+	- `analyze_race` — analyze race performance
+	- `track_progress` — track long-term progress and trends
 
 Examples & usage
 
@@ -71,5 +73,4 @@ cargo test -p intervals_icu_mcp --test e2e_http -- --nocapture
 ```
 
 Notes
-- To exercise webhooks: set the HMAC secret via the `set_webhook_secret` tool (or `set_webhook_secret_value` programmatically) and POST to `/webhook` with header `x-signature` containing the hex HMAC-SHA256 of the JSON body.
-- The `start_download` tool kicks off a download job and returns a `download_id`. Use `get_download_status`/`list_downloads` to track progress and `cancel_download` to abort.
+- The public MCP surface is the 9 curated intents listed above; dynamic OpenAPI operations stay internal and are never exposed as tool names.

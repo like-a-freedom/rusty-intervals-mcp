@@ -5,7 +5,7 @@
 //!   - `IntervalsMcpHandler` construction + preload
 //!   - STDIO/HTTP mode env-var validation error messages
 //!
-//! Core handler logic (tool count, credentials extraction, webhooks,
+//! Core handler logic (tool count, credentials extraction,
 //! `build_mcp_rmcp_config`, etc.) is tested inline in src/lib.rs.
 
 use secrecy::SecretString;

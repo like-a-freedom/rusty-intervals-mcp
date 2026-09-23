@@ -12,6 +12,33 @@ fn make_activity(id: &str, date: &str, name: &str) -> ActivitySummary {
     }
 }
 
+#[tokio::test]
+async fn test_execute_date_filter_matches_iso_datetime_activity_date() {
+    // Selecting by YYYY-MM-DD must match activities whose stored date is a
+    // full ISO datetime (real Intervals.icu payload shape).
+    let detail = json!({"distance": 10000.0, "moving_time": 2700});
+    let client = Arc::new(
+        MockIntervalsClient::builder()
+            .with_activities(vec![make_activity(
+                "race-1",
+                "2026-05-24T08:00:00",
+                "Harbor 10k Race",
+            )])
+            .with_activity_detail("race-1", detail)
+            .with_streams(json!({}))
+            .with_intervals(json!({})),
+    );
+    let handler = AnalyzeRaceHandler::new();
+    let result = handler
+        .execute(json!({"date": "2026-05-24"}), client, None)
+        .await;
+    assert!(result.is_ok());
+    let output = result.unwrap();
+    let content_str = format!("{:?}", output.content);
+    assert!(content_str.contains("Harbor 10k Race"));
+    assert!(content_str.contains("2026-05-24T08:00:00"));
+}
+
 fn make_client_with_activity(
     id: &str,
     date: &str,

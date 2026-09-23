@@ -5,6 +5,7 @@
 //! produces that table from the wellness and fitness payloads, using
 //! thresholds from [`crate::engines::coach_guidance`] for the status icons.
 
+use crate::content::date::NA;
 use crate::domains::coach::{FitnessMetrics, WellnessMetrics};
 
 /// Render a maybe-missing metric: `None` becomes `n/a` instead of a fabricated
@@ -13,9 +14,7 @@ fn render_optional(
     value: Option<f64>,
     render: impl FnOnce(f64) -> (String, String),
 ) -> (String, String) {
-    value
-        .map(render)
-        .unwrap_or_else(|| ("n/a".into(), "n/a".into()))
+    value.map(render).unwrap_or_else(|| (NA.into(), NA.into()))
 }
 
 /// Physiologically positive-only metrics: zero (or negative) is missing data,

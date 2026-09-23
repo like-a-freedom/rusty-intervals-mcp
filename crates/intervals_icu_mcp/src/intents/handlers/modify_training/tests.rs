@@ -569,7 +569,7 @@ fn test_resolve_target_scope_range_start_after_end() {
         result
             .unwrap_err()
             .to_string()
-            .contains("Start date must be before end date")
+            .contains("must be before end date")
     );
 }
 

@@ -216,8 +216,7 @@ impl IntentHandler for AnalyzeRaceHandler {
             let fitness_context = FitnessContext::load(client.as_ref()).await;
             fetched.wellness = client.get_wellness(Some(7)).await.ok();
 
-            let race_date = NaiveDate::parse_from_str(&race.start_date_local, "%Y-%m-%d")
-                .ok()
+            let race_date = parse_activity_date(&race.start_date_local)
                 .unwrap_or_else(|| chrono::Local::now().date_naive());
             let mut race_context = CoachContext::new(
                 AnalysisKind::RaceAnalysis,

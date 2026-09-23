@@ -42,7 +42,7 @@ jobs:
 
       - name: Run tests
         if: github.event_name == 'pull_request'
-        run: cargo test --all --no-fail-fast
+        run: cargo test --all --all-features --no-fail-fast
 
       - name: Install cargo-llvm-cov
         if: github.event_name != 'pull_request'

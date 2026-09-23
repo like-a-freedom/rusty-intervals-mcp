@@ -3,13 +3,11 @@ use serde_json::Value;
 
 use super::render::*;
 use super::shared::*;
-use crate::content::date::{data_availability_block, filter_activities_by_date, parse_date};
-use crate::content::{ContentBlock, IntentError};
+use crate::content::IntentError;
+use crate::content::date::{NA, data_availability_block, filter_activities_by_date, parse_date};
 use crate::domains::coach::{AnalysisKind, AnalysisWindow, CoachContext};
 use crate::domains::interval_detection::{self};
-use crate::domains::interval_segment::{
-    SegmentProvenance, SegmentRole, SegmentSeriesReport, SegmentWindow,
-};
+use crate::domains::interval_segment::{SegmentProvenance, SegmentRole, SegmentWindow};
 use crate::domains::nutrition::{compute_carb_demand, compute_protein_demand};
 use crate::engines::adaptation::classify_curve_profile;
 use crate::engines::analysis::{
@@ -80,21 +78,7 @@ pub async fn analyze_single(
     tracing::debug!("Found {} matching activities for {}", matching.len(), date);
 
     if matching.is_empty() {
-        let mut content = Vec::new();
-        content.push(ContentBlock::markdown(format!(
-            "# Analysis: {}\nStatus: No activities found",
-            date
-        )));
-
-        let mut summary = vec![
-            format!("  No training activities recorded for {}", date),
-            "  This could be a rest day or activities haven't been synced yet".into(),
-        ];
-        if let Some(d) = desc_filter {
-            summary.push(format!("  Search filter: '{}'", d));
-        }
-
-        content.push(ContentBlock::markdown(summary.join("\n")));
+        let content = single_no_activities_blocks(date, desc_filter);
 
         let suggestions = vec![
             "Check if activities are synced from your fitness device".into(),
@@ -113,52 +97,7 @@ pub async fn analyze_single(
     }
 
     if matching.len() > 1 {
-        let mut content = Vec::new();
-        content.push(ContentBlock::markdown(format!(
-            "# Analysis: {}\nStatus: Multiple activities found",
-            date
-        )));
-
-        let mut summary = vec![format!(
-            "  Found {} activities for {}",
-            matching.len(),
-            date
-        )];
-        if let Some(d) = desc_filter {
-            summary.push(format!(
-                "  Search filter: '{}' matched {} activities",
-                d,
-                matching.len()
-            ));
-        }
-        summary.push("  Please be more specific with your search.".into());
-
-        let mut activities_list = vec!["Found activities:".into()];
-        for (i, a) in matching.iter().enumerate() {
-            activities_list.push(format!(
-                "{}. {} (ID: {})",
-                i + 1,
-                a.name.as_deref().unwrap_or("Unknown"),
-                a.id
-            ));
-        }
-        content.push(ContentBlock::markdown(activities_list.join("\n")));
-
-        let mut retry_examples = vec!["To analyze a specific activity, retry with:".into()];
-        for (i, a) in matching.iter().enumerate() {
-            let name = a.name.as_deref().unwrap_or("Unknown");
-            let id = &a.id;
-            let key_phrase = name.split(['-', '—', ':']).next().unwrap_or(name).trim();
-
-            retry_examples.push(format!(
-                "{}. {} → `description_contains: \"{}\"` or ID: `{}`",
-                i + 1,
-                name,
-                key_phrase,
-                id
-            ));
-        }
-        content.push(ContentBlock::markdown(retry_examples.join("\n")));
+        let content = single_multiple_activities_blocks(date, desc_filter, &matching);
 
         let suggestions = vec![
             "Choose one activity from the list and retry with its `description_contains` value".into(),
@@ -205,7 +144,7 @@ pub async fn analyze_single(
 
     let analysis_mode =
         SingleAnalysisMode::parse(input.get("analysis_type").and_then(Value::as_str));
-    let requested_metrics = requested_metrics(input);
+    let requested = requested_metrics(input);
     let include_best = input
         .get("include_best_efforts")
         .and_then(Value::as_bool)
@@ -378,75 +317,47 @@ pub async fn analyze_single(
     workout_context.guidance = build_guidance(&workout_context.metrics, &workout_context.alerts);
 
     let mut content = Vec::new();
-    content.push(ContentBlock::markdown(format!(
-        "# Analysis: {}\nDate: {}\nID: {}\nType: {}",
-        activity_name,
+    content.push(single_header_block(
+        &activity_name,
         date,
-        activity_id,
-        analysis_mode.as_str()
-    )));
-    content.push(ContentBlock::markdown(format!(
-        "Workout Grade: {:?}",
-        workout_grade
-    )));
+        &activity_id,
+        analysis_mode.as_str(),
+    ));
+    content.push(workout_grade_block(&workout_grade));
 
     let insights = WorkoutInsights::generate(&analysis_metrics, &workout_grade);
-    if !insights.is_empty() {
-        let mut insight_lines = vec!["Insights".to_string()];
-        for insight in &insights {
-            insight_lines.push(format!("  {}", insight));
-        }
-        content.push(ContentBlock::markdown(insight_lines.join("\n")));
+    if let Some(block) = insights_block(&insights) {
+        content.push(block);
     }
 
     let rows = build_basic_workout_metric_rows(workout_detail);
     if !rows.is_empty() {
-        content.push(ContentBlock::table(
-            vec!["Metric".into(), "Value".into()],
-            rows,
-        ));
+        content.push(basic_metrics_table_block(rows));
     }
 
-    if let Some(etvs_text) = render_etvs_section(workout_context.metrics.etvs.as_ref()) {
-        content.push(ContentBlock::markdown(etvs_text));
+    if let Some(block) = render_etvs_section(workout_context.metrics.etvs.as_ref()) {
+        content.push(block);
     }
 
-    if !requested_metrics.is_empty() {
+    if !requested.is_empty() {
         let rows = build_requested_single_metric_rows(
             workout_detail.and_then(Value::as_object),
-            &requested_metrics,
+            &requested,
             workout_context.metrics.etvs.as_ref(),
         );
-        content.push(ContentBlock::markdown("Requested Metrics".to_string()));
-        content.push(ContentBlock::table(
-            vec!["Metric".into(), "Value".into(), "Status".into()],
-            rows,
-        ));
+        content.extend(requested_single_metrics_blocks(rows));
     }
 
     if analysis_mode.show_detailed_breakdown() {
         let rows = build_detailed_workout_rows(workout_detail);
         if !rows.is_empty() {
-            content.push(ContentBlock::markdown("Detailed Breakdown".to_string()));
-            content.push(ContentBlock::table(
-                vec!["Metric".into(), "Value".into()],
-                rows,
-            ));
+            content.extend(detailed_breakdown_blocks(rows));
         }
     }
 
     let activity_message_rows = build_activity_message_rows(&fetched.activity_messages);
     if !activity_message_rows.is_empty() {
-        content.push(ContentBlock::markdown("Workout Comments".to_string()));
-        content.push(ContentBlock::table(
-            vec![
-                "When".into(),
-                "Author".into(),
-                "Type".into(),
-                "Comment".into(),
-            ],
-            activity_message_rows,
-        ));
+        content.extend(workout_comments_blocks(activity_message_rows));
     }
 
     if analysis_mode.show_execution_context()
@@ -468,10 +379,7 @@ pub async fn analyze_single(
                 decoupling.decoupling_pct, decoupling.state
             ));
         }
-        content.push(ContentBlock::markdown(format!(
-            "Execution Context\n  {}",
-            lines.join("\n  ")
-        )));
+        content.push(execution_context_block(&lines));
     }
 
     if analysis_mode.show_execution_context() {
@@ -482,31 +390,28 @@ pub async fn analyze_single(
         if let Some(variance) = analysis_metrics.pace_variance_percent {
             stream_metrics.push(format!("Pace Variance: {:.1}%", variance));
         }
-        if !stream_metrics.is_empty() {
-            content.push(ContentBlock::markdown(format!(
-                "Stream Metrics\n  {}",
-                stream_metrics.join("\n  ")
-            )));
+        if let Some(block) = stream_metrics_block(&stream_metrics) {
+            content.push(block);
         }
     }
 
-    if let Some(espe_text) = render_espe_section(
+    if let Some(block) = render_espe_section(
         &workout_context.metrics.espe_anchors,
         &workout_context.metrics.espe_derived,
     ) {
-        content.push(ContentBlock::markdown(espe_text));
+        content.push(block);
     }
-    if let Some(wdrm_text) = render_wdrm_section(&workout_context.metrics.wdrm) {
-        content.push(ContentBlock::markdown(wdrm_text));
+    if let Some(block) = render_wdrm_section(&workout_context.metrics.wdrm) {
+        content.push(block);
     }
     if let Some(workout) = &workout_context.metrics.workout
-        && let Some(isdm_text) = render_isdm_section(&workout.aerobic_decoupling)
+        && let Some(block) = render_isdm_section(&workout.aerobic_decoupling)
     {
-        content.push(ContentBlock::markdown(isdm_text));
+        content.push(block);
     }
 
-    if let Some(fit_text) = render_fitness_snapshot(&workout_context.metrics.fitness) {
-        content.push(ContentBlock::markdown(fit_text));
+    if let Some(block) = render_fitness_snapshot(&workout_context.metrics.fitness) {
+        content.push(block);
     }
 
     if analysis_mode.show_interval_section() {
@@ -528,11 +433,7 @@ pub async fn analyze_single(
         if let Some(detection) = local_detection {
             let upstream_failed =
                 matches!(fetched.intervals_state, SourceFetchState::Failed { .. });
-            let rationale = detection
-                .reasons
-                .first()
-                .map(String::as_str)
-                .unwrap_or("n/a");
+            let rationale = detection.reasons.first().map(String::as_str).unwrap_or(NA);
 
             match detection.session_kind {
                 interval_detection::SessionKind::StructuredIntervals => {
@@ -548,14 +449,14 @@ pub async fn analyze_single(
                         .sum::<f64>()
                         / detection.work_segments.len() as f64;
                     let confidence = detection.confidence.unwrap_or_default();
-                    content.push(ContentBlock::markdown(format!(
-                        "Interval Analysis\n  Structured session with {} detected work intervals, {} recoveries, {:.0}s work, mean intensity {:.2}, confidence {:.0}%.",
+                    append_structured_interval_header(
+                        &mut content,
                         detection.work_segments.len(),
                         detection.recovery_segments.len(),
                         work_duration_s,
                         mean_work_intensity,
-                        confidence * 100.0,
-                    )));
+                        confidence,
+                    );
 
                     let metric_streams = fetched.streams.as_ref().and_then(parse_metric_streams);
 
@@ -584,39 +485,18 @@ pub async fn analyze_single(
                         let recoveries = enrich_segments(streams, &recovery_windows);
                         let consistency = compute_structured_consistency(&efforts);
 
-                        let report = SegmentSeriesReport {
+                        let report = crate::domains::interval_segment::SegmentSeriesReport {
                             provenance: SegmentProvenance::LocalStructured,
                             efforts,
                             recoveries,
                             consistency,
                         };
 
-                        content.push(ContentBlock::markdown(
-                            "Metrics require ≥80% time coverage per signal; lower-coverage values are shown as n/a."
-                        ));
-                        let tables = build_segment_tables(&report, presentation);
-                        for table in tables {
-                            content.push(ContentBlock::markdown(table.title));
-                            content.push(ContentBlock::table(table.headers, table.rows));
-                        }
-
-                        if let Some(ref cons) = report.consistency {
-                            let cons_rows = build_consistency_rows(cons, presentation);
-                            if !cons_rows.is_empty() {
-                                content
-                                    .push(ContentBlock::markdown("Repeat Consistency".to_string()));
-                                content.push(ContentBlock::table(
-                                    vec!["Metric".to_string(), "Value".to_string()],
-                                    cons_rows,
-                                ));
-                            }
-                        }
+                        append_segment_report(&mut content, &report, presentation);
                     }
                 }
                 interval_detection::SessionKind::Fartlek => {
-                    content.push(ContentBlock::markdown(format!(
-                        "Interval Analysis\n  Session looks like fartlek / non-structured; no structured work count claimed ({rationale})."
-                    )));
+                    append_fartlek_interval_header(&mut content, rationale);
 
                     let metric_streams = fetched.streams.as_ref().and_then(parse_metric_streams);
 
@@ -646,40 +526,26 @@ pub async fn analyze_single(
                         let efforts = enrich_segments(streams, &surge_windows);
                         let recoveries = enrich_segments(streams, &rec_windows);
 
-                        let report = SegmentSeriesReport {
+                        let report = crate::domains::interval_segment::SegmentSeriesReport {
                             provenance: SegmentProvenance::LocalFartlek,
                             efforts,
                             recoveries,
                             consistency: None,
                         };
 
-                        content.push(ContentBlock::markdown(
-                            "Metrics require ≥80% time coverage per signal; lower-coverage values are shown as n/a."
-                        ));
-                        let tables = build_segment_tables(&report, presentation);
-                        for table in tables {
-                            content.push(ContentBlock::markdown(table.title));
-                            content.push(ContentBlock::table(table.headers, table.rows));
-                        }
+                        append_segment_report(&mut content, &report, presentation);
                     }
                 }
                 interval_detection::SessionKind::Other => {
-                    content.push(ContentBlock::markdown(format!(
-                        "Interval Analysis\n  Session has intensity but is not structured; no structured work count claimed ({rationale})."
-                    )));
+                    append_other_interval_header(&mut content, rationale);
                 }
                 interval_detection::SessionKind::InsufficientData => {
-                    content.push(ContentBlock::markdown(format!(
-                        "Interval Analysis\n  Stream data insufficient for local interval detection ({rationale})."
-                    )));
+                    append_insufficient_interval_header(&mut content, rationale);
                 }
             }
 
             if upstream_failed {
-                content.push(ContentBlock::markdown(
-                    "  Warning: upstream interval endpoint unavailable; Local detection completed as fallback."
-                        .to_string(),
-                ));
+                append_upstream_fallback_warning(&mut content);
             }
         } else if let Some(intervals_arr) = intervals_arr {
             let output_kind =
@@ -689,21 +555,9 @@ pub async fn analyze_single(
                 IntervalOutputKind::Pace => "Avg Pace",
             };
 
-            content.push(ContentBlock::markdown(
-                "\nInterval Analysis\nUpstream Interval Reference:".to_string(),
-            ));
-
             let interval_rows =
                 build_interval_analysis_rows(intervals_arr, fetched.streams.as_ref(), output_kind);
-            content.push(ContentBlock::table(
-                vec![
-                    "Rep".into(),
-                    "Duration".into(),
-                    "Avg HR".into(),
-                    output_header.into(),
-                ],
-                interval_rows,
-            ));
+            append_upstream_reference_section(&mut content, output_header, interval_rows);
 
             if let Some(ref streams) = fetched.streams {
                 let metric_streams = parse_metric_streams(streams);
@@ -716,28 +570,18 @@ pub async fn analyze_single(
                             .partition(|sw| sw.role == SegmentRole::Work);
                         let efforts = enrich_segments(streams, &work);
                         let recoveries = enrich_segments(streams, &recovery);
-                        let report = SegmentSeriesReport {
+                        let report = crate::domains::interval_segment::SegmentSeriesReport {
                             provenance: SegmentProvenance::UpstreamIntervalsIcu,
                             efforts,
                             recoveries,
                             consistency: None,
                         };
-                        content.push(ContentBlock::markdown(
-                            "Metrics require ≥80% time coverage per signal; lower-coverage values are shown as n/a."
-                        ));
-                        let tables = build_segment_tables(&report, presentation);
-                        for table in tables {
-                            content.push(ContentBlock::markdown(table.title));
-                            content.push(ContentBlock::table(table.headers, table.rows));
-                        }
+                        append_segment_report(&mut content, &report, presentation);
                     }
                 }
             }
         } else {
-            content.push(ContentBlock::markdown(
-                "Interval Analysis\n  Interval detection unavailable: stream data not available for local detection."
-                    .to_string(),
-            ));
+            append_interval_unavailable(&mut content);
         }
     }
 
@@ -751,9 +595,7 @@ pub async fn analyze_single(
     );
 
     if include_hist && fetched.power_histogram.is_none() {
-        content.push(ContentBlock::markdown(
-            "\nPower Histogram\n  Power histogram unavailable - this workout may not have power meter data.".to_string(),
-        ));
+        content.push(power_histogram_unavailable_block());
     } else {
         append_histogram_section(
             &mut content,
@@ -797,11 +639,8 @@ pub async fn analyze_single(
         {
             findings.push(output_finding);
         }
-        if !findings.is_empty() {
-            content.push(ContentBlock::markdown(format!(
-                "Quality Findings\n  {}",
-                findings.join("\n  ")
-            )));
+        if let Some(block) = quality_findings_block(&findings) {
+            content.push(block);
         }
     }
 
@@ -839,8 +678,8 @@ pub async fn analyze_single(
             {
                 decoupling.z2_hr_variance = z2_hr_variance;
             }
-            if let Some(z2_text) = render_z2_stability_section(lower, upper, z2_hr_variance) {
-                content.push(ContentBlock::markdown(z2_text));
+            if let Some(block) = render_z2_stability_section(lower, upper, z2_hr_variance) {
+                content.push(block);
             }
         }
     }
@@ -853,18 +692,8 @@ pub async fn analyze_single(
             && dist > 0.0
         {
             let terrain = compute_terrain_context(elev, dist, mtime, None);
-            if terrain.supported {
-                let mut t_lines = vec!["Terrain Context".to_string()];
-                if let Some(ti) = terrain.terrain_index {
-                    t_lines.push(format!("  Terrain Index: {:.0} m/km", ti));
-                }
-                if let Some(vam) = terrain.vam {
-                    t_lines.push(format!("  VAM: {:.0} m/h", vam));
-                }
-                if terrain.terrain_induced {
-                    t_lines.push("  Efficiency drift: terrain-induced".into());
-                }
-                content.push(ContentBlock::markdown(t_lines.join("\n")));
+            if let Some(block) = terrain_context_block(&terrain) {
+                content.push(block);
             }
         }
     }
@@ -880,10 +709,7 @@ pub async fn analyze_single(
             let hours = secs as f64 / 3600.0;
             let carb = compute_carb_demand(hours, if_val);
             let protein = compute_protein_demand(false);
-            content.push(ContentBlock::markdown(format!(
-                "Nutrition Context\n  Carb demand: {:.1} g/kg\n  Protein demand: {:.1} g/kg",
-                carb, protein
-            )));
+            content.push(nutrition_context_block(carb, protein));
         }
     }
 
@@ -900,10 +726,7 @@ pub async fn analyze_single(
             .is_some();
         let profile =
             classify_curve_profile(None, espe.p1m, espe.p5m, espe.p20m, espe.p60m, is_running);
-        content.push(ContentBlock::markdown(format!(
-            "Power/Running Profile\n  Type: {:?}",
-            profile
-        )));
+        content.push(curve_profile_block(&profile));
     }
 
     if analysis_mode.show_data_availability()

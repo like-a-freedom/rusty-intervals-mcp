@@ -1,6 +1,7 @@
 use serde_json::Value;
 
 use crate::content::ContentBlock;
+use crate::content::date::NA;
 use crate::domains::coach::{
     DecouplingMetrics, EspeDerivedMetrics, EspePowerAnchors, EtvsMetrics, FitnessMetrics,
     HeatMetrics, NdliMetrics, WdrMetrics,
@@ -82,6 +83,12 @@ pub fn build_load_management_text(
     lines.join("\n")
 }
 
+pub fn load_management_block(
+    metrics: Option<&crate::domains::coach::LoadManagementMetrics>,
+) -> ContentBlock {
+    ContentBlock::markdown(build_load_management_text(metrics))
+}
+
 pub fn requested_metrics(input: &Value) -> Vec<String> {
     input
         .get("metrics")
@@ -138,7 +145,7 @@ pub fn build_calendar_event_rows(events: &[&intervals_icu_client::Event]) -> Vec
                 event
                     .description
                     .clone()
-                    .unwrap_or_else(|| String::from("n/a")),
+                    .unwrap_or_else(|| String::from(NA)),
             ]
         })
         .collect()
@@ -223,7 +230,7 @@ pub fn build_activity_message_rows(
                 .created
                 .as_deref()
                 .map(|created| created.replace('T', " ").replace('Z', ""))
-                .unwrap_or_else(|| String::from("n/a"));
+                .unwrap_or_else(|| String::from(NA));
             let author = message
                 .name
                 .clone()
@@ -252,10 +259,10 @@ pub fn build_interval_analysis_rows(
             let duration = obj.get("moving_time").and_then(Value::as_i64).unwrap_or(0);
             let avg_hr = interval_number(obj, "average_heartrate")
                 .map(|value| format!("{value:.0} bpm"))
-                .unwrap_or_else(|| "n/a".to_string());
+                .unwrap_or_else(|| NA.to_string());
             let avg_output = derive_interval_output(obj, streams, output_kind)
                 .map(|value| value.format())
-                .unwrap_or_else(|| "n/a".to_string());
+                .unwrap_or_else(|| NA.to_string());
 
             Some(vec![
                 (i + 1).to_string(),
@@ -305,12 +312,12 @@ pub fn build_requested_single_metric_rows(
                         "available".to_string(),
                     )
                 })
-                .unwrap_or_else(|| ("n/a".into(), "unavailable".into())),
+                .unwrap_or_else(|| (NA.into(), "unavailable".into())),
             ("time", Some(detail)) => detail
                 .get("moving_time")
                 .and_then(Value::as_i64)
                 .map(|seconds| (format_duration_hhmm(seconds), "available".to_string()))
-                .unwrap_or_else(|| ("n/a".to_string(), "unavailable".to_string())),
+                .unwrap_or_else(|| (NA.to_string(), "unavailable".to_string())),
             ("distance", Some(detail)) => detail
                 .get("distance")
                 .and_then(Value::as_f64)
@@ -320,17 +327,17 @@ pub fn build_requested_single_metric_rows(
                         "available".to_string(),
                     )
                 })
-                .unwrap_or_else(|| ("n/a".to_string(), "unavailable".to_string())),
+                .unwrap_or_else(|| (NA.to_string(), "unavailable".to_string())),
             ("vertical", Some(detail)) => detail
                 .get("total_elevation_gain")
                 .and_then(Value::as_f64)
                 .map(|elevation| (format!("{:.0} m", elevation), "available".to_string()))
-                .unwrap_or_else(|| ("n/a".to_string(), "unavailable".to_string())),
+                .unwrap_or_else(|| (NA.to_string(), "unavailable".to_string())),
             ("hr", Some(detail)) => detail
                 .get("average_heartrate")
                 .and_then(Value::as_f64)
                 .map(|hr| (format!("{:.0} bpm", hr), "available".to_string()))
-                .unwrap_or_else(|| ("n/a".to_string(), "unavailable".to_string())),
+                .unwrap_or_else(|| (NA.to_string(), "unavailable".to_string())),
             ("pace", Some(detail)) => {
                 let seconds = detail
                     .get("moving_time")
@@ -342,13 +349,13 @@ pub fn build_requested_single_metric_rows(
                     .unwrap_or(0.0);
                 format_pace_per_km(seconds, distance)
                     .map(|pace| (pace, "available".to_string()))
-                    .unwrap_or_else(|| ("n/a".to_string(), "unavailable".to_string()))
+                    .unwrap_or_else(|| (NA.to_string(), "unavailable".to_string()))
             }
             ("tss", Some(detail)) => extract_exact_tss(detail)
                 .map(|tss| (format!("{:.1}", tss), "available".to_string()))
-                .unwrap_or_else(|| ("n/a".to_string(), "unavailable".to_string())),
-            (_, Some(_)) => ("n/a".to_string(), "unsupported".to_string()),
-            (_, None) => ("n/a".to_string(), "unavailable".to_string()),
+                .unwrap_or_else(|| (NA.to_string(), "unavailable".to_string())),
+            (_, Some(_)) => (NA.to_string(), "unsupported".to_string()),
+            (_, None) => (NA.to_string(), "unavailable".to_string()),
         };
 
         rows.push(vec![metric.to_uppercase(), value, status]);
@@ -418,16 +425,16 @@ pub fn build_requested_period_metric_rows(
             ),
             "hr" => weighted_avg_hr()
                 .map(|hr| (format!("{:.0} bpm", hr), "available".to_string()))
-                .unwrap_or_else(|| ("n/a".to_string(), "unavailable".to_string())),
+                .unwrap_or_else(|| (NA.to_string(), "unavailable".to_string())),
             "pace" => format_pace_per_km(
                 period_snapshot.total_time_secs,
                 period_snapshot.total_distance_m,
             )
             .map(|pace| (pace, "available".to_string()))
-            .unwrap_or_else(|| ("n/a".to_string(), "unavailable".to_string())),
+            .unwrap_or_else(|| (NA.to_string(), "unavailable".to_string())),
             "tss" => exact_period_tss()
                 .map(|tss| (format!("{:.1}", tss), "available".to_string()))
-                .unwrap_or_else(|| ("n/a".to_string(), "unavailable".to_string())),
+                .unwrap_or_else(|| (NA.to_string(), "unavailable".to_string())),
             "etvs" => etvs
                 .map(|metrics| {
                     (
@@ -435,8 +442,8 @@ pub fn build_requested_period_metric_rows(
                         "available".to_string(),
                     )
                 })
-                .unwrap_or_else(|| ("n/a".into(), "unavailable".into())),
-            _ => ("n/a".to_string(), "unsupported".to_string()),
+                .unwrap_or_else(|| (NA.into(), "unavailable".into())),
+            _ => (NA.to_string(), "unsupported".to_string()),
         };
 
         rows.push(vec![metric.to_uppercase(), value, status]);
@@ -527,7 +534,7 @@ pub fn build_bucket_histogram_rows(
                     })
                 })
                 .map(|value| format!("{value:.0}"))
-                .unwrap_or_else(|| "n/a".to_string());
+                .unwrap_or_else(|| NA.to_string());
 
             let bucket_label = if start_suffix.is_empty() {
                 start.to_string()
@@ -803,7 +810,7 @@ pub fn append_stream_insights(content: &mut Vec<ContentBlock>, streams: Option<&
 pub fn render_espe_section(
     anchors: &Option<EspePowerAnchors>,
     derived: &Option<EspeDerivedMetrics>,
-) -> Option<String> {
+) -> Option<ContentBlock> {
     let anchors = anchors.as_ref()?;
     if !anchors.supported {
         return None;
@@ -850,10 +857,10 @@ pub fn render_espe_section(
             lines.push(format!("  Adaptation State: {}", state));
         }
     }
-    Some(lines.join("\n"))
+    Some(ContentBlock::markdown(lines.join("\n")))
 }
 
-pub fn render_wdrm_section(wdrm: &Option<WdrMetrics>) -> Option<String> {
+pub fn render_wdrm_section(wdrm: &Option<WdrMetrics>) -> Option<ContentBlock> {
     let wdrm = wdrm.as_ref()?;
     if !wdrm.supported {
         return None;
@@ -891,10 +898,10 @@ pub fn render_wdrm_section(wdrm: &Option<WdrMetrics>) -> Option<String> {
             wdrm.high_depletion_sessions_7d
         ));
     }
-    Some(lines.join("\n"))
+    Some(ContentBlock::markdown(lines.join("\n")))
 }
 
-pub fn render_isdm_section(decoupling: &Option<DecouplingMetrics>) -> Option<String> {
+pub fn render_isdm_section(decoupling: &Option<DecouplingMetrics>) -> Option<ContentBlock> {
     let decoupling = decoupling.as_ref()?;
     let mut lines = vec!["Aerobic Decoupling (ISDM)".to_string()];
     lines.push(format!(
@@ -928,10 +935,10 @@ pub fn render_isdm_section(decoupling: &Option<DecouplingMetrics>) -> Option<Str
             variance, stability
         ));
     }
-    Some(lines.join("\n"))
+    Some(ContentBlock::markdown(lines.join("\n")))
 }
 
-pub fn render_ndli_section(ndli: &Option<NdliMetrics>) -> Option<String> {
+pub fn render_ndli_section(ndli: &Option<NdliMetrics>) -> Option<ContentBlock> {
     let ndli = ndli.as_ref()?;
     if !ndli.supported {
         return None;
@@ -963,10 +970,10 @@ pub fn render_ndli_section(ndli: &Option<NdliMetrics>) -> Option<String> {
             vi
         ));
     }
-    Some(lines.join("\n"))
+    Some(ContentBlock::markdown(lines.join("\n")))
 }
 
-pub fn render_heat_section(heat: &Option<HeatMetrics>) -> Option<String> {
+pub fn render_heat_section(heat: &Option<HeatMetrics>) -> Option<ContentBlock> {
     let heat = heat.as_ref()?;
     if !heat.supported {
         return None;
@@ -979,10 +986,10 @@ pub fn render_heat_section(heat: &Option<HeatMetrics>) -> Option<String> {
     if let Some(max_temp) = heat.heat_max_7d {
         lines.push(format!("  Max Temperature: {:.1} °C", max_temp));
     }
-    Some(lines.join("\n"))
+    Some(ContentBlock::markdown(lines.join("\n")))
 }
 
-pub fn render_fitness_snapshot(fitness: &Option<FitnessMetrics>) -> Option<String> {
+pub fn render_fitness_snapshot(fitness: &Option<FitnessMetrics>) -> Option<ContentBlock> {
     let metrics = fitness.as_ref()?;
     let mut lines = vec!["Fitness Snapshot".to_string()];
     if let Some(ctl) = metrics.ctl {
@@ -1004,14 +1011,14 @@ pub fn render_fitness_snapshot(fitness: &Option<FitnessMetrics>) -> Option<Strin
     if let Some(rr) = metrics.ramp_rate {
         lines.push(format!("  Ramp Rate: {:+.1}/wk", rr));
     }
-    Some(lines.join("\n"))
+    Some(ContentBlock::markdown(lines.join("\n")))
 }
 
 pub fn render_z2_stability_section(
     z2_lower: f64,
     z2_upper: f64,
     variance: Option<f64>,
-) -> Option<String> {
+) -> Option<ContentBlock> {
     let variance = variance?;
     let stability = if variance < 25.0 {
         "stable"
@@ -1020,27 +1027,27 @@ pub fn render_z2_stability_section(
     } else {
         "unstable"
     };
-    Some(format!(
+    Some(ContentBlock::markdown(format!(
         "Z2 HR Stability\n  Z2 Range: {:.0}–{:.0} bpm\n  HR Variance: {:.1} bpm²\n  Assessment: {}",
         z2_lower, z2_upper, variance, stability
-    ))
+    )))
 }
 
-pub fn render_etvs_section(etvs: Option<&EtvsMetrics>) -> Option<String> {
+pub fn render_etvs_section(etvs: Option<&EtvsMetrics>) -> Option<ContentBlock> {
     let metrics = etvs?;
     let coverage = metrics
         .coverage_ratio
         .map(|ratio| format!("{:.1}%", ratio * 100.0))
         .unwrap_or_else(|| "unknown".into());
 
-    Some(format!(
+    Some(ContentBlock::markdown(format!(
         "Effective Training Volume Score (ETVS)\n  Score: {:.1} weighted min\n  Coverage: {} ({}/{} activities)\n  Model: {}",
         metrics.score_weighted_minutes,
         coverage,
         metrics.activities_with_zone_data,
         metrics.activities_total,
         metrics.model,
-    ))
+    )))
 }
 
 /// Render the evidence-gated cycling endurance report. Returns `Some`
@@ -1051,7 +1058,9 @@ pub fn render_etvs_section(etvs: Option<&EtvsMetrics>) -> Option<String> {
 /// bad, ready, fatigued, durable, or fit. Reasoning context paragraphs
 /// follow each numeric block so the reader can interpret the magnitude
 /// without the renderer acting as a coach.
-pub fn render_endurance_evidence(evidence: Option<&EnduranceEvidenceMetrics>) -> Option<String> {
+pub fn render_endurance_evidence(
+    evidence: Option<&EnduranceEvidenceMetrics>,
+) -> Option<ContentBlock> {
     let evidence = evidence?;
     let mut lines: Vec<String> = Vec::new();
     lines.push("Endurance Performance Evidence — Cycling Power Protocol".to_string());
@@ -1065,7 +1074,7 @@ pub fn render_endurance_evidence(evidence: Option<&EnduranceEvidenceMetrics>) ->
     let prolonged_section = render_prolonged_section(&evidence.prolonged_response);
     lines.extend(prolonged_section.lines().map(|s| s.to_string()));
 
-    Some(lines.join("\n"))
+    Some(ContentBlock::markdown(lines.join("\n")))
 }
 
 fn render_status_message(status: EnduranceEvidenceStatus) -> String {
@@ -1204,13 +1213,13 @@ pub(crate) struct SegmentTable {
 fn format_optional(value: Option<f64>, unit: &str, decimals: usize) -> String {
     value
         .map(|v| format!("{v:.decimals$} {unit}"))
-        .unwrap_or_else(|| "n/a".to_string())
+        .unwrap_or_else(|| NA.to_string())
 }
 
 fn format_speed_kmh(speed_mps: Option<f64>) -> String {
     speed_mps
         .map(|s| format!("{:.1} km/h", s * 3.6))
-        .unwrap_or_else(|| "n/a".to_string())
+        .unwrap_or_else(|| NA.to_string())
 }
 
 fn work_table_title(provenance: SegmentProvenance) -> &'static str {
@@ -1438,17 +1447,25 @@ fn format_distance(distance_m: Option<f64>) -> String {
                 format!("{:.0} m", d)
             }
         })
-        .unwrap_or_else(|| "n/a".to_string())
+        .unwrap_or_else(|| NA.to_string())
 }
 
 fn format_pace_or_na(speed_mps: Option<f64>) -> String {
     speed_mps
         .and_then(format_pace_from_speed)
-        .unwrap_or_else(|| "n/a".to_string())
+        .unwrap_or_else(|| NA.to_string())
 }
 
 #[cfg(test)]
 pub(crate) mod legacy_work_interval_baseline;
+
+mod compare;
+mod period;
+mod single;
+
+pub(crate) use compare::*;
+pub(crate) use period::*;
+pub(crate) use single::*;
 
 #[cfg(test)]
 mod tests {
@@ -1470,6 +1487,13 @@ mod tests {
     };
     use intervals_icu_client::{ActivityMessage, ActivitySummary, Event, EventCategory};
     use std::collections::HashMap;
+
+    fn markdown_text(block: ContentBlock) -> String {
+        match block {
+            ContentBlock::Markdown { markdown } => markdown,
+            other => panic!("expected Markdown block, got {other:?}"),
+        }
+    }
 
     // ── build_load_management_text ────────────────────────────────────
 
@@ -2937,7 +2961,7 @@ mod tests {
             ..Default::default()
         };
         let text = render_espe_section(&Some(anchors), &Some(derived));
-        let text = text.expect("should render");
+        let text = markdown_text(text.expect("should render"));
         assert!(text.contains("eFTP"));
         assert!(text.contains("W′"));
         assert!(text.contains("pMax"));
@@ -2952,7 +2976,7 @@ mod tests {
             ..Default::default()
         };
         let text = render_espe_section(&Some(anchors), &None);
-        let text = text.expect("should render");
+        let text = markdown_text(text.expect("should render"));
         assert!(text.contains("eFTP"));
         assert!(!text.contains("Glycolytic Bias"));
     }
@@ -2982,7 +3006,7 @@ mod tests {
             sessions_with_data_7d: 5,
         };
         let text = render_wdrm_section(&Some(wdrm));
-        let text = text.expect("should render");
+        let text = markdown_text(text.expect("should render"));
         assert!(text.contains("W′ Depletion"));
         assert!(text.contains("Max W′ Depletion"));
         assert!(text.contains("Depletion: 75%"));
@@ -2999,7 +3023,7 @@ mod tests {
             ..Default::default()
         };
         let text = render_wdrm_section(&Some(wdrm));
-        let text = text.expect("should render");
+        let text = markdown_text(text.expect("should render"));
         assert!(text.contains("Max W′ Depletion"));
         assert!(!text.contains("Mean 7d"));
         assert!(!text.contains("High Depletion Sessions"));
@@ -3022,7 +3046,7 @@ mod tests {
             ..Default::default()
         };
         let text = render_isdm_section(&Some(decoupling));
-        let text = text.expect("should render");
+        let text = markdown_text(text.expect("should render"));
         assert!(text.contains("Aerobic Decoupling"));
         assert!(text.contains("Signed Decoupling"));
         assert!(text.contains("-3.2%"));
@@ -3043,7 +3067,7 @@ mod tests {
             z2_hr_variance: Some(20.0),
         };
         let text = render_isdm_section(&Some(decoupling));
-        let text = text.expect("should render");
+        let text = markdown_text(text.expect("should render"));
         assert!(text.contains("EF First Half"));
         assert!(text.contains("EF Second Half"));
         assert!(text.contains("Z2 HR Variance"));
@@ -3061,7 +3085,7 @@ mod tests {
             ..Default::default()
         };
         let text = render_isdm_section(&Some(decoupling));
-        assert!(text.unwrap().contains("moderate"));
+        assert!(markdown_text(text.unwrap()).contains("moderate"));
     }
 
     #[test]
@@ -3075,7 +3099,7 @@ mod tests {
             ..Default::default()
         };
         let text = render_isdm_section(&Some(decoupling));
-        assert!(text.unwrap().contains("unstable"));
+        assert!(markdown_text(text.unwrap()).contains("unstable"));
     }
 
     // ── render_ndli_section ──────────────────────────────────────────
@@ -3103,7 +3127,7 @@ mod tests {
             ndli_overload_flag: false,
         };
         let text = render_ndli_section(&Some(ndli));
-        let text = text.expect("should render");
+        let text = markdown_text(text.expect("should render"));
         assert!(text.contains("Neural Density"));
         assert!(text.contains("State: moderate"));
         assert!(text.contains("High-Intensity Days"));
@@ -3121,7 +3145,7 @@ mod tests {
             ..Default::default()
         };
         let text = render_ndli_section(&Some(ndli));
-        let text = text.expect("should render");
+        let text = markdown_text(text.expect("should render"));
         assert!(text.contains("State: low"));
         assert!(!text.contains("Mean IF"));
         assert!(!text.contains("Mean EF"));
@@ -3150,7 +3174,7 @@ mod tests {
             heat_state: "elevated".into(),
         };
         let text = render_heat_section(&Some(heat));
-        let text = text.expect("should render");
+        let text = markdown_text(text.expect("should render"));
         assert!(text.contains("Heat Stress"));
         assert!(text.contains("State: elevated"));
         assert!(text.contains("Heat Index"));
@@ -3165,7 +3189,7 @@ mod tests {
             ..Default::default()
         };
         let text = render_heat_section(&Some(heat));
-        let text = text.expect("should render");
+        let text = markdown_text(text.expect("should render"));
         assert!(text.contains("State: normal"));
         assert!(!text.contains("Heat Index"));
         assert!(!text.contains("Max Temperature"));
@@ -3180,8 +3204,9 @@ mod tests {
 
     #[test]
     fn render_z2_stability_section_stable() {
-        let text = render_z2_stability_section(120.0, 150.0, Some(20.0));
-        let text = text.expect("should render");
+        let text = markdown_text(
+            render_z2_stability_section(120.0, 150.0, Some(20.0)).expect("should render"),
+        );
         assert!(text.contains("Z2 HR Stability"));
         assert!(text.contains("120–150 bpm"));
         assert!(text.contains("HR Variance: 20.0"));
@@ -3190,15 +3215,17 @@ mod tests {
 
     #[test]
     fn render_z2_stability_section_moderate() {
-        let text = render_z2_stability_section(120.0, 150.0, Some(35.0));
-        let text = text.expect("should render");
+        let text = markdown_text(
+            render_z2_stability_section(120.0, 150.0, Some(35.0)).expect("should render"),
+        );
         assert!(text.contains("moderate"));
     }
 
     #[test]
     fn render_z2_stability_section_unstable() {
-        let text = render_z2_stability_section(120.0, 150.0, Some(55.0));
-        let text = text.expect("should render");
+        let text = markdown_text(
+            render_z2_stability_section(120.0, 150.0, Some(55.0)).expect("should render"),
+        );
         assert!(text.contains("unstable"));
     }
 
@@ -3374,7 +3401,7 @@ mod tests {
 
     #[test]
     fn render_etvs_section_includes_value_model_and_coverage() {
-        let text = render_etvs_section(Some(&etvs_fixture())).unwrap();
+        let text = markdown_text(render_etvs_section(Some(&etvs_fixture())).unwrap());
         assert!(text.contains("Effective Training Volume Score (ETVS)"));
         assert!(text.contains("110.0 weighted min"));
         assert!(text.contains("95.0%"));
@@ -3423,11 +3450,13 @@ mod tests {
 
     #[test]
     fn render_endurance_evidence_shows_values_and_context_never_diagnosis() {
-        let text = render_endurance_evidence(Some(&EnduranceEvidenceMetrics {
-            submaximal: render_available_submaximal(),
-            prolonged_response: render_available_prolonged(),
-        }))
-        .expect("non-empty evidence");
+        let text = markdown_text(
+            render_endurance_evidence(Some(&EnduranceEvidenceMetrics {
+                submaximal: render_available_submaximal(),
+                prolonged_response: render_available_prolonged(),
+            }))
+            .expect("non-empty evidence"),
+        );
         assert!(text.contains("Submaximal HR–Power Response"));
         assert!(text.contains("Recent − reference HR: -6.0 bpm"));
         assert!(text.contains("Efficiency change: +4.2%"));
@@ -3454,7 +3483,7 @@ mod tests {
                 EnduranceEvidenceStatus::NoEligibleProlongedRide,
             ),
         };
-        let text = render_endurance_evidence(Some(&evidence)).expect("non-empty");
+        let text = markdown_text(render_endurance_evidence(Some(&evidence)).expect("non-empty"));
         assert!(text.contains("No matched 10-minute HR–power windows"));
         assert!(text.contains("No eligible prolonged ride"));
     }

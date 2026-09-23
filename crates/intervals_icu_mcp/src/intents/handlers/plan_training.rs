@@ -10,15 +10,16 @@ use serde_json::{Value, json};
 /// Plans training across various horizons (microcycle to annual plan).
 use std::sync::Arc;
 
-use crate::content::date::parse_date;
+use crate::content::date::{parse_date, validate_date_range};
 use crate::domains::events::validate_and_prepare_event;
 use crate::engines::coach_metrics::parse::{
-    is_plausible_hrv, parse_entry_date, sleep_hours_from_entry,
+    is_plausible_hrv, latest_entry_by_date, sleep_hours_from_entry,
 };
 use crate::engines::fitness_context::FitnessContext;
 use crate::engines::forecast::{
     TAPER_ACTUAL_REDUCTION_PCT, TAPER_TARGET_REDUCTION_PCT, parameterized_load, project_tsb,
 };
+use crate::engines::shared::parse_activity_date;
 
 pub struct PlanTrainingHandler;
 impl PlanTrainingHandler {
@@ -56,11 +57,7 @@ impl PlanTrainingHandler {
         let start_date = parse_date(period_start, "period_start")?;
         let end_date = parse_date(period_end, "period_end")?;
 
-        if start_date > end_date {
-            return Err(IntentError::validation(
-                "Start date must be before end date.".to_string(),
-            ));
-        }
+        validate_date_range(&start_date, &end_date, None)?;
 
         let weeks: u32 = u32::try_from((end_date - start_date).num_days() / 7 + 1).unwrap_or(0);
 
@@ -222,9 +219,7 @@ impl IntentHandler for PlanTrainingHandler {
                     let dated: Vec<(chrono::NaiveDate, f64, f64)> = activities
                         .iter()
                         .filter_map(|a| {
-                            let date =
-                                chrono::NaiveDate::parse_from_str(&a.start_date_local, "%Y-%m-%d")
-                                    .ok()?;
+                            let date = parse_activity_date(&a.start_date_local)?;
                             let moving_secs = a.moving_time? as f64;
                             let elapsed_secs = a.elapsed_time? as f64;
                             Some((date, moving_secs, elapsed_secs))
@@ -274,7 +269,7 @@ impl IntentHandler for PlanTrainingHandler {
                 )
             })
             .filter(|e| {
-                chrono::NaiveDate::parse_from_str(&e.start_date_local, "%Y-%m-%d")
+                parse_activity_date(&e.start_date_local)
                     .map(|d| d >= start_date && d <= end_date)
                     .unwrap_or(false)
             })
@@ -288,7 +283,7 @@ impl IntentHandler for PlanTrainingHandler {
                 arr.iter()
                     .filter_map(|w| {
                         let date_str = w.get("start_date_local").and_then(|v| v.as_str())?;
-                        let date = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d").ok()?;
+                        let date = parse_activity_date(date_str)?;
                         if date >= start_date && date <= end_date {
                             let name = w.get("name").and_then(|v| v.as_str()).unwrap_or("Workout");
                             Some(format!("{} ({})", name, date_str))
@@ -357,7 +352,7 @@ impl IntentHandler for PlanTrainingHandler {
                 )
             })
             .filter(|e| {
-                chrono::NaiveDate::parse_from_str(&e.start_date_local, "%Y-%m-%d")
+                parse_activity_date(&e.start_date_local)
                     .map(|d| d >= start_date && d <= end_date)
                     .unwrap_or(false)
             })
@@ -384,7 +379,7 @@ impl IntentHandler for PlanTrainingHandler {
                     continue;
                 }
                 if let Some(date_str) = w.get("start_date_local").and_then(|v| v.as_str())
-                    && let Ok(d) = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d")
+                    && let Some(d) = parse_activity_date(date_str)
                     && d >= start_date
                     && d <= end_date
                 {
@@ -780,12 +775,9 @@ impl WellnessSnapshot {
     fn from_value(value: &Value) -> Self {
         let entries = value.as_array().cloned().unwrap_or_default();
         // Resolve the latest entry by date: the API may return newest-first,
-        // so positional `last()` can point at the oldest day. Entries without
-        // a parseable date sort first, so a fully undated payload keeps the
-        // historical last-entry behavior.
-        let latest = entries
-            .iter()
-            .max_by_key(|entry| entry.as_object().and_then(parse_entry_date));
+        // so positional `last()` can point at the oldest day. Undated-only
+        // payloads keep the historical last-entry behavior.
+        let latest = latest_entry_by_date(&entries).or_else(|| entries.last());
         let Some(latest) = latest else {
             return Self::default();
         };

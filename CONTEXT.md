@@ -38,6 +38,11 @@ See ADR-0001.
 - **Strangler fig** — the migration pattern: typed `IntervalsClient` methods
   and dynamic dispatch coexist; new endpoints arrive via dynamic dispatch
   immediately, typed methods migrate incrementally. See ADR-0001.
+- **Render seam** — presentation is not engine logic. Engines never
+  construct `ContentBlock`s; engine presentation lives in
+  `engines/analyze_training/render/` (data flows through
+  `engines/{single,compare,period}.rs` untouched). Intent handlers own
+  theirs, including `intents/handlers/render/` and handler-local markdown.
 
 ### Metric-domain terms
 

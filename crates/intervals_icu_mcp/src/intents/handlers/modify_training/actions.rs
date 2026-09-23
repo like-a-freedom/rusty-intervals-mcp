@@ -8,7 +8,7 @@
 //! (notably `find_matching_events`, `fetch_events_*`,
 //! `event_matches_description`, and `parse_duration_to_seconds`).
 
-use crate::content::date::parse_date;
+use crate::content::date::{parse_date, validate_date_range};
 use crate::domains::events::{validate_and_prepare_event, validation_error_to_string};
 use crate::domains::workout_validator::{format_duration_short, validate_workout_description};
 use crate::intents::{ContentBlock, IntentError, IntentOutput, OutputMetadata};
@@ -31,11 +31,7 @@ impl super::ModifyTrainingHandler {
             (None, Some(start), Some(end)) => {
                 let start_date = parse_date(start, "target_date_from")?;
                 let end_date = parse_date(end, "target_date_to")?;
-                if start_date > end_date {
-                    return Err(IntentError::validation(
-                        "Start date must be before end date.".to_string(),
-                    ));
-                }
+                validate_date_range(&start_date, &end_date, None)?;
                 Ok(TargetScope::Range(start_date, end_date))
             }
             (None, Some(_), None) | (None, None, Some(_)) => Err(IntentError::validation(

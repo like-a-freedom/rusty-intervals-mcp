@@ -1,8 +1,8 @@
+use crate::content::date::NA;
 use crate::content::{ContentBlock, OutputMetadata};
 use crate::domains::coach::EtvsMetrics;
 use crate::domains::interval_detection::RawStream;
 use crate::domains::interval_segment::SportPresentation;
-use crate::domains::load::{ComparableLoadSeries, LoadSource};
 use crate::engines::analysis::PeriodSummary;
 use crate::engines::analysis_fetch::{activity_load, extract_activity_load};
 use intervals_icu_client::ActivitySummary;
@@ -111,54 +111,6 @@ impl SingleAnalysisMode {
     pub(crate) fn show_detailed_breakdown(self) -> bool {
         matches!(self, Self::Detailed)
     }
-}
-
-pub(crate) fn build_load_data_quality_section(series: &ComparableLoadSeries) -> ContentBlock {
-    let mut lines = vec!["Training Load Data Quality".to_string()];
-
-    if series.activities_total == 0 {
-        lines.push("  No activities in period".to_string());
-        return ContentBlock::markdown(lines.join("\n"));
-    }
-
-    let loaded = series.activities_with_load;
-    let total = series.activities_total;
-    let pct = (loaded as f64 / total as f64) * 100.0;
-
-    lines.push(format!(
-        "  Loaded: {} / {} activities ({:.0}%)",
-        loaded, total, pct
-    ));
-
-    if loaded < total {
-        lines.push(format!(
-            "  {} activities without API load excluded",
-            total - loaded
-        ));
-    }
-
-    for (source, count) in &series.source_counts {
-        let label = match source {
-            LoadSource::IcuTrainingLoad => "icu_training_load",
-            LoadSource::TrainingLoadAlias => "training_load",
-            LoadSource::TssAlias => "tss",
-            LoadSource::ActivitySummaryTrainingLoad => "summary training_load",
-        };
-        lines.push(format!(
-            "  {}: {} {}",
-            label,
-            count,
-            if *count == 1 {
-                "activity"
-            } else {
-                "activities"
-            }
-        ));
-    }
-
-    lines.push("  Activities without API load are excluded from load totals".to_string());
-
-    ContentBlock::markdown(lines.join("\n"))
 }
 
 pub(crate) fn numeric_series(streams: &Value, keys: &[&str]) -> Option<Vec<f64>> {
@@ -270,7 +222,7 @@ pub(crate) fn requested_metric_value(metric: &str, stats: &PeriodStats) -> (Stri
                     "derived".into(),
                 )
             } else {
-                ("n/a".into(), "distance/time unavailable".into())
+                (NA.into(), "distance/time unavailable".into())
             }
         }
         "hr" => {
@@ -286,7 +238,7 @@ pub(crate) fn requested_metric_value(metric: &str, stats: &PeriodStats) -> (Stri
                 })
                 .collect::<Vec<_>>();
             if values.is_empty() {
-                ("n/a".into(), "average HR unavailable".into())
+                (NA.into(), "average HR unavailable".into())
             } else {
                 let avg = values.iter().sum::<f64>() / values.len() as f64;
                 (
@@ -346,7 +298,7 @@ pub(crate) fn requested_metric_value(metric: &str, stats: &PeriodStats) -> (Stri
                 }
             }
             if zone_totals.is_empty() {
-                ("n/a".into(), "zone times unavailable".into())
+                (NA.into(), "zone times unavailable".into())
             } else {
                 let mut sorted: Vec<_> = zone_totals.into_iter().collect();
                 sorted.sort_by(|a, b| a.0.cmp(&b.0));
@@ -376,8 +328,8 @@ pub(crate) fn requested_metric_value(metric: &str, stats: &PeriodStats) -> (Stri
                     ),
                 )
             })
-            .unwrap_or_else(|| ("n/a".into(), "zone times unavailable".into())),
-        other => ("n/a".into(), format!("metric '{}' not yet modeled", other)),
+            .unwrap_or_else(|| (NA.into(), "zone times unavailable".into())),
+        other => (NA.into(), format!("metric '{}' not yet modeled", other)),
     }
 }
 

@@ -157,6 +157,7 @@ pub mod mock {
     #[derive(Default, Debug)]
     pub struct MockObservations {
         pub wellness_last_days_back: Mutex<Option<i32>>,
+        pub wellness_days_history: Mutex<Vec<Option<i32>>>,
         pub wellness_calls: AtomicUsize,
     }
 
@@ -171,7 +172,16 @@ pub mod mock {
                 .lock()
                 .expect("wellness_last_days_back mutex poisoned")
         }
+
+        pub fn wellness_days_history(&self) -> Vec<Option<i32>> {
+            self.wellness_days_history
+                .lock()
+                .expect("wellness_days_history mutex poisoned")
+                .clone()
+        }
     }
+
+    pub const ACTIVITY_MESSAGES_KEY: &str = "__activity_messages";
 
     #[derive(Default)]
     pub struct MockIntervalsClient {
@@ -179,6 +189,7 @@ pub mod mock {
         pub events: Vec<Event>,
         pub fitness_summary: Option<Value>,
         pub workout_detail: Option<Value>,
+        pub default_activity_detail: Option<Value>,
         pub streams: Option<Value>,
         pub intervals: Option<Value>,
         pub best_efforts: Option<Value>,
@@ -539,16 +550,13 @@ pub mod mock {
                     Self::activity("a3", "Run 3", "2026-02-25"),
                 ],
                 fitness_summary: Some(Self::fitness_snapshot(55.0, 45.0, 10.0)),
-                activity_details: HashMap::from([(
-                    "a1".to_string(),
-                    json!({
-                        "distance": 15000.0,
-                        "moving_time": 5400,
-                        "average_heartrate": 145.0,
-                        "average_watts": 210.0,
-                        "total_elevation_gain": 300.0
-                    }),
-                )]),
+                default_activity_detail: Some(json!({
+                    "distance": 15000.0,
+                    "moving_time": 5400,
+                    "average_heartrate": 145.0,
+                    "average_watts": 210.0,
+                    "total_elevation_gain": 300.0
+                })),
                 ..Default::default()
             }
         }
@@ -711,17 +719,14 @@ pub mod mock {
             Self {
                 activities,
                 fitness_summary: Some(Self::fitness_snapshot(58.0, 50.0, 8.0)),
-                activity_details: HashMap::from([(
-                    "load-1".to_string(),
-                    json!({
-                        "distance": 12000.0,
-                        "moving_time": 3600,
-                        "average_heartrate": 145.0,
-                        "average_watts": 215.0,
-                        "total_elevation_gain": 120.0,
-                        "icu_training_load": 55.0
-                    }),
-                )]),
+                default_activity_detail: Some(json!({
+                    "distance": 12000.0,
+                    "moving_time": 3600,
+                    "average_heartrate": 145.0,
+                    "average_watts": 215.0,
+                    "total_elevation_gain": 120.0,
+                    "icu_training_load": 55.0
+                })),
                 ..Default::default()
             }
         }
@@ -960,17 +965,14 @@ pub mod mock {
                     Self::activity("tempo-2", "Tempo Cruise Intervals", "2026-02-25"),
                 ],
                 fitness_summary: Some(Self::fitness_snapshot(55.0, 45.0, 10.0)),
-                activity_details: HashMap::from([(
-                    "tempo-1".to_string(),
-                    json!({
-                        "distance": 15000.0,
-                        "moving_time": 5400,
-                        "average_heartrate": 145.0,
-                        "average_watts": 210.0,
-                        "total_elevation_gain": 300.0,
-                        "tss": 77.0
-                    }),
-                )]),
+                default_activity_detail: Some(json!({
+                    "distance": 15000.0,
+                    "moving_time": 5400,
+                    "average_heartrate": 145.0,
+                    "average_watts": 210.0,
+                    "total_elevation_gain": 300.0,
+                    "tss": 77.0
+                })),
                 ..Default::default()
             }
         }
@@ -1505,47 +1507,38 @@ pub mod mock {
         }
 
         pub fn with_fartlek_streams_and_upstream_intervals() -> Self {
-            let mut time_s = Vec::new();
-            let mut speed = Vec::new();
+            let mut time = Vec::new();
+            let mut velocity_smooth = Vec::new();
             let mut heartrate = Vec::new();
-            let mut power = Vec::new();
-            let mut t = 0.0f64;
-            for block in 0..6 {
-                let is_work = block % 2 == 0;
-                let dur = if is_work { 180 } else { 120 };
-                let spd = if is_work { 5.5 } else { 2.5 };
-                let hr = if is_work { 170.0 } else { 135.0 };
-                let w = if is_work { 280.0 } else { 100.0 };
-                for _ in 0..dur {
-                    time_s.push(t);
-                    speed.push(spd);
+            let mut watts = Vec::new();
+            for (duration, speed, hr, power) in [
+                (20, 6.0, 178.0, 320.0),
+                (250, 3.0, 145.0, 150.0),
+                (90, 6.5, 182.0, 340.0),
+                (50, 2.8, 140.0, 130.0),
+                (40, 5.5, 172.0, 300.0),
+            ] {
+                for _ in 0..duration {
+                    time.push(time.len() as f64);
+                    velocity_smooth.push(speed);
                     heartrate.push(hr);
-                    power.push(w);
-                    t += 1.0;
+                    watts.push(power);
                 }
             }
+
             Self {
-                activities: vec![Self::activity("fartlek-1", "Fartlek session", "2026-02-18")],
+                activities: vec![Self::activity("fartlek-1", "Fartlek", "2026-02-18")],
                 fitness_summary: Some(Self::fitness_snapshot(54.0, 47.0, 7.0)),
-                activity_details: HashMap::from([(
-                    "fartlek-1".to_string(),
-                    json!({
-                        "distance": 10000.0,
-                        "moving_time": 1800,
-                        "average_heartrate": 155.0,
-                        "average_watts": 200.0,
-                        "total_elevation_gain": 50.0
-                    }),
-                )]),
-                streams: Some(json!({
-                    "time": time_s,
-                    "velocity_smooth": speed,
-                    "heartrate": heartrate,
-                    "watts": power
-                })),
+                default_activity_detail: Some(json!({"distance": 6000.0, "moving_time": 450})),
                 intervals: Some(json!([
-                    {"moving_time": 180, "average_heartrate": 170.0, "average_watts": 280.0}
+                    {"moving_time": 60, "average_heartrate": 170, "average_watts": 300}
                 ])),
+                streams: Some(json!({
+                    "time": time,
+                    "velocity_smooth": velocity_smooth,
+                    "heartrate": heartrate,
+                    "watts": watts
+                })),
                 ..Default::default()
             }
         }
@@ -1602,6 +1595,7 @@ pub mod mock {
                 .get(activity_id)
                 .cloned()
                 .or_else(|| self.workout_detail.clone())
+                .or_else(|| self.default_activity_detail.clone())
                 .unwrap_or_else(|| json!({})))
         }
 
@@ -1662,7 +1656,16 @@ pub mod mock {
             &self,
             _activity_id: &str,
         ) -> Result<Vec<ActivityMessage>, IntervalsError> {
-            if let Some(msgs) = self.activity_details.get("__activity_messages") {
+            if let Some(msgs) = self.activity_details.get(ACTIVITY_MESSAGES_KEY) {
+                return serde_json::from_value(msgs.clone()).map_err(|e| {
+                    IntervalsError::Config(intervals_icu_client::ConfigError::Other(e.to_string()))
+                });
+            }
+            if let Some(msgs) = self
+                .default_activity_detail
+                .as_ref()
+                .and_then(|detail| detail.get(ACTIVITY_MESSAGES_KEY))
+            {
                 return serde_json::from_value(msgs.clone()).map_err(|e| {
                     IntervalsError::Config(intervals_icu_client::ConfigError::Other(e.to_string()))
                 });
@@ -1833,6 +1836,11 @@ pub mod mock {
                 .wellness_last_days_back
                 .lock()
                 .expect("wellness_last_days_back mutex poisoned") = days_back;
+            self.observations
+                .wellness_days_history
+                .lock()
+                .expect("wellness_days_history mutex poisoned")
+                .push(days_back);
             Ok(self.wellness.clone().unwrap_or_else(|| json!([])))
         }
 
@@ -2051,7 +2059,7 @@ pub fn content_text(content: &[crate::intents::ContentBlock]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::mock::MockIntervalsClient;
+    use super::mock::{ACTIVITY_MESSAGES_KEY, MockIntervalsClient};
     use super::*;
     use intervals_icu_client::domains::workout::SportSettings;
     use intervals_icu_client::{
@@ -2523,11 +2531,11 @@ mod tests {
     fn test_mock_get_activity_messages_from_details() {
         let mut details = std::collections::HashMap::new();
         details.insert(
-            "__activity_messages".to_string(),
+            ACTIVITY_MESSAGES_KEY.to_string(),
             json!([{"id": 1, "name": "Msg"}]),
         );
         let client = MockIntervalsClient::default()
-            .with_activity_detail("__activity_messages", json!([{"id": 1, "name": "Msg"}]));
+            .with_activity_detail(ACTIVITY_MESSAGES_KEY, json!([{"id": 1, "name": "Msg"}]));
         let rt = tokio::runtime::Runtime::new().unwrap();
         let result = rt.block_on(client.get_activity_messages("a1")).unwrap();
         assert_eq!(result.len(), 1);

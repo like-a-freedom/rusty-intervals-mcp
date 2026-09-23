@@ -708,8 +708,7 @@ async fn test_execute_start_date_after_end_date() {
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(
-        err.to_string()
-            .contains("Start date must be before end date"),
+        err.to_string().contains("must be before end date"),
         "Expected start-after-end error, got: {err}"
     );
 }
@@ -799,6 +798,54 @@ async fn test_execute_with_upcoming_conflicts_only() {
 }
 
 #[tokio::test]
+async fn test_execute_conflict_detects_iso_datetime_event_dates() {
+    // Real API rows may carry full ISO datetimes; date-only parsing must not
+    // silently skip the conflict.
+    let handler = PlanTrainingHandler::new();
+    let client = Arc::new(MockIntervalsClient::builder().with_events(vec![Event {
+        id: None,
+        start_date_local: "2026-03-15T10:00:00".into(),
+        name: "Existing Workout".into(),
+        category: EventCategory::Workout,
+        description: None,
+        r#type: None,
+    }]));
+    let input = json!({
+        "period_start": "2026-03-01",
+        "period_end": "2026-03-31",
+        "idempotency_token": "test-token"
+    });
+    let result = handler.execute(input, client, None).await;
+    assert!(result.is_ok());
+    let output = result.unwrap();
+    let content_str = format!("{:?}", output.content);
+    assert!(content_str.contains("Conflict Detected"));
+    assert!(content_str.contains("Existing Workout"));
+    assert_eq!(output.metadata.events_created, Some(0));
+}
+
+#[tokio::test]
+async fn test_execute_upcoming_conflict_accepts_iso_datetime_dates() {
+    let handler = PlanTrainingHandler::new();
+    let client = Arc::new(
+        MockIntervalsClient::builder().with_upcoming_workouts(json!([
+            {"start_date_local": "2026-03-15T10:00:00", "name": "Planned Workout"}
+        ])),
+    );
+    let input = json!({
+        "period_start": "2026-03-01",
+        "period_end": "2026-03-31",
+        "idempotency_token": "test-token"
+    });
+    let result = handler.execute(input, client, None).await;
+    assert!(result.is_ok());
+    let output = result.unwrap();
+    let content_str = format!("{:?}", output.content);
+    assert!(content_str.contains("Existing Plan Detected"));
+    assert_eq!(output.metadata.events_created, Some(0));
+}
+
+#[tokio::test]
 async fn test_execute_with_both_conflicts() {
     let handler = PlanTrainingHandler::new();
     let client = Arc::new(
@@ -836,6 +883,32 @@ async fn test_execute_with_race_anchors() {
     let client = Arc::new(MockIntervalsClient::builder().with_events(vec![Event {
         id: None,
         start_date_local: "2026-03-15".into(),
+        name: "Big Race".into(),
+        category: EventCategory::RaceA,
+        description: None,
+        r#type: None,
+    }]));
+    let input = json!({
+        "period_start": "2026-03-01",
+        "period_end": "2026-03-31",
+        "idempotency_token": "test-token"
+    });
+    let result = handler.execute(input, client, None).await;
+    assert!(result.is_ok());
+    let output = result.unwrap();
+    let content_str = format!("{:?}", output.content);
+    assert!(content_str.contains("Race Anchors"));
+    assert!(content_str.contains("Big Race"));
+}
+
+#[tokio::test]
+async fn test_execute_race_anchors_accept_iso_datetime_event_dates() {
+    // Race events with ISO datetime dates must still anchor the plan;
+    // date-only parsing dropped them from the period filter.
+    let handler = PlanTrainingHandler::new();
+    let client = Arc::new(MockIntervalsClient::builder().with_events(vec![Event {
+        id: None,
+        start_date_local: "2026-03-15T09:00:00".into(),
         name: "Big Race".into(),
         category: EventCategory::RaceA,
         description: None,
@@ -1095,6 +1168,45 @@ async fn test_execute_with_historical_activities_no_overshoot() {
     let content_str = format!("{:?}", output.content);
     assert!(content_str.contains("Historical Avg"));
     assert!(!output.suggestions.iter().any(|s| s.contains("exceeds")));
+}
+
+#[tokio::test]
+async fn test_execute_historical_avg_accepts_iso_datetime_activity_dates() {
+    // Historical volume must compute from ISO datetime activity dates too.
+    let handler = PlanTrainingHandler::new();
+    let client = Arc::new(MockIntervalsClient::builder().with_activities(vec![
+        ActivitySummary {
+            id: "1".into(),
+            name: Some("Run 1".into()),
+            start_date_local: "2026-02-01T10:00:00".into(),
+            moving_time: Some(3600),
+            elapsed_time: Some(4500),
+            ..Default::default()
+        },
+        ActivitySummary {
+            id: "2".into(),
+            name: Some("Run 2".into()),
+            start_date_local: "2026-02-08T07:30:00".into(),
+            moving_time: Some(3600),
+            elapsed_time: Some(4500),
+            ..Default::default()
+        },
+    ]));
+    let input = json!({
+        "period_start": "2026-03-01",
+        "period_end": "2026-03-07",
+        "idempotency_token": "test-token"
+    });
+    let result = handler.execute(input, client, None).await;
+    assert!(result.is_ok());
+    let output = result.unwrap();
+    let content_str = format!("{:?}", output.content);
+    // 2 activities x 1h moving over a 7-day span => 2.0 hrs/wk moving,
+    // 4500s x 2 => 2.5 hrs/wk elapsed, both computed from ISO datetime dates.
+    assert!(
+        content_str.contains("Historical Avg (1wk): 2.0 hrs/wk (moving), 2.5 hrs/wk (elapsed)"),
+        "Expected computed historical averages, got: {content_str}"
+    );
 }
 
 #[tokio::test]

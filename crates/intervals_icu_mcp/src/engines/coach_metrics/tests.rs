@@ -93,6 +93,28 @@ fn parse_fitness_metrics_undated_array_keeps_first_object() {
 }
 
 #[test]
+fn parse_fitness_metrics_dated_tie_keeps_first_object() {
+    // Same-day duplicates must not depend on array order: first-wins.
+    let payload = json!([
+        {"id": "2026-03-16", "ctl": 40.0},
+        {"id": "2026-03-16", "ctl": 60.0},
+    ]);
+    let metrics = parse_fitness_metrics(Some(&payload)).unwrap();
+    assert_eq!(metrics.ctl, Some(40.0));
+}
+
+#[test]
+fn parse_fitness_metrics_mixed_dated_and_undated_prefers_dated() {
+    let payload = json!([
+        {"ctl": 90.0},
+        {"id": "2026-03-16", "ctl": 60.0},
+        {"ctl": 80.0},
+    ]);
+    let metrics = parse_fitness_metrics(Some(&payload)).unwrap();
+    assert_eq!(metrics.ctl, Some(60.0));
+}
+
+#[test]
 fn parse_fitness_metrics_rejects_negative_ctl_atl_keeps_negative_tsb() {
     // CTL/ATL are EWMAs of non-negative loads; TSB and ramp rate are
     // legitimately negative and must pass through.

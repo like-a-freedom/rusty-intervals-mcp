@@ -26,6 +26,36 @@ fn resolve_relative_day_alias(date_str: &str) -> Option<NaiveDate> {
     }
 }
 
+/// Extract and parse `{prefix}_start` / `{prefix}_end` date fields from JSON
+/// input and validate the resulting range.
+///
+/// Shared by the `compare_periods` intent handler (validation) and the
+/// `analyze_training` compare engine (extraction), so both layers produce
+/// identical `Missing: …` errors from one source.
+///
+/// # Errors
+/// Returns [`IntentError`] if a field is missing/invalid or the range is
+/// invalid (start after end).
+pub fn parse_period_range(
+    input: &serde_json::Value,
+    prefix: &str,
+) -> Result<(NaiveDate, NaiveDate), IntentError> {
+    let start_key = format!("{prefix}_start");
+    let end_key = format!("{prefix}_end");
+    let start_str = input
+        .get(start_key.as_str())
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| IntentError::validation(format!("Missing: {start_key}")))?;
+    let end_str = input
+        .get(end_key.as_str())
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| IntentError::validation(format!("Missing: {end_key}")))?;
+    let start_date = parse_date(start_str, &start_key)?;
+    let end_date = parse_date(end_str, &end_key)?;
+    validate_date_range(&start_date, &end_date, None)?;
+    Ok((start_date, end_date))
+}
+
 /// Parse and validate an ordinary date string.
 ///
 /// Accepts:
@@ -47,20 +77,6 @@ pub fn parse_date(date_str: &str, field_name: &str) -> Result<NaiveDate, IntentE
             field_name, date_str
         ))
     })
-}
-
-/// Parse optional date string
-///
-/// # Errors
-/// Returns [`IntentError`] if the input is Some and not a valid date string.
-pub fn parse_optional_date(
-    date_str: Option<&str>,
-    field_name: &str,
-) -> Result<Option<NaiveDate>, IntentError> {
-    match date_str {
-        Some(s) => Ok(Some(parse_date(s, field_name)?)),
-        None => Ok(None),
-    }
 }
 
 #[must_use]
@@ -193,11 +209,13 @@ pub fn filter_events_by_range<'a>(
         .collect()
 }
 
-/// Validate that a date range is valid (start <= end, reasonable range)
+/// Validate that a date range is valid (start <= end, optional max span).
+///
+/// Pass `max_days: None` for an unbounded range.
 pub fn validate_date_range(
     start: &NaiveDate,
     end: &NaiveDate,
-    max_days: i32,
+    max_days: Option<i32>,
 ) -> Result<(), IntentError> {
     if start > end {
         return Err(IntentError::validation(format!(
@@ -207,10 +225,12 @@ pub fn validate_date_range(
     }
 
     let days = (*end - *start).num_days();
-    if days > max_days as i64 {
+    if let Some(max) = max_days
+        && days > i64::from(max)
+    {
         return Err(IntentError::validation(format!(
             "Date range too large: {} days (max: {} days)",
-            days, max_days
+            days, max
         )));
     }
 
@@ -242,11 +262,14 @@ pub fn data_availability_block(
     None
 }
 
+/// Canonical placeholder for a missing metric cell.
+pub const NA: &str = "n/a";
+
 /// Format a percentage value, returning `"+5.2%"` or `"n/a"` when absent.
 pub fn format_pct(value: Option<f64>) -> String {
     value
         .map(|delta| format!("{:+.1}%", delta))
-        .unwrap_or_else(|| "n/a".into())
+        .unwrap_or_else(|| NA.to_string())
 }
 
 #[cfg(test)]
@@ -321,23 +344,6 @@ mod tests {
     #[test]
     fn test_parse_date_garbage() {
         let err = parse_date("not-a-date", "x").unwrap_err();
-        assert!(matches!(err, IntentError::ValidationError(_)));
-    }
-
-    #[test]
-    fn test_parse_optional_date_some() {
-        let result = parse_optional_date(Some("2026-03-21"), "d").unwrap();
-        assert_eq!(result, Some(NaiveDate::from_ymd_opt(2026, 3, 21).unwrap()));
-    }
-
-    #[test]
-    fn test_parse_optional_date_none() {
-        assert_eq!(parse_optional_date(None, "d").unwrap(), None);
-    }
-
-    #[test]
-    fn test_parse_optional_date_invalid() {
-        let err = parse_optional_date(Some("bad"), "x").unwrap_err();
         assert!(matches!(err, IntentError::ValidationError(_)));
     }
 
@@ -642,20 +648,20 @@ mod tests {
     fn test_validate_date_range_valid() {
         let s = NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
         let e = NaiveDate::from_ymd_opt(2026, 3, 10).unwrap();
-        assert!(validate_date_range(&s, &e, 30).is_ok());
+        assert!(validate_date_range(&s, &e, Some(30)).is_ok());
     }
 
     #[test]
     fn test_validate_date_range_same_day() {
         let d = NaiveDate::from_ymd_opt(2026, 3, 21).unwrap();
-        assert!(validate_date_range(&d, &d, 30).is_ok());
+        assert!(validate_date_range(&d, &d, Some(30)).is_ok());
     }
 
     #[test]
     fn test_validate_date_range_start_after_end() {
         let s = NaiveDate::from_ymd_opt(2026, 3, 20).unwrap();
         let e = NaiveDate::from_ymd_opt(2026, 3, 10).unwrap();
-        let err = validate_date_range(&s, &e, 30).unwrap_err();
+        let err = validate_date_range(&s, &e, Some(30)).unwrap_err();
         assert!(err.to_string().contains("must be before"));
     }
 
@@ -663,7 +669,7 @@ mod tests {
     fn test_validate_date_range_exceeds_max_days() {
         let s = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
         let e = NaiveDate::from_ymd_opt(2026, 3, 31).unwrap();
-        let err = validate_date_range(&s, &e, 30).unwrap_err();
+        let err = validate_date_range(&s, &e, Some(30)).unwrap_err();
         assert!(err.to_string().contains("too large"));
     }
 
@@ -671,7 +677,14 @@ mod tests {
     fn test_validate_date_range_exact_max() {
         let s = NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
         let e = NaiveDate::from_ymd_opt(2026, 3, 31).unwrap();
-        assert!(validate_date_range(&s, &e, 30).is_ok());
+        assert!(validate_date_range(&s, &e, Some(30)).is_ok());
+    }
+
+    #[test]
+    fn test_validate_date_range_unbounded() {
+        let s = NaiveDate::from_ymd_opt(2020, 1, 1).unwrap();
+        let e = NaiveDate::from_ymd_opt(2026, 3, 31).unwrap();
+        assert!(validate_date_range(&s, &e, None).is_ok());
     }
 
     #[test]

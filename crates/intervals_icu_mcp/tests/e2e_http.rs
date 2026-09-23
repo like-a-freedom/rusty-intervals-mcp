@@ -396,11 +396,10 @@ impl IntervalsClient for LocalMockClient {
 }
 
 #[tokio::test]
-async fn e2e_webhook_and_profile() {
+async fn e2e_profile() {
     // build client and handler
     let client: Arc<dyn IntervalsClient> = Arc::new(LocalMockClient);
     let handler = intervals_icu_mcp::IntervalsMcpHandler::new(client.clone());
-    handler.set_webhook_secret_value("s3cr3t").await;
 
     // build app (reuse server construction)
     let session = std::sync::Arc::new(
@@ -414,7 +413,6 @@ async fn e2e_webhook_and_profile() {
     );
 
     let client_clone = client.clone();
-    let handler_clone = handler.clone();
     let app = axum::Router::new()
         .route("/health", axum::routing::get(|| async { "ok" }))
         .route(
@@ -424,17 +422,6 @@ async fn e2e_webhook_and_profile() {
                 async move {
                     let p = client.get_athlete_profile().await.unwrap();
                     axum::Json(serde_json::json!({ "id": p.id, "name": p.name }))
-                }
-            }),
-        )
-        .route(
-            "/webhook",
-            axum::routing::post(move |axum::Json(payload): axum::Json<serde_json::Value>| {
-                let handler = handler_clone.clone();
-                async move {
-                    // delegate to handler.process_webhook with a dummy signature
-                    let _ = handler.process_webhook("deadbeef", payload).await;
-                    axum::Json(serde_json::json!({ "ok": true }))
                 }
             }),
         )
@@ -453,15 +440,6 @@ async fn e2e_webhook_and_profile() {
     // profile
     let res = http
         .get(format!("http://{}/athlete/profile", addr))
-        .send()
-        .await
-        .unwrap();
-    assert!(res.status().is_success());
-
-    // webhook - with bad signature should fail
-    let res = http
-        .post(format!("http://{}/webhook", addr))
-        .json(&serde_json::json!({ "id": "x" }))
         .send()
         .await
         .unwrap();

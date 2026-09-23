@@ -5,6 +5,8 @@
 
 use serde_json::Value;
 
+use crate::content::date::NA;
+
 /// Classify intervals as work or rest using median-split heuristic.
 ///
 /// Work intervals are those with speed and/or HR above the median.
@@ -200,7 +202,7 @@ impl IntervalOutputValue {
         match self {
             Self::Power(value) => format!("{value:.0} W"),
             Self::Pace(speed_mps) => {
-                format_pace_from_speed(*speed_mps).unwrap_or_else(|| "n/a".to_string())
+                format_pace_from_speed(*speed_mps).unwrap_or_else(|| NA.to_string())
             }
         }
     }

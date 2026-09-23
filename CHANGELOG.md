@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.24.0] - 2026-09-23
+
+### Fixed
+- `start_date_local` parsing routes through `parse_activity_date` (datetime-aware), so real API rows with ISO datetime dates are no longer dropped from historical averages and race analysis.
+- Date-range validation (`start <= end`) now goes through the shared `validate_date_range` everywhere (`plan_training`, `compare_periods`, `analyze_training` period, `modify_training` scope), with identical error text and an optional max span.
+
+### Changed
+- Validation for `compare_periods` moves to the intent handler; the engine assumes validated input (`parse_period_range` is the single shared extractor).
+- Test support is gated behind the `test-support` cargo feature (ADR-0008); CI runs `--all-features`.
+- Presentation extraction: `engines/analyze_training/{single,compare,period}.rs` no longer construct `ContentBlock`s — markdown lives in `engines/analyze_training/render/`; production `n/a` literals unify on `content::date::NA`.
+- `MockCoachClient` deleted; all integration tests use `test_support::MockIntervalsClient`.
+
+### Removed
+- Dead code purge (ADR-0009): `types.rs` (64/65 unused DTOs), `state.rs`, `event_id.rs`, `services.rs`, orphaned `tests.rs`, and the unwired webhook path (`webhook_*` fields/methods, e2e webhook coverage). READMEs updated to the real 9 intents.
+- Test-only `parse_optional_date` (no production callers).
+
 ## [2.23.2] - 2026-09-23
 
 ### Fixed

@@ -1,9 +1,10 @@
 use intervals_icu_client::IntervalsClient;
 use serde_json::Value;
 
+use super::render::*;
 use super::shared::*;
-use crate::content::date::{format_pct, parse_date};
-use crate::content::{ContentBlock, IntentError};
+use crate::content::IntentError;
+use crate::content::date::parse_period_range;
 use crate::domains::coach::CoachMetrics;
 use crate::engines::analysis::AnalysisEngine;
 use crate::engines::coach_guidance::{build_alerts, build_guidance};
@@ -16,22 +17,8 @@ pub async fn compare_periods(
     input: &Value,
     client: &dyn IntervalsClient,
 ) -> Result<AnalyzeReport, IntentError> {
-    let a_start = input
-        .get("period_a_start")
-        .and_then(Value::as_str)
-        .ok_or_else(|| IntentError::validation("Missing: period_a_start"))?;
-    let a_end = input
-        .get("period_a_end")
-        .and_then(Value::as_str)
-        .ok_or_else(|| IntentError::validation("Missing: period_a_end"))?;
-    let b_start = input
-        .get("period_b_start")
-        .and_then(Value::as_str)
-        .ok_or_else(|| IntentError::validation("Missing: period_b_start"))?;
-    let b_end = input
-        .get("period_b_end")
-        .and_then(Value::as_str)
-        .ok_or_else(|| IntentError::validation("Missing: period_b_end"))?;
+    let (a_start_date, a_end_date) = parse_period_range(input, "period_a")?;
+    let (b_start_date, b_end_date) = parse_period_range(input, "period_b")?;
 
     let a_label = input
         .get("period_a_label")
@@ -42,27 +29,20 @@ pub async fn compare_periods(
         .and_then(Value::as_str)
         .unwrap_or("Period B");
     let workout_type = input.get("workout_type").and_then(Value::as_str);
-    let requested_metrics = input
+    let requested = input
         .get("metrics")
         .and_then(Value::as_array)
         .map(|items| items.iter().filter_map(Value::as_str).collect::<Vec<_>>())
         .unwrap_or_default();
 
-    let a_start_date = parse_date(a_start, "period_a_start")?;
-    let a_end_date = parse_date(a_end, "period_a_end")?;
-    let b_start_date = parse_date(b_start, "period_b_start")?;
-    let b_end_date = parse_date(b_end, "period_b_end")?;
-
-    if a_start_date > a_end_date {
-        return Err(IntentError::validation(
-            "period_a_start must be on or before period_a_end".to_string(),
-        ));
-    }
-    if b_start_date > b_end_date {
-        return Err(IntentError::validation(
-            "period_b_start must be on or before period_b_end".to_string(),
-        ));
-    }
+    debug_assert!(
+        a_start_date <= a_end_date,
+        "period_a range must be start <= end (validated at handler)"
+    );
+    debug_assert!(
+        b_start_date <= b_end_date,
+        "period_b range must be start <= end (validated at handler)"
+    );
 
     let a_window = crate::domains::coach::AnalysisWindow::new(a_start_date, a_end_date);
     let b_window = crate::domains::coach::AnalysisWindow::new(b_start_date, b_end_date);
@@ -134,64 +114,19 @@ pub async fn compare_periods(
     let guidance = build_guidance(&metrics_for_guidance, &alerts);
 
     let mut content = Vec::new();
-    content.push(ContentBlock::markdown(format!(
-        "# Comparison: {} vs {}",
-        later_label, earlier_label
-    )));
+    content.push(comparison_header_block(later_label, earlier_label));
+    content.push(like_for_like_table_block(
+        &comparison,
+        later_label,
+        earlier_label,
+    ));
 
-    let mut rows = vec![vec![
-        "Metric".into(),
-        later_label.into(),
-        earlier_label.into(),
-        "Δ".into(),
-    ]];
-    for m in &comparison.metrics {
-        let (formatted_a, formatted_b) = if m.name == "Workouts" {
-            (
-                format!("{:.0}", m.period_a_value),
-                format!("{:.0}", m.period_b_value),
-            )
-        } else {
-            (
-                format!("{:.1}", m.period_a_value),
-                format!("{:.1}", m.period_b_value),
-            )
-        };
-        rows.push(vec![
-            m.name.clone(),
-            formatted_a,
-            formatted_b,
-            format!("{:+.1} ({:+.0}%)", m.delta_absolute, m.delta_percent),
-        ]);
-    }
-    content.push(ContentBlock::table(rows[0].clone(), rows[1..].to_vec()));
-
-    if let Some(ref fm) = fitness_metrics {
-        let mut fit_lines = vec!["Fitness Snapshot".to_string()];
-        if let Some(ctl) = fm.ctl {
-            fit_lines.push(format!("  CTL: {:.0}", ctl));
-        }
-        if let Some(atl) = fm.atl {
-            fit_lines.push(format!("  ATL: {:.0}", atl));
-        }
-        if let Some(tsb) = fm.tsb {
-            let state = if tsb > 10.0 {
-                "Fresh"
-            } else if tsb < -10.0 {
-                "Fatigued"
-            } else {
-                "Balanced"
-            };
-            fit_lines.push(format!("  TSB: {:.0} ({})", tsb, state));
-        }
-        if let Some(rr) = fm.ramp_rate {
-            fit_lines.push(format!("  Ramp Rate: {:+.1}/wk", rr));
-        }
-        content.push(ContentBlock::markdown(fit_lines.join("\n")));
+    if let Some(block) = render_fitness_snapshot(&fitness_metrics) {
+        content.push(block);
     }
 
-    if !requested_metrics.is_empty() {
-        let rows = requested_metrics
+    if !requested.is_empty() {
+        let rows = requested
             .iter()
             .map(|metric| {
                 let (later_value, note) = requested_metric_value(metric, &later_stats);
@@ -204,37 +139,23 @@ pub async fn compare_periods(
                 ]
             })
             .collect::<Vec<_>>();
-        content.push(ContentBlock::markdown("Requested Metrics".to_string()));
-        content.push(ContentBlock::table(
-            vec![
-                "Metric".into(),
-                later_label.into(),
-                earlier_label.into(),
-                "Status".into(),
-            ],
+        content.extend(requested_compare_metrics_blocks(
             rows,
+            later_label,
+            earlier_label,
         ));
     }
 
-    content.push(ContentBlock::markdown(format!(
-        "Trend Context\n  Activity delta: {}\n  Time delta: {}\n  Distance delta: {}\n  Elevation delta: {}\n  Current period weekly average: {:.1} hrs\n  {} consistency: {} ({:.0}% of {} planned sessions)\n  {} consistency: {} ({:.0}% of {} planned sessions)",
-        trend
-            .activity_count_delta
-            .map(|delta| format!("{:+}", delta))
-            .unwrap_or_else(|| "n/a".into()),
-        format_pct(trend.time_delta_pct),
-        format_pct(trend.distance_delta_pct),
-        format_pct(trend.elevation_delta_pct),
-        later_volume.weekly_avg_hours,
+    content.push(comparison_trend_context_block(
         later_label,
-        later_consistency.state.as_deref().unwrap_or("unknown"),
-        later_consistency.ratio.unwrap_or(0.0) * 100.0,
-        later_stats.planned_count,
         earlier_label,
-        earlier_consistency.state.as_deref().unwrap_or("unknown"),
-        earlier_consistency.ratio.unwrap_or(0.0) * 100.0,
+        &trend,
+        &later_volume,
+        &later_consistency,
+        later_stats.planned_count,
+        &earlier_consistency,
         earlier_stats.planned_count,
-    )));
+    ));
 
     let mut suggestions = vec![comparison.summary.clone()];
     suggestions.extend(guidance.suggestions);
@@ -494,29 +415,6 @@ mod compare_tests {
     }
 
     #[tokio::test]
-    async fn test_compare_periods_validates_dates() {
-        let client = MockIntervalsClient::builder();
-        let input = serde_json::json!({
-            "period_a_start": "2026-02-01",
-            "period_a_end": "2026-01-01",
-            "period_b_start": "2026-02-01",
-            "period_b_end": "2026-02-28"
-        });
-        let result = compare_periods(&input, &client).await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_compare_periods_missing_required_field() {
-        let client = MockIntervalsClient::builder();
-        let input = serde_json::json!({
-            "period_a_start": "2026-01-01"
-        });
-        let result = compare_periods(&input, &client).await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
     async fn test_compare_periods_with_metrics() {
         let client = MockIntervalsClient::builder();
         let input = serde_json::json!({
@@ -582,23 +480,7 @@ mod compare_tests {
             "period_b_end": "2026-03-07"
         });
         let report = compare_periods(&input, &client).await.unwrap();
-        let rendered = report
-            .content
-            .iter()
-            .map(|b| match b {
-                crate::intents::ContentBlock::Markdown { markdown } => markdown.clone(),
-                crate::intents::ContentBlock::Table { headers, rows } => {
-                    let mut s = headers.join(" | ");
-                    for row in rows {
-                        s.push('\n');
-                        s.push_str(&row.join(" | "));
-                    }
-                    s
-                }
-                _ => String::new(),
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
+        let rendered = format!("{:?}", report.content);
 
         // The header shows the later period (Period B in caller input)
         // first, because delta is anchored to the later period.
