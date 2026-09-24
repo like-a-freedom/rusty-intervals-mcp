@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [2.25.0] - 2026-09-24
 
 ### Added
 - `MCP_PUBLIC_BASE_PATH` runtime path prefix (HTTP mode): mounts `/mcp`, `/auth`, `/ui*`, `/health`, `/metrics` under e.g. `/intervals` for reverse-proxy **pass-through** deployments (no path rewriting). UI links, redirects, and the session cookie `Path` carry the prefix; unset/empty keeps today's root behavior. Domain root returns 404 when a prefix is set (ADR-0010).

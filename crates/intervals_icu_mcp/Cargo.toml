@@ -1,6 +1,6 @@
 [package]
 name = "intervals_icu_mcp"
-version = "2.24.0"
+version = "2.25.0"
 edition = "2024"
 rust-version = "1.88"
 
