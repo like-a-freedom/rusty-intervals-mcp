@@ -112,6 +112,10 @@ pub struct UiState {
     /// Whether to set the `Secure` flag on session cookies.
     /// `false` when running behind a TLS-terminating reverse proxy or on plain HTTP.
     pub cookie_secure: bool,
+    /// Public reverse-proxy path prefix, already normalized via
+    /// `crate::normalize_base_path`: `""` (root) or `"/intervals"`.
+    /// Used to prefix UI links, redirects, and the session cookie `Path`.
+    pub base_path: String,
 }
 
 impl UiState {
@@ -120,7 +124,11 @@ impl UiState {
         revoked_jtis: TokenRevocationSet,
         registry_path: Option<PathBuf>,
         cookie_secure: bool,
+        base_path: String,
     ) -> Self {
+        // Defense in depth: re-normalize so callers cannot pass a raw env
+        // value ("/intervals/", "intervals", "//x") into URL/cookie emission.
+        let base_path = crate::normalize_base_path(&base_path);
         let tokens = Arc::new(RwLock::new(
             registry_path
                 .as_ref()
@@ -147,7 +155,13 @@ impl UiState {
             registry_path,
             revoked_jtis,
             cookie_secure,
+            base_path,
         }
+    }
+
+    /// Prefix a logical app path (e.g. `"/ui/tokens"`) with the public base path.
+    pub fn ui_url(&self, path: &str) -> String {
+        format!("{}{}", self.base_path, path)
     }
 
     async fn session_context(&self, headers: &HeaderMap) -> SessionContext {
@@ -315,14 +329,17 @@ fn page_shell(
     body: Markup,
     flash_success: Option<String>,
     flash_error: Option<String>,
+    base: &str,
 ) -> Markup {
-    fn nav_link(label: &str, href: &str, current: &str) -> Markup {
+    fn nav_link(label: &str, path: &str, current: &str, base: &str) -> Markup {
+        let href = format!("{base}{path}");
         if href == current {
             html! { a.active href=(href) { (label) } }
         } else {
             html! { a href=(href) { (label) } }
         }
     }
+    let current = format!("{base}{page}");
     html! {
         (DOCTYPE)
         html lang="en" {
@@ -330,7 +347,7 @@ fn page_shell(
                 meta charset="utf-8";
                 meta name="viewport" content="width=device-width, initial-scale=1";
                 title { (title) " — Intervals.icu MCP" }
-                link rel="stylesheet" href="/ui/static/css";
+                link rel="stylesheet" href=(format!("{base}/ui/static/css"));
                 script {
                     r#"document.addEventListener("DOMContentLoaded",()=>{const b=document.querySelector(".flash-banner");if(b){setTimeout(()=>{b.classList.add("dismissing");setTimeout(()=>b.remove(),400)},5e3);if(window.history.replaceState){const u=new URL(window.location);u.searchParams.delete("error");u.searchParams.delete("success");window.history.replaceState({},"",u)}}const c=document.querySelector("[data-clipboard]");if(c){c.addEventListener("click",function(){navigator.clipboard.writeText(this.dataset.clipboard).then(()=>{let t=this.querySelector(".copy-toast");if(!t){t=document.createElement("span");t.className="copy-toast";t.textContent="Copied!";this.appendChild(t);requestAnimationFrame(()=>t.classList.add("show"))}setTimeout(()=>{t.classList.remove("show");setTimeout(()=>t.remove(),250)},1200)}).catch(()=>{})})}})"#
                 }
@@ -402,8 +419,8 @@ fn page_shell(
             body {
                 .nav-bar {
                     .brand { "Intervals.icu MCP" }
-                    (nav_link("Home", "/ui", page))
-                    (nav_link("Tokens", "/ui/tokens", page))
+                    (nav_link("Home", "/ui", &current, base))
+                    (nav_link("Tokens", "/ui/tokens", &current, base))
                 }
                 @if let Some(ref msg) = flash_error {
                     .flash-banner.error-alert { (msg) }
@@ -426,7 +443,7 @@ pub struct UiQuery {
     pub success: Option<String>,
 }
 
-fn render_home_body(csrf: &str) -> Markup {
+fn render_home_body(csrf: &str, base: &str) -> Markup {
     use maud_ui::primitives::{button, card, field, input};
 
     html! {
@@ -435,7 +452,7 @@ fn render_home_body(csrf: &str) -> Markup {
                 title: Some("MCP Server Token".into()),
                 description: Some("Enter your Intervals.icu credentials to generate an API token".into()),
                 children: html! {
-                    form method="POST" action="/ui/token" {
+                    form method="POST" action=(format!("{base}/ui/token")) {
                         input type="hidden" name="_csrf" value=(csrf);
                         (field::render(field::Props {
                             label: "Athlete ID".into(),
@@ -506,21 +523,32 @@ pub async fn ui_home(
     let html = page_shell(
         "Token Setup",
         "/ui",
-        render_home_body(&session.csrf_token),
+        render_home_body(&session.csrf_token, &ui.base_path),
         query.success,
         query.error,
+        &ui.base_path,
     );
     let mut resp = html.into_response();
-    set_session_cookie(&mut resp, &session.session_id, ui.cookie_secure);
+    set_session_cookie(
+        &mut resp,
+        &session.session_id,
+        ui.cookie_secure,
+        &ui.base_path,
+    );
     resp
 }
 
-fn set_session_cookie(resp: &mut axum::response::Response, session_id: &str, cookie_secure: bool) {
+fn set_session_cookie(
+    resp: &mut axum::response::Response,
+    session_id: &str,
+    cookie_secure: bool,
+    base_path: &str,
+) {
     use axum::http::header::SET_COOKIE;
     let secure = if cookie_secure { "; Secure" } else { "" };
     let cookie = format!(
-        "{}={}; HttpOnly; SameSite=Strict; Path=/ui; Max-Age={}{secure}",
-        SESSION_COOKIE_NAME, session_id, SESSION_COOKIE_MAX_AGE_SECONDS
+        "{}={}; HttpOnly; SameSite=Strict; Path={}/ui; Max-Age={}{secure}",
+        SESSION_COOKIE_NAME, session_id, base_path, SESSION_COOKIE_MAX_AGE_SECONDS
     );
     resp.headers_mut()
         .insert(SET_COOKIE, cookie.parse().unwrap());
@@ -538,9 +566,14 @@ pub struct TokenForm {
     pub ttl_days: Option<u64>,
 }
 
-fn redirect_with_session(url: &str, session_id: &str, cookie_secure: bool) -> Response {
+fn redirect_with_session(
+    url: &str,
+    session_id: &str,
+    cookie_secure: bool,
+    base_path: &str,
+) -> Response {
     let mut resp = Redirect::to(url).into_response();
-    set_session_cookie(&mut resp, session_id, cookie_secure);
+    set_session_cookie(&mut resp, session_id, cookie_secure, base_path);
     resp
 }
 
@@ -553,17 +586,19 @@ pub async fn ui_create_token(
     let submitted_csrf = form._csrf.clone().unwrap_or_default();
     if !ui.csrf_matches(&session.session_id, &submitted_csrf).await {
         return redirect_with_session(
-            "/ui?error=Invalid+session+%28CSRF%29",
+            &ui.ui_url("/ui?error=Invalid+session+%28CSRF%29"),
             &session.session_id,
             ui.cookie_secure,
+            &ui.base_path,
         );
     }
 
     let Some(token_request) = TokenRequestData::from_form(form) else {
         return redirect_with_session(
-            "/ui?error=Missing+credentials",
+            &ui.ui_url("/ui?error=Missing+credentials"),
             &session.session_id,
             ui.cookie_secure,
+            &ui.base_path,
         );
     };
 
@@ -575,9 +610,10 @@ pub async fn ui_create_token(
         Ok(c) => c,
         Err(_e) => {
             return redirect_with_session(
-                "/ui?error=Client+init+failed",
+                &ui.ui_url("/ui?error=Client+init+failed"),
                 &session.session_id,
                 ui.cookie_secure,
+                &ui.base_path,
             );
         }
     };
@@ -624,23 +660,32 @@ pub async fn ui_create_token(
                         &token_request.athlete_id,
                         &expiry_formatted,
                         &token_request.ttl_label(),
+                        &ui.base_path,
                     );
-                    let html = page_shell("Token Generated", "/ui", body, None, None);
+                    let html =
+                        page_shell("Token Generated", "/ui", body, None, None, &ui.base_path);
                     let mut resp = html.into_response();
-                    set_session_cookie(&mut resp, &session.session_id, ui.cookie_secure);
+                    set_session_cookie(
+                        &mut resp,
+                        &session.session_id,
+                        ui.cookie_secure,
+                        &ui.base_path,
+                    );
                     resp
                 }
                 Err(e) => redirect_with_session(
-                    &format!("/ui?error=Token+generation+failed%3A+{e}"),
+                    &ui.ui_url(&format!("/ui?error=Token+generation+failed%3A+{e}")),
                     &session.session_id,
                     ui.cookie_secure,
+                    &ui.base_path,
                 ),
             }
         }
         Err(_) => redirect_with_session(
-            "/ui?error=Invalid+credentials",
+            &ui.ui_url("/ui?error=Invalid+credentials"),
             &session.session_id,
             ui.cookie_secure,
+            &ui.base_path,
         ),
     }
 }
@@ -658,6 +703,7 @@ fn render_token_success(
     athlete_id: &str,
     expiry_formatted: &str,
     ttl_label: &str,
+    base: &str,
 ) -> Markup {
     use maud_ui::primitives::{button, card};
 
@@ -684,7 +730,7 @@ fn render_token_success(
                 dd { (expiry_formatted) }
             }
             br;
-            a href="/ui" {
+            a href=(format!("{base}/ui")) {
                 (button::render(button::Props {
                     label: "Back to Home".into(),
                     variant: button::Variant::Outline,
@@ -692,7 +738,7 @@ fn render_token_success(
                 }))
             }
             " "
-            a href="/ui/tokens" {
+            a href=(format!("{base}/ui/tokens")) {
                 (button::render(button::Props {
                     label: "View All Tokens".into(),
                     variant: button::Variant::Primary,
@@ -767,16 +813,28 @@ pub async fn ui_list_tokens(
     let ascending = query.order.as_deref() != Some("desc");
     let sorted = sort_tokens(filtered, sort, ascending);
 
-    let body = render_token_list(&sorted, &session.csrf_token, &query.sort, &query.order);
+    let body = render_token_list(
+        &sorted,
+        &session.csrf_token,
+        &query.sort,
+        &query.order,
+        &ui.base_path,
+    );
     let html = page_shell(
         "Token Management",
         "/ui/tokens",
         body,
         query.success,
         query.error,
+        &ui.base_path,
     );
     let mut resp = html.into_response();
-    set_session_cookie(&mut resp, &session.session_id, ui.cookie_secure);
+    set_session_cookie(
+        &mut resp,
+        &session.session_id,
+        ui.cookie_secure,
+        &ui.base_path,
+    );
     resp
 }
 
@@ -784,6 +842,7 @@ fn sort_href(
     sort_field: &str,
     current_sort: &Option<String>,
     current_order: &Option<String>,
+    base: &str,
 ) -> String {
     let is_current = current_sort.as_deref() == Some(sort_field);
     let new_order = if is_current && current_order.as_deref() != Some("desc") {
@@ -791,7 +850,7 @@ fn sort_href(
     } else {
         "asc"
     };
-    format!("/ui/tokens?sort={sort_field}&order={new_order}")
+    format!("{base}/ui/tokens?sort={sort_field}&order={new_order}")
 }
 
 fn sort_arrow(
@@ -815,6 +874,7 @@ fn render_token_list(
     csrf: &str,
     current_sort: &Option<String>,
     current_order: &Option<String>,
+    base: &str,
 ) -> Markup {
     use maud_ui::primitives::{badge, button, card};
 
@@ -823,11 +883,12 @@ fn render_token_list(
         field: &str,
         current_sort: &Option<String>,
         current_order: &Option<String>,
+        base: &str,
     ) -> Markup {
         let arrow = sort_arrow(field, current_sort, current_order);
         html! {
             th.mui-table__th {
-                a href=(sort_href(field, current_sort, current_order)) style="color:inherit;text-decoration:none;display:inline-flex;align-items:center;gap:0.125rem;" {
+                a href=(sort_href(field, current_sort, current_order, base)) style="color:inherit;text-decoration:none;display:inline-flex;align-items:center;gap:0.125rem;" {
                     (label)
                     @if !arrow.is_empty() {
                         span.sort-arrow { (arrow) }
@@ -846,7 +907,7 @@ fn render_token_list(
                     p style="color:var(--mui-muted-foreground,#6b7280);margin-bottom:1rem;" {
                         "No tokens yet. Create one to get started."
                     }
-                    a href="/ui" {
+                    a href=(format!("{base}/ui")) {
                         (button::render(button::Props {
                             label: "Create a Token".into(),
                             ..Default::default()
@@ -858,10 +919,10 @@ fn render_token_list(
                     table.mui-table {
                         thead {
                             tr {
-                                (th_link("Athlete ID", "athlete", current_sort, current_order))
-                                (th_link("Issued", "issued", current_sort, current_order))
-                                (th_link("Expires", "expires", current_sort, current_order))
-                                (th_link("Status", "status", current_sort, current_order))
+                                (th_link("Athlete ID", "athlete", current_sort, current_order, base))
+                                (th_link("Issued", "issued", current_sort, current_order, base))
+                                (th_link("Expires", "expires", current_sort, current_order, base))
+                                (th_link("Status", "status", current_sort, current_order, base))
                                 th.mui-table__th { "Action" }
                             }
                         }
@@ -882,7 +943,7 @@ fn render_token_list(
                                     }
                                     td.mui-table__td {
                                         @if !t.revoked {
-                                            form method="POST" action={"/ui/revoke/"(t.jti)} {
+                                            form method="POST" action=(format!("{base}/ui/revoke/{}", t.jti)) {
                                                 input type="hidden" name="_csrf" value=(csrf);
                                                 (button::render(button::Props {
                                                     label: "Revoke".into(),
@@ -917,9 +978,10 @@ pub async fn ui_revoke_token(
     let submitted_csrf = form.get("_csrf").map(|value| value.as_str()).unwrap_or("");
     if !ui.csrf_matches(&session.session_id, submitted_csrf).await {
         return redirect_with_session(
-            "/ui/tokens?error=Invalid+CSRF",
+            &ui.ui_url("/ui/tokens?error=Invalid+CSRF"),
             &session.session_id,
             ui.cookie_secure,
+            &ui.base_path,
         );
     }
 
@@ -933,9 +995,10 @@ pub async fn ui_revoke_token(
     );
 
     redirect_with_session(
-        "/ui/tokens?success=Token+revoked",
+        &ui.ui_url("/ui/tokens?success=Token+revoked"),
         &session.session_id,
         ui.cookie_secure,
+        &ui.base_path,
     )
 }
 
@@ -956,7 +1019,73 @@ mod tests {
             revoked_jtis: revoked_jtis.clone(),
         });
 
-        UiState::new(app_state, revoked_jtis, None, false)
+        UiState::new(app_state, revoked_jtis, None, false, String::new())
+    }
+
+    fn test_ui_state_with_base(base: &str) -> UiState {
+        use std::collections::HashSet;
+        let secret = b"test_secret_key_for_jwt_signing_12345678901234567890123456789012";
+        let jwt_manager = Arc::new(crate::auth::JwtManager::new(secret, [0u8; 32]));
+        let revoked_jtis = Arc::new(tokio::sync::RwLock::new(HashSet::new()));
+        let app_state = Arc::new(AppState {
+            jwt_manager,
+            jwt_ttl_seconds: 3600,
+            base_url: "https://intervals.icu".to_string(),
+            revoked_jtis: revoked_jtis.clone(),
+        });
+
+        UiState::new(app_state, revoked_jtis, None, false, base.to_string())
+    }
+
+    #[test]
+    fn auth_ui_ui_url_prefixes_paths() {
+        let ui = test_ui_state_with_base("/intervals");
+        assert_eq!(ui.ui_url("/ui"), "/intervals/ui");
+        assert_eq!(
+            ui.ui_url("/ui/tokens?sort=issued&order=asc"),
+            "/intervals/ui/tokens?sort=issued&order=asc"
+        );
+    }
+
+    #[test]
+    fn auth_ui_ui_url_root_is_identity() {
+        let ui = test_ui_state();
+        assert_eq!(ui.ui_url("/ui"), "/ui");
+    }
+
+    #[test]
+    fn auth_ui_session_cookie_path_scoped_under_base() {
+        let mut resp = axum::response::Response::new(axum::body::Body::empty());
+        set_session_cookie(&mut resp, "sid", false, "/intervals");
+        let cookie = resp
+            .headers()
+            .get(header::SET_COOKIE)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(cookie.contains("Path=/intervals/ui"), "cookie={cookie}");
+    }
+
+    #[test]
+    fn auth_ui_session_cookie_path_root_unchanged() {
+        let mut resp = axum::response::Response::new(axum::body::Body::empty());
+        set_session_cookie(&mut resp, "sid", false, "");
+        let cookie = resp
+            .headers()
+            .get(header::SET_COOKIE)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        // Trailing ';' matters: a bare `contains("Path=/ui")` would also match
+        // a wrongly-scoped `Path=/intervals/ui`.
+        assert!(cookie.contains("Path=/ui;"), "cookie={cookie}");
+    }
+
+    #[test]
+    fn auth_ui_new_normalizes_base_path() {
+        let ui = test_ui_state_with_base("/intervals/");
+        assert_eq!(ui.base_path, "/intervals");
+        assert_eq!(ui.ui_url("/ui"), "/intervals/ui");
     }
 
     fn headers_with_cookie(cookie: &str) -> HeaderMap {

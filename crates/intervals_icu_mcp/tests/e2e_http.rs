@@ -445,3 +445,76 @@ async fn e2e_profile() {
         .unwrap();
     assert!(res.status().is_success());
 }
+
+#[tokio::test]
+async fn e2e_mcp_initialize_under_public_base_path() {
+    let client: Arc<dyn IntervalsClient> = Arc::new(LocalMockClient);
+    let handler = intervals_icu_mcp::IntervalsMcpHandler::new(client.clone());
+
+    let session = std::sync::Arc::new(
+        rmcp::transport::streamable_http_server::session::local::LocalSessionManager::default(),
+    );
+    let handler_for_factory = handler.clone();
+    let mcp_service = rmcp::transport::streamable_http_server::tower::StreamableHttpService::new(
+        move || -> Result<_, std::io::Error> { Ok(handler_for_factory.clone()) },
+        session,
+        rmcp::transport::streamable_http_server::tower::StreamableHttpServerConfig::default(),
+    );
+
+    let inner = axum::Router::new()
+        .route("/health", axum::routing::get(|| async { "ok" }))
+        .nest_service("/mcp", mcp_service);
+    let app = intervals_icu_mcp::apply_public_base_path(inner, "/intervals");
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = axum::serve(listener, app.into_make_service());
+    let _sv = tokio::spawn(async move {
+        server.await.ok();
+    });
+
+    let http = Client::new();
+
+    // The listener is bound before spawn, but give the accept loop one beat
+    // (same race window as e2e_profile; a short retry keeps this deterministic).
+    let mut health_status = reqwest::StatusCode::IM_A_TEAPOT;
+    for _ in 0..50 {
+        match http
+            .get(format!("http://{addr}/intervals/health"))
+            .send()
+            .await
+        {
+            Ok(r) => {
+                health_status = r.status();
+                if health_status.is_success() {
+                    break;
+                }
+            }
+            Err(_) => tokio::time::sleep(std::time::Duration::from_millis(20)).await,
+        }
+    }
+    assert_eq!(health_status, 200);
+
+    // MCP initialize reaches the streamable service through the nest.
+    let res = http
+        .post(format!("http://{addr}/intervals/mcp"))
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
+        .body(r#"{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"e2e","version":"0"}},"id":1}"#)
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        res.status().is_success(),
+        "initialize under prefix must reach MCP service, status={}",
+        res.status()
+    );
+
+    // Root is freed.
+    let res = http
+        .get(format!("http://{addr}/health"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 404);
+}

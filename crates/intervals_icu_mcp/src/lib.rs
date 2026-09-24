@@ -482,11 +482,19 @@ pub async fn run_http_server(
     let cookie_secure = std::env::var("MCP_COOKIE_SECURE")
         .map(|v| v != "false" && v != "0")
         .unwrap_or(true);
+    let base_path = normalize_base_path(&std::env::var("MCP_PUBLIC_BASE_PATH").unwrap_or_default());
+    if !base_path.is_empty() {
+        tracing::info!(
+            %base_path,
+            "serving under public base path (reverse proxy must pass the prefix through, no rewrite)"
+        );
+    }
     let ui_state = auth_ui::UiState::new(
         app_state.clone(),
         revoked_jtis.clone(),
         registry_path,
         cookie_secure,
+        base_path.clone(),
     );
 
     let ui_config = tower_governor::governor::GovernorConfigBuilder::default()
@@ -565,16 +573,22 @@ pub async fn run_http_server(
 
     let metrics_route = metrics::create_metrics_router();
 
+    let root_redirect_target = format!("{base_path}/ui");
     let app = axum::Router::new()
         .route(
             "/",
-            axum::routing::get(|| async { axum::response::Redirect::to("/ui") }),
+            axum::routing::get(move || {
+                let target = root_redirect_target.clone();
+                async move { axum::response::Redirect::to(target.as_str()) }
+            }),
         )
         .merge(auth_route)
         .merge(ui_route)
         .merge(mcp_route)
         .merge(health_route)
         .merge(metrics_route);
+
+    let app = apply_public_base_path(app, &base_path);
 
     tracing::info!(
         %address,
@@ -638,6 +652,55 @@ pub fn build_mcp_rmcp_config(
         rmcp::transport::streamable_http_server::tower::StreamableHttpServerConfig::default()
             .with_allowed_hosts(allowed_hosts_input.split(',').map(|s| s.trim().to_string()))
     }
+}
+
+/// Normalize a public base path from configuration.
+///
+/// Returns an empty string for root deployment (no prefix). Otherwise returns
+/// a canonical path starting with `/` and without a trailing `/`.
+/// Examples: `"intervals"` → `"/intervals"`, `"/intervals/"` → `"/intervals"`,
+/// `"/"` → `""`, `""` → `""`.
+pub fn normalize_base_path(raw: &str) -> String {
+    let trimmed = raw.trim().trim_matches('/');
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    format!("/{trimmed}")
+}
+
+/// Mount `app` under `base_path` for reverse-proxy prefix pass-through.
+///
+/// The proxy forwards the full public path (e.g. `/intervals/mcp`) without
+/// rewriting; this nests every route under `{base_path}/…`.
+///
+/// - `base_path == ""` returns `app` unchanged (root deployment).
+/// - `GET {base_path}` is matched by the app's inner `/` route (axum `nest`
+///   matches the bare prefix); the inner `/` handler must redirect to
+///   `{base_path}/ui`.
+/// - `GET {base_path}/` is NOT matched by `nest` (axum matches `/x` but not
+///   `/x/`), so this outer fallback redirects it to `{base_path}/ui`.
+/// - Every other unmatched path — including root-level paths outside the
+///   prefix — returns 404, freeing the domain root for other services.
+pub fn apply_public_base_path(app: axum::Router, base_path: &str) -> axum::Router {
+    use axum::response::IntoResponse as _;
+
+    if base_path.is_empty() {
+        return app;
+    }
+    let ui_index = format!("{base_path}/ui");
+    let trailing_slash = format!("{base_path}/");
+    axum::Router::new()
+        .nest(base_path, app)
+        .fallback(move |uri: axum::http::Uri| {
+            let ui_index = ui_index.clone();
+            let trailing_slash = trailing_slash.clone();
+            async move {
+                if uri.path() == trailing_slash.as_str() {
+                    return axum::response::Redirect::to(ui_index.as_str()).into_response();
+                }
+                (axum::http::StatusCode::NOT_FOUND, axum::body::Body::empty()).into_response()
+            }
+        })
 }
 
 /// Top-level application entry point.
@@ -1107,6 +1170,28 @@ mod tests {
         let config = super::build_mcp_rmcp_config("");
         // Default config should work without panicking
         let _ = config;
+    }
+
+    // ── normalize_base_path tests ─────────────────────────────────────
+
+    #[test]
+    fn normalize_base_path_cases() {
+        assert_eq!(super::normalize_base_path(""), "");
+        assert_eq!(super::normalize_base_path("/"), "");
+        assert_eq!(super::normalize_base_path("//"), "");
+        assert_eq!(super::normalize_base_path("intervals"), "/intervals");
+        assert_eq!(super::normalize_base_path("/intervals"), "/intervals");
+        assert_eq!(super::normalize_base_path("/intervals/"), "/intervals");
+        assert_eq!(super::normalize_base_path("  /intervals/  "), "/intervals");
+        assert_eq!(super::normalize_base_path("intervals/"), "/intervals");
+        // Multi-segment prefixes are supported (nest accepts them).
+        assert_eq!(
+            super::normalize_base_path("/mcp/intervals/"),
+            "/mcp/intervals"
+        );
+        // Duplicate slashes are collapsed — axum::nest panics on "//…" paths.
+        assert_eq!(super::normalize_base_path("//intervals//"), "/intervals");
+        assert_eq!(super::normalize_base_path("///"), "");
     }
 
     #[test]
