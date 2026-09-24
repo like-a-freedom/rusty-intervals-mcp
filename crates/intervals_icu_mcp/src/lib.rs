@@ -661,17 +661,24 @@ pub fn build_mcp_rmcp_config(
 /// Examples: `"intervals"` → `"/intervals"`, `"/intervals/"` → `"/intervals"`,
 /// `"/"` → `""`, `""` → `""`.
 pub fn normalize_base_path(raw: &str) -> String {
-    let trimmed = raw.trim().trim_matches('/');
+    // Collapse duplicate slashes so axum `nest` never sees a `//…` path
+    // (nest panics on those), then trim leading/trailing slashes.
+    let trimmed: Vec<&str> = raw
+        .trim()
+        .split('/')
+        .filter(|seg| !seg.is_empty())
+        .collect();
     if trimmed.is_empty() {
         return String::new();
     }
-    format!("/{trimmed}")
+    format!("/{}", trimmed.join("/"))
 }
 
 /// Mount `app` under `base_path` for reverse-proxy prefix pass-through.
 ///
 /// The proxy forwards the full public path (e.g. `/intervals/mcp`) without
-/// rewriting; this nests every route under `{base_path}/…`.
+/// rewriting; this nests every route under `{base_path}/…`. The argument is
+/// re-normalized via [`normalize_base_path`] so any raw input is safe.
 ///
 /// - `base_path == ""` returns `app` unchanged (root deployment).
 /// - `GET {base_path}` is matched by the app's inner `/` route (axum `nest`
@@ -684,13 +691,14 @@ pub fn normalize_base_path(raw: &str) -> String {
 pub fn apply_public_base_path(app: axum::Router, base_path: &str) -> axum::Router {
     use axum::response::IntoResponse as _;
 
+    let base_path = normalize_base_path(base_path);
     if base_path.is_empty() {
         return app;
     }
     let ui_index = format!("{base_path}/ui");
     let trailing_slash = format!("{base_path}/");
     axum::Router::new()
-        .nest(base_path, app)
+        .nest(&base_path, app)
         .fallback(move |uri: axum::http::Uri| {
             let ui_index = ui_index.clone();
             let trailing_slash = trailing_slash.clone();
@@ -1189,9 +1197,17 @@ mod tests {
             super::normalize_base_path("/mcp/intervals/"),
             "/mcp/intervals"
         );
-        // Duplicate slashes are collapsed — axum::nest panics on "//…" paths.
+        // Duplicate slashes are collapsed anywhere in the path —
+        // axum::nest panics on "//…" paths.
         assert_eq!(super::normalize_base_path("//intervals//"), "/intervals");
         assert_eq!(super::normalize_base_path("///"), "");
+        assert_eq!(super::normalize_base_path("/a//b"), "/a/b");
+        assert_eq!(
+            super::normalize_base_path("intervals//mcp"),
+            "/intervals/mcp"
+        );
+        // Raw/unnormalized input is safe for apply_public_base_path.
+        assert_eq!(super::normalize_base_path("  //a/b/  "), "/a/b");
     }
 
     #[test]

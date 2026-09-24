@@ -122,3 +122,18 @@ async fn unknown_paths_under_prefix_return_404() {
         .unwrap();
     assert_eq!(resp.status(), 404);
 }
+
+#[tokio::test]
+async fn apply_public_base_path_self_normalizes_raw_input() {
+    // Defense in depth: a raw/unnormalized env value must not panic in
+    // axum::nest (which rejects "//…" paths) and must mount at the
+    // canonical prefix.
+    let inner = Router::new().route("/health", get(|| async { "ok" }));
+    let app = apply_public_base_path(inner, "  //intervals//  ");
+    let addr = spawn(app).await;
+
+    let resp = reqwest::get(format!("http://{addr}/intervals/health"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+}
