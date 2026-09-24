@@ -360,6 +360,8 @@ The server includes a minimal browser-based token management UI at `/ui` when ru
 | `/ui/tokens` | GET | List active (non-revoked) tokens |
 | `/ui/revoke/{jti}` | POST | Revoke a token by its JTI |
 
+Endpoint paths above assume the default root deployment. With `MCP_PUBLIC_BASE_PATH=/intervals` they live under `/intervals/ui…`, the session cookie is scoped to `Path=/intervals/ui`, and all generated links/redirects carry the prefix.
+
 The UI is server-rendered HTML with rate limiting (2 req/s, burst 5). No additional environment variables are needed — it uses the same `JWT_MASTER_KEY` and `JWT_TTL_SECONDS` as the JSON `/auth` endpoint.
 
 **Revocation scope:** Token revocation in the UI is session-scoped. By default tokens are stored in‑memory and lost on restart. Set `MCP_TOKEN_REGISTRY_PATH` to a writable file path to persist issued tokens across restarts (e.g., `/data/tokens.json` in Docker).
@@ -637,6 +639,7 @@ See `.env.example` for the standard environment layout.
 | `JWT_MASTER_KEY` | unset | 64-byte hex key (128 hex chars) required for JWT in HTTP mode |
 | `JWT_TTL_SECONDS` | `7776000` | JWT lifetime in seconds (default 90 days) |
 | `MCP_ALLOWED_HOSTS` | `localhost,127.0.0.1,::1` | Allowed Host headers (anti-DNS-rebinding); set to public hostname(s) when behind a reverse proxy |
+| `MCP_PUBLIC_BASE_PATH` | unset | Public path prefix for reverse-proxy pass-through (e.g. `/intervals`); empty = serve at the domain root. See [Path prefix](#path-prefix-multiple-services-per-domain) |
 
 ### OpenAPI runtime behavior
 
@@ -761,6 +764,27 @@ For production deployment:
 - place the server behind TLS
 - add an authentication layer at the proxy or gateway
 - do not expose an unauthenticated plain HTTP MCP endpoint directly to the public internet
+
+### Path prefix (multiple services per domain)
+
+To host several MCP servers on one domain (`https://mcp.like-a-freedom.ru/memory`, `…/intervals`, …):
+
+1. Set the env var on this service: `MCP_PUBLIC_BASE_PATH=/intervals`.
+2. Configure the reverse proxy for **prefix pass-through — do NOT rewrite the path**:
+   - Pangolin: target `Path=/intervals`, `Match=prefix`, Path Rewriting **off** (the backend expects `/intervals/...`).
+   - Other proxies: forward the request path unchanged to this container.
+3. Point clients at the prefixed endpoints:
+   - MCP: `https://mcp.like-a-freedom.ru/intervals/mcp`
+     (if the client appends `/mcp` itself, give it `https://mcp.like-a-freedom.ru/intervals`)
+   - UI: `https://mcp.like-a-freedom.ru/intervals/ui`
+4. Set `MCP_ALLOWED_HOSTS=mcp.like-a-freedom.ru` (public hostname, anti-DNS-rebinding).
+
+Behavior notes when a prefix is set:
+
+- The domain root is **freed**: `/`, `/health`, `/mcp`, `/ui` at the host root return 404, so they cannot collide with other services on the same domain.
+- Health/metrics move under the prefix: `/intervals/health`, `/intervals/metrics`. If you do not want them public, simply do not publish those paths at the proxy.
+- Direct container healthchecks (bypassing the proxy) must request `{prefix}/health`, or run local/dev instances without `MCP_PUBLIC_BASE_PATH`.
+- The same image serves root and any prefix — switching is a restart with a different env value, no rebuild.
 
 ## License
 

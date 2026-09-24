@@ -66,6 +66,7 @@ Purpose: crate-level operating manual for coding agents working in `crates/inter
   - `INTERVALS_ICU_SPEC_REFRESH_SECS`
 - Logging:
   - `RUST_LOG` (preferred)
+- Reverse proxy (HTTP mode): `MCP_PUBLIC_BASE_PATH` (optional) mounts all routes under a public path prefix with pass-through (no rewrite); empty = root.
 
 ## Code Navigation Rules
 

@@ -48,7 +48,7 @@ intervals_icu_mcp
 (Use `--bin <name>` if you need to select a specific binary.)
 - Run MCP server for stdio or other transports:
 
-The crate supports RMCP transports (stdio, streamable HTTP). In stdio mode, the binary reads `INTERVALS_ICU_API_KEY` and `INTERVALS_ICU_ATHLETE_ID` directly from the environment. In HTTP mode, the server mounts `/auth`, `/health`, and the streamable MCP service at `/mcp` and requires `JWT_MASTER_KEY`.
+The crate supports RMCP transports (stdio, streamable HTTP). In stdio mode, the binary reads `INTERVALS_ICU_API_KEY` and `INTERVALS_ICU_ATHLETE_ID` directly from the environment. In HTTP mode, the server mounts `/auth`, `/health`, and the streamable MCP service at `/mcp` and requires `JWT_MASTER_KEY`. Setting `MCP_PUBLIC_BASE_PATH` (e.g. `/intervals`) serves all of these routes under that prefix for reverse-proxy pass-through deployments.
 
 If you need a concrete stdio example, run an example from the RMCP SDK or see the `tests/e2e_stdio.rs` test for an example of launching the server as a child process.
 

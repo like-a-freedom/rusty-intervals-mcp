@@ -27,6 +27,8 @@ CORS layer
 GracefulShutdownLayer
     ↓
 Router (axum)
+  ├─ [optional] nest MCP_PUBLIC_BASE_PATH — public prefix pass-through (ADR-0010);
+  │             trailing `{prefix}/` and out-of-prefix paths → fallback (redirect / 404)
   ├─ GET  /health          — healthz
   ├─ GET  /metrics         — Prometheus (optional Bearer token)
   ├─ POST /auth            — exchange ICu key for JWT
