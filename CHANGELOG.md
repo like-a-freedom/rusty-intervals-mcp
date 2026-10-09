@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.27.0] - 2026-10-09
+
+### Added
+- Server-side token registry (ADR-0011): every issued token — via `POST /auth` and the web UI alike — is recorded by `jti`, holding its athlete, lifetime, revocation state, and the athlete's upstream credential encrypted at rest. Revocation and upstream-key rotation now work for **all** tokens, and the bearer JWT no longer carries secret material (only `athlete_id` + `jti`). The `/ui/tokens` list is now the registry, filterable by `?athlete=`.
+
+### Changed
+- `POST /auth` now issues revocable, recorded tokens (previously stateless, untracked, and permanently non-revocable).
+- The UI token list no longer depends on the browser session: an expired session no longer hides the operator's tokens; the session only supplies a default athlete filter.
+- `MCP_TOKEN_REGISTRY_PATH` is now load-bearing — without it the registry is in-memory and tokens issued in a previous process are rejected after a restart (the server warns at startup).
+
+### Breaking changes
+- HTTP mode without `MCP_TOKEN_REGISTRY_PATH`: tokens issued by a previous process no longer authenticate after a restart. Set `MCP_TOKEN_REGISTRY_PATH` (e.g. `/data/tokens.json`) to persist the registry.
+- Tokens issued before this release (credential embedded in the JWT, no registry record) remain valid until they expire; newly issued tokens carry no embedded credential. No change for MCP clients — the token is opaque.
+
 ## [2.26.0] - 2026-10-09
 
 ### Added
