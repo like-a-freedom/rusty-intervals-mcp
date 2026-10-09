@@ -179,6 +179,21 @@ impl IntervalsMcpHandler {
             .map(|request_id| request_id.0.clone())
     }
 
+    /// Client identity from the MCP `initialize` handshake (`clientInfo`),
+    /// once the session has been initialized.
+    fn request_client(context: &RequestContext<RoleServer>) -> (String, String) {
+        context
+            .peer
+            .peer_info()
+            .map(|info| {
+                (
+                    info.client_info.name.clone(),
+                    info.client_info.version.clone(),
+                )
+            })
+            .unwrap_or_else(|| ("unknown".to_string(), "unknown".to_string()))
+    }
+
     #[must_use]
     fn client_for_extensions(
         extensions: &rmcp::model::Extensions,
@@ -205,6 +220,15 @@ impl ServerHandler for IntervalsMcpHandler {
         context: RequestContext<RoleServer>,
     ) -> Result<ServerConfig, ErrorData> {
         metrics::record_mcp_session("started");
+        // Self-reported client identity (codex/claude/zed/...) from clientInfo.
+        tracing::info!(
+            request_id = Self::request_request_id(&context.extensions)
+                .as_deref()
+                .unwrap_or("unknown"),
+            client_name = %request.client_info.name,
+            client_version = %request.client_info.version,
+            "MCP client initialized"
+        );
         context.peer.set_peer_info(request);
         Ok(self.get_info())
     }
@@ -273,6 +297,7 @@ impl ServerHandler for IntervalsMcpHandler {
         let client_for_request = Self::client_for_extensions(&context.extensions);
         let athlete_id = Self::request_credentials(&context.extensions).map(|c| c.athlete_id);
         let request_id = Self::request_request_id(&context.extensions);
+        let (client_name, client_version) = Self::request_client(&context);
         let started = std::time::Instant::now();
 
         let intent_name = request.name.as_ref();
@@ -314,6 +339,8 @@ impl ServerHandler for IntervalsMcpHandler {
             Ok(output) => {
                 tracing::info!(
                     athlete_id = athlete_id.as_deref().unwrap_or("unknown"),
+                    client_name = %client_name,
+                    client_version = %client_version,
                     tool = %intent_name,
                     request_id = request_id.as_deref().unwrap_or("unknown"),
                     outcome = "ok",
@@ -327,6 +354,8 @@ impl ServerHandler for IntervalsMcpHandler {
             Err(e) => {
                 tracing::warn!(
                     athlete_id = athlete_id.as_deref().unwrap_or("unknown"),
+                    client_name = %client_name,
+                    client_version = %client_version,
                     tool = %intent_name,
                     request_id = request_id.as_deref().unwrap_or("unknown"),
                     outcome = "error",
