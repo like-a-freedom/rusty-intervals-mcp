@@ -6,15 +6,32 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 - Server-side token registry (ADR-0011): every issued token — via `POST /auth` and the web UI alike — is recorded by `jti`, holding its athlete, lifetime, revocation state, and the athlete's upstream credential encrypted at rest. Revocation now works for **all** tokens, and the bearer JWT no longer carries secret material (only `athlete_id` + `jti`); because the credential lives server-side, an upstream key can be rotated by updating its record without re-issuing tokens. The `/ui/tokens` list is now the registry, filterable by `?athlete=`.
+- MCP sessions log their lifetime and client: `MCP session closed` records the `clientInfo` name/version captured at initialize plus `lifetime_ms`, and the sessions counter flips to `ended` on close. Reconnect storms from a single client are now observable.
+- Tool-call audit events carry `client_name`/`client_version` (falling back to `unknown` until the initialize handshake completes).
+- Tool-call completions record `response_bytes` and a classified `error_kind` (`validation`, `upstream`, `idempotency_conflict`, …), and a call exceeding 10s logs `tool call slow` at `warn` instead of an ordinary `info` completion.
+- Upstream `intervals.icu` failures are logged with athlete, path and error class, not just counted in metrics: transport errors, circuit-open, 5xx, 429 and auth failures log at `warn`; caller-caused 4xx and decode failures are also visible.
 
 ### Changed
 - `POST /auth` now issues revocable, recorded tokens (previously stateless, untracked, and permanently non-revocable).
 - The UI token list no longer depends on the browser session: an expired session no longer hides the operator's tokens; the session only supplies a default athlete filter.
 - `MCP_TOKEN_REGISTRY_PATH` is now load-bearing — without it the registry is in-memory and tokens issued in a previous process are rejected after a restart (the server warns at startup).
+- UI error and success messages are held in the server session instead of the URL. Redirects now carry a bare path, so message text no longer lands in browser history, bookmarks, or an outbound `Referer`, and a page refresh no longer replays the previous message.
+- Log level policy is now strict and documented: per-request noise (`Authenticated request`, histogram `not available`, endurance evidence) was demoted or removed so `info` carries business and audit events only.
+- Dependencies bumped to latest, including majors `rmcp` 3.5.1, `jwt-simple` 0.15, `aes-gcm` 0.11, `serial_test` 4 and `maud-ui` 0.21. MSRV raised 1.88 → 1.99.
+
+### Fixed
+- The token UI reported "your session has expired" during normal use. The session cookie is re-issued with a fresh `Max-Age` on every response, so the server now slides the session lifetime to match; previously it expired on a fixed one-hour schedule while the browser still considered the session valid, and the next action failed its CSRF check.
+- The token UI's empty state told users to "sign in again" when no athlete was associated with the browser session. There is no authentication flow in this UI — the session only remembers which athlete's tokens the browser created — and the message appeared even for a first-time visitor who had never had a session. It now states the actual condition and points at token creation.
+- The token field on the post-creation page was flush against its card description (0px gap); it now has the same vertical rhythm as the rest of the UI.
+- The UI's inline `<script>` and `<style>` were HTML-escaped, breaking the copy button and leaving a rendered `<script>`/`<style>` block in the page source.
+- The flash banner survived a page refresh and the URL kept its message parameters; both are gone now that the message lives in the session.
+- `docker-compose.yml` set `MCP_TOKEN_REGISTRY_PATH` to `./data/tokens.json`, which resolves under the container's runtime workdir rather than the `./data:/data` mount. The registry was therefore never persisted and tokens were lost on restart; the path now matches the mounted volume.
+- A corrupt or unreadable registry file is now reported at startup instead of being silently ignored.
 
 ### Breaking changes
 - HTTP mode without `MCP_TOKEN_REGISTRY_PATH`: tokens issued by a previous process no longer authenticate after a restart. Set `MCP_TOKEN_REGISTRY_PATH` (e.g. `/data/tokens.json`) to persist the registry.
 - Tokens issued before this release (credential embedded in the JWT, no registry record) remain valid until they expire; newly issued tokens carry no embedded credential. No change for MCP clients — the token is opaque.
+- MSRV is now 1.99 (was 1.88).
 
 ## [2.26.0] - 2026-10-09
 
