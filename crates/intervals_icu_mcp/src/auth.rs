@@ -71,6 +71,14 @@ pub struct DecryptedCredentials {
     pub api_key: SecretString,
 }
 
+/// A freshly issued token, recorded server-side.
+#[derive(Clone, Debug)]
+pub struct IssuedToken {
+    pub token: String,
+    pub jti: String,
+    pub expires_at: String,
+}
+
 /// Base URL injected into HTTP requests so rmcp handlers can build per-request clients.
 #[derive(Clone, Debug)]
 pub struct HttpBaseUrl(pub String);
@@ -96,6 +104,41 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// Issue a token and record it in the registry.
+    ///
+    /// The single issuance path: generates the `jti`, encrypts the credential
+    /// for server-side storage, signs the identity token, and records the
+    /// result. Both `POST /auth` and the web UI go through here.
+    pub async fn issue_recorded_token(
+        &self,
+        athlete_id: &str,
+        api_key: &str,
+        ttl_secs: u64,
+    ) -> Result<IssuedToken, AuthError> {
+        let jti = Uuid::new_v4().to_string();
+        let encrypted_api_key = self.jwt_manager.encrypt_credential(api_key)?;
+        let token = self.jwt_manager.issue_token(athlete_id, ttl_secs, &jti)?;
+
+        let now = chrono::Utc::now();
+        let expires_at = (now + chrono::TimeDelta::seconds(ttl_secs as i64)).to_rfc3339();
+        self.tokens
+            .record(TokenRecord {
+                jti: jti.clone(),
+                athlete_id: athlete_id.to_string(),
+                issued_at: now.to_rfc3339(),
+                expires_at: expires_at.clone(),
+                revoked: false,
+                encrypted_api_key: Some(encrypted_api_key),
+            })
+            .await;
+
+        Ok(IssuedToken {
+            token,
+            jti,
+            expires_at,
+        })
+    }
+
     /// Resolve a bearer token to its athlete and upstream credential.
     ///
     /// The registry is authoritative: a revoked record rejects the token
@@ -109,25 +152,33 @@ impl AppState {
             None => None,
         };
 
-        if let Some(record) = &record
-            && record.revoked
-        {
-            tracing::warn!(
-                athlete_id = %record.athlete_id,
-                jti = %record.jti,
-                "Rejected revoked token"
-            );
-            return Err(AuthError::TokenRevoked);
+        if let Some(record) = &record {
+            if record.revoked {
+                tracing::warn!(
+                    athlete_id = %record.athlete_id,
+                    jti = %record.jti,
+                    "Rejected revoked token"
+                );
+                return Err(AuthError::TokenRevoked);
+            }
+            // Defence in depth: the identity in the token must match the record
+            // it points at. A divergence means tampering or registry damage.
+            if record.athlete_id != claims.athlete_id {
+                tracing::warn!(
+                    jti = %record.jti,
+                    token_athlete = %claims.athlete_id,
+                    record_athlete = %record.athlete_id,
+                    "token athlete does not match registry record"
+                );
+                return Err(AuthError::InvalidToken);
+            }
         }
 
         // Prefer the stored credential; fall back to one embedded in the claims
         // (legacy tokens, or a registry record written before ADR-0011 whose
         // credential still travels in the token).
         let encrypted = record
-            .as_ref()
-            .map(|record| record.encrypted_api_key.as_str())
-            .filter(|stored| !stored.is_empty())
-            .map(str::to_owned)
+            .and_then(|record| record.encrypted_api_key)
             .or_else(|| claims.encrypted_api_key.clone())
             .ok_or(AuthError::InvalidToken)?;
 
@@ -480,25 +531,9 @@ pub async fn auth_endpoint(
     })?;
 
     // Validation successful — issue a revocable token recorded server-side.
-    let jti = Uuid::new_v4().to_string();
-    let encrypted_api_key = state.jwt_manager.encrypt_credential(&req.api_key)?;
-    let token = state
-        .jwt_manager
-        .issue_token(&req.athlete_id, state.jwt_ttl_seconds, &jti)?;
-
-    let now = chrono::Utc::now();
-    state
-        .tokens
-        .record(TokenRecord {
-            jti: jti.clone(),
-            athlete_id: req.athlete_id.clone(),
-            issued_at: now.to_rfc3339(),
-            expires_at: (now + chrono::TimeDelta::seconds(state.jwt_ttl_seconds as i64))
-                .to_rfc3339(),
-            revoked: false,
-            encrypted_api_key,
-        })
-        .await;
+    let issued = state
+        .issue_recorded_token(&req.athlete_id, &req.api_key, state.jwt_ttl_seconds)
+        .await?;
 
     // Record token issuance metric
     metrics::record_token_issued();
@@ -507,12 +542,12 @@ pub async fn auth_endpoint(
         client_ip = %client_ip,
         request_id = %request_id,
         athlete_id = %req.athlete_id,
-        jti = %jti,
+        jti = %issued.jti,
         "Issued JWT token"
     );
 
     Ok(Json(AuthResponse {
-        token,
+        token: issued.token,
         expires_in: state.jwt_ttl_seconds,
         athlete_id: req.athlete_id,
     }))
@@ -676,7 +711,7 @@ mod tests {
                 issued_at: chrono::Utc::now().to_rfc3339(),
                 expires_at: chrono::Utc::now().to_rfc3339(),
                 revoked: false,
-                encrypted_api_key: state.jwt_manager.encrypt_credential(api_key).unwrap(),
+                encrypted_api_key: Some(state.jwt_manager.encrypt_credential(api_key).unwrap()),
             })
             .await;
     }
@@ -751,7 +786,7 @@ mod tests {
         state
             .tokens
             .record(TokenRecord {
-                encrypted_api_key: String::new(),
+                encrypted_api_key: None,
                 ..state.tokens.find("jti-1").await.expect("record")
             })
             .await;
@@ -784,6 +819,21 @@ mod tests {
 
         let result = state.authenticate(&token).await;
         assert!(matches!(result, Err(AuthError::TokenRevoked)));
+    }
+
+    #[tokio::test]
+    async fn test_authenticate_rejects_token_recorded_for_another_athlete() {
+        // Defence in depth: a token whose identity diverges from its registry
+        // record must not authenticate.
+        let state = app_state();
+        record_token(&state, "jti-1", "other-athlete", "test_api_key").await;
+        let token = state
+            .jwt_manager
+            .issue_token("i123456", 3600, "jti-1")
+            .unwrap();
+
+        let result = state.authenticate(&token).await;
+        assert!(matches!(result, Err(AuthError::InvalidToken)));
     }
 
     /// Sign authentic claims whose `exp` lies one day in the past, producing

@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [2.27.0] - 2026-10-09
 
 ### Added
-- Server-side token registry (ADR-0011): every issued token — via `POST /auth` and the web UI alike — is recorded by `jti`, holding its athlete, lifetime, revocation state, and the athlete's upstream credential encrypted at rest. Revocation and upstream-key rotation now work for **all** tokens, and the bearer JWT no longer carries secret material (only `athlete_id` + `jti`). The `/ui/tokens` list is now the registry, filterable by `?athlete=`.
+- Server-side token registry (ADR-0011): every issued token — via `POST /auth` and the web UI alike — is recorded by `jti`, holding its athlete, lifetime, revocation state, and the athlete's upstream credential encrypted at rest. Revocation now works for **all** tokens, and the bearer JWT no longer carries secret material (only `athlete_id` + `jti`); because the credential lives server-side, an upstream key can be rotated by updating its record without re-issuing tokens. The `/ui/tokens` list is now the registry, filterable by `?athlete=`.
 
 ### Changed
 - `POST /auth` now issues revocable, recorded tokens (previously stateless, untracked, and permanently non-revocable).

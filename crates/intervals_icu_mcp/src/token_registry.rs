@@ -22,11 +22,11 @@ pub struct TokenRecord {
     pub expires_at: String,
     pub revoked: bool,
     /// The athlete's upstream API key, encrypted with the master-key-derived
-    /// AES-256-GCM key. Never embedded in the JWT. `serde(default)` keeps
-    /// registry files written before ADR-0011 loadable (they fall back to the
-    /// credential embedded in the legacy token's claims).
+    /// AES-256-GCM key. Never embedded in the JWT. `None` for records written
+    /// before ADR-0011 (`serde(default)`), which fall back to the credential
+    /// embedded in the legacy token's claims.
     #[serde(default)]
-    pub encrypted_api_key: String,
+    pub encrypted_api_key: Option<String>,
 }
 
 /// Shared, optionally-persistent registry of issued tokens.
@@ -55,11 +55,6 @@ impl TokenRegistry {
         }
     }
 
-    /// The file this registry persists to, if any.
-    pub fn path(&self) -> Option<&Path> {
-        self.path.as_deref()
-    }
-
     /// Whether recorded tokens survive a restart.
     pub fn is_persistent(&self) -> bool {
         self.path.is_some()
@@ -77,16 +72,6 @@ impl TokenRegistry {
     /// Look a token up by its `jti`.
     pub async fn find(&self, jti: &str) -> Option<TokenRecord> {
         self.records.read().await.get(jti).cloned()
-    }
-
-    /// Whether the record for `jti` is marked revoked. Unknown `jti` is `false`.
-    pub async fn is_revoked(&self, jti: &str) -> bool {
-        self.records
-            .read()
-            .await
-            .get(jti)
-            .map(|record| record.revoked)
-            .unwrap_or(false)
     }
 
     /// Mark a token revoked. Returns `false` when the `jti` is unknown.
@@ -153,9 +138,27 @@ impl TokenRegistry {
     }
 }
 
+/// Load records from `path`.
+///
+/// A missing file is a normal first run (no record). A file that exists but
+/// cannot be read or parsed is an operator-actionable failure: warn, because
+/// every token recorded in it will be rejected until the file is repaired.
 fn read_records(path: &Path) -> Option<Vec<TokenRecord>> {
-    let content = std::fs::read_to_string(path).ok()?;
-    serde_json::from_str(&content).ok()
+    let content = match std::fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(error) => {
+            tracing::warn!(path = %path.display(), %error, "token registry file is unreadable; starting empty — previously issued tokens will be rejected");
+            return None;
+        }
+    };
+    match serde_json::from_str(&content) {
+        Ok(records) => Some(records),
+        Err(error) => {
+            tracing::warn!(path = %path.display(), %error, "token registry file is corrupt; starting empty — previously issued tokens will be rejected");
+            None
+        }
+    }
 }
 
 #[cfg(test)]
@@ -169,7 +172,7 @@ mod tests {
             issued_at: issued_at.to_string(),
             expires_at: "2026-02-01T00:00:00Z".to_string(),
             revoked,
-            encrypted_api_key: format!("encrypted-{jti}"),
+            encrypted_api_key: Some(format!("encrypted-{jti}")),
         }
     }
 
@@ -182,7 +185,7 @@ mod tests {
 
         let found = registry.find("jti-1").await.expect("record present");
         assert_eq!(found.athlete_id, "athlete-a");
-        assert_eq!(found.encrypted_api_key, "encrypted-jti-1");
+        assert_eq!(found.encrypted_api_key.as_deref(), Some("encrypted-jti-1"));
         assert!(registry.find("missing").await.is_none());
     }
 
@@ -193,9 +196,8 @@ mod tests {
             .record(record("jti-1", "athlete-a", "2026-01-01T00:00:00Z", false))
             .await;
 
-        assert!(!registry.is_revoked("jti-1").await);
         assert!(registry.revoke("jti-1").await);
-        assert!(registry.is_revoked("jti-1").await);
+        assert!(registry.find("jti-1").await.expect("record").revoked);
         assert!(!registry.revoke("missing").await);
     }
 
@@ -263,6 +265,15 @@ mod tests {
         let json = r#"[{"jti":"old","athlete_id":"a","issued_at":"2026-01-01T00:00:00Z","expires_at":"2026-02-01T00:00:00Z","revoked":false}]"#;
         let records: Vec<TokenRecord> = serde_json::from_str(json).expect("legacy json parses");
         assert_eq!(records.len(), 1);
-        assert_eq!(records[0].encrypted_api_key, "");
+        assert!(records[0].encrypted_api_key.is_none());
+    }
+
+    #[tokio::test]
+    async fn corrupt_file_starts_empty() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("tokens.json");
+        std::fs::write(&path, b"{not json").expect("write corrupt file");
+        let registry = TokenRegistry::load(Some(path));
+        assert!(registry.all().await.is_empty());
     }
 }

@@ -869,3 +869,36 @@ async fn test_empty_state_cta_links_home() {
         "the CTA must actually navigate somewhere useful"
     );
 }
+
+/// The token inventory is the registry, not a session-scoped subset: with no
+/// cookie at all, an issued token must still be listed.
+#[tokio::test]
+async fn test_ui_tokens_lists_whole_registry_without_a_session() {
+    let state = test_ui_state();
+    state
+        .app_state
+        .issue_recorded_token("i-registry-visible", "api-key", 3600)
+        .await
+        .expect("token issued");
+
+    let app = Router::new()
+        .route("/ui/tokens", get(auth_ui::ui_list_tokens))
+        .with_state(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let page = reqwest::get(format!("http://{addr}/ui/tokens"))
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+
+    assert!(
+        page.contains("i-registry-visible"),
+        "the registry inventory must be visible without a session"
+    );
+}

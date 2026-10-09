@@ -26,7 +26,7 @@ async fn wait_for_server(addr: std::net::SocketAddr) {
 
 use intervals_icu_client::{AthleteProfile, IntervalsClient};
 use intervals_icu_mcp::auth::{AppState, HttpBaseUrl, JwtManager, auth_endpoint, auth_middleware};
-use intervals_icu_mcp::token_registry::{TokenRecord, TokenRegistry};
+use intervals_icu_mcp::token_registry::TokenRegistry;
 use secrecy::ExposeSecret;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -902,6 +902,16 @@ async fn test_auth_endpoint_issues_jwt_for_valid_credentials() {
         .expect("jwt should authenticate");
     assert_eq!(credentials.athlete_id, "i123456");
     assert_eq!(credentials.api_key.expose_secret(), "test_api_key");
+
+    // The /auth-issued token is recorded, so it is revocable — and once revoked
+    // it no longer authenticates.
+    let records = app_state.tokens.list_for_athlete("i123456").await;
+    assert_eq!(records.len(), 1, "the /auth token must be recorded");
+    assert!(app_state.tokens.revoke(&records[0].jti).await);
+    assert!(matches!(
+        app_state.authenticate(token).await,
+        Err(intervals_icu_mcp::auth::AuthError::TokenRevoked)
+    ));
 }
 
 #[tokio::test]
@@ -916,23 +926,11 @@ async fn test_mcp_route_requires_bearer_token_and_accepts_valid_jwt() {
         base_url: "https://intervals.icu".to_string(),
         tokens: TokenRegistry::load(None),
     });
-    let jti = "test-jti-1";
-    let token = jwt_manager
-        .issue_token("i777777", 3600, jti)
-        .expect("token should issue");
-    app_state
-        .tokens
-        .record(TokenRecord {
-            jti: jti.to_string(),
-            athlete_id: "i777777".to_string(),
-            issued_at: "2026-01-01T00:00:00Z".to_string(),
-            expires_at: "2030-01-01T00:00:00Z".to_string(),
-            revoked: false,
-            encrypted_api_key: jwt_manager
-                .encrypt_credential("test_api_key")
-                .expect("credential encrypts"),
-        })
-        .await;
+    let token = app_state
+        .issue_recorded_token("i777777", "test_api_key", 3600)
+        .await
+        .expect("token should issue")
+        .token;
 
     let handler =
         intervals_icu_mcp::IntervalsMcpHandler::new_multi_tenant().expect("new_multi_tenant");
@@ -1001,24 +999,12 @@ async fn test_revoked_token_is_rejected_by_mcp_route() {
         base_url: "https://intervals.icu".to_string(),
         tokens: TokenRegistry::load(None),
     });
-    let jti = "revoked-jti";
-    let token = jwt_manager
-        .issue_token("i888888", 3600, jti)
+    let issued = app_state
+        .issue_recorded_token("i888888", "test_api_key", 3600)
+        .await
         .expect("token should issue");
-    app_state
-        .tokens
-        .record(TokenRecord {
-            jti: jti.to_string(),
-            athlete_id: "i888888".to_string(),
-            issued_at: "2026-01-01T00:00:00Z".to_string(),
-            expires_at: "2030-01-01T00:00:00Z".to_string(),
-            revoked: false,
-            encrypted_api_key: jwt_manager
-                .encrypt_credential("test_api_key")
-                .expect("credential encrypts"),
-        })
-        .await;
-    assert!(app_state.tokens.revoke(jti).await);
+    assert!(app_state.tokens.revoke(&issued.jti).await);
+    let token = issued.token;
 
     let handler =
         intervals_icu_mcp::IntervalsMcpHandler::new_multi_tenant().expect("new_multi_tenant");

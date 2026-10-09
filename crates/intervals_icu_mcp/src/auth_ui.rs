@@ -649,22 +649,6 @@ impl UiState {
             session.athlete_id = Some(athlete_id.to_string());
         }
     }
-
-    async fn tokens_for_athlete(&self, athlete_id: &str) -> Vec<TokenRecord> {
-        self.app_state.tokens.list_for_athlete(athlete_id).await
-    }
-
-    async fn all_tokens(&self) -> Vec<TokenRecord> {
-        self.app_state.tokens.all().await
-    }
-
-    async fn record_token(&self, record: TokenRecord) {
-        self.app_state.tokens.record(record).await;
-    }
-
-    async fn revoke_token(&self, jti: &str) -> bool {
-        self.app_state.tokens.revoke(jti).await
-    }
 }
 
 fn normalize_ttl_days(ttl_days: Option<u64>) -> u64 {
@@ -998,15 +982,20 @@ pub async fn ui_create_token(
 
     match client.get_athlete_profile().await {
         Ok(_) => {
-            let jti = Uuid::new_v4().to_string();
-            let encrypted_api_key = match ui
+            let issued = match ui
                 .app_state
-                .jwt_manager
-                .encrypt_credential(&token_request.api_key)
+                .issue_recorded_token(
+                    &token_request.athlete_id,
+                    &token_request.api_key,
+                    ttl_seconds,
+                )
+                .await
             {
-                Ok(value) => value,
+                Ok(issued) => issued,
                 Err(e) => {
-                    tracing::warn!(%e, "credential encryption failed in UI");
+                    // Keep the internal error out of the URL: it becomes page
+                    // text, browser history, and an outbound Referer header.
+                    tracing::warn!(%e, "token generation failed in UI");
                     return redirect_with_flash(
                         &ui,
                         &session.session_id,
@@ -1019,72 +1008,35 @@ pub async fn ui_create_token(
                     .await;
                 }
             };
-            match ui
-                .app_state
-                .jwt_manager
-                .issue_token(&token_request.athlete_id, ttl_seconds, &jti)
-            {
-                Ok(token) => {
-                    let now = chrono::Utc::now();
-                    let expires = now + chrono::TimeDelta::seconds(ttl_seconds as i64);
-                    let expires_at = expires.to_rfc3339();
-                    let expiry_formatted = format_datetime(&expires_at);
 
-                    ui.record_token(TokenRecord {
-                        jti: jti.clone(),
-                        athlete_id: token_request.athlete_id.clone(),
-                        issued_at: now.to_rfc3339(),
-                        expires_at,
-                        revoked: false,
-                        encrypted_api_key,
-                    })
-                    .await;
+            ui.remember_athlete(&session.session_id, &token_request.athlete_id)
+                .await;
 
-                    ui.remember_athlete(&session.session_id, &token_request.athlete_id)
-                        .await;
+            crate::metrics::record_token_issued_with_source("ui");
+            crate::metrics::record_ui_action("token_created");
+            tracing::info!(
+                athlete_id = %token_request.athlete_id,
+                jti = %issued.jti,
+                ui_action = "token_created",
+                "Token created via web UI"
+            );
 
-                    crate::metrics::record_token_issued_with_source("ui");
-                    crate::metrics::record_ui_action("token_created");
-                    tracing::info!(
-                        athlete_id = %token_request.athlete_id,
-                        jti = %jti,
-                        ui_action = "token_created",
-                        "Token created via web UI"
-                    );
-
-                    let body = render_token_success(
-                        &token,
-                        &token_request.athlete_id,
-                        &expiry_formatted,
-                        &token_request.ttl_label(),
-                        &ui.base_path,
-                    );
-                    let html = page_shell("Token Generated", "/ui", body, None, &ui.base_path);
-                    let mut resp = html.into_response();
-                    set_session_cookie(
-                        &mut resp,
-                        &session.session_id,
-                        ui.cookie_secure,
-                        &ui.base_path,
-                    );
-                    resp
-                }
-                Err(e) => {
-                    // Keep the internal error out of the URL: it becomes page
-                    // text, browser history, and an outbound Referer header.
-                    tracing::warn!(%e, "token generation failed in UI");
-                    redirect_with_flash(
-                        &ui,
-                        &session.session_id,
-                        "/ui",
-                        Flash {
-                            kind: FlashKind::Error,
-                            message: "Could not create the token. Please try again.".into(),
-                        },
-                    )
-                    .await
-                }
-            }
+            let body = render_token_success(
+                &issued.token,
+                &token_request.athlete_id,
+                &format_datetime(&issued.expires_at),
+                &token_request.ttl_label(),
+                &ui.base_path,
+            );
+            let html = page_shell("Token Generated", "/ui", body, None, &ui.base_path);
+            let mut resp = html.into_response();
+            set_session_cookie(
+                &mut resp,
+                &session.session_id,
+                ui.cookie_secure,
+                &ui.base_path,
+            );
+            resp
         }
         Err(_) => redirect_with_flash(
             &ui,
@@ -1239,8 +1191,8 @@ pub async fn ui_list_tokens(
         .map(str::to_owned)
         .or_else(|| session.athlete_id.clone());
     let filtered = match requested_athlete.as_deref() {
-        Some(athlete) => ui.tokens_for_athlete(athlete).await,
-        None => ui.all_tokens().await,
+        Some(athlete) => ui.app_state.tokens.list_for_athlete(athlete).await,
+        None => ui.app_state.tokens.all().await,
     };
 
     let sort = parse_sort_field(query.sort.as_deref().unwrap_or("issued"));
@@ -1471,7 +1423,7 @@ pub async fn ui_revoke_token(
         .await;
     }
 
-    ui.revoke_token(&jti).await;
+    ui.app_state.tokens.revoke(&jti).await;
 
     crate::metrics::record_ui_action("token_revoked");
     tracing::info!(
@@ -1686,34 +1638,38 @@ mod tests {
     async fn auth_ui_token_registry_filters_and_revokes() {
         let ui = test_ui_state();
 
-        ui.record_token(TokenRecord {
-            jti: "jti-1".to_string(),
-            athlete_id: "athlete-a".to_string(),
-            issued_at: "2026-05-26T10:00:00Z".to_string(),
-            expires_at: "2026-05-27T10:00:00Z".to_string(),
-            revoked: false,
-            encrypted_api_key: "enc-a".to_string(),
-        })
-        .await;
-        ui.record_token(TokenRecord {
-            jti: "jti-2".to_string(),
-            athlete_id: "athlete-b".to_string(),
-            issued_at: "2026-05-26T11:00:00Z".to_string(),
-            expires_at: "2026-05-27T11:00:00Z".to_string(),
-            revoked: false,
-            encrypted_api_key: "enc-b".to_string(),
-        })
-        .await;
+        ui.app_state
+            .tokens
+            .record(TokenRecord {
+                jti: "jti-1".to_string(),
+                athlete_id: "athlete-a".to_string(),
+                issued_at: "2026-05-26T10:00:00Z".to_string(),
+                expires_at: "2026-05-27T10:00:00Z".to_string(),
+                revoked: false,
+                encrypted_api_key: Some("enc-a".to_string()),
+            })
+            .await;
+        ui.app_state
+            .tokens
+            .record(TokenRecord {
+                jti: "jti-2".to_string(),
+                athlete_id: "athlete-b".to_string(),
+                issued_at: "2026-05-26T11:00:00Z".to_string(),
+                expires_at: "2026-05-27T11:00:00Z".to_string(),
+                revoked: false,
+                encrypted_api_key: Some("enc-b".to_string()),
+            })
+            .await;
 
-        let athlete_tokens = ui.tokens_for_athlete("athlete-a").await;
+        let athlete_tokens = ui.app_state.tokens.list_for_athlete("athlete-a").await;
         assert_eq!(athlete_tokens.len(), 1);
         assert_eq!(athlete_tokens[0].jti, "jti-1");
         assert!(!athlete_tokens[0].revoked);
 
-        assert!(ui.revoke_token("jti-1").await);
-        assert!(!ui.revoke_token("missing-jti").await);
+        assert!(ui.app_state.tokens.revoke("jti-1").await);
+        assert!(!ui.app_state.tokens.revoke("missing-jti").await);
 
-        let athlete_tokens = ui.tokens_for_athlete("athlete-a").await;
+        let athlete_tokens = ui.app_state.tokens.list_for_athlete("athlete-a").await;
         assert!(athlete_tokens[0].revoked);
     }
 
@@ -1726,7 +1682,7 @@ mod tests {
                 issued_at: "2026-05-26T11:00:00Z".to_string(),
                 expires_at: "2026-05-28T11:00:00Z".to_string(),
                 revoked: false,
-                encrypted_api_key: String::new(),
+                encrypted_api_key: None,
             },
             TokenRecord {
                 jti: "jti-2".to_string(),
@@ -1734,7 +1690,7 @@ mod tests {
                 issued_at: "2026-05-26T10:00:00Z".to_string(),
                 expires_at: "2026-05-27T10:00:00Z".to_string(),
                 revoked: true,
-                encrypted_api_key: String::new(),
+                encrypted_api_key: None,
             },
         ];
 

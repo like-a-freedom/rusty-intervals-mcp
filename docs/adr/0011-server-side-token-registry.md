@@ -40,8 +40,9 @@ tokens, keyed by `jti`.
 
 ## Consequences
 
-- Revocation and upstream-key rotation now work for *every* token, not just
-  UI-issued ones.
+- Revocation now works for *every* token, not just UI-issued ones. Because the
+  credential lives in the registry rather than the token, an upstream key can
+  also be rotated by updating its record — no token re-issue required.
 - Bearer tokens no longer carry secret material.
 - The registry must be persisted (`MCP_TOKEN_REGISTRY_PATH`) or newly issued
   tokens are rejected after a restart — the deliberate cost of a stateful,
