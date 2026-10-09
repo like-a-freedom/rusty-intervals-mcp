@@ -147,12 +147,74 @@ impl ReqwestIntervalsClient {
             .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
     }
 
+    /// HTTP method and path of a request builder, for diagnostics.
+    /// `try_clone` fails only for non-cloneable (streaming) bodies, which
+    /// this client never sends
+    fn request_method_path(request: &reqwest::RequestBuilder) -> (String, String) {
+        request
+            .try_clone()
+            .and_then(|builder| builder.build().ok())
+            .map(|built| {
+                (
+                    built.method().as_str().to_string(),
+                    built.url().path().to_string(),
+                )
+            })
+            .unwrap_or_else(|| ("unknown".to_string(), "unknown".to_string()))
+    }
+
+    /// Log one upstream failure event. 5xx, auth, transport, circuit-open
+    /// and 429 failures are `warn` (operator-visible upstream/pressure
+    /// signals); 4xx and not-found responses are `debug` (they follow from
+    /// caller input)
+    fn log_upstream_error(
+        &self,
+        method: &str,
+        path: &str,
+        latency_ms: Option<u128>,
+        status: Option<u16>,
+        err: &IntervalsError,
+    ) {
+        let error_kind = Self::upstream_error_type(err);
+        if matches!(error_kind, "not_found" | "4xx" | "other") && status != Some(429) {
+            tracing::debug!(
+                athlete_id = %self.athlete_id,
+                %method,
+                %path,
+                latency_ms,
+                status = ?status,
+                error_kind,
+                error = %err,
+                "upstream request failed"
+            );
+        } else {
+            tracing::warn!(
+                athlete_id = %self.athlete_id,
+                %method,
+                %path,
+                latency_ms,
+                status = ?status,
+                error_kind,
+                error = %err,
+                "upstream request failed"
+            );
+        }
+    }
+
     /// Execute a request and return the raw response.
     ///
     /// Handles circuit breaker, timing, metrics, and transport errors.
     /// The caller is responsible for interpreting the response body.
     async fn execute_raw(&self, request: reqwest::RequestBuilder) -> Result<reqwest::Response> {
+        let (method, path) = Self::request_method_path(&request);
         if !self.circuit_breaker.allow_request() {
+            tracing::warn!(
+                athlete_id = %self.athlete_id,
+                %method,
+                %path,
+                error_kind = "circuit_open",
+                "upstream request rejected"
+            );
             return Err(IntervalsError::Api(crate::error::ApiError::new(
                 503,
                 "circuit breaker open — upstream is unavailable",
@@ -163,6 +225,7 @@ impl ReqwestIntervalsClient {
         let start = std::time::Instant::now();
         let resp = request.send().await;
         let duration = start.elapsed().as_secs_f64();
+        let latency_ms = start.elapsed().as_millis();
 
         let resp = match resp {
             Ok(r) => {
@@ -173,7 +236,10 @@ impl ReqwestIntervalsClient {
                 self.circuit_breaker.record_failure();
                 histogram!("intervals_icu_client_upstream_request_duration_seconds")
                     .record(duration);
-                return Err(IntervalsError::Transport(e.into()));
+                let err = IntervalsError::Transport(e.into());
+                Self::record_upstream_error(&err);
+                self.log_upstream_error(&method, &path, Some(latency_ms), None, &err);
+                return Err(err);
             }
         };
 
@@ -186,6 +252,9 @@ impl ReqwestIntervalsClient {
         )
         .increment(1);
 
+        // Status interpretation stays with the callers: fallback probes
+        // (e.g. best-efforts parameter retries) legitimately observe 4xx
+        // responses without treating them as failures.
         Ok(resp)
     }
 
@@ -196,7 +265,20 @@ impl ReqwestIntervalsClient {
     ) -> Result<T> {
         let resp = self.execute_raw(request).await?;
         self.handle_response(resp).await.inspect_err(|e| {
-            Self::record_upstream_error(e);
+            // Status failures were already recorded in error_from_response;
+            // this arm only fires for 2xx bodies that fail to decode.
+            if matches!(
+                e,
+                IntervalsError::JsonDecode(_) | IntervalsError::Decode { .. }
+            ) {
+                Self::record_upstream_error(e);
+                tracing::warn!(
+                    athlete_id = %self.athlete_id,
+                    error_kind = "decode",
+                    error = %e,
+                    "upstream response decode failed"
+                );
+            }
         })
     }
 
@@ -204,9 +286,8 @@ impl ReqwestIntervalsClient {
     async fn execute_text(&self, request: reqwest::RequestBuilder) -> Result<String> {
         let resp = self.execute_raw(request).await?;
         if !resp.status().is_success() {
-            let err = self.error_from_response(resp).await;
-            Self::record_upstream_error(&err);
-            return Err(err);
+            // Defensive: execute_raw already turned non-success into Err.
+            return Err(self.error_from_response(resp).await);
         }
         Ok(resp.text().await?)
     }
@@ -215,9 +296,8 @@ impl ReqwestIntervalsClient {
     async fn execute_empty(&self, request: reqwest::RequestBuilder) -> Result<()> {
         let resp = self.execute_raw(request).await?;
         if !resp.status().is_success() {
-            let err = self.error_from_response(resp).await;
-            Self::record_upstream_error(&err);
-            return Err(err);
+            // Defensive: execute_raw already turned non-success into Err.
+            return Err(self.error_from_response(resp).await);
         }
         Ok(())
     }
@@ -258,10 +338,20 @@ impl ReqwestIntervalsClient {
     }
 
     /// Extract error information from a failed response.
+    ///
+    /// This is the single choke point for non-success responses (every
+    /// caller funnels here), so the upstream failure metric and log event
+    /// are recorded exactly once, here. The HTTP method lies outside the
+    /// response object in reqwest; latency is captured for transport
+    /// failures in `execute_raw` instead.
     async fn error_from_response(&self, resp: reqwest::Response) -> IntervalsError {
         let status = resp.status().as_u16();
+        let path = resp.url().path().to_string();
         let body = resp.text().await.unwrap_or_default();
-        Self::error_from_response_parts(status, &body)
+        let err = Self::error_from_response_parts(status, &body);
+        Self::record_upstream_error(&err);
+        self.log_upstream_error("unknown", &path, None, Some(status), &err);
+        err
     }
 
     fn error_from_response_parts(status: u16, body: &str) -> IntervalsError {
@@ -869,6 +959,23 @@ mod tests {
         IntervalsClient, IntervalsError, ValidationError, http_client::ReqwestIntervalsClient,
     };
     use serde_json::json;
+
+    #[test]
+    fn request_method_path_extracts_verb_and_path() {
+        let client = ReqwestIntervalsClient::new(
+            "https://example.com",
+            "i1",
+            secrecy::SecretString::new("k".to_string().into()),
+        )
+        .expect("client builds");
+        let request = client.request(
+            reqwest::Method::GET,
+            &client.api_url(&["athlete", "i1", "activities"]),
+        );
+        let (method, path) = ReqwestIntervalsClient::request_method_path(&request);
+        assert_eq!(method, "GET");
+        assert_eq!(path, "/api/v1/athlete/i1/activities");
+    }
 
     #[test]
     fn normalize_sport_capitalizes_correctly() {
