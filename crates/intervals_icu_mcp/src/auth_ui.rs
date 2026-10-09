@@ -5,7 +5,7 @@ use axum::{
     response::{IntoResponse, Redirect, Response},
 };
 use intervals_icu_client::IntervalsClient;
-use maud::{DOCTYPE, Markup, html};
+use maud::{DOCTYPE, Markup, PreEscaped, html};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -17,6 +17,78 @@ use uuid::Uuid;
 use crate::auth::{AppState, TokenRevocationSet};
 
 const MAUD_UI_CSS: &str = include_str!("../static/maud-ui.css");
+
+/// Page-local JavaScript.
+///
+/// Rendered via `PreEscaped`: browsers do not decode HTML entities inside
+/// `<script>`, so an escaped payload is a syntax error and never runs.
+const INLINE_SCRIPT: &str = r#"document.addEventListener("DOMContentLoaded",()=>{const b=document.querySelector(".flash-banner");if(b){setTimeout(()=>{b.classList.add("dismissing");setTimeout(()=>b.remove(),400)},5e3);if(window.history.replaceState){const u=new URL(window.location);u.searchParams.delete("error");u.searchParams.delete("success");window.history.replaceState({},"",u)}}const c=document.querySelector("[data-clipboard]");if(c){c.addEventListener("click",function(){navigator.clipboard.writeText(this.dataset.clipboard).then(()=>{let t=this.querySelector(".copy-toast");if(!t){t=document.createElement("span");t.className="copy-toast";t.textContent="Copied!";this.appendChild(t);requestAnimationFrame(()=>t.classList.add("show"))}setTimeout(()=>{t.classList.remove("show");setTimeout(()=>t.remove(),250)},1200)}).catch(()=>{})})}})"#;
+
+/// Page-local CSS, layered on top of `maud-ui.css`.
+///
+/// Rendered via `PreEscaped` for the same reason as `INLINE_SCRIPT`.
+const INLINE_STYLE: &str = r#"                    .mui-card { margin: 4rem auto; }
+                    .mui-card--narrow { max-width: 28rem; }
+                    .mui-card__body { padding: 1.5rem; }
+                    .mui-card__title { margin-bottom: 0.5rem; }
+                    .mui-card__description { margin-top: 0.5rem; }
+                    .mui-field + .mui-field { margin-top: 1.25rem; }
+                    .tokens-page-card .mui-card { max-width: none; width: 100%; }
+                    .mui-container { padding: 0 1.5rem; }
+                    .token-display {
+                      font-family: 'SF Mono', 'Fira Code', monospace;
+                      font-size: 0.75rem;
+                      word-break: break-all;
+                      background: #0f172a;
+                      color: #e2e8f0;
+                      padding: 1rem;
+                      padding-top: 2rem;
+                      border-radius: 0.5rem;
+                      border: 1px solid #1e293b;
+                      position: relative;
+                    }
+                    .copy-btn { position: absolute; top: 0.5rem; right: 0.5rem; background: none; border: none; color: #64748b; cursor: pointer; padding: 0.25rem; line-height: 1; display: inline-flex; align-items: center; justify-content: center; border-radius: 0.25rem; transition: color .15s, background .15s; }
+                    .copy-btn:hover { color: #e2e8f0; background: rgba(226,232,240,0.08); }
+                    .copy-btn:active svg { transform: scale(0.85); }
+                    .copy-btn svg { display: block; transition: transform .15s; }
+                    .copy-toast { position: absolute; top: -1.5rem; right: 0; font-size: 0.65rem; color: #22c55e; white-space: nowrap; opacity: 0; transition: opacity .25s, transform .25s; pointer-events: none; transform: translateY(4px); }
+                    .copy-toast.show { opacity: 1; transform: translateY(0); }
+                    .error-alert {
+                      background: rgba(225, 29, 72, 0.1);
+                      border: 1px solid var(--mui-danger, #e11d48);
+                      color: var(--mui-danger, #e11d48);
+                      padding: 0.75rem 1rem;
+                      border-radius: 0.5rem;
+                      font-size: 0.875rem;
+                    }
+                    .success-alert {
+                      background: rgba(22, 163, 74, 0.1);
+                      border: 1px solid var(--mui-success, #16a34a);
+                      color: var(--mui-success, #16a34a);
+                      padding: 0.75rem 1rem;
+                      border-radius: 0.5rem;
+                      font-size: 0.875rem;
+                    }
+                    .flash-banner { margin: 1rem auto; max-width: 48rem; animation: flashIn .35s ease-out; }
+                    .flash-banner.dismissing { opacity: 0; transition: opacity .4s ease; }
+                    @keyframes flashIn { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
+                    input[type=hidden] { display: none; }
+                    .nav-bar { display: flex; align-items: center; gap: 1rem; padding: 0.75rem 1.5rem;
+                      border-bottom: 1px solid var(--mui-border, #e5e7eb); }
+                    .nav-bar a { color: var(--mui-text-muted, #6b7280); text-decoration: none; font-size: 0.875rem; }
+                    .nav-bar a:hover { color: var(--mui-text, #111827); }
+                    .nav-bar a.active { color: var(--mui-text, #111827); font-weight: 500; }
+                    .nav-bar .brand { font-weight: 600; font-size: 1rem; color: var(--mui-text, #111827); }
+                    .mui-table-wrapper { width: 100%; overflow-x: auto; }
+                    .mui-table { width: 100%; }
+                    .mui-table th a { color: inherit; text-decoration: none; display: inline-flex; align-items: center; gap: 0.25rem; }
+                    .mui-table th a:hover { opacity: 0.75; }
+                    .sort-arrow { display: inline-block; font-size: 0.625rem; line-height: 1; }
+                    .ttl-select { width: 100%; padding: 0.5rem; border: 1px solid var(--mui-border, #e5e7eb); border-radius: 0.375rem; background: var(--mui-bg, #fff); color: var(--mui-text, #111827); font-size: 0.875rem; }
+                    .field-hint { font-weight: 400; color: var(--mui-muted-foreground, #6b7280); font-size: 0.75rem; margin-left: 0.5rem; }
+                    .token-info-grid { display: grid; grid-template-columns: auto 1fr; gap: 0.5rem 1rem; margin-top: 1rem; font-size: 0.875rem; }
+                    .token-info-grid dt { color: var(--mui-muted-foreground, #6b7280); text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.75rem; }
+                    .token-info-grid dd { margin: 0; }"#;
 const DEFAULT_TOKEN_TTL_DAYS: u64 = 30;
 const MAX_TOKEN_TTL_DAYS: u64 = 3650;
 const SECONDS_PER_DAY: u64 = 86_400;
@@ -348,73 +420,11 @@ fn page_shell(
                 meta name="viewport" content="width=device-width, initial-scale=1";
                 title { (title) " — Intervals.icu MCP" }
                 link rel="stylesheet" href=(format!("{base}/ui/static/css"));
-                script {
-                    r#"document.addEventListener("DOMContentLoaded",()=>{const b=document.querySelector(".flash-banner");if(b){setTimeout(()=>{b.classList.add("dismissing");setTimeout(()=>b.remove(),400)},5e3);if(window.history.replaceState){const u=new URL(window.location);u.searchParams.delete("error");u.searchParams.delete("success");window.history.replaceState({},"",u)}}const c=document.querySelector("[data-clipboard]");if(c){c.addEventListener("click",function(){navigator.clipboard.writeText(this.dataset.clipboard).then(()=>{let t=this.querySelector(".copy-toast");if(!t){t=document.createElement("span");t.className="copy-toast";t.textContent="Copied!";this.appendChild(t);requestAnimationFrame(()=>t.classList.add("show"))}setTimeout(()=>{t.classList.remove("show");setTimeout(()=>t.remove(),250)},1200)}).catch(()=>{})})}})"#
-                }
-                style {
-                    r#"                    .mui-card { margin: 4rem auto; }
-                    .mui-card--narrow { max-width: 28rem; }
-                    .mui-card__body { padding: 1.5rem; }
-                    .mui-card__title { margin-bottom: 0.5rem; }
-                    .mui-card__description { margin-top: 0.5rem; }
-                    .mui-field + .mui-field { margin-top: 1.25rem; }
-                    .tokens-page-card .mui-card { max-width: none; width: 100%; }
-                    .mui-container { padding: 0 1.5rem; }
-                    .token-display {
-                      font-family: 'SF Mono', 'Fira Code', monospace;
-                      font-size: 0.75rem;
-                      word-break: break-all;
-                      background: #0f172a;
-                      color: #e2e8f0;
-                      padding: 1rem;
-                      padding-top: 2rem;
-                      border-radius: 0.5rem;
-                      border: 1px solid #1e293b;
-                      position: relative;
-                    }
-                    .copy-btn { position: absolute; top: 0.5rem; right: 0.5rem; background: none; border: none; color: #64748b; cursor: pointer; padding: 0.25rem; line-height: 1; display: inline-flex; align-items: center; justify-content: center; border-radius: 0.25rem; transition: color .15s, background .15s; }
-                    .copy-btn:hover { color: #e2e8f0; background: rgba(226,232,240,0.08); }
-                    .copy-btn:active svg { transform: scale(0.85); }
-                    .copy-btn svg { display: block; transition: transform .15s; }
-                    .copy-toast { position: absolute; top: -1.5rem; right: 0; font-size: 0.65rem; color: #22c55e; white-space: nowrap; opacity: 0; transition: opacity .25s, transform .25s; pointer-events: none; transform: translateY(4px); }
-                    .copy-toast.show { opacity: 1; transform: translateY(0); }
-                    .error-alert {
-                      background: rgba(225, 29, 72, 0.1);
-                      border: 1px solid var(--mui-danger, #e11d48);
-                      color: var(--mui-danger, #e11d48);
-                      padding: 0.75rem 1rem;
-                      border-radius: 0.5rem;
-                      font-size: 0.875rem;
-                    }
-                    .success-alert {
-                      background: rgba(22, 163, 74, 0.1);
-                      border: 1px solid var(--mui-success, #16a34a);
-                      color: var(--mui-success, #16a34a);
-                      padding: 0.75rem 1rem;
-                      border-radius: 0.5rem;
-                      font-size: 0.875rem;
-                    }
-                    .flash-banner { margin: 1rem auto; max-width: 48rem; animation: flashIn .35s ease-out; }
-                    .flash-banner.dismissing { opacity: 0; transition: opacity .4s ease; }
-                    @keyframes flashIn { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
-                    input[type=hidden] { display: none; }
-                    .nav-bar { display: flex; align-items: center; gap: 1rem; padding: 0.75rem 1.5rem;
-                      border-bottom: 1px solid var(--mui-border, #e5e7eb); }
-                    .nav-bar a { color: var(--mui-text-muted, #6b7280); text-decoration: none; font-size: 0.875rem; }
-                    .nav-bar a:hover { color: var(--mui-text, #111827); }
-                    .nav-bar a.active { color: var(--mui-text, #111827); font-weight: 500; }
-                    .nav-bar .brand { font-weight: 600; font-size: 1rem; color: var(--mui-text, #111827); }
-                    .mui-table-wrapper { width: 100%; overflow-x: auto; }
-                    .mui-table { width: 100%; }
-                    .mui-table th a { color: inherit; text-decoration: none; display: inline-flex; align-items: center; gap: 0.25rem; }
-                    .mui-table th a:hover { opacity: 0.75; }
-                    .sort-arrow { display: inline-block; font-size: 0.625rem; line-height: 1; }
-                    .ttl-select { width: 100%; padding: 0.5rem; border: 1px solid var(--mui-border, #e5e7eb); border-radius: 0.375rem; background: var(--mui-bg, #fff); color: var(--mui-text, #111827); font-size: 0.875rem; }
-                    .field-hint { font-weight: 400; color: var(--mui-muted-foreground, #6b7280); font-size: 0.75rem; margin-left: 0.5rem; }
-                    .token-info-grid { display: grid; grid-template-columns: auto 1fr; gap: 0.5rem 1rem; margin-top: 1rem; font-size: 0.875rem; }
-                    .token-info-grid dt { color: var(--mui-muted-foreground, #6b7280); text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.75rem; }
-                    .token-info-grid dd { margin: 0; }"#
-                }
+                // `PreEscaped`: browsers do not decode HTML entities inside
+                // <script>/<style>, so escaping here would ship a syntax error
+                // and the flash banner's query string would survive a refresh.
+                script { (PreEscaped(INLINE_SCRIPT)) }
+                style { (PreEscaped(INLINE_STYLE)) }
             }
             body {
                 .nav-bar {

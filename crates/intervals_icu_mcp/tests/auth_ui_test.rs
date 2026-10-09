@@ -75,6 +75,100 @@ async fn test_ui_home_returns_html() {
     );
 }
 
+/// Extract the inline `<script>` body from a rendered page.
+///
+/// Returns `None` when the page has no inline script.
+fn inline_script(body: &str) -> Option<&str> {
+    let start = body.find("<script>")? + "<script>".len();
+    let end = body[start..].find("</script>")? + start;
+    Some(&body[start..end])
+}
+
+/// The flash banner's cleanup script strips `?success=` / `?error=` from the URL
+/// with `history.replaceState`. If the browser cannot parse that script, the
+/// query string survives a refresh and the "Token revoked" banner reappears on
+/// every reload.
+///
+/// maud HTML-escapes interpolated text, which turns the script's quotes into
+/// `&quot;`. Browsers do not decode entities inside `<script>`, so the escaped
+/// form is a syntax error and the whole block never runs.
+#[tokio::test]
+async fn test_ui_inline_script_is_not_html_escaped() {
+    let state = test_ui_state();
+    let app = Router::new()
+        .route("/ui", get(auth_ui::ui_home))
+        .route("/ui/tokens", get(auth_ui::ui_list_tokens))
+        .with_state(state);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    for path in ["/ui", "/ui/tokens"] {
+        let body = reqwest::get(&format!("http://{addr}{path}"))
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+
+        let script = inline_script(&body)
+            .unwrap_or_else(|| panic!("{path}: page must ship an inline script"));
+
+        assert!(
+            !script.contains("&quot;"),
+            "{path}: inline script was HTML-escaped; the browser cannot parse it, \
+             so the flash banner query string survives a refresh"
+        );
+        assert!(
+            !script.contains("&amp;") && !script.contains("&lt;") && !script.contains("&gt;"),
+            "{path}: inline script contains escaped entities and will not parse"
+        );
+        assert!(
+            script.contains("replaceState"),
+            "{path}: script must strip the flash query string on load"
+        );
+    }
+}
+
+/// The same escaping hazard applies to the inline `<style>` block: a stray `<`
+/// or `&` in the page-local CSS would break the whole block.
+#[tokio::test]
+async fn test_ui_inline_style_is_not_html_escaped() {
+    let state = test_ui_state();
+    let app = Router::new()
+        .route("/ui", get(auth_ui::ui_home))
+        .with_state(state);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let body = reqwest::get(&format!("http://{addr}/ui"))
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+
+    let start = body.find("<style>").expect("page must ship inline styles") + 7;
+    let end = body[start..].find("</style>").unwrap() + start;
+    let style = &body[start..end];
+
+    assert!(
+        !style.contains("&quot;") && !style.contains("&amp;"),
+        "inline <style> was HTML-escaped and will not parse"
+    );
+    assert!(
+        style.contains(".flash-banner"),
+        "inline <style> must keep the flash banner rules"
+    );
+}
+
 #[tokio::test]
 async fn test_ui_css_served() {
     let state = test_ui_state();
