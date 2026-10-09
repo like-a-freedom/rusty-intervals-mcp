@@ -9,7 +9,6 @@
 /// - Error handling
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use reqwest::Client;
-use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -27,6 +26,7 @@ async fn wait_for_server(addr: std::net::SocketAddr) {
 
 use intervals_icu_client::{AthleteProfile, IntervalsClient};
 use intervals_icu_mcp::auth::{AppState, HttpBaseUrl, JwtManager, auth_endpoint, auth_middleware};
+use intervals_icu_mcp::token_registry::{TokenRecord, TokenRegistry};
 use secrecy::ExposeSecret;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -843,17 +843,16 @@ async fn test_auth_endpoint_issues_jwt_for_valid_credentials() {
     let master_key_config =
         intervals_icu_mcp::auth::MasterKeyConfig::from_hex(&master_key_hex).unwrap();
     let jwt_manager = Arc::new(JwtManager::from_master_key(&master_key_config));
-    let revoked_jtis = Arc::new(tokio::sync::RwLock::new(HashSet::new()));
     let app_state = Arc::new(AppState {
         jwt_manager: jwt_manager.clone(),
         jwt_ttl_seconds: 3600,
         base_url: mock_server.uri(),
-        revoked_jtis: revoked_jtis.clone(),
+        tokens: TokenRegistry::load(None),
     });
 
     let app = axum::Router::new()
         .route("/auth", axum::routing::post(auth_endpoint))
-        .with_state(app_state);
+        .with_state(app_state.clone());
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -896,9 +895,11 @@ async fn test_auth_endpoint_issues_jwt_for_valid_credentials() {
     assert_eq!(expires_in, 3600);
     assert_eq!(athlete_id, "i123456");
 
-    let credentials = jwt_manager
-        .verify_token(token, None)
-        .expect("jwt should verify");
+    // /auth records the token server-side; it resolves through the registry.
+    let credentials = app_state
+        .authenticate(token)
+        .await
+        .expect("jwt should authenticate");
     assert_eq!(credentials.athlete_id, "i123456");
     assert_eq!(credentials.api_key.expose_secret(), "test_api_key");
 }
@@ -909,17 +910,29 @@ async fn test_mcp_route_requires_bearer_token_and_accepts_valid_jwt() {
     let master_key_config =
         intervals_icu_mcp::auth::MasterKeyConfig::from_hex(&master_key_hex).unwrap();
     let jwt_manager = Arc::new(JwtManager::from_master_key(&master_key_config));
-    let revoked_jtis: Arc<tokio::sync::RwLock<HashSet<String>>> =
-        Arc::new(tokio::sync::RwLock::new(HashSet::new()));
     let app_state = Arc::new(AppState {
         jwt_manager: jwt_manager.clone(),
         jwt_ttl_seconds: 3600,
         base_url: "https://intervals.icu".to_string(),
-        revoked_jtis: revoked_jtis.clone(),
+        tokens: TokenRegistry::load(None),
     });
+    let jti = "test-jti-1";
     let token = jwt_manager
-        .issue_token("i777777", "test_api_key", 3600, None)
+        .issue_token("i777777", 3600, jti)
         .expect("token should issue");
+    app_state
+        .tokens
+        .record(TokenRecord {
+            jti: jti.to_string(),
+            athlete_id: "i777777".to_string(),
+            issued_at: "2026-01-01T00:00:00Z".to_string(),
+            expires_at: "2030-01-01T00:00:00Z".to_string(),
+            revoked: false,
+            encrypted_api_key: jwt_manager
+                .encrypt_credential("test_api_key")
+                .expect("credential encrypts"),
+        })
+        .await;
 
     let handler =
         intervals_icu_mcp::IntervalsMcpHandler::new_multi_tenant().expect("new_multi_tenant");
@@ -974,6 +987,80 @@ async fn test_mcp_route_requires_bearer_token_and_accepts_valid_jwt() {
         .expect("authorized request should complete");
 
     assert_ne!(authorized.status(), reqwest::StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn test_revoked_token_is_rejected_by_mcp_route() {
+    let master_key_hex = test_master_key_hex();
+    let master_key_config =
+        intervals_icu_mcp::auth::MasterKeyConfig::from_hex(&master_key_hex).unwrap();
+    let jwt_manager = Arc::new(JwtManager::from_master_key(&master_key_config));
+    let app_state = Arc::new(AppState {
+        jwt_manager: jwt_manager.clone(),
+        jwt_ttl_seconds: 3600,
+        base_url: "https://intervals.icu".to_string(),
+        tokens: TokenRegistry::load(None),
+    });
+    let jti = "revoked-jti";
+    let token = jwt_manager
+        .issue_token("i888888", 3600, jti)
+        .expect("token should issue");
+    app_state
+        .tokens
+        .record(TokenRecord {
+            jti: jti.to_string(),
+            athlete_id: "i888888".to_string(),
+            issued_at: "2026-01-01T00:00:00Z".to_string(),
+            expires_at: "2030-01-01T00:00:00Z".to_string(),
+            revoked: false,
+            encrypted_api_key: jwt_manager
+                .encrypt_credential("test_api_key")
+                .expect("credential encrypts"),
+        })
+        .await;
+    assert!(app_state.tokens.revoke(jti).await);
+
+    let handler =
+        intervals_icu_mcp::IntervalsMcpHandler::new_multi_tenant().expect("new_multi_tenant");
+    let session = Arc::new(
+        rmcp::transport::streamable_http_server::session::local::LocalSessionManager::default(),
+    );
+    let mcp_service = rmcp::transport::streamable_http_server::tower::StreamableHttpService::new(
+        move || -> Result<_, std::io::Error> { Ok(handler.clone()) },
+        session,
+        rmcp::transport::streamable_http_server::tower::StreamableHttpServerConfig::default(),
+    );
+
+    let app = axum::Router::new()
+        .nest_service("/mcp", mcp_service)
+        .layer(axum::Extension(HttpBaseUrl(
+            "https://intervals.icu".to_string(),
+        )))
+        .layer(axum::middleware::from_fn_with_state(
+            app_state,
+            auth_middleware,
+        ));
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = axum::serve(listener, app.into_make_service());
+    let _server_handle = tokio::spawn(async move {
+        server.await.ok();
+    });
+
+    wait_for_server(addr).await;
+
+    let response = Client::new()
+        .post(format!("http://{}/mcp", addr))
+        .header("Authorization", format!("Bearer {token}"))
+        .header("Accept", "application/json, text/event-stream")
+        .header("Content-Type", "application/json")
+        .body(r#"{"jsonrpc":"2.0","method":"ping","id":1}"#)
+        .send()
+        .await
+        .expect("revoked request should complete");
+
+    assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED);
 }
 
 // ============================================================================

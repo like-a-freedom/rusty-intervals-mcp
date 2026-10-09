@@ -1,12 +1,17 @@
 //! JWT Authentication and Encryption Module
 //!
-//! # Revocation
+//! # Token model
 //!
-//! Tokens issued via the web UI carry a `jti` (JWT ID) claim that is recorded in
-//! both the UI token registry and a lightweight `TokenRevocationSet`. When a token
-//! is revoked through the UI, its `jti` is added to this set, and the auth middleware
-//! rejects any request bearing a revoked token. Tokens issued via the `/auth` API
-//! endpoint carry `jti: None` and are not subject to revocation.
+//! A JWT is proof of identity, not a secret carrier: its custom claims hold the
+//! `athlete_id` and a `jti`, never the upstream credential. The credential and
+//! the revocation state live in the server-side [`crate::token_registry`], keyed
+//! by `jti`; [`AppState::authenticate`] joins the two. Every issued token — via
+//! `POST /auth` or the web UI — is recorded, so every token is revocable and the
+//! upstream key can be rotated without re-issuing. See ADR-0011.
+//!
+//! Legacy tokens (issued before ADR-0011) embedded the encrypted credential in
+//! their claims and carried no `jti`; they remain verifiable through the
+//! claims-fallback path until they expire.
 
 use aes_gcm::{Aes256Gcm, KeyInit, aead::Aead};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -20,9 +25,10 @@ use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use thiserror::Error;
-use tokio::sync::RwLock;
+use uuid::Uuid;
 
 use crate::metrics;
+use crate::token_registry::{TokenRecord, TokenRegistry};
 
 #[cfg(test)]
 use secrecy::ExposeSecret;
@@ -34,13 +40,28 @@ fn fill_random<const N: usize>() -> Result<[u8; N], AuthError> {
     Ok(buf)
 }
 
-/// Custom claims for JWT tokens
+/// Custom claims carried by a token.
+///
+/// Only what is genuinely custom lives here: a **legacy** token's embedded
+/// credential. Identity and the token id use the registered `sub` and `jti`
+/// claims (`jti` via `with_jwt_id`), because jwt-simple `#[serde(flatten)]`s
+/// custom claims into the same object as the registered ones — a custom `jti`
+/// field would collide with the registered `jti` and be dropped on read.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct IntervalsClaims {
     pub athlete_id: String,
-    pub encrypted_api_key: String,
-    /// JWT ID — set only for UI-issued tokens; `None` for `/auth` tokens.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encrypted_api_key: Option<String>,
+}
+
+/// The claims this server relies on after verification.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerifiedClaims {
+    pub athlete_id: String,
+    /// Registered `jti` claim; identifies the registry record.
     pub jti: Option<String>,
+    /// Legacy embedded credential (see ADR-0011); `None` for new tokens.
+    pub encrypted_api_key: Option<String>,
 }
 
 /// Decrypted credentials after JWT verification
@@ -49,10 +70,6 @@ pub struct DecryptedCredentials {
     pub athlete_id: String,
     pub api_key: SecretString,
 }
-
-/// Thread-safe set of revoked JWT IDs.
-/// Shared between [`AppState`] and the UI token registry.
-pub type TokenRevocationSet = Arc<RwLock<HashSet<String>>>;
 
 /// Base URL injected into HTTP requests so rmcp handlers can build per-request clients.
 #[derive(Clone, Debug)]
@@ -72,9 +89,55 @@ pub struct AppState {
     pub jwt_manager: Arc<JwtManager>,
     pub jwt_ttl_seconds: u64,
     pub base_url: String,
-    /// Set of revoked JWT IDs — shared with the UI token registry.
-    /// Tokens without a `jti` (issued via `/auth`) are not tracked here.
-    pub revoked_jtis: TokenRevocationSet,
+    /// Authoritative record of issued tokens, keyed by `jti`. Holds the
+    /// revocation state and the encrypted upstream credential that the JWT
+    /// deliberately does not carry. Shared with the web UI.
+    pub tokens: TokenRegistry,
+}
+
+impl AppState {
+    /// Resolve a bearer token to its athlete and upstream credential.
+    ///
+    /// The registry is authoritative: a revoked record rejects the token
+    /// unconditionally, and an unknown `jti` is rejected unless the token
+    /// carries a legacy embedded credential (the backward-compatibility path).
+    pub async fn authenticate(&self, token: &str) -> Result<DecryptedCredentials, AuthError> {
+        let claims = self.jwt_manager.verify_claims(token)?;
+
+        let record = match claims.jti.as_deref() {
+            Some(jti) => self.tokens.find(jti).await,
+            None => None,
+        };
+
+        if let Some(record) = &record
+            && record.revoked
+        {
+            tracing::warn!(
+                athlete_id = %record.athlete_id,
+                jti = %record.jti,
+                "Rejected revoked token"
+            );
+            return Err(AuthError::TokenRevoked);
+        }
+
+        // Prefer the stored credential; fall back to one embedded in the claims
+        // (legacy tokens, or a registry record written before ADR-0011 whose
+        // credential still travels in the token).
+        let encrypted = record
+            .as_ref()
+            .map(|record| record.encrypted_api_key.as_str())
+            .filter(|stored| !stored.is_empty())
+            .map(str::to_owned)
+            .or_else(|| claims.encrypted_api_key.clone())
+            .ok_or(AuthError::InvalidToken)?;
+
+        let api_key = self.jwt_manager.decrypt_credential(&encrypted)?;
+
+        Ok(DecryptedCredentials {
+            athlete_id: claims.athlete_id,
+            api_key,
+        })
+    }
 }
 
 /// Master key configuration with HKDF-derived keys
@@ -165,46 +228,39 @@ impl JwtManager {
         }
     }
 
-    /// Issue a JWT token.
+    /// Issue a bearer token for `athlete_id`.
     ///
-    /// When `jti` is `Some`, the value is embedded in custom claims so the
-    /// auth middleware can check it against the revocation set.  Tokens issued
-    /// via `/auth` pass `None` and are not revocable.
+    /// The token carries identity only — `athlete_id` and the `jti` that keys
+    /// its registry record — plus the standard registered claims. The upstream
+    /// credential is *not* embedded; the caller stores it in the
+    /// [`TokenRegistry`] under the same `jti`. See ADR-0011.
     pub fn issue_token(
         &self,
         athlete_id: &str,
-        api_key: &str,
         ttl_secs: u64,
-        jti: Option<&str>,
+        jti: &str,
     ) -> Result<String, AuthError> {
-        let encrypted = self.encrypt_api_key(api_key)?;
-
         let custom = IntervalsClaims {
             athlete_id: athlete_id.to_string(),
-            encrypted_api_key: encrypted,
-            jti: jti.map(|s| s.to_string()),
+            encrypted_api_key: None,
         };
 
         let claims = Claims::with_custom_claims(custom, Duration::from_secs(ttl_secs))
             .with_issuer(&self.issuer)
             .with_audience(self.audience.clone())
-            .with_subject(athlete_id.to_string());
+            .with_subject(athlete_id.to_string())
+            .with_jwt_id(jti.to_string());
 
         self.signing_key
             .authenticate(claims)
             .map_err(|_| AuthError::EncryptionError)
     }
 
-    /// Verify a JWT token.
+    /// Verify signature, clock, issuer, and audience; return the claims.
     ///
-    /// When `revoked_jtis` is `Some`, the token's `jti` claim (if present) is
-    /// checked against the set of revoked IDs.  Tokens without a `jti` are
-    /// accepted regardless of the revocation set.
-    pub fn verify_token(
-        &self,
-        token: &str,
-        revoked_jtis: Option<&HashSet<String>>,
-    ) -> Result<DecryptedCredentials, AuthError> {
+    /// Credential resolution is the caller's job (the registry, keyed by `jti`),
+    /// so this stays a pure token-in/claims-out operation.
+    pub fn verify_claims(&self, token: &str) -> Result<VerifiedClaims, AuthError> {
         let verification_options = VerificationOptions {
             allowed_issuers: Some(HashSet::from([self.issuer.clone()])),
             allowed_audiences: Some(HashSet::from([self.audience.clone()])),
@@ -212,36 +268,56 @@ impl JwtManager {
             ..Default::default()
         };
 
-        let claims: JWTClaims<IntervalsClaims> = self
-            .signing_key
+        self.signing_key
             .verify_token::<IntervalsClaims>(token, Some(verification_options))
+            .map(|claims| VerifiedClaims {
+                athlete_id: claims.custom.athlete_id,
+                jti: claims.jwt_id,
+                encrypted_api_key: claims.custom.encrypted_api_key,
+            })
             .map_err(|e| {
                 if is_expired_jwt_error(&e) {
                     AuthError::TokenExpired
                 } else {
                     AuthError::InvalidToken
                 }
-            })?;
+            })
+    }
 
-        // Check revocation if the token carries a jti
-        if let Some(ref jti) = claims.custom.jti
-            && let Some(revoked) = revoked_jtis
-            && revoked.contains(jti)
-        {
-            tracing::warn!(
-                athlete_id = %claims.custom.athlete_id,
-                jti = %jti,
-                "Rejected revoked token"
-            );
-            return Err(AuthError::TokenRevoked);
-        }
+    /// Encrypt an upstream credential for server-side storage in the registry.
+    pub fn encrypt_credential(&self, api_key: &str) -> Result<String, AuthError> {
+        self.encrypt_api_key(api_key)
+    }
 
-        let api_key = self.decrypt_api_key(&claims.custom.encrypted_api_key)?;
+    /// Decrypt a credential produced by [`Self::encrypt_credential`] — or
+    /// embedded in a legacy token's claims.
+    pub fn decrypt_credential(&self, encrypted: &str) -> Result<SecretString, AuthError> {
+        self.decrypt_api_key(encrypted)
+            .map(|api_key| SecretString::new(api_key.into()))
+    }
 
-        Ok(DecryptedCredentials {
-            athlete_id: claims.custom.athlete_id.clone(),
-            api_key: SecretString::new(api_key.into()),
-        })
+    /// Sign a legacy-shaped token that embeds its credential in the claims.
+    ///
+    /// Test-only: production issuance always records the credential in the
+    /// registry. This fixture exercises the backward-compatibility path.
+    #[cfg(test)]
+    fn issue_legacy_token(
+        &self,
+        athlete_id: &str,
+        api_key: &str,
+        ttl_secs: u64,
+    ) -> Result<String, AuthError> {
+        let custom = IntervalsClaims {
+            athlete_id: athlete_id.to_string(),
+            encrypted_api_key: Some(self.encrypt_api_key(api_key)?),
+        };
+        let claims = Claims::with_custom_claims(custom, Duration::from_secs(ttl_secs))
+            .with_issuer(&self.issuer)
+            .with_audience(self.audience.clone())
+            .with_subject(athlete_id.to_string());
+        self.signing_key
+            .authenticate(claims)
+            .map_err(|_| AuthError::EncryptionError)
     }
 
     /// Best-effort recovery of the athlete identity behind a rejected token.
@@ -403,13 +479,26 @@ pub async fn auth_endpoint(
         AuthError::InvalidCredentials
     })?;
 
-    // Validation successful - issue JWT
-    let token = state.jwt_manager.issue_token(
-        &req.athlete_id,
-        &req.api_key,
-        state.jwt_ttl_seconds,
-        None,
-    )?;
+    // Validation successful — issue a revocable token recorded server-side.
+    let jti = Uuid::new_v4().to_string();
+    let encrypted_api_key = state.jwt_manager.encrypt_credential(&req.api_key)?;
+    let token = state
+        .jwt_manager
+        .issue_token(&req.athlete_id, state.jwt_ttl_seconds, &jti)?;
+
+    let now = chrono::Utc::now();
+    state
+        .tokens
+        .record(TokenRecord {
+            jti: jti.clone(),
+            athlete_id: req.athlete_id.clone(),
+            issued_at: now.to_rfc3339(),
+            expires_at: (now + chrono::TimeDelta::seconds(state.jwt_ttl_seconds as i64))
+                .to_rfc3339(),
+            revoked: false,
+            encrypted_api_key,
+        })
+        .await;
 
     // Record token issuance metric
     metrics::record_token_issued();
@@ -418,6 +507,7 @@ pub async fn auth_endpoint(
         client_ip = %client_ip,
         request_id = %request_id,
         athlete_id = %req.athlete_id,
+        jti = %jti,
         "Issued JWT token"
     );
 
@@ -465,10 +555,7 @@ pub async fn auth_middleware(
         .unwrap_or_else(|| "unknown".to_string());
 
     let credentials = if let Some(token) = auth_header {
-        match app_state
-            .jwt_manager
-            .verify_token(token, Some(&*app_state.revoked_jtis.read().await))
-        {
+        match app_state.authenticate(token).await {
             Ok(creds) => {
                 // Record successful verification
                 metrics::record_token_verification("valid");
@@ -571,32 +658,132 @@ mod tests {
         assert!(matches!(result, Err(AuthError::EncryptionError)));
     }
 
-    #[test]
-    fn test_issue_token_success() {
-        let manager = create_test_manager();
-        let token = manager
-            .issue_token("i123456", "test_api_key", 3600, None)
-            .unwrap();
-        let parts: Vec<&str> = token.split('.').collect();
-        assert_eq!(parts.len(), 3);
+    fn app_state() -> AppState {
+        AppState {
+            jwt_manager: Arc::new(create_test_manager()),
+            jwt_ttl_seconds: 3600,
+            base_url: "https://intervals.icu".to_string(),
+            tokens: TokenRegistry::load(None),
+        }
+    }
+
+    async fn record_token(state: &AppState, jti: &str, athlete_id: &str, api_key: &str) {
+        state
+            .tokens
+            .record(TokenRecord {
+                jti: jti.to_string(),
+                athlete_id: athlete_id.to_string(),
+                issued_at: chrono::Utc::now().to_rfc3339(),
+                expires_at: chrono::Utc::now().to_rfc3339(),
+                revoked: false,
+                encrypted_api_key: state.jwt_manager.encrypt_credential(api_key).unwrap(),
+            })
+            .await;
     }
 
     #[test]
-    fn test_verify_token_success() {
+    fn test_issue_token_success() {
         let manager = create_test_manager();
-        let token = manager
-            .issue_token("i123456", "test_api_key", 3600, None)
+        let token = manager.issue_token("i123456", 3600, "jti-1").unwrap();
+        let parts: Vec<&str> = token.split('.').collect();
+        assert_eq!(parts.len(), 3);
+
+        // The JWT carries identity only — no embedded credential.
+        let claims = manager.verify_claims(&token).unwrap();
+        assert_eq!(claims.athlete_id, "i123456");
+        assert_eq!(claims.jti.as_deref(), Some("jti-1"));
+        assert!(claims.encrypted_api_key.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_authenticate_resolves_credential_from_registry() {
+        let state = app_state();
+        record_token(&state, "jti-1", "i123456", "test_api_key").await;
+        let token = state
+            .jwt_manager
+            .issue_token("i123456", 3600, "jti-1")
             .unwrap();
-        let credentials = manager.verify_token(&token, None).unwrap();
+
+        let credentials = state.authenticate(&token).await.unwrap();
         assert_eq!(credentials.athlete_id, "i123456");
         assert_eq!(credentials.api_key.expose_secret(), "test_api_key");
     }
 
-    #[test]
-    fn test_verify_invalid_token_fails() {
-        let manager = create_test_manager();
-        let result = manager.verify_token("invalid.token.here", None);
+    #[tokio::test]
+    async fn test_authenticate_rejects_invalid_token() {
+        let state = app_state();
+        let result = state.authenticate("invalid.token.here").await;
         assert!(matches!(result, Err(AuthError::InvalidToken)));
+    }
+
+    #[tokio::test]
+    async fn test_authenticate_rejects_unknown_jti_without_credential() {
+        // A token whose signature is valid but whose jti has no registry record
+        // and carries no legacy credential must fail closed.
+        let state = app_state();
+        let token = state
+            .jwt_manager
+            .issue_token("i123456", 3600, "ghost")
+            .unwrap();
+        let result = state.authenticate(&token).await;
+        assert!(matches!(result, Err(AuthError::InvalidToken)));
+    }
+
+    #[tokio::test]
+    async fn test_authenticate_accepts_legacy_token_with_embedded_credential() {
+        let state = app_state();
+        let token = state
+            .jwt_manager
+            .issue_legacy_token("i123456", "legacy_key", 3600)
+            .unwrap();
+
+        let credentials = state.authenticate(&token).await.unwrap();
+        assert_eq!(credentials.athlete_id, "i123456");
+        assert_eq!(credentials.api_key.expose_secret(), "legacy_key");
+    }
+
+    #[tokio::test]
+    async fn test_authenticate_falls_back_to_claims_when_record_lacks_credential() {
+        // Registry files written before ADR-0011 keep the credential in the
+        // token's claims; a record with an empty credential must fall back.
+        let state = app_state();
+        record_token(&state, "jti-1", "i123456", "stale").await;
+        state
+            .tokens
+            .record(TokenRecord {
+                encrypted_api_key: String::new(),
+                ..state.tokens.find("jti-1").await.expect("record")
+            })
+            .await;
+
+        let manager = &state.jwt_manager;
+        let custom = IntervalsClaims {
+            athlete_id: "i123456".to_string(),
+            encrypted_api_key: Some(manager.encrypt_credential("from_claims").unwrap()),
+        };
+        let claims = Claims::with_custom_claims(custom, Duration::from_secs(3600))
+            .with_issuer(&manager.issuer)
+            .with_audience(manager.audience.clone())
+            .with_subject("i123456".to_string())
+            .with_jwt_id("jti-1");
+        let token = manager.signing_key.authenticate(claims).unwrap();
+
+        let credentials = state.authenticate(&token).await.unwrap();
+        assert_eq!(credentials.api_key.expose_secret(), "from_claims");
+    }
+
+    #[tokio::test]
+    async fn test_authenticate_rejects_revoked_token() {
+        let state = app_state();
+        record_token(&state, "jti-1", "i123456", "test_api_key").await;
+        let token = state
+            .jwt_manager
+            .issue_token("i123456", 3600, "jti-1")
+            .unwrap();
+        assert!(state.tokens.revoke("jti-1").await);
+
+        let result = state.authenticate(&token).await;
+        assert!(matches!(result, Err(AuthError::TokenRevoked)));
     }
 
     /// Sign authentic claims whose `exp` lies one day in the past, producing
@@ -605,13 +792,13 @@ mod tests {
     fn create_expired_token(manager: &JwtManager, athlete_id: &str) -> String {
         let custom = IntervalsClaims {
             athlete_id: athlete_id.to_string(),
-            encrypted_api_key: "irrelevant-for-this-test".to_string(),
-            jti: None,
+            encrypted_api_key: None,
         };
         let mut claims = Claims::with_custom_claims(custom, Duration::from_secs(0))
             .with_issuer(&manager.issuer)
             .with_audience(manager.audience.clone())
-            .with_subject(athlete_id.to_string());
+            .with_subject(athlete_id.to_string())
+            .with_jwt_id("expired-jti");
         claims.expires_at = Some(Clock::now_since_epoch() - Duration::from_secs(86_400));
         manager
             .signing_key
@@ -623,7 +810,7 @@ mod tests {
     fn test_verify_expired_token_maps_to_token_expired() {
         let manager = create_test_manager();
         let token = create_expired_token(&manager, "i424242");
-        let result = manager.verify_token(&token, None);
+        let result = manager.verify_claims(&token);
         assert!(matches!(result, Err(AuthError::TokenExpired)));
     }
 
@@ -641,7 +828,7 @@ mod tests {
     fn test_identify_rejected_token_returns_athlete_for_valid_token() {
         let manager = create_test_manager();
         let token = manager
-            .issue_token("i111111", "test_api_key", 3600, None)
+            .issue_token("i111111", 3600, "jti-1")
             .expect("token should issue");
         assert_eq!(
             manager.identify_rejected_token(&token).as_deref(),
@@ -659,7 +846,7 @@ mod tests {
     fn test_identify_rejected_token_tampered_returns_none() {
         let manager = create_test_manager();
         let token = manager
-            .issue_token("i222222", "test_api_key", 3600, None)
+            .issue_token("i222222", 3600, "jti-1")
             .expect("token should issue");
         let mut parts: Vec<String> = token.split('.').map(str::to_string).collect();
         assert_eq!(parts.len(), 3, "JWT should have three segments");
@@ -674,7 +861,7 @@ mod tests {
         let manager = create_test_manager();
         let other = JwtManager::new(b"a completely different signing secret!!", [1u8; 32]);
         let foreign_token = other
-            .issue_token("i333333", "test_api_key", 3600, None)
+            .issue_token("i333333", 3600, "jti-1")
             .expect("token should issue");
         assert_eq!(manager.identify_rejected_token(&foreign_token), None);
     }
@@ -682,25 +869,25 @@ mod tests {
     #[test]
     fn test_verify_tampered_token_fails() {
         let manager = create_test_manager();
-        let token = manager
-            .issue_token("i123456", "test_api_key", 3600, None)
-            .unwrap();
+        let token = manager.issue_token("i123456", 3600, "jti-1").unwrap();
         let mut tampered = token.chars().collect::<Vec<_>>();
         tampered[10] = 'X';
         let tampered_token: String = tampered.into_iter().collect();
-        let result = manager.verify_token(&tampered_token, None);
+        let result = manager.verify_claims(&tampered_token);
         assert!(matches!(result, Err(AuthError::InvalidToken)));
     }
 
-    #[test]
-    fn test_issue_and_verify_round_trip() {
-        let manager = create_test_manager();
+    #[tokio::test]
+    async fn test_issue_and_verify_round_trip() {
+        let state = app_state();
         let athlete_id = "i999999";
         let api_key = "round_trip_test_key";
-        let token = manager
-            .issue_token(athlete_id, api_key, 3600, None)
+        record_token(&state, "jti-1", athlete_id, api_key).await;
+        let token = state
+            .jwt_manager
+            .issue_token(athlete_id, 3600, "jti-1")
             .unwrap();
-        let credentials = manager.verify_token(&token, None).unwrap();
+        let credentials = state.authenticate(&token).await.unwrap();
         assert_eq!(credentials.athlete_id, athlete_id);
         assert_eq!(credentials.api_key.expose_secret(), api_key);
     }
@@ -711,8 +898,7 @@ mod tests {
         let claims = Claims::with_custom_claims(
             IntervalsClaims {
                 athlete_id: "i123456".to_string(),
-                encrypted_api_key: manager.encrypt_api_key("test_api_key").unwrap(),
-                jti: None,
+                encrypted_api_key: None,
             },
             Duration::from_secs(3600),
         )
@@ -721,7 +907,7 @@ mod tests {
         .with_subject("i123456".to_string());
 
         let token = manager.signing_key.authenticate(claims).unwrap();
-        let result = manager.verify_token(&token, None);
+        let result = manager.verify_claims(&token);
 
         assert!(matches!(result, Err(AuthError::InvalidToken)));
     }
@@ -732,8 +918,7 @@ mod tests {
         let claims = Claims::with_custom_claims(
             IntervalsClaims {
                 athlete_id: "i123456".to_string(),
-                encrypted_api_key: manager.encrypt_api_key("test_api_key").unwrap(),
-                jti: None,
+                encrypted_api_key: None,
             },
             Duration::from_secs(3600),
         )
@@ -742,18 +927,26 @@ mod tests {
         .with_subject("i123456".to_string());
 
         let token = manager.signing_key.authenticate(claims).unwrap();
-        let result = manager.verify_token(&token, None);
+        let result = manager.verify_claims(&token);
 
         assert!(matches!(result, Err(AuthError::InvalidToken)));
     }
 
-    #[test]
-    fn test_multiple_tokens_independent() {
-        let manager = create_test_manager();
-        let token1 = manager.issue_token("athlete1", "key1", 3600, None).unwrap();
-        let token2 = manager.issue_token("athlete2", "key2", 3600, None).unwrap();
-        let creds1 = manager.verify_token(&token1, None).unwrap();
-        let creds2 = manager.verify_token(&token2, None).unwrap();
+    #[tokio::test]
+    async fn test_multiple_tokens_independent() {
+        let state = app_state();
+        record_token(&state, "jti-1", "athlete1", "key1").await;
+        record_token(&state, "jti-2", "athlete2", "key2").await;
+        let token1 = state
+            .jwt_manager
+            .issue_token("athlete1", 3600, "jti-1")
+            .unwrap();
+        let token2 = state
+            .jwt_manager
+            .issue_token("athlete2", 3600, "jti-2")
+            .unwrap();
+        let creds1 = state.authenticate(&token1).await.unwrap();
+        let creds2 = state.authenticate(&token2).await.unwrap();
         assert_ne!(creds1.athlete_id, creds2.athlete_id);
         assert_ne!(
             creds1.api_key.expose_secret(),
@@ -761,12 +954,16 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_special_characters_in_api_key() {
-        let manager = create_test_manager();
+    #[tokio::test]
+    async fn test_special_characters_in_api_key() {
+        let state = app_state();
         let api_key = "special!@#$%^&*()_+-=[]{}|;':\",./<>?";
-        let token = manager.issue_token("i123456", api_key, 3600, None).unwrap();
-        let credentials = manager.verify_token(&token, None).unwrap();
+        record_token(&state, "jti-1", "i123456", api_key).await;
+        let token = state
+            .jwt_manager
+            .issue_token("i123456", 3600, "jti-1")
+            .unwrap();
+        let credentials = state.authenticate(&token).await.unwrap();
         assert_eq!(credentials.api_key.expose_secret(), api_key);
     }
 
@@ -821,7 +1018,7 @@ mod tests {
             jwt_manager: jwt_manager.clone(),
             jwt_ttl_seconds: 3600,
             base_url: "https://intervals.icu".to_string(),
-            revoked_jtis: Arc::new(tokio::sync::RwLock::new(HashSet::new())),
+            tokens: TokenRegistry::load(None),
         };
 
         let cloned = state.clone();
@@ -850,7 +1047,7 @@ mod tests {
             jwt_manager,
             jwt_ttl_seconds: 3600,
             base_url: "https://intervals.icu".to_string(),
-            revoked_jtis: Arc::new(tokio::sync::RwLock::new(HashSet::new())),
+            tokens: TokenRegistry::load(None),
         });
 
         let req = AuthRequest {
@@ -941,24 +1138,29 @@ mod tests {
     }
 
     // RED: Test JWT token issuance and verification with HKDF
-    #[test]
-    fn test_jwt_issue_and_verify_with_hkdf() {
+    #[tokio::test]
+    async fn test_jwt_issue_and_verify_with_hkdf() {
         let master_key_hex = repeated_hex("11", 64);
 
         let config = MasterKeyConfig::from_hex(&master_key_hex).unwrap();
-        let manager = JwtManager::from_master_key(&config);
+        let manager = Arc::new(JwtManager::from_master_key(&config));
+        let state = AppState {
+            jwt_manager: manager,
+            jwt_ttl_seconds: 3600,
+            base_url: "https://intervals.icu".to_string(),
+            tokens: TokenRegistry::load(None),
+        };
 
         let athlete_id = "i123456";
         let api_key = "test_api_key_123";
 
-        // Issue token
-        let token = manager
-            .issue_token(athlete_id, api_key, 3600, None)
+        record_token(&state, "jti-1", athlete_id, api_key).await;
+        let token = state
+            .jwt_manager
+            .issue_token(athlete_id, 3600, "jti-1")
             .unwrap();
 
-        // Verify token
-        let credentials = manager.verify_token(&token, None).unwrap();
-
+        let credentials = state.authenticate(&token).await.unwrap();
         assert_eq!(credentials.athlete_id, athlete_id);
         assert_eq!(credentials.api_key.expose_secret(), api_key);
     }
@@ -976,19 +1178,14 @@ mod tests {
         let manager2 = JwtManager::from_master_key(&config2);
 
         let athlete_id = "i123456";
-        let api_key = "test_api_key_123";
 
-        let token1 = manager1
-            .issue_token(athlete_id, api_key, 3600, None)
-            .unwrap();
-        let token2 = manager2
-            .issue_token(athlete_id, api_key, 3600, None)
-            .unwrap();
+        let token1 = manager1.issue_token(athlete_id, 3600, "jti-1").unwrap();
+        let token2 = manager2.issue_token(athlete_id, 3600, "jti-1").unwrap();
 
         // Tokens should be different
         assert_ne!(token1, token2);
 
         // Token from manager1 should NOT be verifiable by manager2
-        assert!(manager2.verify_token(&token1, None).is_err());
+        assert!(manager2.verify_claims(&token1).is_err());
     }
 }

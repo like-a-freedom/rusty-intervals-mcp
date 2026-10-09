@@ -5,21 +5,20 @@ use axum::{
 };
 use intervals_icu_mcp::auth::{self, AppState};
 use intervals_icu_mcp::auth_ui::{self, UiState};
+use intervals_icu_mcp::token_registry::TokenRegistry;
 use std::sync::Arc;
 
 fn test_ui_state() -> UiState {
-    use std::collections::HashSet;
     let secret = b"test_secret_key_for_jwt_signing_12345678901234567890123456789012";
     let jwt_manager = Arc::new(auth::JwtManager::new(secret, [0u8; 32]));
-    let revoked_jtis = Arc::new(tokio::sync::RwLock::new(HashSet::new()));
     let app_state = Arc::new(AppState {
         jwt_manager,
         jwt_ttl_seconds: 3600,
         base_url: "https://intervals.icu".to_string(),
-        revoked_jtis: revoked_jtis.clone(),
+        tokens: TokenRegistry::load(None),
     });
 
-    UiState::new(app_state, revoked_jtis, None, false, String::new())
+    UiState::new(app_state, false, String::new())
 }
 
 fn headers_with_cookie(value: &str) -> HeaderMap {
@@ -29,18 +28,16 @@ fn headers_with_cookie(value: &str) -> HeaderMap {
 }
 
 fn test_ui_state_with_base(base: &str) -> UiState {
-    use std::collections::HashSet;
     let secret = b"test_secret_key_for_jwt_signing_12345678901234567890123456789012";
     let jwt_manager = Arc::new(auth::JwtManager::new(secret, [0u8; 32]));
-    let revoked_jtis = Arc::new(tokio::sync::RwLock::new(HashSet::new()));
     let app_state = Arc::new(AppState {
         jwt_manager,
         jwt_ttl_seconds: 3600,
         base_url: "https://intervals.icu".to_string(),
-        revoked_jtis: revoked_jtis.clone(),
+        tokens: TokenRegistry::load(None),
     });
 
-    UiState::new(app_state, revoked_jtis, None, false, base.to_string())
+    UiState::new(app_state, false, base.to_string())
 }
 
 #[tokio::test]
@@ -831,12 +828,16 @@ async fn test_empty_state_does_not_claim_authentication() {
             "the UI has no authentication flow, so it must not say {fiction:?}"
         );
     }
+    // The registry is the inventory: an empty registry reads as "No tokens yet",
+    // never as a lost session.
     assert!(
-        page.contains("No athlete in this session"),
+        page.contains("No tokens yet"),
         "the state should be described accurately"
     );
-    // Tokens already issued stay valid, so the copy must not imply otherwise.
-    assert!(page.contains("still valid"));
+    assert!(
+        !page.contains("No athlete in this session"),
+        "the inventory must not depend on the ephemeral session"
+    );
     // The call to action should offer the real next step.
     assert!(
         page.contains("Create a Token"),

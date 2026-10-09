@@ -11,8 +11,8 @@
 //! - [`domains`] — domain types and value objects
 //! - [`metrics`] — Prometheus metrics recording
 //! - [`dynamic`] — dynamic OpenAPI-driven tool registry
+//! - [`token_registry`] — server-side record of issued tokens (ADR-0011)
 
-use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -51,6 +51,7 @@ pub mod metrics;
 pub mod session;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
+pub mod token_registry;
 
 fn all_intent_handlers() -> Vec<Box<dyn intents::IntentHandler>> {
     vec![
@@ -869,20 +870,26 @@ pub async fn run_http_server(
     let base_url = std::env::var("INTERVALS_ICU_BASE_URL")
         .unwrap_or_else(|_| "https://intervals.icu".to_string());
 
-    let revoked_jtis: auth::TokenRevocationSet = Arc::new(tokio::sync::RwLock::new(HashSet::new()));
+    let registry_path = std::env::var("MCP_TOKEN_REGISTRY_PATH")
+        .ok()
+        .map(PathBuf::from);
+    let token_registry = token_registry::TokenRegistry::load(registry_path);
+    if !token_registry.is_persistent() {
+        tracing::warn!(
+            "token registry is in-memory: issued tokens are rejected after restart; \
+             set MCP_TOKEN_REGISTRY_PATH to persist them"
+        );
+    }
 
     let app_state = std::sync::Arc::new(auth::AppState {
         jwt_manager: jwt_manager.clone(),
         jwt_ttl_seconds,
         base_url: base_url.clone(),
-        revoked_jtis: revoked_jtis.clone(),
+        tokens: token_registry.clone(),
     });
 
     let handler = IntervalsMcpHandler::new_multi_tenant().expect("new_multi_tenant");
 
-    let registry_path = std::env::var("MCP_TOKEN_REGISTRY_PATH")
-        .ok()
-        .map(PathBuf::from);
     let cookie_secure = std::env::var("MCP_COOKIE_SECURE")
         .map(|v| v != "false" && v != "0")
         .unwrap_or(true);
@@ -893,13 +900,7 @@ pub async fn run_http_server(
             "serving under public base path (reverse proxy must pass the prefix through, no rewrite)"
         );
     }
-    let ui_state = auth_ui::UiState::new(
-        app_state.clone(),
-        revoked_jtis.clone(),
-        registry_path,
-        cookie_secure,
-        base_path.clone(),
-    );
+    let ui_state = auth_ui::UiState::new(app_state.clone(), cookie_secure, base_path.clone());
 
     let ui_config = tower_governor::governor::GovernorConfigBuilder::default()
         .per_second(2)

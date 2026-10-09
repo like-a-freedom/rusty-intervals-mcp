@@ -23,8 +23,8 @@ Router (axum)
   │             trailing `{prefix}/` and out-of-prefix paths → fallback (redirect / 404)
   ├─ GET  /health          — healthz (unauthenticated)
   ├─ GET  /metrics         — Prometheus (unauthenticated)
-  ├─ POST /auth            — exchange ICu key for JWT (governor 1 rps + timeout)
-  ├─ GET  /ui, /ui/token…  — token management UI (governor 2 rps)
+  ├─ POST /auth            — exchange ICu key for JWT; record the token in the registry (governor 1 rps + timeout)
+  ├─ GET  /ui, /ui/token…  — token management UI over the registry (governor 2 rps)
   └─ POST /mcp             — JSON-RPC endpoint (see sub-layers)
 ```
 
@@ -38,7 +38,7 @@ rmcp's StreamableHttpService with a `LoggingSessionManager` decorator
 Extension(HttpBaseUrl)
 GovernorLayer           — per-athlete rate limiting (keyed by athlete_id from the JWT)
 IdleTimeoutLayer        — request inactivity timeout (REQUEST_TIMEOUT_SECONDS)
-AuthMiddleware          — verifies JWT, resolves athlete_id + request_id into extensions
+AuthMiddleware          — verifies JWT, resolves credentials from the token registry by `jti`, rejects revoked tokens, resolves athlete_id + request_id into extensions
 DefaultBodyLimit        — MAX_HTTP_BODY_SIZE
 TimeoutLayer            — 408 on overall request timeout
 McpJsonRpcService       — rmcp StreamableHttpService; allowed-host check lives here
@@ -53,6 +53,10 @@ private implementation capabilities used by server-owned orchestration and are n
 listed nor accepted as `tools/call` names.
 
 Key design: auth runs **before** governor so `athlete_id` is available for rate-limit keying. Unauthenticated endpoints (`/health`, `/metrics`) are separate routes and skip both layers.
+
+### Token registry (ADR-0011)
+
+The `token_registry` module is the single source of truth for issued tokens, keyed by `jti`. It holds each token's athlete, lifetime, revocation state, and the athlete's upstream credential **encrypted at rest**; the JWT carries only identity (`athlete_id` + `jti`) and never the credential. Both `/auth` and the UI write to it, the `AuthMiddleware` reads it, and it persists to `MCP_TOKEN_REGISTRY_PATH` when set (in-memory otherwise, with a startup warning). Legacy tokens that still embed their credential in the claims stay verifiable until they expire.
 
 ## Rate limiting
 

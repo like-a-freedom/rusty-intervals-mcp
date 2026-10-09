@@ -44,6 +44,23 @@ See ADR-0001.
   `engines/{single,compare,period}.rs` untouched). Intent handlers own
   theirs, including `intents/handlers/render/` and handler-local markdown.
 
+### Auth and token terms
+
+- **Token record** — the server-side record of one issued bearer token:
+  `jti`, athlete, issue/expiry timestamps, revocation state, and the athlete's
+  upstream credential encrypted at rest.
+- **Token registry** — the repository of token records, keyed by `jti`. The
+  single source of truth for revocation and credential resolution; every token
+  (from `/auth` and the UI alike) is recorded here. See ADR-0011.
+- **Upstream credential** — an athlete's Intervals.icu API key. Stored encrypted
+  in the token registry; never embedded in the JWT.
+- **Legacy token** — a token issued before ADR-0011. It carries its encrypted
+  credential in the JWT claims and no registry `jti`; it stays verifiable until
+  it expires.
+- **Operator panel** — the `/ui` token-management surface. A trusted,
+  network-protected operator view (like `/metrics`), not a multi-tenant
+  authenticated surface._Avoid_: “session-scoped inventory”, “API key in JWT”.
+
 ### Metric-domain terms
 
 - **Load** — training stress value for one activity. Canonical source:

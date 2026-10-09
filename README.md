@@ -357,14 +357,14 @@ The server includes a minimal browser-based token management UI at `/ui` when ru
 |---|---|---|
 | `/ui` | GET | Token creation form |
 | `/ui/token` | POST | Create a JWT token (form body: `athlete_id`, `api_key`) |
-| `/ui/tokens` | GET | List active (non-revoked) tokens |
+| `/ui/tokens` | GET | List issued tokens (optional `?athlete=` filter; `?sort=`, `?order=`) |
 | `/ui/revoke/{jti}` | POST | Revoke a token by its JTI |
 
 Endpoint paths above assume the default root deployment. With `MCP_PUBLIC_BASE_PATH=/intervals` they live under `/intervals/ui…`, the session cookie is scoped to `Path=/intervals/ui`, and all generated links/redirects carry the prefix.
 
-The UI is server-rendered HTML with rate limiting (2 req/s, burst 5). No additional environment variables are needed — it uses the same `JWT_MASTER_KEY` and `JWT_TTL_SECONDS` as the JSON `/auth` endpoint.
+The UI is server-rendered HTML with rate limiting (2 req/s, burst 5). No additional environment variables are needed — it uses the same `JWT_MASTER_KEY` and `JWT_TTL_SECONDS` as the JSON `/auth` endpoint.
 
-**Revocation scope:** Token revocation in the UI is session-scoped. By default tokens are stored in‑memory and lost on restart. Set `MCP_TOKEN_REGISTRY_PATH` to a writable file path to persist issued tokens across restarts (e.g., `/data/tokens.json` in Docker).
+**Revocation scope:** every token the server issues — via `/auth` or the UI — is recorded in the server-side **token registry**, keyed by its `jti`, and can be revoked. The registry is the source of truth for revocation and for the athlete's upstream credential (stored encrypted at rest; the credential never travels inside the JWT). The token list shows the whole registry, filterable by athlete with `?athlete=`; the browser session only supplies a default filter. Set `MCP_TOKEN_REGISTRY_PATH` to a writable file path to persist the registry across restarts (e.g., `/data/tokens.json` in Docker) — without it the registry is in-memory and **tokens issued in the previous process are rejected after a restart** (the server warns about this at startup).
 
 ## VS Code / Copilot setup
 
@@ -640,6 +640,7 @@ See `.env.example` for the standard environment layout.
 | `MCP_RATE_LIMIT_BURST` | `15` | Per-athlete burst capacity for `/mcp` |
 | `JWT_MASTER_KEY` | unset | 64-byte hex key (128 hex chars) required for JWT in HTTP mode |
 | `JWT_TTL_SECONDS` | `7776000` | JWT lifetime in seconds (default 90 days) |
+| `MCP_TOKEN_REGISTRY_PATH` | unset | Writable file path for the server-side token registry; without it the registry is in-memory and issued tokens do not survive a restart |
 | `MCP_ALLOWED_HOSTS` | `localhost,127.0.0.1,::1` | Allowed Host headers (anti-DNS-rebinding); set to public hostname(s) when behind a reverse proxy |
 | `MCP_PUBLIC_BASE_PATH` | unset | Public path prefix for reverse-proxy pass-through (e.g. `/intervals`); empty = serve at the domain root. See [Path prefix](#path-prefix-multiple-services-per-domain) |
 

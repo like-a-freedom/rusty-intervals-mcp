@@ -6,15 +6,15 @@ use axum::{
 };
 use intervals_icu_client::IntervalsClient;
 use maud::{DOCTYPE, Markup, PreEscaped, html};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
-use crate::auth::{AppState, TokenRevocationSet};
+use crate::auth::AppState;
+use crate::token_registry::TokenRecord;
 
 const MAUD_UI_CSS: &str = include_str!("../static/maud-ui.css");
 
@@ -447,16 +447,8 @@ fn generate_csrf_token() -> String {
 
 // ── Token registry ───────────────────────────────────────────────────────
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct TokenRecord {
-    pub jti: String,
-    pub athlete_id: String,
-    pub issued_at: String,
-    pub expires_at: String,
-    pub revoked: bool,
-}
-
-pub type TokenRegistry = Arc<RwLock<Vec<TokenRecord>>>;
+// The registry ([`crate::token_registry`]) is the single source of truth for
+// issued tokens; it is held by [`AppState`] and shared with the auth middleware.
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SessionContext {
@@ -507,10 +499,6 @@ impl TokenRequestData {
 pub struct UiState {
     pub app_state: Arc<AppState>,
     pub sessions: SessionStore,
-    pub tokens: TokenRegistry,
-    pub registry_path: Option<PathBuf>,
-    /// Shared revocation set — same instance as in AppState.
-    pub revoked_jtis: TokenRevocationSet,
     /// Whether to set the `Secure` flag on session cookies.
     /// `false` when running behind a TLS-terminating reverse proxy or on plain HTTP.
     pub cookie_secure: bool,
@@ -521,41 +509,13 @@ pub struct UiState {
 }
 
 impl UiState {
-    pub fn new(
-        app_state: Arc<AppState>,
-        revoked_jtis: TokenRevocationSet,
-        registry_path: Option<PathBuf>,
-        cookie_secure: bool,
-        base_path: String,
-    ) -> Self {
+    pub fn new(app_state: Arc<AppState>, cookie_secure: bool, base_path: String) -> Self {
         // Defense in depth: re-normalize so callers cannot pass a raw env
         // value ("/intervals/", "intervals", "//x") into URL/cookie emission.
         let base_path = crate::normalize_base_path(&base_path);
-        let tokens = Arc::new(RwLock::new(
-            registry_path
-                .as_ref()
-                .and_then(|p| std::fs::read_to_string(p).ok())
-                .and_then(|s| serde_json::from_str(&s).ok())
-                .unwrap_or_default(),
-        ));
-        // Pre-populate revocation set from existing registry
-        if let Some(path) = registry_path.as_ref()
-            && let Ok(content) = std::fs::read_to_string(path)
-            && let Ok(records) = serde_json::from_str::<Vec<TokenRecord>>(&content)
-        {
-            let mut guard = revoked_jtis.blocking_write();
-            for record in &records {
-                if record.revoked {
-                    guard.insert(record.jti.clone());
-                }
-            }
-        }
         Self {
             app_state,
             sessions: Arc::new(RwLock::new(HashMap::new())),
-            tokens,
-            registry_path,
-            revoked_jtis,
             cookie_secure,
             base_path,
         }
@@ -691,51 +651,19 @@ impl UiState {
     }
 
     async fn tokens_for_athlete(&self, athlete_id: &str) -> Vec<TokenRecord> {
-        self.tokens
-            .read()
-            .await
-            .iter()
-            .filter(|token| token.athlete_id == athlete_id)
-            .cloned()
-            .collect()
+        self.app_state.tokens.list_for_athlete(athlete_id).await
+    }
+
+    async fn all_tokens(&self) -> Vec<TokenRecord> {
+        self.app_state.tokens.all().await
     }
 
     async fn record_token(&self, record: TokenRecord) {
-        self.tokens.write().await.push(record);
-        self.persist_registry().await;
+        self.app_state.tokens.record(record).await;
     }
 
     async fn revoke_token(&self, jti: &str) -> bool {
-        let revoked = {
-            let mut registry = self.tokens.write().await;
-            if let Some(token) = registry.iter_mut().find(|token| token.jti == jti) {
-                token.revoked = true;
-                true
-            } else {
-                false
-            }
-        };
-
-        if revoked {
-            // Also add to the shared revocation set so middleware can reject it.
-            self.revoked_jtis.write().await.insert(jti.to_string());
-            self.persist_registry().await;
-        }
-
-        revoked
-    }
-
-    async fn persist_registry(&self) {
-        if let Some(path) = self.registry_path.as_ref() {
-            if let Some(parent) = path.parent() {
-                let _ = tokio::fs::create_dir_all(parent).await;
-            }
-
-            let tokens = self.tokens.read().await.clone();
-            if let Ok(data) = serde_json::to_vec(&tokens) {
-                let _ = tokio::fs::write(path, data).await;
-            }
-        }
+        self.app_state.tokens.revoke(jti).await
     }
 }
 
@@ -1071,12 +999,31 @@ pub async fn ui_create_token(
     match client.get_athlete_profile().await {
         Ok(_) => {
             let jti = Uuid::new_v4().to_string();
-            match ui.app_state.jwt_manager.issue_token(
-                &token_request.athlete_id,
-                &token_request.api_key,
-                ttl_seconds,
-                Some(&jti),
-            ) {
+            let encrypted_api_key = match ui
+                .app_state
+                .jwt_manager
+                .encrypt_credential(&token_request.api_key)
+            {
+                Ok(value) => value,
+                Err(e) => {
+                    tracing::warn!(%e, "credential encryption failed in UI");
+                    return redirect_with_flash(
+                        &ui,
+                        &session.session_id,
+                        "/ui",
+                        Flash {
+                            kind: FlashKind::Error,
+                            message: "Could not create the token. Please try again.".into(),
+                        },
+                    )
+                    .await;
+                }
+            };
+            match ui
+                .app_state
+                .jwt_manager
+                .issue_token(&token_request.athlete_id, ttl_seconds, &jti)
+            {
                 Ok(token) => {
                     let now = chrono::Utc::now();
                     let expires = now + chrono::TimeDelta::seconds(ttl_seconds as i64);
@@ -1089,6 +1036,7 @@ pub async fn ui_create_token(
                         issued_at: now.to_rfc3339(),
                         expires_at,
                         revoked: false,
+                        encrypted_api_key,
                     })
                     .await;
 
@@ -1237,6 +1185,9 @@ fn render_token_success(
 pub struct TokenListQuery {
     pub sort: Option<String>,
     pub order: Option<String>,
+    /// Optional athlete filter. When absent the session's athlete supplies the
+    /// default; when neither is present the whole registry is shown.
+    pub athlete: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1276,11 +1227,20 @@ pub async fn ui_list_tokens(
     Query(query): Query<TokenListQuery>,
 ) -> Response {
     let session = ui.session_context(&headers).await;
-    let current_athlete = session.athlete_id.unwrap_or_default();
-    let filtered = if current_athlete.is_empty() {
-        vec![]
-    } else {
-        ui.tokens_for_athlete(&current_athlete).await
+
+    // The registry is the inventory; the browser session only supplies a
+    // default filter. An explicit `?athlete=` always wins, and with neither we
+    // show the whole registry rather than dead-ending on an expired session.
+    let requested_athlete = query
+        .athlete
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .or_else(|| session.athlete_id.clone());
+    let filtered = match requested_athlete.as_deref() {
+        Some(athlete) => ui.tokens_for_athlete(athlete).await,
+        None => ui.all_tokens().await,
     };
 
     let sort = parse_sort_field(query.sort.as_deref().unwrap_or("issued"));
@@ -1298,7 +1258,7 @@ pub async fn ui_list_tokens(
         &Some(effective_sort),
         &Some(effective_order),
         &ui.base_path,
-        !current_athlete.is_empty(),
+        requested_athlete.as_deref(),
     );
     let html = page_shell(
         "Token Management",
@@ -1354,7 +1314,7 @@ fn render_token_list(
     current_sort: &Option<String>,
     current_order: &Option<String>,
     base: &str,
-    session_known: bool,
+    athlete_filter: Option<&str>,
 ) -> Markup {
     use maud_ui::primitives::{badge, button, card};
 
@@ -1391,57 +1351,45 @@ fn render_token_list(
 
     let table_card = card::render(card::Props {
         title: Some("Active Tokens".into()),
-        description: Some("Manage tokens issued through this interface.".into()),
+        description: Some(match athlete_filter {
+            Some(athlete) => format!("Tokens issued for {athlete}."),
+            None => "Tokens issued by this server.".to_string(),
+        }),
         children: html! {
             @if tokens.is_empty() {
-                // Two genuinely different situations. Saying "No tokens yet" when
-                // we simply lost the session is a false statement about the
-                // operator's security posture, and its only call to action pushes
-                // them to mint a duplicate credential.
+                // The registry is the inventory, so an empty list means either a
+                // filter that matched nothing or an empty registry — never a
+                // lost session. Both states offer the real next step.
                 div.empty-state {
                     span.empty-state__icon aria-hidden="true" {
                         svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"
                             viewBox="0 0 24 24" fill="none" stroke="currentColor"
                             stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" {
-                            @if session_known {
-                                path d="M20 13a8 8 0 1 1-3.6-6.7" {}
-                                polyline points="9 11 12 14 22 4" {}
-                            } @else {
-                                circle cx="12" cy="12" r="9" {}
-                                polyline points="12 8 12 12 12 16" {}
-                            }
+                            path d="M20 13a8 8 0 1 1-3.6-6.7" {}
+                            polyline points="9 11 12 14 22 4" {}
                         }
                     }
-                    @if session_known {
-                        p.empty-state__title { "No tokens yet" }
+                    @if let Some(athlete) = athlete_filter {
+                        p.empty-state__title { "No tokens for this athlete" }
                         p.empty-state__body {
-                            "You have not created an API token through this interface yet."
-                        }
-                        div.empty-state__action {
-                            (button::render(button::Props {
-                                label: "Create a Token".into(),
-                                variant: button::Variant::Primary,
-                                ..Default::default()
-                            }))
+                            "No tokens are recorded for " (athlete) "."
                         }
                     } @else {
-                        p.empty-state__title { "No athlete in this session" }
+                        p.empty-state__title { "No tokens yet" }
                         p.empty-state__body {
-                            "This browser session isn't linked to an athlete, so we \
-                             can't tell which tokens belong to it. Tokens you \
-                             created earlier are still valid."
+                            "No API tokens have been issued by this server yet."
                         }
-                        div.empty-state__action {
-                            a class="btn-primary" href=(format!("{base}/ui")) {
-                                "Create a Token"
-                            }
+                    }
+                    div.empty-state__action {
+                        a class="btn-primary" href=(format!("{base}/ui")) {
+                            "Create a Token"
                         }
                     }
                 }
             } @else {
                 div.mui-table-wrapper {
                     table.mui-table {
-                        caption.visually-hidden { "Tokens issued through this interface." }
+                        caption.visually-hidden { "Tokens issued by this server." }
                         thead {
                             tr {
                                 (th_link("Athlete ID", "athlete", current_sort, current_order, base))
@@ -1547,36 +1495,33 @@ pub async fn ui_revoke_token(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::token_registry::TokenRegistry;
     use axum::http::HeaderValue;
 
     fn test_ui_state() -> UiState {
-        use std::collections::HashSet;
         let secret = b"test_secret_key_for_jwt_signing_12345678901234567890123456789012";
         let jwt_manager = Arc::new(crate::auth::JwtManager::new(secret, [0u8; 32]));
-        let revoked_jtis = Arc::new(tokio::sync::RwLock::new(HashSet::new()));
         let app_state = Arc::new(AppState {
             jwt_manager,
             jwt_ttl_seconds: 3600,
             base_url: "https://intervals.icu".to_string(),
-            revoked_jtis: revoked_jtis.clone(),
+            tokens: TokenRegistry::load(None),
         });
 
-        UiState::new(app_state, revoked_jtis, None, false, String::new())
+        UiState::new(app_state, false, String::new())
     }
 
     fn test_ui_state_with_base(base: &str) -> UiState {
-        use std::collections::HashSet;
         let secret = b"test_secret_key_for_jwt_signing_12345678901234567890123456789012";
         let jwt_manager = Arc::new(crate::auth::JwtManager::new(secret, [0u8; 32]));
-        let revoked_jtis = Arc::new(tokio::sync::RwLock::new(HashSet::new()));
         let app_state = Arc::new(AppState {
             jwt_manager,
             jwt_ttl_seconds: 3600,
             base_url: "https://intervals.icu".to_string(),
-            revoked_jtis: revoked_jtis.clone(),
+            tokens: TokenRegistry::load(None),
         });
 
-        UiState::new(app_state, revoked_jtis, None, false, base.to_string())
+        UiState::new(app_state, false, base.to_string())
     }
 
     #[test]
@@ -1747,6 +1692,7 @@ mod tests {
             issued_at: "2026-05-26T10:00:00Z".to_string(),
             expires_at: "2026-05-27T10:00:00Z".to_string(),
             revoked: false,
+            encrypted_api_key: "enc-a".to_string(),
         })
         .await;
         ui.record_token(TokenRecord {
@@ -1755,6 +1701,7 @@ mod tests {
             issued_at: "2026-05-26T11:00:00Z".to_string(),
             expires_at: "2026-05-27T11:00:00Z".to_string(),
             revoked: false,
+            encrypted_api_key: "enc-b".to_string(),
         })
         .await;
 
@@ -1779,6 +1726,7 @@ mod tests {
                 issued_at: "2026-05-26T11:00:00Z".to_string(),
                 expires_at: "2026-05-28T11:00:00Z".to_string(),
                 revoked: false,
+                encrypted_api_key: String::new(),
             },
             TokenRecord {
                 jti: "jti-2".to_string(),
@@ -1786,6 +1734,7 @@ mod tests {
                 issued_at: "2026-05-26T10:00:00Z".to_string(),
                 expires_at: "2026-05-27T10:00:00Z".to_string(),
                 revoked: true,
+                encrypted_api_key: String::new(),
             },
         ];
 

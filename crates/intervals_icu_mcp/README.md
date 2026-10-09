@@ -60,6 +60,7 @@ Useful HTTP-mode environment variables:
 - `IDLE_TIMEOUT_SECONDS` (default `60`)
 - `JWT_MASTER_KEY` (required, 64-byte hex key)
 - `JWT_TTL_SECONDS` (default `7776000` = 90 days)
+- `MCP_TOKEN_REGISTRY_PATH` (unset = in-memory registry; set a writable path to persist issued tokens across restarts)
 
 For containerized deployment, prefer the repository-level `Dockerfile` and `docker-compose.yml`; those artifacts are intended for HTTP streamable MCP, not stdio child-process usage.
 - Running tests:
