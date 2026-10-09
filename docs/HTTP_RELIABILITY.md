@@ -55,6 +55,13 @@ The outermost middleware assigns every HTTP request a correlation id: a well-for
 
 Each request also produces one access-log line with `method`, `path`, `status`, `client_ip`, and `latency_ms`: `warn` for 5xx, `info` for 4xx, `debug` otherwise. `/health` and `/metrics` probes are silent to avoid log noise.
 
+## Log-level policy
+
+`warn` means an operator (or athlete) should look; `info` marks business events worth keeping forever; anything routine or per-request is `debug`/`trace`. In practice:
+- `info`: auth issuance/refusal, tool-call audit (`outcome`, `response_bytes`), session start with `client_name`, startup/shutdown, config summary, cache refreshes that succeed.
+- `warn`: 5xx responses, upstream intervals.icu failures (`transport`, `5xx`, `429`, `auth`, `circuit_open`), tool errors and slow calls (`> 10 s`), response serialization failures, rate-limit rejections, invalid config values falling back to defaults, mutex poisoning, panics.
+- `debug`: routine per-request lines (access log on success, authenticated request), upstream 4xx/not-found, optional-data gaps (missing histograms), internal fallbacks and retries, engine fetch detail.
+
 ## Real client IP behind proxies
 
 Docker NAT and reverse proxies hide the true client address in the TCP handshake (`ConnectInfo` shows the proxy/bridge, e.g. `172.26.0.x`). The server therefore resolves `client_ip` from `X-Forwarded-For` (right-most entry — the hop seen by the nearest proxy, so a fabricated left-most value cannot win) and `X-Real-IP` — but **only when the direct TCP peer is loopback/private/link-local**, i.e. a trusted local relay. A public direct peer is never trusted.

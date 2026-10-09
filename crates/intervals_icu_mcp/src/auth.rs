@@ -502,7 +502,8 @@ pub async fn auth_middleware(
         return Err(StatusCode::UNAUTHORIZED);
     };
 
-    tracing::info!(athlete_id = %credentials.athlete_id, "Authenticated request");
+    // Per-request routine already covered by the access log; keep it quiet.
+    tracing::debug!(athlete_id = %credentials.athlete_id, "Authenticated request");
 
     request.extensions_mut().insert(credentials);
 

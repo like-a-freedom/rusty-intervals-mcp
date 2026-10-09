@@ -131,7 +131,7 @@ On error: API or validation errors with descriptive messages."
             && period_days < max_days
             && period_weeks < MAX_PERIOD_WEEKS
         {
-            tracing::info!(
+            tracing::debug!(
                 requested_days = period_days,
                 available_ctl_points = initial_ctl_points,
                 min_required = MIN_DAYS_FOR_PLATEAU,

@@ -105,7 +105,7 @@ pub async fn collect_endurance_evidence(
                 }
             }
             Err(error) => {
-                tracing::info!(
+                tracing::debug!(
                     activity_id = %activity.id,
                     error = %error,
                     "Endurance evidence detail fetch failed"
@@ -135,7 +135,7 @@ pub async fn collect_endurance_evidence(
                     }
                 }
                 Err(error) => {
-                    tracing::info!(
+                    tracing::debug!(
                         activity_id = %id,
                         error = %error,
                         "Endurance evidence stream fetch failed"
