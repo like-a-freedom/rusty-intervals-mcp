@@ -22,72 +22,383 @@ const MAUD_UI_CSS: &str = include_str!("../static/maud-ui.css");
 ///
 /// Rendered via `PreEscaped`: browsers do not decode HTML entities inside
 /// `<script>`, so an escaped payload is a syntax error and never runs.
-const INLINE_SCRIPT: &str = r#"document.addEventListener("DOMContentLoaded",()=>{const b=document.querySelector(".flash-banner");if(b){setTimeout(()=>{b.classList.add("dismissing");setTimeout(()=>b.remove(),400)},5e3);if(window.history.replaceState){const u=new URL(window.location);u.searchParams.delete("error");u.searchParams.delete("success");window.history.replaceState({},"",u)}}const c=document.querySelector("[data-clipboard]");if(c){c.addEventListener("click",function(){navigator.clipboard.writeText(this.dataset.clipboard).then(()=>{let t=this.querySelector(".copy-toast");if(!t){t=document.createElement("span");t.className="copy-toast";t.textContent="Copied!";this.appendChild(t);requestAnimationFrame(()=>t.classList.add("show"))}setTimeout(()=>{t.classList.remove("show");setTimeout(()=>t.remove(),250)},1200)}).catch(()=>{})})}})"#;
+const INLINE_SCRIPT: &str = r#"
+document.addEventListener("DOMContentLoaded", () => {
+  // The message lives in the session, not the URL, so there is nothing to
+  // scrub here. It auto-dismisses; a refresh renders a clean page.
+  const banner = document.querySelector(".flash-banner");
+  if (banner) {
+    setTimeout(() => {
+      banner.classList.add("dismissing");
+      setTimeout(() => banner.remove(), 400);
+    }, 8000);
+  }
+
+  // Irreversible actions confirm before the request leaves the browser.
+  // `data-confirmed` guards against a second submit re-prompting.
+  document.querySelectorAll("form[data-confirm]").forEach((form) => {
+    form.addEventListener("submit", (event) => {
+      if (form.dataset.confirmed === "1") return;
+      event.preventDefault();
+      if (window.confirm(form.dataset.confirm)) {
+        form.dataset.confirmed = "1";
+        form.submit();
+      }
+    });
+  });
+
+  document.querySelectorAll("[data-clipboard]").forEach((btn) => {
+    const announce = (msg) => {
+      const live = document.getElementById("copy-status");
+      if (live) live.textContent = msg;
+    };
+    btn.addEventListener("click", async () => {
+      const value = btn.dataset.clipboard;
+      // `navigator.clipboard` is undefined outside a secure context, and
+      // accessing it there throws synchronously — which a trailing .catch()
+      // cannot intercept. Guard the access itself.
+      try {
+        if (navigator.clipboard && window.isSecureContext) {
+          await navigator.clipboard.writeText(value);
+        } else {
+          const field = document.getElementById("generated-token");
+          if (!field) throw new Error("no fallback field");
+          field.focus();
+          field.select();
+          field.setSelectionRange(0, value.length);
+        }
+        announce(btn.dataset.copied || "Copied");
+        btn.classList.add("copied");
+      } catch (_) {
+        announce("Copy failed — select the token and copy manually");
+      }
+    });
+  });
+});
+"#;
 
 /// Page-local CSS, layered on top of `maud-ui.css`.
 ///
 /// Rendered via `PreEscaped` for the same reason as `INLINE_SCRIPT`.
-const INLINE_STYLE: &str = r#"                    .mui-card { margin: 4rem auto; }
-                    .mui-card--narrow { max-width: 28rem; }
-                    .mui-card__body { padding: 1.5rem; }
+const INLINE_STYLE: &str = r#"                    .mui-card { margin-block: var(--mui-space-section); margin-inline: auto; }
+                    .mui-card__body { padding: var(--mui-space-card); }
                     .mui-card__title { margin-bottom: 0.5rem; }
                     .mui-card__description { margin-top: 0.5rem; }
-                    .mui-field + .mui-field { margin-top: 1.25rem; }
-                    .tokens-page-card .mui-card { max-width: none; width: 100%; }
-                    .mui-container { padding: 0 1.5rem; }
-                    .token-display {
-                      font-family: 'SF Mono', 'Fira Code', monospace;
-                      font-size: 0.75rem;
-                      word-break: break-all;
-                      background: #0f172a;
-                      color: #e2e8f0;
-                      padding: 1rem;
-                      padding-top: 2rem;
-                      border-radius: 0.5rem;
-                      border: 1px solid #1e293b;
-                      position: relative;
+                    /* Vertical rhythm lives here, not in markup <br> tags.
+                       The header collapses its own bottom padding, so the first
+                       group needs its own leading space or it touches the
+                       description. */
+                    .card-fields {
+                      display: flex;
+                      flex-direction: column;
+                      gap: 1.25rem;
+                      margin-block-start: 1.5rem;
                     }
-                    .copy-btn { position: absolute; top: 0.5rem; right: 0.5rem; background: none; border: none; color: #64748b; cursor: pointer; padding: 0.25rem; line-height: 1; display: inline-flex; align-items: center; justify-content: center; border-radius: 0.25rem; transition: color .15s, background .15s; }
-                    .copy-btn:hover { color: #e2e8f0; background: rgba(226,232,240,0.08); }
-                    .copy-btn:active svg { transform: scale(0.85); }
-                    .copy-btn svg { display: block; transition: transform .15s; }
-                    .copy-toast { position: absolute; top: -1.5rem; right: 0; font-size: 0.65rem; color: #22c55e; white-space: nowrap; opacity: 0; transition: opacity .25s, transform .25s; pointer-events: none; transform: translateY(4px); }
-                    .copy-toast.show { opacity: 1; transform: translateY(0); }
-                    .error-alert {
-                      background: rgba(225, 29, 72, 0.1);
-                      border: 1px solid var(--mui-danger, #e11d48);
-                      color: var(--mui-danger, #e11d48);
+                    .card-fields > * { margin-block-start: 0; }
+                    .mui-container { padding-inline: var(--mui-space-gutter); }
+                    .ui-narrow { max-inline-size: 28rem; margin-inline: auto; }
+                    .ui-measure { max-inline-size: 56rem; margin-inline: auto; }
+                    .form-actions { margin-block-start: 0.5rem; }
+                    .form-actions .mui-btn { inline-size: 100%; }
+                    /* Same rhythm reason as `.card-fields`: the card header
+                       collapses its own bottom padding, so the first element in
+                       the body needs its own leading space or it touches the
+                       description. */
+                    .token-display {
+                      margin-block-start: 1.5rem;
+                      position: relative;
+                      background: var(--mui-bg-input);
+                      border: 1px solid var(--mui-border);
+                      border-radius: var(--mui-radius-md);
+                    }
+                    .token-display__value {
+                      display: block;
+                      inline-size: 100%;
+                      /* Room for the copy button; the field stays fully readable. */
+                      padding-block: 2.75rem 1rem;
+                      padding-inline: 1rem;
+                      border: none;
+                      background: transparent;
+                      color: var(--mui-text);
+                      font-family: var(--mui-font-mono);
+                      font-size: 0.75rem;
+                      line-height: 1.6;
+                      overflow-wrap: anywhere;
+                      overflow-y: auto;
+                      resize: none;
+                      /* Field-sizing lets it fit the whole credential instead of
+                         clipping it behind a fixed rows="3". */
+                      field-sizing: content;
+                      min-block-size: 6lh;
+                      max-block-size: 14lh;
+                    }
+                    .token-display__value:focus-visible {
+                      outline: 2px solid var(--mui-border-focus);
+                      outline-offset: -2px;
+                      border-radius: var(--mui-radius-md);
+                    }
+                    .copy-btn {
+                      position: absolute;
+                      inset-block-start: 0.375rem;
+                      inset-inline-end: 0.375rem;
+                      display: inline-flex;
+                      align-items: center;
+                      justify-content: center;
+                      padding: 0;
+                      background: transparent;
+                      border: none;
+                      border-radius: var(--mui-radius-sm);
+                      color: var(--mui-text-muted);
+                      cursor: pointer;
+                      inline-size: 1.75rem;
+                      block-size: 1.75rem;
+                    }
+                    /* Hit area larger than the visual (WCAG 2.5.8). */
+                    .copy-btn::after {
+                      content: "";
+                      position: absolute;
+                      inset: min(0px, (100% - 44px) / 2);
+                    }
+                    .copy-btn svg { display: block; inline-size: 1rem; block-size: 1rem; }
+                    @media (hover: hover) and (pointer: fine) {
+                      .copy-btn:hover { color: var(--mui-text); background: var(--mui-bg-card); }
+                    }
+                    .copy-status { display: block; margin-top: 0.5rem; min-height: 1.25rem; font-size: var(--mui-text-xs); color: var(--mui-success-text, #4ade80); }
+                    .copy-btn.copied { color: var(--mui-success-text, #4ade80); }
+                    .error-alert,
+                    .success-alert {
                       padding: 0.75rem 1rem;
-                      border-radius: 0.5rem;
+                      border-radius: var(--mui-radius-md);
+                      border: 1px solid;
                       font-size: 0.875rem;
+                    }
+                    .error-alert {
+                      background: color-mix(in oklch, var(--mui-danger) 12%, transparent);
+                      border-color: color-mix(in oklch, var(--mui-danger) 30%, transparent);
+                      color: var(--mui-danger-text);
                     }
                     .success-alert {
-                      background: rgba(22, 163, 74, 0.1);
-                      border: 1px solid var(--mui-success, #16a34a);
-                      color: var(--mui-success, #16a34a);
-                      padding: 0.75rem 1rem;
-                      border-radius: 0.5rem;
-                      font-size: 0.875rem;
+                      background: color-mix(in oklch, var(--mui-success) 12%, transparent);
+                      border-color: color-mix(in oklch, var(--mui-success) 30%, transparent);
+                      color: var(--mui-success-text);
                     }
-                    .flash-banner { margin: 1rem auto; max-width: 48rem; animation: flashIn .35s ease-out; }
-                    .flash-banner.dismissing { opacity: 0; transition: opacity .4s ease; }
-                    @keyframes flashIn { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
-                    input[type=hidden] { display: none; }
-                    .nav-bar { display: flex; align-items: center; gap: 1rem; padding: 0.75rem 1.5rem;
-                      border-bottom: 1px solid var(--mui-border, #e5e7eb); }
-                    .nav-bar a { color: var(--mui-text-muted, #6b7280); text-decoration: none; font-size: 0.875rem; }
-                    .nav-bar a:hover { color: var(--mui-text, #111827); }
-                    .nav-bar a.active { color: var(--mui-text, #111827); font-weight: 500; }
-                    .nav-bar .brand { font-weight: 600; font-size: 1rem; color: var(--mui-text, #111827); }
+                    .flash-banner {
+                      margin: 0 auto var(--mui-space-card);
+                      /* Share the content measure so the banner and the card
+                         share one left edge instead of floating wider. */
+                      max-inline-size: min(28rem, 100%);
+                      display: flex;
+                      align-items: flex-start;
+                      gap: 0.5rem;
+                    }
+                    @keyframes flashIn { from { opacity: 0; translate: 0 -0.5rem; } to { opacity: 1; translate: 0; } }
+                    @media (prefers-reduced-motion: no-preference) {
+                      .flash-banner { animation: flashIn 350ms var(--mui-ease-out); }
+                      .flash-banner.dismissing { opacity: 0; transition: opacity 400ms var(--mui-ease-out); }
+                      .copy-btn:active svg { scale: 0.85; }
+                      .copy-btn svg { transition: scale 150ms var(--mui-ease-out); }
+                    }
+                    /* Top-bar nav: 2 items, brand left, links right.
+                       Active state = 2px underline + weight + colour, all driven
+                       off [aria-current="page"] so there is one source of truth.
+                       44px min target satisfies WCAG 2.2 SC 2.5.5 outright. */
+                    .nav-bar {
+                      display: flex;
+                      flex-wrap: wrap;
+                      align-items: center;
+                      gap: 0.25rem 1.5rem;
+                      min-block-size: 3.5rem;
+                      padding-inline: var(--mui-space-gutter);
+                      border-block-end: 1px solid var(--mui-border);
+                      background: var(--mui-bg);
+                    }
+                    .nav-bar .brand {
+                      font-size: 1.0625rem;
+                      font-weight: 600;
+                      line-height: 1;
+                      color: var(--mui-text);
+                      text-decoration: none;
+                    }
+                    .nav-bar nav { margin-inline-start: auto; }
+                    .nav-list {
+                      display: flex;
+                      flex-wrap: wrap;
+                      align-items: center;
+                      gap: 0.125rem;
+                      margin: 0;
+                      padding: 0;
+                      list-style: none;
+                    }
+                    .nav-link {
+                      position: relative;
+                      display: inline-flex;
+                      align-items: center;
+                      min-block-size: 2.75rem;
+                      padding-inline: 0.75rem;
+                      border-radius: var(--mui-radius-sm);
+                      font-size: 0.875rem;
+                      line-height: 1;
+                      color: var(--mui-text-muted);
+                      text-decoration: none;
+                      transition: color 120ms var(--mui-ease-out);
+                    }
+                    /* Indicator: absolutely positioned so it takes no layout
+                       space, transparent by default, only opacity animates. */
+                    .nav-link::after {
+                      content: "";
+                      position: absolute;
+                      inset-inline: 0.5rem;
+                      inset-block-end: 0.375rem;
+                      block-size: 2px;
+                      border-radius: 2px;
+                      background: var(--mui-accent);
+                      opacity: 0;
+                      transition: opacity 120ms var(--mui-ease-out);
+                    }
+                    .nav-link[aria-current="page"] {
+                      font-weight: 600;
+                      color: var(--mui-text);
+                    }
+                    .nav-link[aria-current="page"]::after { opacity: 1; }
+                    /* Pull the ring inward so it never fights the underline. */
+                    .nav-link:focus-visible {
+                      outline: 2px solid var(--mui-accent);
+                      outline-offset: -2px;
+                    }
+                    @media (hover: hover) and (pointer: fine) {
+                      .nav-link:hover { color: var(--mui-text); }
+                    }
+                    @media (prefers-reduced-motion: reduce) {
+                      .nav-link,
+                      .nav-link::after { transition: none; }
+                    }
+                    /* Two links never need a hamburger; just tighten up. */
+                    @media (max-width: 30rem) {
+                      .nav-bar { gap: 0.125rem 0.75rem; padding-inline: 0.75rem; }
+                      .nav-link { padding-inline: 0.5rem; }
+                    }
                     .mui-table-wrapper { width: 100%; overflow-x: auto; }
                     .mui-table { width: 100%; }
-                    .mui-table th a { color: inherit; text-decoration: none; display: inline-flex; align-items: center; gap: 0.25rem; }
-                    .mui-table th a:hover { opacity: 0.75; }
-                    .sort-arrow { display: inline-block; font-size: 0.625rem; line-height: 1; }
-                    .ttl-select { width: 100%; padding: 0.5rem; border: 1px solid var(--mui-border, #e5e7eb); border-radius: 0.375rem; background: var(--mui-bg, #fff); color: var(--mui-text, #111827); font-size: 0.875rem; }
-                    .field-hint { font-weight: 400; color: var(--mui-muted-foreground, #6b7280); font-size: 0.75rem; margin-left: 0.5rem; }
+                    .mui-table .sort-link {
+                      color: inherit;
+                      text-decoration: none;
+                      display: inline-flex;
+                      align-items: center;
+                      gap: 0.25rem;
+                      padding-block: 0.25rem;
+                    }
+                    @media (hover: hover) and (pointer: fine) {
+                      .mui-table .sort-link:hover { color: var(--mui-text); }
+                    }
+                    .sort-arrow { font-size: var(--mui-text-xs); line-height: 1; color: var(--mui-text-subtle); }
+                    /* Status reads as a quiet tinted chip, not a saturated block.
+                       Uses the *-text tokens, which exist for text on tint. */
+                    .mui-badge--success {
+                      background: color-mix(in oklch, var(--mui-success) 14%, transparent);
+                      border-color: color-mix(in oklch, var(--mui-success) 32%, transparent);
+                      color: var(--mui-success-text);
+                    }
+                    .mui-badge--danger {
+                      background: color-mix(in oklch, var(--mui-danger) 14%, transparent);
+                      border-color: color-mix(in oklch, var(--mui-danger) 32%, transparent);
+                      color: var(--mui-danger-text);
+                    }
+                    /* Destructive button: a solid saturated block shouted at
+                       every row. Keep the fill for affordance but calm it and let
+                       the text carry more of the contrast load. */
+                    .mui-btn--danger {
+                      background: color-mix(in oklch, var(--mui-danger) 82%, var(--mui-bg-card));
+                      border-color: color-mix(in oklch, var(--mui-danger) 90%, black);
+                      color: var(--mui-accent-fg);
+                    }
+                    /* 8. A real empty state, reused for both zero-token cases. */
+                    .empty-state {
+                      display: grid;
+                      justify-items: center;
+                      gap: 0.5rem;
+                      padding-block: 2.5rem 1.5rem;
+                      text-align: center;
+                    }
+                    .empty-state__icon {
+                      display: grid;
+                      place-items: center;
+                      inline-size: 2.5rem;
+                      block-size: 2.5rem;
+                      border-radius: var(--mui-radius-full);
+                      background: var(--mui-bg-input);
+                      color: var(--mui-text-muted);
+                      margin-block-end: 0.25rem;
+                    }
+                    .empty-state__title { color: var(--mui-text); font-weight: 600; }
+                    .empty-state__body {
+                      color: var(--mui-text-muted);
+                      font-size: 0.875rem;
+                      line-height: 1.5;
+                      max-inline-size: 28rem;
+                      margin: 0;
+                    }
+                    .empty-state__action { margin-block-start: 0.75rem; }
+                    .token-empty { text-align: center; padding-block: 2rem 0.5rem; }
+                    .token-empty__title { color: var(--mui-text); font-weight: 600; margin: 0 0 0.375rem; }
+                    .token-empty__body { color: var(--mui-text-muted); font-size: 0.875rem; margin: 0 0 1.25rem; }
+                    .token-empty__link { color: var(--mui-accent-text); font-size: 0.875rem; }
+                    /* Action links styled as buttons: <a> must not wrap <button>. */
+                    .btn-reset,
+                    .btn-primary {
+                      display: inline-flex;
+                      align-items: center;
+                      justify-content: center;
+                      block-size: 2.25rem;
+                      padding-inline: 1rem;
+                      border-radius: var(--mui-radius-md);
+                      font-family: var(--mui-font-sans);
+                      font-size: 0.875rem;
+                      font-weight: 500;
+                      text-decoration: none;
+                    }
+                    .btn-reset { background: var(--mui-bg-input); border: 1px solid var(--mui-border); color: var(--mui-text); }
+                    .btn-primary { background: var(--mui-accent); border: 1px solid var(--mui-accent); color: var(--mui-accent-fg); }
+                    @media (hover: hover) and (pointer: fine) {
+                      .btn-reset:hover { background: var(--mui-bg-card); border-color: var(--mui-border-hover); }
+                      .btn-primary:hover { background: var(--mui-accent-hover); border-color: var(--mui-accent-hover); }
+                    }
+                    .ttl-select {
+                      inline-size: 100%;
+                      padding-block: 0.5rem;
+                      padding-inline: 0.75rem;
+                      border: 1px solid var(--mui-border);
+                      border-radius: var(--mui-radius-md);
+                      background: var(--mui-bg);
+                      color: var(--mui-text);
+                      font-size: 0.875rem;
+                    }
+                    /* Safari zooms the viewport when a focused field is under
+                       16px. Only touch devices need the bump. */
+                    @media (pointer: coarse) {
+                      .mui-input, .ttl-select { font-size: max(16px, 0.875rem); }
+                    }
+                    .field-hint { font-weight: 400; color: var(--mui-text-muted); font-size: var(--mui-text-xs); margin-inline-start: 0.5rem; }
+                    .visually-hidden {
+                      position: absolute;
+                      inline-size: 1px;
+                      block-size: 1px;
+                      padding: 0;
+                      margin: -1px;
+                      overflow: clip;
+                      clip-path: inset(50%);
+                      white-space: nowrap;
+                      border: 0;
+                    }
+                    .token-actions {
+                      display: flex;
+                      flex-wrap: wrap;
+                      gap: 0.5rem;
+                      margin-block-start: 1.25rem;
+                    }
+                    .token-actions > * { flex: 1 1 auto; }
+                    .token-actions .mui-btn { inline-size: 100%; }
                     .token-info-grid { display: grid; grid-template-columns: auto 1fr; gap: 0.5rem 1rem; margin-top: 1rem; font-size: 0.875rem; }
-                    .token-info-grid dt { color: var(--mui-muted-foreground, #6b7280); text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.75rem; }
+                    .token-info-grid dt { color: var(--mui-text-muted); text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.75rem; }
                     .token-info-grid dd { margin: 0; }"#;
 const DEFAULT_TOKEN_TTL_DAYS: u64 = 30;
 const MAX_TOKEN_TTL_DAYS: u64 = 3650;
@@ -98,11 +409,30 @@ const MAX_SESSIONS: usize = 1000;
 
 // ── Session types ────────────────────────────────────────────────────────
 
+/// A one-shot message carried across a POST→redirect→GET.
+///
+/// Stored server-side in the session, so the URL stays clean and the text
+/// never lands in browser history, a `Referer` header, or a proxy log.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Flash {
+    pub kind: FlashKind,
+    pub message: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FlashKind {
+    Success,
+    Error,
+}
+
 #[derive(Clone, Debug)]
 pub struct SessionData {
     pub csrf_token: String,
     pub athlete_id: Option<String>,
+    /// Last time this session was used. Refreshed on every request so the
+    /// server-side lifetime slides in step with the cookie's `Max-Age`.
     created_at: Instant,
+    pub flash: Option<Flash>,
 }
 
 pub type SessionStore = Arc<RwLock<HashMap<String, SessionData>>>;
@@ -254,6 +584,13 @@ impl UiState {
         if let Some(session_id) = session_id_from_headers(headers)
             && self.sessions.read().await.contains_key(&session_id)
         {
+            // The cookie is re-issued with a fresh Max-Age on every response, so
+            // the server must slide the expiry too. Without this the server
+            // evicts an actively-used session while the browser still believes
+            // it is valid, and the next POST fails its CSRF check.
+            if let Some(session) = self.sessions.write().await.get_mut(&session_id) {
+                session.created_at = Instant::now();
+            }
             return session_id;
         }
 
@@ -267,12 +604,19 @@ impl UiState {
                 csrf_token: csrf,
                 athlete_id: None,
                 created_at: Instant::now(),
+                flash: None,
             },
         );
         session_id
     }
 
-    /// Remove expired sessions and, if still over capacity, the oldest ones.
+    /// Remove sessions unused for longer than the cookie lifetime.
+    ///
+    /// The window is measured from `created_at`, which slides forward on every
+    /// request. That matters: the cookie is re-issued with a fresh `Max-Age` on
+    /// every response, so a server measuring from creation would silently expire
+    /// an actively-used session while the browser still considered it live — and
+    /// the operator's next POST would fail its CSRF check for no visible reason.
     async fn evict_stale_sessions(&self) {
         let mut sessions = self.sessions.write().await;
         // Remove sessions older than the cookie max age.
@@ -296,6 +640,41 @@ impl UiState {
 
     async fn session(&self, session_id: &str) -> Option<SessionData> {
         self.sessions.read().await.get(session_id).cloned()
+    }
+
+    /// Queue a message for the next render of this session.
+    pub async fn set_flash(&self, session_id: &str, flash: Flash) {
+        if let Some(session) = self.sessions.write().await.get_mut(session_id) {
+            session.flash = Some(flash);
+        }
+    }
+
+    /// Read and clear the pending message. One-shot: a refresh must not replay it.
+    pub async fn take_flash(&self, session_id: &str) -> Option<Flash> {
+        self.sessions
+            .write()
+            .await
+            .get_mut(session_id)
+            .and_then(|session| session.flash.take())
+    }
+
+    /// Test seam: resolve the session a set of headers implies,
+    /// returning `(session_id, csrf_token)`.
+    #[doc(hidden)]
+    pub async fn session_for_test(&self, headers: &HeaderMap) -> (String, String) {
+        let ctx = self.session_context(headers).await;
+        (ctx.session_id, ctx.csrf_token)
+    }
+
+    /// Test seam: when the session was created.
+    #[doc(hidden)]
+    pub async fn session_created(&self, session_id: &str) -> Instant {
+        self.sessions
+            .read()
+            .await
+            .get(session_id)
+            .map(|s| s.created_at)
+            .unwrap_or_else(Instant::now)
     }
 
     async fn csrf_matches(&self, session_id: &str, submitted_csrf: &str) -> bool {
@@ -380,6 +759,13 @@ fn session_id_from_headers(headers: &HeaderMap) -> Option<String> {
 
 // ── CSS route ────────────────────────────────────────────────────────────
 
+/// The served stylesheet.
+///
+/// Exposed so tests can assert on it without re-reading the file.
+pub fn served_css() -> &'static str {
+    MAUD_UI_CSS
+}
+
 pub async fn serve_css() -> impl IntoResponse {
     let mut headers = HeaderMap::new();
     headers.insert(
@@ -395,20 +781,23 @@ pub async fn serve_css() -> impl IntoResponse {
 
 // ── HTML shell ───────────────────────────────────────────────────────────
 
-fn page_shell(
-    title: &str,
-    page: &str,
-    body: Markup,
-    flash_success: Option<String>,
-    flash_error: Option<String>,
-    base: &str,
-) -> Markup {
+fn page_shell(title: &str, page: &str, body: Markup, flash: Option<Flash>, base: &str) -> Markup {
     fn nav_link(label: &str, path: &str, current: &str, base: &str) -> Markup {
         let href = format!("{base}{path}");
+        // `aria-current` is the single source of truth for the active state, so
+        // the visual highlight and the announced state can never disagree.
         if href == current {
-            html! { a.active href=(href) { (label) } }
+            html! {
+                li {
+                    a.nav-link href=(href) aria-current="page" { (label) }
+                }
+            }
         } else {
-            html! { a href=(href) { (label) } }
+            html! {
+                li {
+                    a.nav-link href=(href) { (label) }
+                }
+            }
         }
     }
     let current = format!("{base}{page}");
@@ -418,6 +807,10 @@ fn page_shell(
             head {
                 meta charset="utf-8";
                 meta name="viewport" content="width=device-width, initial-scale=1";
+                // Tell the UA to paint the dark surface before CSS loads, and
+                // let the OS light/dark preference reach the theme tokens.
+                meta name="color-scheme" content="dark light";
+                link rel="icon" href="data:,";
                 title { (title) " — Intervals.icu MCP" }
                 link rel="stylesheet" href=(format!("{base}/ui/static/css"));
                 // `PreEscaped`: browsers do not decode HTML entities inside
@@ -427,18 +820,26 @@ fn page_shell(
                 style { (PreEscaped(INLINE_STYLE)) }
             }
             body {
-                .nav-bar {
-                    .brand { "Intervals.icu MCP" }
-                    (nav_link("Home", "/ui", &current, base))
-                    (nav_link("Tokens", "/ui/tokens", &current, base))
+                header.nav-bar {
+                    a.brand href=(format!("{base}/ui")) { "Intervals.icu MCP" }
+                    nav aria-label="Primary" {
+                        ul.nav-list {
+                            (nav_link("Home", "/ui", &current, base))
+                            (nav_link("Tokens", "/ui/tokens", &current, base))
+                        }
+                    }
                 }
-                @if let Some(ref msg) = flash_error {
-                    .flash-banner.error-alert { (msg) }
-                } @else if let Some(ref msg) = flash_success {
-                    .flash-banner.success-alert { (msg) }
-                }
-                .mui-container {
-                    (body)
+                main #main {
+                    h1.visually-hidden { (title) }
+                    @if let Some(ref msg) = flash {
+                        @match msg.kind {
+                            FlashKind::Error => .flash-banner.error-alert role="alert" { (msg.message.clone()) },
+                            FlashKind::Success => .flash-banner.success-alert role="status" aria-live="polite" { (msg.message.clone()) },
+                        }
+                    }
+                    .mui-container {
+                        (body)
+                    }
                 }
             }
         }
@@ -447,29 +848,34 @@ fn page_shell(
 
 // ── Landing page (GET /ui) ───────────────────────────────────────────────
 
-#[derive(Deserialize)]
-pub struct UiQuery {
-    pub error: Option<String>,
-    pub success: Option<String>,
-}
+/// The home page takes no query parameters any more.
+///
+/// Flash messages live in the session and are consumed once by `page_shell`,
+/// so a reload renders a clean page instead of replaying the old message.
+#[derive(Deserialize, Default)]
+pub struct UiQuery {}
 
 fn render_home_body(csrf: &str, base: &str) -> Markup {
     use maud_ui::primitives::{button, card, field, input};
 
     html! {
-        div style="max-width: 28rem; margin: 0 auto;" {
+        div.ui-narrow {
             (card::render(card::Props {
                 title: Some("MCP Server Token".into()),
                 description: Some("Enter your Intervals.icu credentials to generate an API token".into()),
                 children: html! {
                     form method="POST" action=(format!("{base}/ui/token")) {
                         input type="hidden" name="_csrf" value=(csrf);
+                        div.card-fields {
                         (field::render(field::Props {
                             label: "Athlete ID".into(),
                             id: "athlete_id".into(),
                             required: true,
                             children: html! {
+                                // `id` must match the label's `for`; without it the
+                                // control has no accessible name (WCAG 4.1.2).
                                 (input::render(input::Props {
+                                    id: "athlete_id".into(),
                                     name: "athlete_id".into(),
                                     placeholder: "e.g. i123456".into(),
                                     required: true,
@@ -483,7 +889,10 @@ fn render_home_body(csrf: &str, base: &str) -> Markup {
                             id: "api_key".into(),
                             required: true,
                             children: html! {
+                                // `id` must match the label's `for`; without it the
+                                // control has no accessible name (WCAG 4.1.2).
                                 (input::render(input::Props {
+                                    id: "api_key".into(),
                                     name: "api_key".into(),
                                     input_type: input::InputType::Password,
                                     placeholder: "Your Intervals.icu API key".into(),
@@ -509,13 +918,15 @@ fn render_home_body(csrf: &str, base: &str) -> Markup {
                                 option value="3650" { "10 years" }
                             }
                         }
-                        br;
-                        (button::render(button::Props {
-                            label: "Generate Token".into(),
-                            button_type: "submit",
-                            variant: button::Variant::Default,
-                            ..Default::default()
-                        }))
+                        div.form-actions {
+                            (button::render(button::Props {
+                                label: "Generate Token".into(),
+                                button_type: "submit",
+                                variant: button::Variant::Primary,
+                                ..Default::default()
+                            }))
+                        }
+                        }
                     }
                 },
                 ..Default::default()
@@ -530,12 +941,12 @@ pub async fn ui_home(
     headers: HeaderMap,
 ) -> impl IntoResponse {
     let session = ui.session_context(&headers).await;
+    let _ = &query; // reserved for future non-flash query params
     let html = page_shell(
         "Token Setup",
         "/ui",
         render_home_body(&session.csrf_token, &ui.base_path),
-        query.success,
-        query.error,
+        ui.take_flash(&session.session_id).await,
         &ui.base_path,
     );
     let mut resp = html.into_response();
@@ -576,6 +987,20 @@ pub struct TokenForm {
     pub ttl_days: Option<u64>,
 }
 
+/// Redirect to `path` carrying a one-shot message in the session.
+///
+/// The message never appears in the URL: no copy-pasteable error text, nothing
+/// in browser history, and nothing leaked into an outbound `Referer` header.
+async fn redirect_with_flash(ui: &UiState, session_id: &str, path: &str, flash: Flash) -> Response {
+    ui.set_flash(session_id, flash).await;
+    redirect_with_session(
+        &ui.ui_url(path),
+        session_id,
+        ui.cookie_secure,
+        &ui.base_path,
+    )
+}
+
 fn redirect_with_session(
     url: &str,
     session_id: &str,
@@ -595,21 +1020,29 @@ pub async fn ui_create_token(
     let session = ui.session_context(&headers).await;
     let submitted_csrf = form._csrf.clone().unwrap_or_default();
     if !ui.csrf_matches(&session.session_id, &submitted_csrf).await {
-        return redirect_with_session(
-            &ui.ui_url("/ui?error=Invalid+session+%28CSRF%29"),
+        return redirect_with_flash(
+            &ui,
             &session.session_id,
-            ui.cookie_secure,
-            &ui.base_path,
-        );
+            "/ui",
+            Flash {
+                kind: FlashKind::Error,
+                message: "Your session has expired. Reload the page and try again.".into(),
+            },
+        )
+        .await;
     }
 
     let Some(token_request) = TokenRequestData::from_form(form) else {
-        return redirect_with_session(
-            &ui.ui_url("/ui?error=Missing+credentials"),
+        return redirect_with_flash(
+            &ui,
             &session.session_id,
-            ui.cookie_secure,
-            &ui.base_path,
-        );
+            "/ui",
+            Flash {
+                kind: FlashKind::Error,
+                message: "Enter both your athlete ID and API key.".into(),
+            },
+        )
+        .await;
     };
 
     let client = match intervals_icu_client::http_client::ReqwestIntervalsClient::new(
@@ -619,12 +1052,17 @@ pub async fn ui_create_token(
     ) {
         Ok(c) => c,
         Err(_e) => {
-            return redirect_with_session(
-                &ui.ui_url("/ui?error=Client+init+failed"),
+            return redirect_with_flash(
+                &ui,
                 &session.session_id,
-                ui.cookie_secure,
-                &ui.base_path,
-            );
+                "/ui",
+                Flash {
+                    kind: FlashKind::Error,
+                    message: "Could not reach Intervals.icu. Check your connection and try again."
+                        .into(),
+                },
+            )
+            .await;
         }
     };
 
@@ -673,8 +1111,7 @@ pub async fn ui_create_token(
                         &token_request.ttl_label(),
                         &ui.base_path,
                     );
-                    let html =
-                        page_shell("Token Generated", "/ui", body, None, None, &ui.base_path);
+                    let html = page_shell("Token Generated", "/ui", body, None, &ui.base_path);
                     let mut resp = html.into_response();
                     set_session_cookie(
                         &mut resp,
@@ -684,20 +1121,35 @@ pub async fn ui_create_token(
                     );
                     resp
                 }
-                Err(e) => redirect_with_session(
-                    &ui.ui_url(&format!("/ui?error=Token+generation+failed%3A+{e}")),
-                    &session.session_id,
-                    ui.cookie_secure,
-                    &ui.base_path,
-                ),
+                Err(e) => {
+                    // Keep the internal error out of the URL: it becomes page
+                    // text, browser history, and an outbound Referer header.
+                    tracing::warn!(%e, "token generation failed in UI");
+                    redirect_with_flash(
+                        &ui,
+                        &session.session_id,
+                        "/ui",
+                        Flash {
+                            kind: FlashKind::Error,
+                            message: "Could not create the token. Please try again.".into(),
+                        },
+                    )
+                    .await
+                }
             }
         }
-        Err(_) => redirect_with_session(
-            &ui.ui_url("/ui?error=Invalid+credentials"),
+        Err(_) => redirect_with_flash(
+            &ui,
             &session.session_id,
-            ui.cookie_secure,
-            &ui.base_path,
-        ),
+            "/ui",
+            Flash {
+                kind: FlashKind::Error,
+                message:
+                    "Intervals.icu rejected your athlete ID or API key. Check both and try again."
+                        .into(),
+            },
+        )
+        .await,
     }
 }
 
@@ -709,6 +1161,25 @@ fn format_datetime(rfc3339: &str) -> String {
     }
 }
 
+/// Test seam: the page-local stylesheet, so visual tests measure real CSS
+/// instead of a hand-copied copy that can silently drift.
+#[doc(hidden)]
+pub fn inline_style_for_test() -> &'static str {
+    INLINE_STYLE
+}
+
+/// Test seam: render the post-creation page without needing network access.
+#[doc(hidden)]
+pub fn render_token_success_for_test(
+    token: &str,
+    athlete_id: &str,
+    expiry_formatted: &str,
+    ttl_label: &str,
+    base: &str,
+) -> String {
+    render_token_success(token, athlete_id, expiry_formatted, ttl_label, base).into_string()
+}
+
 fn render_token_success(
     token: &str,
     athlete_id: &str,
@@ -716,22 +1187,28 @@ fn render_token_success(
     ttl_label: &str,
     base: &str,
 ) -> Markup {
-    use maud_ui::primitives::{button, card};
+    use maud_ui::primitives::card;
 
     let card_content = card::render(card::Props {
         title: Some("Token Generated".into()),
         description: Some("Copy this token now — you won't see it again.".into()),
         children: html! {
+            // `readonly` textarea: the token stays selectable and gets native
+            // select-all + long-press-to-copy, which is the only copy path that
+            // works outside a secure context (plain-HTTP self-hosting).
             div class="token-display" {
-                button.copy-btn data-clipboard=(token) {
-                    svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" {
+                textarea #generated-token class="token-display__value" readonly spellcheck="false" {
+                    (token)
+                }
+                button.copy-btn type="button" data-clipboard=(token) aria-label="Copy token to clipboard" {
+                    svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false" {
                         rect x="8" y="2" width="8" height="4" rx="1" ry="1" {}
                         path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" {}
                     }
+                    span.visually-hidden { "Copy token" }
                 }
-                (token)
             }
-            br;
+            span #copy-status.copy-status role="status" aria-live="polite" {}
             dl.token-info-grid {
                 dt { "Athlete ID" }
                 dd { (athlete_id) }
@@ -740,27 +1217,15 @@ fn render_token_success(
                 dt { "Expires" }
                 dd { (expiry_formatted) }
             }
-            br;
-            a href=(format!("{base}/ui")) {
-                (button::render(button::Props {
-                    label: "Back to Home".into(),
-                    variant: button::Variant::Outline,
-                    ..Default::default()
-                }))
-            }
-            " "
-            a href=(format!("{base}/ui/tokens")) {
-                (button::render(button::Props {
-                    label: "View All Tokens".into(),
-                    variant: button::Variant::Primary,
-                    ..Default::default()
-                }))
+            div.token-actions {
+                a.btn-reset href=(format!("{base}/ui")) { "Back to Home" }
+                a.btn-primary href=(format!("{base}/ui/tokens")) { "View All Tokens" }
             }
         },
         ..Default::default()
     });
     html! {
-        div style="max-width: 28rem; margin: 0 auto;" {
+        div.ui-narrow {
             (card_content)
         }
     }
@@ -772,8 +1237,6 @@ fn render_token_success(
 pub struct TokenListQuery {
     pub sort: Option<String>,
     pub order: Option<String>,
-    pub success: Option<String>,
-    pub error: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -824,19 +1287,24 @@ pub async fn ui_list_tokens(
     let ascending = query.order.as_deref() != Some("desc");
     let sorted = sort_tokens(filtered, sort, ascending);
 
+    // The handler already defaults to issued/asc. Surface that default in the
+    // header, otherwise the rendered order contradicts the visible affordance.
+    let effective_sort = query.sort.clone().unwrap_or_else(|| "issued".to_string());
+    let effective_order = query.order.clone().unwrap_or_else(|| "asc".to_string());
+
     let body = render_token_list(
         &sorted,
         &session.csrf_token,
-        &query.sort,
-        &query.order,
+        &Some(effective_sort),
+        &Some(effective_order),
         &ui.base_path,
+        !current_athlete.is_empty(),
     );
     let html = page_shell(
         "Token Management",
         "/ui/tokens",
         body,
-        query.success,
-        query.error,
+        ui.take_flash(&session.session_id).await,
         &ui.base_path,
     );
     let mut resp = html.into_response();
@@ -886,6 +1354,7 @@ fn render_token_list(
     current_sort: &Option<String>,
     current_order: &Option<String>,
     base: &str,
+    session_known: bool,
 ) -> Markup {
     use maud_ui::primitives::{badge, button, card};
 
@@ -897,44 +1366,89 @@ fn render_token_list(
         base: &str,
     ) -> Markup {
         let arrow = sort_arrow(field, current_sort, current_order);
+        let active = current_sort.as_deref() == Some(field);
+        let dir = match current_order.as_deref() {
+            Some("desc") if active => "descending",
+            Some(_) if active => "ascending",
+            _ => "none",
+        };
         html! {
-            th.mui-table__th {
-                a href=(sort_href(field, current_sort, current_order, base)) style="color:inherit;text-decoration:none;display:inline-flex;align-items:center;gap:0.125rem;" {
+            th.mui-table__th scope="col" aria-sort=(dir) {
+                a.sort-link href=(sort_href(field, current_sort, current_order, base)) {
                     (label)
-                    @if !arrow.is_empty() {
-                        span.sort-arrow { (arrow) }
+                    span.sort-arrow aria-hidden="true" { (arrow) }
+                    span.visually-hidden {
+                        @if active {
+                            " (sorted)"
+                        } @else {
+                            " (sort)"
+                        }
                     }
                 }
             }
         }
     }
 
-    card::render(card::Props {
+    let table_card = card::render(card::Props {
         title: Some("Active Tokens".into()),
         description: Some("Manage tokens issued through this interface.".into()),
         children: html! {
             @if tokens.is_empty() {
-                div style="text-align:center;padding:2rem 0;" {
-                    p style="color:var(--mui-muted-foreground,#6b7280);margin-bottom:1rem;" {
-                        "No tokens yet. Create one to get started."
+                // Two genuinely different situations. Saying "No tokens yet" when
+                // we simply lost the session is a false statement about the
+                // operator's security posture, and its only call to action pushes
+                // them to mint a duplicate credential.
+                div.empty-state {
+                    span.empty-state__icon aria-hidden="true" {
+                        svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"
+                            viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" {
+                            @if session_known {
+                                path d="M20 13a8 8 0 1 1-3.6-6.7" {}
+                                polyline points="9 11 12 14 22 4" {}
+                            } @else {
+                                circle cx="12" cy="12" r="9" {}
+                                polyline points="12 8 12 12 12 16" {}
+                            }
+                        }
                     }
-                    a href=(format!("{base}/ui")) {
-                        (button::render(button::Props {
-                            label: "Create a Token".into(),
-                            ..Default::default()
-                        }))
+                    @if session_known {
+                        p.empty-state__title { "No tokens yet" }
+                        p.empty-state__body {
+                            "You have not created an API token through this interface yet."
+                        }
+                        div.empty-state__action {
+                            (button::render(button::Props {
+                                label: "Create a Token".into(),
+                                variant: button::Variant::Primary,
+                                ..Default::default()
+                            }))
+                        }
+                    } @else {
+                        p.empty-state__title { "No athlete in this session" }
+                        p.empty-state__body {
+                            "This browser session isn't linked to an athlete, so we \
+                             can't tell which tokens belong to it. Tokens you \
+                             created earlier are still valid."
+                        }
+                        div.empty-state__action {
+                            a class="btn-primary" href=(format!("{base}/ui")) {
+                                "Create a Token"
+                            }
+                        }
                     }
                 }
             } @else {
                 div.mui-table-wrapper {
                     table.mui-table {
+                        caption.visually-hidden { "Tokens issued through this interface." }
                         thead {
                             tr {
                                 (th_link("Athlete ID", "athlete", current_sort, current_order, base))
                                 (th_link("Issued", "issued", current_sort, current_order, base))
                                 (th_link("Expires", "expires", current_sort, current_order, base))
                                 (th_link("Status", "status", current_sort, current_order, base))
-                                th.mui-table__th { "Action" }
+                                th.mui-table__th scope="col" { "Action" }
                             }
                         }
                         tbody {
@@ -954,7 +1468,13 @@ fn render_token_list(
                                     }
                                     td.mui-table__td {
                                         @if !t.revoked {
-                                            form method="POST" action=(format!("{base}/ui/revoke/{}", t.jti)) {
+                                            // Irreversible: revoking breaks every MCP
+                                            // client using this token. Confirm before
+                                            // acting rather than after.
+                                            form method="POST"
+                                                action=(format!("{base}/ui/revoke/{}", t.jti))
+                                                data-confirm="Revoke this token?\n\nAny MCP client using it will stop working immediately. This cannot be undone."
+                                            {
                                                 input type="hidden" name="_csrf" value=(csrf);
                                                 (button::render(button::Props {
                                                     label: "Revoke".into(),
@@ -974,7 +1494,10 @@ fn render_token_list(
             }
         },
         ..Default::default()
-    })
+    });
+    html! {
+        div.ui-measure { (table_card) }
+    }
 }
 
 // ── Token revocation (POST /ui/revoke/:jti) ──────────────────────────────
@@ -988,12 +1511,16 @@ pub async fn ui_revoke_token(
     let session = ui.session_context(&headers).await;
     let submitted_csrf = form.get("_csrf").map(|value| value.as_str()).unwrap_or("");
     if !ui.csrf_matches(&session.session_id, submitted_csrf).await {
-        return redirect_with_session(
-            &ui.ui_url("/ui/tokens?error=Invalid+CSRF"),
+        return redirect_with_flash(
+            &ui,
             &session.session_id,
-            ui.cookie_secure,
-            &ui.base_path,
-        );
+            "/ui/tokens",
+            Flash {
+                kind: FlashKind::Error,
+                message: "Your session has expired. Reload the page and try again.".into(),
+            },
+        )
+        .await;
     }
 
     ui.revoke_token(&jti).await;
@@ -1005,12 +1532,16 @@ pub async fn ui_revoke_token(
         "Token revoked via web UI"
     );
 
-    redirect_with_session(
-        &ui.ui_url("/ui/tokens?success=Token+revoked"),
+    redirect_with_flash(
+        &ui,
         &session.session_id,
-        ui.cookie_secure,
-        &ui.base_path,
+        "/ui/tokens",
+        Flash {
+            kind: FlashKind::Success,
+            message: "Token revoked. Clients using it will stop working.".into(),
+        },
     )
+    .await
 }
 
 #[cfg(test)]

@@ -20,8 +20,8 @@
   -webkit-text-size-adjust: 100%;
   -webkit-tap-highlight-color: transparent;
 
-  /* Theme is switched with `color-scheme`, never by redefining tokens. */
-  color-scheme: dark;
+  /* Follow the OS light/dark preference; an explicit [data-theme] still wins. */
+  color-scheme: light dark;
 }
 
 [data-theme=light] {
@@ -59,8 +59,10 @@
   --mui-warning: oklch(55.38% 0.1207 66.44);
   --mui-danger: light-dark(oklch(50.54% 0.1905 27.52), oklch(57.71% 0.2152 27.33));
   --mui-accent-text: light-dark(oklch(48.82% 0.2172 264.38), oklch(71.37% 0.1434 254.62));
-  --mui-success-text: light-dark(oklch(52.73% 0.1371 150.07), oklch(80.03% 0.1821 151.71));
-  --mui-warning-text: light-dark(oklch(55.38% 0.1207 66.44), oklch(83.69% 0.1644 84.43));
+  /* The `*-text` variants sit on a 12% tint of their fill, so the light values
+     are darkened to clear 4.5:1 against that tint, not against white alone. */
+  --mui-success-text: light-dark(oklch(48% 0.1371 150.07), oklch(80.03% 0.1821 151.71));
+  --mui-warning-text: light-dark(oklch(48% 0.1207 66.44), oklch(83.69% 0.1644 84.43));
   --mui-danger-text: light-dark(oklch(50.54% 0.1905 27.52), oklch(71.06% 0.1661 22.22));
 
   /* Radii */
@@ -812,6 +814,7 @@ dialog.mui-alert-dialog::backdrop {
   flex-direction: column;
   gap: 0.375rem;
   padding-block: var(--mui-space-card) var(--mui-space-card);
+  padding-inline: var(--mui-space-card);
   padding-block-end: 0;
 }
 .mui-card__title {
