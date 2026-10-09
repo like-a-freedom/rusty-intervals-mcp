@@ -11,16 +11,27 @@ Purpose: operating manual for coding agents working in `rusty-intervals-mcp`.
 
 ## Project snapshot
 
-- Language: Rust (toolchain pinned in `rust-toolchain.toml`)
+- Language: Rust; toolchain is `channel = "stable"` in `rust-toolchain.toml`
+  (currently 1.99.0; `rust-version` in the mcp manifest tracks the stable
+  in use)
 - Workspace crates:
-  - `crates/intervals_icu_client` — HTTP client, retries, observability, examples
-  - `crates/intervals_icu_mcp` — MCP server, 9 intent handlers (including `track_progress`), dynamic OpenAPI tool registry, prompts/resources
+  - `crates/intervals_icu_client` — HTTP client, circuit breaker, upstream
+    metrics + failure logging, API compatibility helpers
+  - `crates/intervals_icu_mcp` — MCP server, 9 intent handlers (including
+    `track_progress`), dynamic OpenAPI tool registry, prompts/resources,
+    request correlation (`request_id` / real client IP) and session
+    lifecycle logging (`session.rs`)
 - Important docs:
-  - `README.md` — setup, runtime usage, token-efficiency behavior
-  - `docs/ARCHITECTURE.md` — runtime architecture and request flow
-  - `docs/HTTP_RELIABILITY.md` — rate limiting, keepalive, graceful shutdown, 429 recovery
+  - `README.md` — setup, runtime usage, token-efficiency behavior, env vars
+    (incl. `RUST_LOG_FORMAT` / `RUST_LOG_COLOR`)
+  - `docs/ARCHITECTURE.md` — runtime architecture, layering, metrics list
+  - `docs/HTTP_RELIABILITY.md` — rate limiting, keepalive, graceful shutdown,
+    request correlation, real client IP behind proxies, log-level policy
+  - `RELEASING.md` — release checklist (annotated `vX.Y.Z — title` tags)
+  - `CONTEXT.md` + `docs/adr/` — domain vocabulary and decisions
   - `CONTRIBUTING.md` — contribution and local checks
   - `.github/workflows/ci.yml` — authoritative CI checks
+- **`Cargo.lock` is gitignored** — never stage it.
 
 ## How to work in this repo
 
@@ -52,6 +63,11 @@ Purpose: operating manual for coding agents working in `rusty-intervals-mcp`.
 - Add/maintain `///` docs for public types/functions.
 - Use trait-based abstractions for testability (e.g., `IntervalsClient`).
 - Follow existing module boundaries instead of introducing parallel architecture.
+- **Modules use the pathless layout**: `<name>.rs` next to `<name>/`.
+  `mod.rs` files are legacy here — allowed only inside `tests/*/mod.rs`.
+- Logging: structured `key=value`, UTC-millis timestamps; levels follow the
+  policy in `docs/HTTP_RELIABILITY.md` (info = business/audit events,
+  warn = operator-actionable failures, debug = routine per-request detail).
 
 ### Good pattern example
 
@@ -91,6 +107,9 @@ pub async fn load_registry(client: &dyn IntervalsClient) -> DynamicRegistry {
 - Avoid unrelated formatting churn.
 - Preserve file structure and naming conventions already used in the workspace.
 - When behavior changes, update relevant docs in `README.md` or `docs/`.
+- Never touch `Cargo.lock` (gitignored) or other local-only ignored files
+  (sections of `docs/`, `.env*`).
+- Never stage or revert another actor's uncommitted in-progress work.
 
 ## Boundaries
 
