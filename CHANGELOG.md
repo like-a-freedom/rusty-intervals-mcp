@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.26.0] - 2026-10-09
+
+### Added
+- HTTP request correlation (HTTP mode): the server adopts a well-formed inbound `X-Request-ID` (or generates one), echoes it in the response, and stamps `request_id` on auth, `/auth` and tool-call log events.
+- One access-log line per HTTP request: `method`, `path`, `status`, `client_ip`, `latency_ms` (`warn` on 5xx, `info` on 4xx, `debug` otherwise); `/health` and `/metrics` stay silent.
+- Tool-call completion events with `outcome`, `athlete_id`, `tool`, `latency_ms`; tokens issued via the web UI log their `jti` (traceable to revocation).
+- Real client IP resolution: when the direct TCP peer is a local relay (loopback/private/link-local), `client_ip` is taken from `X-Forwarded-For` (right-most entry) or `X-Real-IP`, so logs show the true client behind nginx/Traefik/Caddy instead of the Docker bridge address.
+- Graceful HTTP server shutdown on SIGTERM/Ctrl-C: in-flight requests drain, then exit is logged with `drain_ms`; thread panics are logged before the default hook runs.
+- `RUST_LOG_FORMAT` (`json` = one JSON object per line) and `RUST_LOG_COLOR` (`always`/`never`) env vars.
+
+### Changed
+- Human-readable logs are single-line records with RFC 3339 UTC millisecond timestamps and structured `key=value` fields throughout.
+- JWT verification rejections are attributable: `Failed JWT verification` now carries `athlete_id` and `error_kind` (`expired`/`revoked`/`invalid`).
+
 ## [2.25.0] - 2026-09-24
 
 ### Added
