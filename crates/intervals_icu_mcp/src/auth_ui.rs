@@ -651,6 +651,7 @@ pub async fn ui_create_token(
                     crate::metrics::record_ui_action("token_created");
                     tracing::info!(
                         athlete_id = %token_request.athlete_id,
+                        jti = %jti,
                         ui_action = "token_created",
                         "Token created via web UI"
                     );

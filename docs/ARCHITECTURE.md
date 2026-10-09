@@ -82,7 +82,7 @@ Detects dead connections early so clients don't silently stall.
 
 ## Graceful shutdown
 
-`GracefulShutdownLayer` listens for SIGTERM / Ctrl-C and drains in-flight requests using tokio's cooperative cancellation. The readiness probe flips to `ready=false` so load balancers stop routing new traffic before the socket closes.
+`shutdown_signal` listens for SIGTERM / Ctrl-C and feeds `axum::serve(...).with_graceful_shutdown(...)`: the socket stops accepting new connections, in-flight requests finish, and the stop is logged with `drain_ms`. `/health` keeps returning `ok` for the whole process lifetime — there is no readiness flip.
 
 ## Observability
 

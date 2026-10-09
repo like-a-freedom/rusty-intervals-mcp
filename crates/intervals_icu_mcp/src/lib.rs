@@ -173,6 +173,13 @@ impl IntervalsMcpHandler {
     }
 
     #[must_use]
+    fn request_request_id(extensions: &rmcp::model::Extensions) -> Option<String> {
+        Self::request_parts(extensions)
+            .and_then(|parts| parts.extensions.get::<RequestId>())
+            .map(|request_id| request_id.0.clone())
+    }
+
+    #[must_use]
     fn client_for_extensions(
         extensions: &rmcp::model::Extensions,
     ) -> Option<Arc<dyn IntervalsClient>> {
@@ -265,6 +272,8 @@ impl ServerHandler for IntervalsMcpHandler {
         metrics::record_mcp_method_call("tools/call");
         let client_for_request = Self::client_for_extensions(&context.extensions);
         let athlete_id = Self::request_credentials(&context.extensions).map(|c| c.athlete_id);
+        let request_id = Self::request_request_id(&context.extensions);
+        let started = std::time::Instant::now();
 
         let intent_name = request.name.as_ref();
         let args: rmcp::model::JsonObject = request.arguments.unwrap_or_default();
@@ -299,11 +308,34 @@ impl ServerHandler for IntervalsMcpHandler {
             }
         };
 
+        // Business audit event: who ran which tool, with what outcome.
+        let latency_ms = started.elapsed().as_millis();
         match intent_result {
-            Ok(output) => intent_output_to_call_tool_result(&output)
-                .map(CallToolResponse::from)
-                .map_err(|e| ErrorData::internal_error(e.to_string(), None)),
-            Err(e) => Err(intent_error_to_error_data(&e)),
+            Ok(output) => {
+                tracing::info!(
+                    athlete_id = athlete_id.as_deref().unwrap_or("unknown"),
+                    tool = %intent_name,
+                    request_id = request_id.as_deref().unwrap_or("unknown"),
+                    outcome = "ok",
+                    latency_ms,
+                    "tool call completed"
+                );
+                intent_output_to_call_tool_result(&output)
+                    .map(CallToolResponse::from)
+                    .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+            }
+            Err(e) => {
+                tracing::warn!(
+                    athlete_id = athlete_id.as_deref().unwrap_or("unknown"),
+                    tool = %intent_name,
+                    request_id = request_id.as_deref().unwrap_or("unknown"),
+                    outcome = "error",
+                    latency_ms,
+                    error = ?e,
+                    "tool call completed"
+                );
+                Err(intent_error_to_error_data(&e))
+            }
         }
     }
 
@@ -385,6 +417,9 @@ impl ServerHandler for IntervalsMcpHandler {
 ///   names, anything else for dense human-readable text.
 /// - `RUST_LOG_COLOR`: `always`/`never` (or `1`/`0`); unset follows stderr
 ///   TTY detection.
+///
+/// Also installs a panic hook so thread panics surface as structured error
+/// events. Panics are process-fatal incidents and must appear in the log.
 pub fn init_tracing() {
     let log_env = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
     let combined_filter = format!("{},rmcp=warn,serve_inner=warn", log_env);
@@ -424,6 +459,31 @@ pub fn init_tracing() {
             .with_env_filter(env_filter)
             .init();
     }
+
+    install_panic_hook();
+}
+
+/// Record thread panics as structured `error` events while preserving the
+/// default panic output for stderr consumers.
+fn install_panic_hook() {
+    static HOOK: std::sync::Once = std::sync::Once::new();
+    HOOK.call_once(|| {
+        let default_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let payload = info.payload();
+            let message = payload
+                .downcast_ref::<&str>()
+                .map(|value| (*value).to_string())
+                .or_else(|| payload.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "unstated panic payload".to_string());
+            let location = info
+                .location()
+                .map(|loc| format!("{}:{}", loc.file(), loc.line()))
+                .unwrap_or_else(|| "unknown".to_string());
+            tracing::error!(panic_location = %location, error = %message, "thread panic");
+            default_hook(info);
+        }));
+    });
 }
 
 /// Resolve ANSI color usage from `RUST_LOG_COLOR` (`always`/`never`, with
@@ -519,6 +579,186 @@ pub async fn initialize_handler_single_user() -> Result<IntervalsMcpHandler, Str
 
     tracing::info!(tool_count = dynamic_tools, "discovered dynamic tools");
     Ok(handler)
+}
+
+/// Correlation identifier for a single HTTP request, assigned by HTTP
+/// middleware and passed to inner handlers as a request extension so auth
+/// and tool events can be joined per request.
+#[derive(Clone, Debug)]
+pub struct RequestId(pub String);
+
+/// Keep only sane inbound correlation IDs (bounded length, visible ASCII);
+/// anything else falls back to local generation instead of trusting clients.
+fn normalize_inbound_request_id(value: Option<&str>) -> Option<&str> {
+    let candidate = value?.trim();
+    let usable = !candidate.is_empty()
+        && candidate.len() <= 128
+        && candidate
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'));
+    usable.then_some(candidate)
+}
+
+fn new_request_id() -> String {
+    uuid::Uuid::new_v4().simple().to_string()
+}
+
+/// Client IP to report in logs and access records: the address behind a
+/// reverse proxy when the direct TCP peer is a local relay (Docker bridge,
+/// nginx, sidecar), otherwise the socket peer itself. Assigned by the
+/// outermost HTTP middleware and shared with inner auth handlers.
+#[derive(Clone, Debug)]
+pub struct ClientIp(pub String);
+
+/// Loopback/private/link-local peers can only be local relays, so their
+/// forwarding headers are believable; a public direct peer must never be
+/// allowed to claim a different origin.
+fn is_trusted_proxy_peer(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            let o = v4.octets();
+            v4.is_loopback() || v4.is_private() || (o[0] == 169 && o[1] == 254)
+        }
+        std::net::IpAddr::V6(v6) => {
+            // fc00::/7 unique-local range (`Ipv6Addr::is_private` is unstable).
+            let unique_local = v6.segments()[0] & 0xfe00 == 0xfc00;
+            v6.is_loopback() || unique_local || v6.is_unicast_link_local()
+        }
+    }
+}
+
+fn last_parseable_ip(headers: &axum::http::HeaderMap, name: &str) -> Option<std::net::IpAddr> {
+    let mut candidate = None;
+    for value in headers.get_all(name) {
+        let Ok(value) = value.to_str() else {
+            continue;
+        };
+        for token in value.split(',') {
+            if let Ok(ip) = token.trim().parse::<std::net::IpAddr>() {
+                candidate = Some(ip);
+            }
+        }
+    }
+    candidate
+}
+
+/// Resolve the real client IP. Forwarding headers are consulted only when
+/// the direct TCP peer is a trusted local relay; then the right-most
+/// `X-Forwarded-For` entry wins (it is the hop observed by the nearest
+/// proxy, so a client cannot spoof it with a fabricated left-most hop),
+/// with `X-Real-IP` as the fallback.
+fn effective_client_ip(headers: &axum::http::HeaderMap, peer: std::net::SocketAddr) -> String {
+    if !is_trusted_proxy_peer(peer.ip()) {
+        return peer.to_string();
+    }
+    last_parseable_ip(headers, "x-forwarded-for")
+        .or_else(|| last_parseable_ip(headers, "x-real-ip"))
+        .map(|ip| ip.to_string())
+        .unwrap_or_else(|| peer.to_string())
+}
+
+/// Outermost HTTP middleware: assigns one `request_id` per request (adopting
+/// a valid inbound `X-Request-ID` when present per correlation-ID practice),
+/// exposes it to inner layers, echoes it on the response for client-side
+/// debugging, records one per-request completion event (5xx `warn`, 4xx
+/// `info`, otherwise `debug`; liveness/metrics probes stay silent), and
+/// resolves the real client IP across trusted proxy hops for every log line.
+async fn request_id_middleware(
+    mut request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let request_id = normalize_inbound_request_id(
+        request
+            .headers()
+            .get("x-request-id")
+            .and_then(|value| value.to_str().ok()),
+    )
+    .map(str::to_string)
+    .unwrap_or_else(new_request_id);
+    let method = request.method().clone();
+    let path = request.uri().path().to_string();
+    let client_ip = match request
+        .extensions()
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        .cloned()
+    {
+        Some(axum::extract::ConnectInfo(peer)) => effective_client_ip(request.headers(), peer),
+        None => "unknown".to_string(),
+    };
+    request
+        .extensions_mut()
+        .insert(RequestId(request_id.clone()));
+    request.extensions_mut().insert(ClientIp(client_ip.clone()));
+
+    let started = std::time::Instant::now();
+    let mut response = next.run(request).await;
+    if let Ok(value) = axum::http::HeaderValue::from_str(&request_id) {
+        response.headers_mut().insert("x-request-id", value);
+    }
+
+    let status = response.status();
+    let liveness_probe = path.ends_with("/health") || path.ends_with("/metrics");
+    if !liveness_probe {
+        let latency_ms = started.elapsed().as_millis();
+        if status.is_server_error() {
+            tracing::warn!(
+                request_id = %request_id,
+                %method,
+                %path,
+                %client_ip,
+                status = status.as_u16(),
+                latency_ms,
+                "http request failed"
+            );
+        } else if status.is_client_error() {
+            tracing::info!(
+                request_id = %request_id,
+                %method,
+                %path,
+                %client_ip,
+                status = status.as_u16(),
+                latency_ms,
+                "http request completed"
+            );
+        } else {
+            tracing::debug!(
+                request_id = %request_id,
+                %method,
+                %path,
+                %client_ip,
+                status = status.as_u16(),
+                latency_ms,
+                "http request completed"
+            );
+        }
+    }
+    response
+}
+
+/// Resolve once a shutdown signal arrives, recording the signal time so the
+/// caller can measure how long draining in-flight requests took.
+async fn shutdown_signal(signal_at: Arc<std::sync::OnceLock<std::time::Instant>>) {
+    #[cfg(unix)]
+    let reason = match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+        Ok(mut sigterm) => tokio::select! {
+            _ = tokio::signal::ctrl_c() => "ctrl_c",
+            _ = sigterm.recv() => "sigterm",
+        },
+        Err(_) => {
+            let _ = tokio::signal::ctrl_c().await;
+            "ctrl_c"
+        }
+    };
+    #[cfg(not(unix))]
+    let reason = {
+        let _ = tokio::signal::ctrl_c().await;
+        "ctrl_c"
+    };
+    let _ = signal_at.set(std::time::Instant::now());
+    tracing::info!(
+        signal = reason,
+        "shutdown signal received, draining in-flight requests"
+    );
 }
 
 /// HTTP mode: multi-tenant with JWT authentication.
@@ -682,13 +922,22 @@ pub async fn run_http_server(
         .merge(ui_route)
         .merge(mcp_route)
         .merge(health_route)
-        .merge(metrics_route);
+        .merge(metrics_route)
+        .layer(axum::middleware::from_fn(request_id_middleware));
 
     let app = apply_public_base_path(app, &base_path);
 
+    // Configuration summary as one auditable event (values only, never secrets).
     tracing::info!(
         %address,
+        %base_url,
         request_timeout_secs = request_timeout.as_secs(),
+        idle_timeout_secs,
+        jwt_ttl_seconds,
+        mcp_rate_per_second,
+        mcp_burst_size,
+        max_body_size,
+        cookie_secure,
         "starting HTTP server with JWT authentication"
     );
 
@@ -707,11 +956,20 @@ pub async fn run_http_server(
     let std_listener: std::net::TcpListener = socket.into();
     let listener = tokio::net::TcpListener::from_std(std_listener)?;
 
+    let signal_at: Arc<std::sync::OnceLock<std::time::Instant>> =
+        Arc::new(std::sync::OnceLock::new());
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
+    .with_graceful_shutdown(shutdown_signal(Arc::clone(&signal_at)))
     .await?;
+
+    let drain_ms = signal_at
+        .get()
+        .map(|signal_time| signal_time.elapsed().as_millis())
+        .unwrap_or_default();
+    tracing::info!(drain_ms, "HTTP server stopped");
 
     Ok(())
 }
@@ -950,9 +1208,115 @@ mod tests {
     // Inline tests for private symbols of `lib.rs`.
     use crate::auth::{DecryptedCredentials, HttpBaseUrl};
     use crate::{
-        AthleteKeyExtractor, IntervalsMcpHandler, configure_tcp_keepalive, parse_rate_limit_values,
-        use_ansi_colors, write_utc_rfc3339_millis,
+        AthleteKeyExtractor, IntervalsMcpHandler, configure_tcp_keepalive, effective_client_ip,
+        is_trusted_proxy_peer, new_request_id, normalize_inbound_request_id,
+        parse_rate_limit_values, use_ansi_colors, write_utc_rfc3339_millis,
     };
+
+    #[test]
+    fn inbound_request_id_is_adopted_when_well_formed() {
+        assert_eq!(
+            normalize_inbound_request_id(Some("req-7F21_abc.9")),
+            Some("req-7F21_abc.9")
+        );
+        assert_eq!(
+            normalize_inbound_request_id(Some("  padded-id ")),
+            Some("padded-id")
+        );
+    }
+
+    #[test]
+    fn inbound_request_id_is_rejected_when_unusable() {
+        assert_eq!(normalize_inbound_request_id(None), None);
+        assert_eq!(normalize_inbound_request_id(Some("")), None);
+        assert_eq!(normalize_inbound_request_id(Some("   ")), None);
+        assert_eq!(normalize_inbound_request_id(Some("bad id!")), None);
+        assert_eq!(normalize_inbound_request_id(Some("\u{1f600}id")), None);
+        let too_long = "a".repeat(129);
+        assert_eq!(normalize_inbound_request_id(Some(&too_long)), None);
+    }
+
+    #[test]
+    fn generated_request_ids_are_unique_and_well_formed() {
+        let first = new_request_id();
+        let second = new_request_id();
+        assert_ne!(first, second);
+        assert_eq!(first.len(), 32);
+        assert!(normalize_inbound_request_id(Some(&first)).is_some());
+    }
+
+    #[test]
+    fn request_request_id_returns_none_without_parts() {
+        let extensions = rmcp::model::Extensions::default();
+        let result = IntervalsMcpHandler::request_request_id(&extensions);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn proxied_client_ip_prefers_right_most_forwarded_entry() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            "x-forwarded-for",
+            axum::http::HeaderValue::from_static("198.51.100.2, 203.0.113.7"),
+        );
+        let peer = std::net::SocketAddr::from(([172, 26, 0, 1], 49_796));
+        assert_eq!(effective_client_ip(&headers, peer), "203.0.113.7");
+    }
+
+    #[test]
+    fn proxied_client_ip_falls_back_to_real_ip_header() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            "x-real-ip",
+            axum::http::HeaderValue::from_static("203.0.113.9"),
+        );
+        let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 8080));
+        assert_eq!(effective_client_ip(&headers, peer), "203.0.113.9");
+    }
+
+    #[test]
+    fn public_peer_ignores_forwarded_headers() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            "x-forwarded-for",
+            axum::http::HeaderValue::from_static("203.0.113.7"),
+        );
+        let peer = std::net::SocketAddr::from(([8, 8, 8, 8], 1234));
+        assert_eq!(effective_client_ip(&headers, peer), "8.8.8.8:1234");
+    }
+
+    #[test]
+    fn unparseable_forwarded_values_are_skipped() {
+        let peer = std::net::SocketAddr::from(([172, 26, 0, 1], 80));
+
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            "x-forwarded-for",
+            axum::http::HeaderValue::from_static("unknown, 2001:db8::42"),
+        );
+        assert_eq!(effective_client_ip(&headers, peer), "2001:db8::42");
+
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            "x-forwarded-for",
+            axum::http::HeaderValue::from_static("not-an-ip"),
+        );
+        assert_eq!(effective_client_ip(&headers, peer), "172.26.0.1:80");
+    }
+
+    #[test]
+    fn only_local_relay_peers_are_trusted() {
+        assert!(is_trusted_proxy_peer(std::net::IpAddr::from([
+            127, 0, 0, 1
+        ])));
+        assert!(is_trusted_proxy_peer(std::net::IpAddr::from([
+            172, 26, 0, 1
+        ])));
+        assert!(is_trusted_proxy_peer(std::net::IpAddr::from([
+            192, 168, 1, 5
+        ])));
+        assert!(!is_trusted_proxy_peer(std::net::IpAddr::from([8, 8, 8, 8])));
+    }
     use secrecy::{ExposeSecret, SecretString};
 
     fn render_millis(unix_ms: u64) -> String {

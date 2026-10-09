@@ -358,9 +358,16 @@ impl IntoResponse for AuthError {
 pub async fn auth_endpoint(
     State(state): State<Arc<AppState>>,
     axum::extract::ConnectInfo(client_addr): axum::extract::ConnectInfo<SocketAddr>,
+    request_id: Option<axum::Extension<crate::RequestId>>,
+    client_ip_ext: Option<axum::Extension<crate::ClientIp>>,
     Json(req): Json<AuthRequest>,
 ) -> Result<Json<AuthResponse>, AuthError> {
-    let client_ip = client_addr.to_string();
+    let client_ip = client_ip_ext
+        .map(|axum::Extension(ip)| ip.0)
+        .unwrap_or_else(|| client_addr.to_string());
+    let request_id = request_id
+        .map(|axum::Extension(id)| id.0)
+        .unwrap_or_else(|| "unknown".to_string());
 
     // Validate credentials against intervals.icu API
     let client = intervals_icu_client::http_client::ReqwestIntervalsClient::new(
@@ -382,6 +389,7 @@ pub async fn auth_endpoint(
     client.get_athlete_profile().await.map_err(|e| {
         tracing::warn!(
             client_ip = %client_ip,
+            request_id = %request_id,
             athlete_id = %req.athlete_id,
             error = %e,
             "Invalid credentials at /auth"
@@ -402,6 +410,7 @@ pub async fn auth_endpoint(
 
     tracing::info!(
         client_ip = %client_ip,
+        request_id = %request_id,
         athlete_id = %req.athlete_id,
         "Issued JWT token"
     );
@@ -429,12 +438,24 @@ pub async fn auth_middleware(
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "));
 
-    // Get client IP for logging
+    // Real client IP resolved by the outer middleware; the socket peer is
+    // only reachable when the middleware is bypassed (e.g. direct calls).
     let client_ip = request
         .extensions()
-        .get::<ConnectInfo<SocketAddr>>()
-        .map(|ci| ci.0)
-        .map(|addr| addr.to_string())
+        .get::<crate::ClientIp>()
+        .map(|ip| ip.0.clone())
+        .or_else(|| {
+            request
+                .extensions()
+                .get::<ConnectInfo<SocketAddr>>()
+                .map(|ci| ci.0.to_string())
+        })
+        .unwrap_or_else(|| "unknown".to_string());
+    // Correlation id assigned/upstream by the outer request-id middleware.
+    let request_id = request
+        .extensions()
+        .get::<crate::RequestId>()
+        .map(|id| id.0.clone())
         .unwrap_or_else(|| "unknown".to_string());
 
     let credentials = if let Some(token) = auth_header {
@@ -451,18 +472,19 @@ pub async fn auth_middleware(
                 // Attribute the rejection when the token is authentic but
                 // expired/revoked, so operators can tell whose token it was.
                 let athlete_id = app_state.jwt_manager.identify_rejected_token(token);
-                tracing::warn!(
-                    client_ip = %client_ip,
-                    athlete_id = athlete_id.as_deref().unwrap_or("unknown"),
-                    error = %e,
-                    "Failed JWT verification"
-                );
-                // Record failed verification with status
                 let status = match &e {
                     AuthError::TokenExpired => "expired",
                     AuthError::TokenRevoked => "revoked",
                     _ => "invalid",
                 };
+                tracing::warn!(
+                    client_ip = %client_ip,
+                    request_id = %request_id,
+                    athlete_id = athlete_id.as_deref().unwrap_or("unknown"),
+                    error_kind = status,
+                    error = %e,
+                    "Failed JWT verification"
+                );
                 metrics::record_token_verification(status);
                 metrics::record_auth_failure("invalid_token");
                 return Err(StatusCode::UNAUTHORIZED);
@@ -471,6 +493,7 @@ pub async fn auth_middleware(
     } else {
         tracing::warn!(
             client_ip = %client_ip,
+            request_id = %request_id,
             "Missing Authorization header"
         );
         // Record failed verification (missing token)
@@ -833,6 +856,8 @@ mod tests {
         let result = auth_endpoint(
             State(state),
             axum::extract::ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8080))),
+            None,
+            None,
             Json(req),
         )
         .await;

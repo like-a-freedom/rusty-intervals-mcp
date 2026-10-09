@@ -47,11 +47,23 @@ Detects dead peers before the next request arrives, preventing silent stalls.
 
 ## Graceful shutdown
 
-1. Readiness probe returns `{"ready": false}` — load balancers stop routing.
-2. Tokio `CancellationToken` fires — in-flight requests finish draining.
-3. Server socket closes.
+SIGTERM / Ctrl-C trigger `axum::serve` graceful shutdown: the socket stops accepting new connections, in-flight requests drain to completion, and the exit is logged with `drain_ms`. There is no readiness flip — `/health` returns plain `ok` while the process is alive.
 
-Controlled by `IDLE_TIMEOUT_SECONDS` for the drain window.
+## Request correlation
+
+The outermost middleware assigns every HTTP request a correlation id: a well-formed inbound `X-Request-ID` (max 128 visible ASCII chars) is adopted, otherwise a random 32-hex id is generated. The id is echoed back in the `X-Request-ID` response header and carried as `request_id=` in every log line produced for that request (auth refusals, `/auth` outcomes, tool calls).
+
+Each request also produces one access-log line with `method`, `path`, `status`, `client_ip`, and `latency_ms`: `warn` for 5xx, `info` for 4xx, `debug` otherwise. `/health` and `/metrics` probes are silent to avoid log noise.
+
+## Real client IP behind proxies
+
+Docker NAT and reverse proxies hide the true client address in the TCP handshake (`ConnectInfo` shows the proxy/bridge, e.g. `172.26.0.x`). The server therefore resolves `client_ip` from `X-Forwarded-For` (right-most entry — the hop seen by the nearest proxy, so a fabricated left-most value cannot win) and `X-Real-IP` — but **only when the direct TCP peer is loopback/private/link-local**, i.e. a trusted local relay. A public direct peer is never trusted.
+
+Operators must make the proxy send the header:
+- nginx: `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;` (or `X-Real-IP $remote_addr;`)
+- Traefik and Caddy: sent by default.
+
+Without such a proxy (plain `docker -p` port publishing), the container never sees the real client IP at all — use a reverse proxy or `network_mode: host`.
 
 ## 429 recovery strategy for clients
 
