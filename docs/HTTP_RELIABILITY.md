@@ -58,7 +58,7 @@ Each request also produces one access-log line with `method`, `path`, `status`, 
 ## Log-level policy
 
 `warn` means an operator (or athlete) should look; `info` marks business events worth keeping forever; anything routine or per-request is `debug`/`trace`. In practice:
-- `info`: auth issuance/refusal, tool-call audit (`outcome`, `response_bytes`), session start with `client_name`, startup/shutdown, config summary, cache refreshes that succeed.
+- `info`: auth issuance/refusal, tool-call audit (`outcome`, `response_bytes`), session open/close with `client_name`, startup/shutdown, config summary, cache refreshes that succeed.
 - `warn`: 5xx responses, upstream intervals.icu failures (`transport`, `5xx`, `429`, `auth`, `circuit_open`), tool errors and slow calls (`> 10 s`), response serialization failures, rate-limit rejections, invalid config values falling back to defaults, mutex poisoning, panics.
 - `debug`: routine per-request lines (access log on success, authenticated request), upstream 4xx/not-found, optional-data gaps (missing histograms), internal fallbacks and retries, engine fetch detail.
 

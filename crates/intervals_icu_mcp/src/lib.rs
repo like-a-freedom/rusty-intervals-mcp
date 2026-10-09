@@ -48,6 +48,7 @@ pub mod dynamic;
 pub mod engines;
 pub mod intents;
 pub mod metrics;
+pub mod session;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 
@@ -932,9 +933,9 @@ pub async fn run_http_server(
         ))
         .with_state(app_state.clone());
 
-    let session = std::sync::Arc::new(
+    let session = std::sync::Arc::new(crate::session::LoggingSessionManager::new(
         rmcp::transport::streamable_http_server::session::local::LocalSessionManager::default(),
-    );
+    ));
 
     // Build rmcp server config — read allowed hosts from env for reverse-proxy deployments.
     let allowed_hosts_env = std::env::var("MCP_ALLOWED_HOSTS").unwrap_or_default();
