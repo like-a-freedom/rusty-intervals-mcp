@@ -8,7 +8,7 @@
 //! rejects any request bearing a revoked token. Tokens issued via the `/auth` API
 //! endpoint carry `jti: None` and are not subject to revocation.
 
-use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
+use aes_gcm::{Aes256Gcm, KeyInit, aead::Aead};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use hkdf::Hkdf;
 use intervals_icu_client::IntervalsClient;
@@ -273,13 +273,17 @@ impl JwtManager {
 
     fn encrypt_api_key(&self, api_key: &str) -> Result<String, AuthError> {
         let cipher = Aes256Gcm::new((&self.encryption_key).into());
-        let nonce = fill_random::<12>()?;
-
-        let ciphertext = cipher
-            .encrypt(Nonce::from_slice(&nonce), api_key.as_bytes())
+        let nonce_bytes = fill_random::<12>()?;
+        let nonce: &aes_gcm::Nonce<aes_gcm::aead::consts::U12> = nonce_bytes
+            .as_slice()
+            .try_into()
             .map_err(|_| AuthError::EncryptionError)?;
 
-        let mut result = nonce.to_vec();
+        let ciphertext = cipher
+            .encrypt(nonce, api_key.as_bytes())
+            .map_err(|_| AuthError::EncryptionError)?;
+
+        let mut result = nonce_bytes.to_vec();
         result.extend(ciphertext);
         Ok(STANDARD.encode(&result))
     }
@@ -293,12 +297,14 @@ impl JwtManager {
             return Err(AuthError::EncryptionError);
         }
 
-        let nonce = &data[..12];
+        let nonce: &aes_gcm::Nonce<aes_gcm::aead::consts::U12> = data[..12]
+            .try_into()
+            .map_err(|_| AuthError::EncryptionError)?;
         let ciphertext = &data[12..];
 
         let cipher = Aes256Gcm::new((&self.encryption_key).into());
         let plaintext = cipher
-            .decrypt(Nonce::from_slice(nonce), ciphertext)
+            .decrypt(nonce, ciphertext)
             .map_err(|_| AuthError::EncryptionError)?;
 
         String::from_utf8(plaintext).map_err(|_| AuthError::EncryptionError)
