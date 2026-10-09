@@ -58,6 +58,17 @@ impl IntentError {
     pub fn internal(msg: impl Into<String>) -> Self {
         Self::InternalError(msg.into())
     }
+
+    /// Stable machine-readable class for log fields (`error_kind`).
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::UnknownIntent(_) => "unknown_intent",
+            Self::ValidationError(_) => "validation",
+            Self::IdempotencyConflict(_) => "idempotency_conflict",
+            Self::ApiClientError(_) => "upstream",
+            Self::InternalError(_) => "internal",
+        }
+    }
 }
 
 /// Metadata for output pagination and aggregation.
@@ -91,3 +102,26 @@ impl OutputMetadata {
     }
 }
 pub mod date;
+
+#[cfg(test)]
+mod tests {
+    use super::IntentError;
+
+    #[test]
+    fn intent_error_kind_maps_each_variant() {
+        assert_eq!(
+            IntentError::UnknownIntent("x".into()).kind(),
+            "unknown_intent"
+        );
+        assert_eq!(
+            IntentError::ValidationError("x".into()).kind(),
+            "validation"
+        );
+        assert_eq!(
+            IntentError::IdempotencyConflict("x".into()).kind(),
+            "idempotency_conflict"
+        );
+        assert_eq!(IntentError::ApiClientError("x".into()).kind(), "upstream");
+        assert_eq!(IntentError::InternalError("x".into()).kind(), "internal");
+    }
+}

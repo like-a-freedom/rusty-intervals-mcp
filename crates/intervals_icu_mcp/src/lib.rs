@@ -333,23 +333,56 @@ impl ServerHandler for IntervalsMcpHandler {
             }
         };
 
-        // Business audit event: who ran which tool, with what outcome.
+        // Business audit event: who ran which tool, from which client, with
+        // what outcome, latency and response budget.
         let latency_ms = started.elapsed().as_millis();
         match intent_result {
             Ok(output) => {
-                tracing::info!(
-                    athlete_id = athlete_id.as_deref().unwrap_or("unknown"),
-                    client_name = %client_name,
-                    client_version = %client_version,
-                    tool = %intent_name,
-                    request_id = request_id.as_deref().unwrap_or("unknown"),
-                    outcome = "ok",
-                    latency_ms,
-                    "tool call completed"
-                );
-                intent_output_to_call_tool_result(&output)
-                    .map(CallToolResponse::from)
-                    .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+                let result = match intent_output_to_call_tool_result(&output) {
+                    Ok(result) => result,
+                    Err(e) => {
+                        tracing::warn!(
+                            athlete_id = athlete_id.as_deref().unwrap_or("unknown"),
+                            client_name = %client_name,
+                            client_version = %client_version,
+                            tool = %intent_name,
+                            request_id = request_id.as_deref().unwrap_or("unknown"),
+                            outcome = "error",
+                            error_kind = "serialization",
+                            latency_ms,
+                            error = ?e,
+                            "tool call failed to serialize response"
+                        );
+                        return Err(ErrorData::internal_error(e.to_string(), None));
+                    }
+                };
+                let response_bytes = intents::types::structured_response_bytes(&result);
+                if latency_ms >= SLOW_TOOL_CALL_MS {
+                    tracing::warn!(
+                        athlete_id = athlete_id.as_deref().unwrap_or("unknown"),
+                        client_name = %client_name,
+                        client_version = %client_version,
+                        tool = %intent_name,
+                        request_id = request_id.as_deref().unwrap_or("unknown"),
+                        outcome = "slow",
+                        latency_ms,
+                        response_bytes,
+                        "tool call slow"
+                    );
+                } else {
+                    tracing::info!(
+                        athlete_id = athlete_id.as_deref().unwrap_or("unknown"),
+                        client_name = %client_name,
+                        client_version = %client_version,
+                        tool = %intent_name,
+                        request_id = request_id.as_deref().unwrap_or("unknown"),
+                        outcome = "ok",
+                        latency_ms,
+                        response_bytes,
+                        "tool call completed"
+                    );
+                }
+                Ok(CallToolResponse::from(result))
             }
             Err(e) => {
                 tracing::warn!(
@@ -359,6 +392,7 @@ impl ServerHandler for IntervalsMcpHandler {
                     tool = %intent_name,
                     request_id = request_id.as_deref().unwrap_or("unknown"),
                     outcome = "error",
+                    error_kind = e.kind(),
                     latency_ms,
                     error = ?e,
                     "tool call completed"
@@ -631,6 +665,10 @@ fn normalize_inbound_request_id(value: Option<&str>) -> Option<&str> {
 fn new_request_id() -> String {
     uuid::Uuid::new_v4().simple().to_string()
 }
+
+/// Latency at which a tool call is reported as `warn "tool call slow"`
+/// instead of the routine `info" completion event.
+const SLOW_TOOL_CALL_MS: u128 = 10_000;
 
 /// Client IP to report in logs and access records: the address behind a
 /// reverse proxy when the direct TCP peer is a local relay (Docker bridge,

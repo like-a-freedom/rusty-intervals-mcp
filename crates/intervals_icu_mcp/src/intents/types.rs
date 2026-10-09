@@ -277,6 +277,17 @@ pub fn intent_output_to_call_tool_result(
     Ok(result)
 }
 
+/// Byte size of the serialized `structuredContent` payload — the budget an
+/// agent actually carries. Observability only; measured after conversion.
+pub fn structured_response_bytes(result: &rmcp::model::CallToolResult) -> usize {
+    result
+        .structured_content
+        .as_ref()
+        .and_then(|content| serde_json::to_string(content).ok())
+        .unwrap_or_default()
+        .len()
+}
+
 /// Convert IntentError to MCP ErrorData
 pub fn intent_error_to_error_data(error: &IntentError) -> rmcp::ErrorData {
     match error {
@@ -863,6 +874,22 @@ mod tests {
                 .map(Vec::len),
             Some(1)
         );
+    }
+
+    // ========================================================================
+    // structured_response_bytes() Tests
+    // ========================================================================
+
+    #[test]
+    fn structured_response_bytes_counts_serialized_structured_content() {
+        use rmcp::model::CallToolResult;
+
+        let mut result = CallToolResult::success(Vec::new());
+        assert_eq!(structured_response_bytes(&result), 0);
+
+        result.structured_content = Some(serde_json::json!({"a": 1}));
+        // `{"a":1}` is exactly 7 bytes
+        assert_eq!(structured_response_bytes(&result), 7);
     }
 
     #[test]
