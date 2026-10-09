@@ -32,9 +32,10 @@ changes (it currently sits at `2.17.0` and has no `rmcp` dependency).
    ```
    Fix root causes; never mute warnings or delete tests to go green.
 
-3. **CHANGELOG.** Fold the top `## [Unreleased]` section into
-   `## [X.Y.Z] - YYYY-MM-DD` (Keep a Changelog-style groups: `Added`,
-   `Changed`, `Fixed`, `Breaking changes`). Each entry must state what
+3. **CHANGELOG.** Add the new `## [X.Y.Z] - YYYY-MM-DD` section (Keep a
+   Changelog-style groups: `Added`, `Changed`, `Fixed`, `Breaking changes`).
+   Entries are usually authored at release time from `git log
+   <prev-tag>..HEAD` and the release-notes draft. Each entry must state what
    changed and its user-facing impact. For a dependency migration, call out
    the new dependency version, any MSRV change, and whether the wire
    format / protocol version changed for existing clients.
@@ -55,10 +56,13 @@ changes (it currently sits at `2.17.0` and has no `rmcp` dependency).
 
 7. **Tag and push** (the tag is what triggers CI):
    ```sh
-   git tag -a vX.Y.Z -m "release vX.Y.Z"
+   git tag -a vX.Y.Z -m "vX.Y.Z — <short title>
+
+   <one short paragraph: what this release is and why it matters>"
    git push origin master
    git push origin vX.Y.Z
    ```
+   Tags are annotated and follow `vX.Y.Z — title` (see `git log v2.26.0`).
 
 8. **Create the GitHub release** from the pushed tag (UI or `gh`). The CI
    workflow (`on: release`) attaches binary artifacts and checksums for

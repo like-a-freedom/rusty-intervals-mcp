@@ -79,6 +79,11 @@ operating on plain data (`ActivitySummary`, `Event`, `NaiveDate`,
 **All shared, pure helpers live under `crate::content::*`, not
 `crate::intents::utils`.**
 
+> **Update:** the `content/mod.rs` layout has since been converted to the
+> modern pathless style (`content.rs` + `content/date.rs`); the repo no
+> longer uses `mod.rs` outside test-support dirs. The module-structure
+> decision stands; only the file-location idiom changed.
+
 ### Layout
 
 ```

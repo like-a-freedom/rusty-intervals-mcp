@@ -14,35 +14,34 @@ Client request
     ↓
 TCP accept (socket2 keepalive)
     ↓
-AllowedHostsLayer  — DNS rebinding guard
-    ↓
-Request ID layer   — per-request tracing span
-    ↓
-Metrics layers     — request counters, active-gauge, duration histogram
-    ↓
-Body limit layer   — MAX_HTTP_BODY_SIZE
-    ↓
-CORS layer
-    ↓
-GracefulShutdownLayer
+Request-ID middleware  — adopts/echoes X-Request-ID, resolves real client_ip
+                         (X-Forwarded-For / X-Real-IP behind trusted proxies),
+                         per-request access log
     ↓
 Router (axum)
   ├─ [optional] nest MCP_PUBLIC_BASE_PATH — public prefix pass-through (ADR-0010);
   │             trailing `{prefix}/` and out-of-prefix paths → fallback (redirect / 404)
-  ├─ GET  /health          — healthz
-  ├─ GET  /metrics         — Prometheus (optional Bearer token)
-  ├─ POST /auth            — exchange ICu key for JWT
-  ├─ GET  /ui              — token management UI
-  └─ POST /mcp             — JSON-RPC endpoint
+  ├─ GET  /health          — healthz (unauthenticated)
+  ├─ GET  /metrics         — Prometheus (unauthenticated)
+  ├─ POST /auth            — exchange ICu key for JWT (governor 1 rps + timeout)
+  ├─ GET  /ui, /ui/token…  — token management UI (governor 2 rps)
+  └─ POST /mcp             — JSON-RPC endpoint (see sub-layers)
 ```
+
+The `Mcp-Session-Id` lifecycle (create / initialize / close) is managed by
+rmcp's StreamableHttpService with a `LoggingSessionManager` decorator
+(`session.rs`) that logs session open/close with client identity and lifetime.
 
 ### `/mcp` sub-layers (inside the router)
 
 ```text
-AuthMiddleware          — extracts JWT, resolves athlete_id
-GovernorLayer           — per-athlete rate limiting (AthleteKeyExtractor)
+Extension(HttpBaseUrl)
+GovernorLayer           — per-athlete rate limiting (keyed by athlete_id from the JWT)
 IdleTimeoutLayer        — request inactivity timeout (REQUEST_TIMEOUT_SECONDS)
-McpJsonRpcService       — JSON-RPC processing, session management
+AuthMiddleware          — verifies JWT, resolves athlete_id + request_id into extensions
+DefaultBodyLimit        — MAX_HTTP_BODY_SIZE
+TimeoutLayer            — 408 on overall request timeout
+McpJsonRpcService       — rmcp StreamableHttpService; allowed-host check lives here
     ↓
 Intent Router           — validation, idempotency, orchestration
 Internal Execution Layer— dynamic OpenAPI runtime, ICu client
@@ -88,14 +87,18 @@ Detects dead connections early so clients don't silently stall.
 
 All layers publish counters and histograms to Prometheus (`GET /metrics`):
 
-| Layer | What it tracks |
-|-------|----------------|
-| Request counter | `http_requests_total{path, status}` |
-| Active gauge | `http_active_requests` (up/down per handler) |
-| Duration histogram | `http_request_duration_seconds_bucket{path}` |
-| Rate limit | `rate_limited_total{scope}` (incremented on 429) |
-| Auth | `tokens_issued_total`, `token_verifications_total{status}` |
-| Tool calls | `tool_calls_total{tool}`, `tool_duration_seconds{tool}` |
+| Layer | Metric (prefix `intervals_icu_`) |
+|-------|--------------------------------|
+| HTTP requests | `mcp_http_requests_total{path, status}`, `mcp_http_request_duration_seconds`, `mcp_active_requests` |
+| Rate limit | `mcp_rate_limited_total{scope}` |
+| Auth | `mcp_tokens_issued_total{source}`, `mcp_token_verifications_total{status}`, `mcp_auth_failures_total` |
+| Tool calls | `mcp_tool_calls_total{tool, success}`, `mcp_tool_duration_seconds{tool}` |
+| MCP sessions | `mcp_mcp_sessions_total{status}` (started / ended), `mcp_mcp_method_calls_total` |
+| Upstream intervals.icu | `client_upstream_requests_total{status}`, `client_upstream_errors_total{error_type}`, `client_upstream_request_duration_seconds`, `client_circuit_state` |
+| Idempotency | `mcp_idempotency_total{result}` |
+| Dynamic dispatch | `mcp_dynamic_dispatch_total{method, outcome}` |
+
+(mod.rs files are not used; the layout is `<name>.rs` + `<name>/` — Rust 2018 pathless style.)
 
 ## Testing strategy
 
@@ -108,7 +111,7 @@ All layers publish counters and histograms to Prometheus (`GET /metrics`):
 
 ### Load Provenance Pipeline
 
-All load extraction flows through `extract_activity_load` in `analysis_fetch.rs`:
+All load extraction flows through `extract_activity_load` in `engines/analysis_fetch/load.rs`:
 
 1. **Alias priority:** `icu_training_load` → `training_load`/`icuTrainingLoad` → `tss`
 2. **Activity summary fallback:** `training_load` field on `ActivitySummary` (lower priority)
