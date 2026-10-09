@@ -135,6 +135,17 @@ pub enum AuthError {
     JwtError(#[from] jwt_simple::Error),
 }
 
+/// Classify a `jwt_simple` verification failure as an expiration by matching
+/// the typed `JWTError` in the error chain instead of rendered message text.
+fn is_expired_jwt_error(error: &jwt_simple::Error) -> bool {
+    error.chain().any(|cause| {
+        matches!(
+            cause.downcast_ref::<jwt_simple::JWTError>(),
+            Some(jwt_simple::JWTError::TokenHasExpired)
+        )
+    })
+}
+
 impl JwtManager {
     pub fn new(jwt_secret: &[u8], encryption_key: [u8; 32]) -> Self {
         Self {
@@ -205,7 +216,7 @@ impl JwtManager {
             .signing_key
             .verify_token::<IntervalsClaims>(token, Some(verification_options))
             .map_err(|e| {
-                if e.to_string().contains("expired") {
+                if is_expired_jwt_error(&e) {
                     AuthError::TokenExpired
                 } else {
                     AuthError::InvalidToken
@@ -217,7 +228,11 @@ impl JwtManager {
             && let Some(revoked) = revoked_jtis
             && revoked.contains(jti)
         {
-            tracing::warn!(jti = %jti, "Rejected revoked token");
+            tracing::warn!(
+                athlete_id = %claims.custom.athlete_id,
+                jti = %jti,
+                "Rejected revoked token"
+            );
             return Err(AuthError::TokenRevoked);
         }
 
@@ -227,6 +242,33 @@ impl JwtManager {
             athlete_id: claims.custom.athlete_id.clone(),
             api_key: SecretString::new(api_key.into()),
         })
+    }
+
+    /// Best-effort recovery of the athlete identity behind a rejected token.
+    ///
+    /// The HMAC signature is still verified — so only tokens minted by this
+    /// manager can be attributed — while clock checks (`exp`/`iat`/`nbf`) and
+    /// `iss`/`aud` matching are relaxed. The result is safe to log for
+    /// rejected requests (expired, revoked, ...). It must never be used to
+    /// authorise a request. Tokens with an invalid signature (or expired for
+    /// more than ~10 years) cannot be attributed and return `None`.
+    pub fn identify_rejected_token(&self, token: &str) -> Option<String> {
+        let verification_options = VerificationOptions {
+            required_signature_type: Some("JWT".to_string()),
+            // Neutralize every clock-based rejection so an expired-but-
+            // authentic token can still be attributed in rejection logs.
+            // `iss`/`aud` are intentionally not checked: the HMAC signature
+            // already proves the token was minted by this manager, and
+            // attribution must survive issuer/audience shape changes.
+            accept_future: true,
+            time_tolerance: Some(Duration::from_secs(10 * 365 * 24 * 60 * 60)),
+            ..Default::default()
+        };
+
+        self.signing_key
+            .verify_token::<IntervalsClaims>(token, Some(verification_options))
+            .ok()
+            .map(|claims| claims.custom.athlete_id)
     }
 
     fn encrypt_api_key(&self, api_key: &str) -> Result<String, AuthError> {
@@ -406,8 +448,12 @@ pub async fn auth_middleware(
                 creds
             }
             Err(e) => {
+                // Attribute the rejection when the token is authentic but
+                // expired/revoked, so operators can tell whose token it was.
+                let athlete_id = app_state.jwt_manager.identify_rejected_token(token);
                 tracing::warn!(
                     client_ip = %client_ip,
+                    athlete_id = athlete_id.as_deref().unwrap_or("unknown"),
                     error = %e,
                     "Failed JWT verification"
                 );
@@ -521,6 +567,86 @@ mod tests {
         let manager = create_test_manager();
         let result = manager.verify_token("invalid.token.here", None);
         assert!(matches!(result, Err(AuthError::InvalidToken)));
+    }
+
+    /// Sign authentic claims whose `exp` lies one day in the past, producing
+    /// a token that must fail verification as expired. Issuer, audience, and
+    /// subject mirror `issue_token` so the fixture matches production tokens.
+    fn create_expired_token(manager: &JwtManager, athlete_id: &str) -> String {
+        let custom = IntervalsClaims {
+            athlete_id: athlete_id.to_string(),
+            encrypted_api_key: "irrelevant-for-this-test".to_string(),
+            jti: None,
+        };
+        let mut claims = Claims::with_custom_claims(custom, Duration::from_secs(0))
+            .with_issuer(&manager.issuer)
+            .with_audience(manager.audience.clone())
+            .with_subject(athlete_id.to_string());
+        claims.expires_at = Some(Clock::now_since_epoch() - Duration::from_secs(86_400));
+        manager
+            .signing_key
+            .authenticate(claims)
+            .expect("signing expired claims should work")
+    }
+
+    #[test]
+    fn test_verify_expired_token_maps_to_token_expired() {
+        let manager = create_test_manager();
+        let token = create_expired_token(&manager, "i424242");
+        let result = manager.verify_token(&token, None);
+        assert!(matches!(result, Err(AuthError::TokenExpired)));
+    }
+
+    #[test]
+    fn test_identify_rejected_token_recovers_athlete_for_expired_token() {
+        let manager = create_test_manager();
+        let token = create_expired_token(&manager, "i424242");
+        assert_eq!(
+            manager.identify_rejected_token(&token).as_deref(),
+            Some("i424242")
+        );
+    }
+
+    #[test]
+    fn test_identify_rejected_token_returns_athlete_for_valid_token() {
+        let manager = create_test_manager();
+        let token = manager
+            .issue_token("i111111", "test_api_key", 3600, None)
+            .expect("token should issue");
+        assert_eq!(
+            manager.identify_rejected_token(&token).as_deref(),
+            Some("i111111")
+        );
+    }
+
+    #[test]
+    fn test_identify_rejected_token_garbage_returns_none() {
+        let manager = create_test_manager();
+        assert_eq!(manager.identify_rejected_token("not.a.token"), None);
+    }
+
+    #[test]
+    fn test_identify_rejected_token_tampered_returns_none() {
+        let manager = create_test_manager();
+        let token = manager
+            .issue_token("i222222", "test_api_key", 3600, None)
+            .expect("token should issue");
+        let mut parts: Vec<String> = token.split('.').map(str::to_string).collect();
+        assert_eq!(parts.len(), 3, "JWT should have three segments");
+        // Flip the payload so the signature no longer matches.
+        parts[1] = format!("{}A", parts[1].trim_end_matches('A'));
+        let tampered = parts.join(".");
+        assert_eq!(manager.identify_rejected_token(&tampered), None);
+    }
+
+    #[test]
+    fn test_identify_rejected_token_foreign_key_returns_none() {
+        let manager = create_test_manager();
+        let other = JwtManager::new(b"a completely different signing secret!!", [1u8; 32]);
+        let foreign_token = other
+            .issue_token("i333333", "test_api_key", 3600, None)
+            .expect("token should issue");
+        assert_eq!(manager.identify_rejected_token(&foreign_token), None);
     }
 
     #[test]

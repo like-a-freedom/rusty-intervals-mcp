@@ -335,9 +335,9 @@ pub async fn fetch_single_workout_data(
             }
             Err(e) => {
                 tracing::info!(
-                    "HR histogram not available for activity {}: {}",
-                    request.activity_id,
-                    e
+                    activity_id = %request.activity_id,
+                    error = %e,
+                    "HR histogram not available"
                 );
                 None
             }
@@ -366,9 +366,9 @@ pub async fn fetch_single_workout_data(
             }
             Err(e) => {
                 tracing::info!(
-                    "Power histogram not available for activity {}: {}",
-                    request.activity_id,
-                    e
+                    activity_id = %request.activity_id,
+                    error = %e,
+                    "Power histogram not available"
                 );
                 None
             }
@@ -389,9 +389,9 @@ pub async fn fetch_single_workout_data(
             }
             Err(e) => {
                 tracing::info!(
-                    "Pace histogram not available for activity {}: {}",
-                    request.activity_id,
-                    e
+                    activity_id = %request.activity_id,
+                    error = %e,
+                    "Pace histogram not available"
                 );
                 None
             }

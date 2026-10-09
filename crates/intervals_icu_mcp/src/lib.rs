@@ -145,8 +145,8 @@ impl IntervalsMcpHandler {
             Ok(registry) => registry.len(),
             Err(err) => {
                 tracing::warn!(
-                    "failed to preload dynamic OpenAPI registry: {}",
-                    err.message
+                    error = %err.message,
+                    "failed to preload dynamic OpenAPI registry"
                 );
                 0
             }
@@ -373,19 +373,115 @@ impl ServerHandler for IntervalsMcpHandler {
 // =============================================================================
 
 /// Initialize tracing/logging with sensible defaults.
+///
+/// Text mode (default): single-line compact events with UTC RFC 3339
+/// millisecond timestamps, e.g.
+/// `2026-10-09T03:56:15.073Z  WARN JWT verification failed athlete_id=i42 client_ip=... error=Token expired`.
+///
+/// Environment controls:
+/// - `RUST_LOG`: standard directive filter (default `info`, noisy internal
+///   targets pinned to `warn`).
+/// - `RUST_LOG_FORMAT`: `json` for structured JSON records keyed off field
+///   names, anything else for dense human-readable text.
+/// - `RUST_LOG_COLOR`: `always`/`never` (or `1`/`0`); unset follows stderr
+///   TTY detection.
 pub fn init_tracing() {
     let log_env = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
     let combined_filter = format!("{},rmcp=warn,serve_inner=warn", log_env);
     let env_filter = tracing_subscriber::EnvFilter::try_new(&combined_filter)
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,rmcp=warn,serve_inner=warn"));
 
-    tracing_subscriber::fmt()
-        .compact()
-        .with_writer(std::io::stderr)
-        .with_ansi(false)
-        .with_target(false)
-        .with_env_filter(env_filter)
-        .init();
+    let json_output =
+        std::env::var("RUST_LOG_FORMAT").is_ok_and(|v| v.eq_ignore_ascii_case("json"));
+    let ansi = use_ansi_colors(
+        std::env::var("RUST_LOG_COLOR").ok().as_deref(),
+        std::io::IsTerminal::is_terminal(&std::io::stderr()),
+    );
+
+    if json_output {
+        // Structured records: one JSON object per event with the event
+        // fields flattened into the record for pipeline-friendly querying.
+        let format = tracing_subscriber::fmt::format()
+            .json()
+            .flatten_event(true)
+            .with_timer(UtcMillisTime)
+            .with_ansi(false);
+        tracing_subscriber::fmt()
+            .event_format(format)
+            .with_writer(std::io::stderr)
+            .with_target(true)
+            .with_env_filter(env_filter)
+            .init();
+    } else {
+        let format = tracing_subscriber::fmt::format()
+            .compact()
+            .with_timer(UtcMillisTime)
+            .with_ansi(ansi)
+            .with_target(false);
+        tracing_subscriber::fmt()
+            .event_format(format)
+            .with_writer(std::io::stderr)
+            .with_env_filter(env_filter)
+            .init();
+    }
+}
+
+/// Resolve ANSI color usage from `RUST_LOG_COLOR` (`always`/`never`, with
+/// `1`/`0` accepted as aliases), falling back to stderr TTY detection.
+fn use_ansi_colors(setting: Option<&str>, stderr_is_terminal: bool) -> bool {
+    match setting.map(|v| v.trim().to_ascii_lowercase()).as_deref() {
+        Some("1") | Some("always") => true,
+        Some("0") | Some("never") => false,
+        _ => stderr_is_terminal,
+    }
+}
+
+/// Timestamps in UTC RFC 3339 with millisecond precision.
+#[derive(Debug, Clone, Copy)]
+struct UtcMillisTime;
+
+impl tracing_subscriber::fmt::time::FormatTime for UtcMillisTime {
+    fn format_time(&self, w: &mut tracing_subscriber::fmt::format::Writer<'_>) -> std::fmt::Result {
+        let unix_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_millis() as u64)
+            .unwrap_or_default();
+        write_utc_rfc3339_millis(w, unix_ms)
+    }
+}
+
+/// Render Unix epoch milliseconds as `YYYY-MM-DDTHH:MM:SS.mmmZ`.
+fn write_utc_rfc3339_millis(w: &mut impl std::fmt::Write, unix_ms: u64) -> std::fmt::Result {
+    let secs_of_day = ((unix_ms / 1000) % 86_400) as u32;
+    let hour = secs_of_day / 3600;
+    let minute = (secs_of_day % 3600) / 60;
+    let second = secs_of_day % 60;
+    let (year, month, day) = civil_from_days((unix_ms / 1000 / 86_400) as i64);
+    write!(
+        w,
+        "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{:03}Z",
+        unix_ms % 1000
+    )
+}
+
+/// Convert days since the Unix epoch to a civil date (Howard Hinnant's
+/// `civil_from_days` algorithm).
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let day_of_era = (z - era * 146_097) as u64; // [0, 146_096]
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365; // [0, 399]
+    let year = year_of_era as i64 + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100); // [0, 365]
+    let shifted_month = (5 * day_of_year + 2) / 153; // [0, 11], March-first calendar
+    let day = (day_of_year - (153 * shifted_month + 2) / 5 + 1) as u32; // [1, 31]
+    let month = if shifted_month < 10 {
+        shifted_month + 3
+    } else {
+        shifted_month - 9
+    } as u32;
+    (if month <= 2 { year + 1 } else { year }, month, day)
 }
 
 /// STDIO mode: initialize with credentials from env vars.
@@ -421,7 +517,7 @@ pub async fn initialize_handler_single_user() -> Result<IntervalsMcpHandler, Str
         0
     };
 
-    tracing::info!("discovered {} dynamic tools", dynamic_tools);
+    tracing::info!(tool_count = dynamic_tools, "discovered dynamic tools");
     Ok(handler)
 }
 
@@ -624,7 +720,7 @@ pub async fn run_http_server(
 pub async fn run_stdio_server(
     handler: IntervalsMcpHandler,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    tracing::info!("starting STDIO MCP server...");
+    tracing::info!("starting STDIO MCP server");
 
     use rmcp::serve_server;
     let transport = (tokio::io::stdin(), tokio::io::stdout());
@@ -717,15 +813,13 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     init_tracing();
 
     let version = env!("CARGO_PKG_VERSION");
-    tracing::info!(version = %version, "intervals_icu_mcp starting");
-
     let transport_mode = std::env::var("MCP_TRANSPORT").unwrap_or_else(|_| "stdio".to_string());
-    tracing::info!(%transport_mode, "using transport mode");
+    tracing::info!(version = %version, %transport_mode, "intervals_icu_mcp starting");
 
     match transport_mode.as_str() {
         "stdio" => {
             let handler = initialize_handler_single_user().await.map_err(|e| {
-                tracing::error!("{e}");
+                tracing::error!(error = %e, "failed to initialize STDIO handler");
                 e
             })?;
             run_stdio_server(handler).await?;
@@ -857,8 +951,70 @@ mod tests {
     use crate::auth::{DecryptedCredentials, HttpBaseUrl};
     use crate::{
         AthleteKeyExtractor, IntervalsMcpHandler, configure_tcp_keepalive, parse_rate_limit_values,
+        use_ansi_colors, write_utc_rfc3339_millis,
     };
     use secrecy::{ExposeSecret, SecretString};
+
+    fn render_millis(unix_ms: u64) -> String {
+        let mut out = String::new();
+        write_utc_rfc3339_millis(&mut out, unix_ms).expect("formatting should not fail");
+        out
+    }
+
+    #[test]
+    fn rfc3339_millis_renders_epoch_instant() {
+        assert_eq!(render_millis(0), "1970-01-01T00:00:00.000Z");
+    }
+
+    #[test]
+    fn rfc3339_millis_renders_known_instant() {
+        assert_eq!(render_millis(1_760_000_000_000), "2025-10-09T08:53:20.000Z");
+    }
+
+    #[test]
+    fn rfc3339_millis_keeps_millisecond_component() {
+        assert_eq!(render_millis(1_760_000_000_073), "2025-10-09T08:53:20.073Z");
+    }
+
+    #[test]
+    fn rfc3339_millis_handles_leap_days() {
+        // 2024-02-29T00:00:00Z
+        assert_eq!(render_millis(1_709_164_800_000), "2024-02-29T00:00:00.000Z");
+        // 2000-02-29T00:00:00Z (century leap year rule).
+        assert_eq!(render_millis(951_782_400_000), "2000-02-29T00:00:00.000Z");
+    }
+
+    #[test]
+    fn ansi_colors_follow_explicit_setting() {
+        for value in ["always", "ALWAYS", " always ", "1"] {
+            assert!(
+                use_ansi_colors(Some(value), false),
+                "{value} should force on"
+            );
+            assert!(
+                use_ansi_colors(Some(value), true),
+                "{value} should force on"
+            );
+        }
+        for value in ["never", "NEVER", "never ", "0"] {
+            assert!(
+                !use_ansi_colors(Some(value), true),
+                "{value} should force off"
+            );
+            assert!(
+                !use_ansi_colors(Some(value), false),
+                "{value} should force off"
+            );
+        }
+    }
+
+    #[test]
+    fn ansi_colors_fall_back_to_terminal_when_unset_or_unknown() {
+        assert!(use_ansi_colors(None, true));
+        assert!(!use_ansi_colors(None, false));
+        assert!(use_ansi_colors(Some("rainbow"), true));
+        assert!(!use_ansi_colors(Some("rainbow"), false));
+    }
 
     #[test]
     fn request_extensions_extract_multi_tenant_credentials_and_base_url() {

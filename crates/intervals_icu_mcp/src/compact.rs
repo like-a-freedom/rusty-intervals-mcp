@@ -107,7 +107,7 @@ pub fn compact_item<T: serde::Serialize>(
     fields: Option<&[String]>,
 ) -> Value {
     let value = serde_json::to_value(item).unwrap_or_else(|e| {
-        tracing::warn!("compact_item serialization failed: {e}");
+        tracing::warn!(error = %e, "compact_item serialization failed");
         Value::Null
     });
     compact_object(&value, default_fields, fields)

@@ -26,7 +26,7 @@ impl IntentRouter {
             .into_iter()
             .map(|h| (h.name().to_string(), h))
             .collect();
-        info!("IntentRouter initialized with {} handlers", map.len());
+        info!(handler_count = map.len(), "IntentRouter initialized");
         Self {
             handlers: Arc::new(map),
             idempotency,
