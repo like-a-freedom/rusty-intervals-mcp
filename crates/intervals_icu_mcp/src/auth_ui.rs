@@ -163,7 +163,30 @@ const INLINE_STYLE: &str = r#"                    .mui-card { margin-block: var(
                     @media (hover: hover) and (pointer: fine) {
                       .copy-btn:hover { color: var(--mui-text); background: var(--mui-bg-card); }
                     }
-                    .copy-status { display: block; margin-top: 0.5rem; min-height: 1.25rem; font-size: var(--mui-text-xs); color: var(--mui-success-text, #4ade80); }
+                    /* Same top strip as the button; right-aligned so the
+                       confirmation reads immediately left of the copy icon. */
+                    .copy-status {
+                      position: absolute;
+                      inset-block-start: 0.375rem;
+                      /* Right edge stops one gap short of the button's left
+                         edge: 0.375rem inset + 1.75rem button + 0.5rem gap. */
+                      inset-inline: 0.75rem calc(0.375rem + 1.75rem + 0.5rem);
+                      block-size: 1.75rem;
+                      /* Not `display: flex`: `text-overflow: ellipsis` only
+                         applies to a block container's inline content, so a flex
+                         item silently clips the *start* of a long message with no
+                         ellipsis. Centring via line-height keeps the block box,
+                         so the message truncates visibly at the narrow end. */
+                      line-height: 1.75rem;
+                      overflow: hidden;
+                      font-size: var(--mui-text-xs);
+                      text-align: end;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                      color: var(--mui-success-text, #4ade80);
+                      /* Never intercepts the click meant for the button. */
+                      pointer-events: none;
+                    }
                     .copy-btn.copied { color: var(--mui-success-text, #4ade80); }
                     .error-alert,
                     .success-alert {
@@ -1100,6 +1123,10 @@ fn render_token_success(
                 textarea #generated-token class="token-display__value" readonly spellcheck="false" {
                     (token)
                 }
+                // Copy feedback sits in the same top strip as the button, so the
+                // confirmation reads immediately left of the icon instead of on
+                // a line of its own below the field.
+                span #copy-status.copy-status role="status" aria-live="polite" {}
                 button.copy-btn type="button" data-clipboard=(token) aria-label="Copy token to clipboard" {
                     svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false" {
                         rect x="8" y="2" width="8" height="4" rx="1" ry="1" {}
@@ -1108,7 +1135,6 @@ fn render_token_success(
                     span.visually-hidden { "Copy token" }
                 }
             }
-            span #copy-status.copy-status role="status" aria-live="polite" {}
             dl.token-info-grid {
                 dt { "Athlete ID" }
                 dd { (athlete_id) }

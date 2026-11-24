@@ -902,3 +902,21 @@ async fn test_ui_tokens_lists_whole_registry_without_a_session() {
         "the registry inventory must be visible without a session"
     );
 }
+
+/// TEMP probe
+#[test]
+fn zz_dump_copy() {
+    let body = auth_ui::render_token_success_for_test(
+        "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJpMTIzNDUifQ.c2lnbmF0dXJlLWhlcmUtZm9yLXRlc3Rpbmc",
+        "i12345",
+        "9 Nov 2026, 12:00",
+        "30 days",
+        "",
+    );
+    let css = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/static/maud-ui.css"))
+        .unwrap();
+    let page_css = auth_ui::inline_style_for_test();
+    std::fs::write("/tmp/uicopy/page.html", format!(
+        "<!doctype html><html><head><meta charset=utf-8><style>{css}</style><style>{page_css}</style></head><body><main class=\"mui-container\">{body}</main></body></html>"
+    )).unwrap();
+}
