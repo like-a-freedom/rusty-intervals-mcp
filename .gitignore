@@ -37,3 +37,4 @@ tarpaulin-report.html
 *.profraw
 cobertura.xml
 data/
+.impeccable/
