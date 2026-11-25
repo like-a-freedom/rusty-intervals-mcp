@@ -1,12 +1,14 @@
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
 use rusqlite::{Connection, TransactionBehavior};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, TryLockError};
 use std::time::Duration;
 use thiserror::Error;
 
 const SCHEMA_VERSION: i64 = 2;
-const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+const BUSY_TIMEOUT: Duration = Duration::from_secs(1);
+const CONNECTION_LOCK_TIMEOUT: Duration = Duration::from_millis(250);
+const CONNECTION_LOCK_POLL_INTERVAL: Duration = Duration::from_millis(5);
 const CREATE_IDEMPOTENCY_TABLE_V2: &str = "CREATE TABLE idempotency_operations (
     scope_hash BLOB PRIMARY KEY NOT NULL CHECK(length(scope_hash) = 32),
     tenant_hash BLOB CHECK(tenant_hash IS NULL OR length(tenant_hash) = 32),
@@ -42,6 +44,8 @@ pub(crate) enum StateStoreError {
     InvalidEncryptionKey,
     #[error("state-store database connection lock is poisoned")]
     Poisoned,
+    #[error("state-store database connection remained busy past the lock deadline")]
+    LockTimeout,
     #[error("state-store record transition did not match the expected state")]
     InvalidTransition,
 }
@@ -72,6 +76,10 @@ impl StateStore {
         connection.pragma_update(None, "synchronous", "FULL")?;
         connection.pragma_update(None, "foreign_keys", "ON")?;
         Self::initialize_schema(&mut connection)?;
+        connection.execute(
+            "UPDATE idempotency_operations SET state = 'unknown' WHERE state = 'active'",
+            [],
+        )?;
         set_database_sidecar_permissions(&path)?;
 
         Ok(Self {
@@ -154,7 +162,21 @@ impl StateStore {
         let connection = Arc::clone(&self.connection);
         let path = self.path.clone();
         tokio::task::spawn_blocking(move || {
-            let mut connection = connection.lock().map_err(|_| StateStoreError::Poisoned)?;
+            let deadline = std::time::Instant::now() + CONNECTION_LOCK_TIMEOUT;
+            let mut connection = loop {
+                match connection.try_lock() {
+                    Ok(connection) => break connection,
+                    Err(TryLockError::Poisoned(_)) => return Err(StateStoreError::Poisoned),
+                    Err(TryLockError::WouldBlock) => {
+                        let remaining =
+                            deadline.saturating_duration_since(std::time::Instant::now());
+                        if remaining.is_zero() {
+                            return Err(StateStoreError::LockTimeout);
+                        }
+                        std::thread::sleep(CONNECTION_LOCK_POLL_INTERVAL.min(remaining));
+                    }
+                }
+            };
             let operation_result = operation(&mut connection);
             let permission_result = set_database_sidecar_permissions(&path);
             permission_result?;
@@ -314,6 +336,76 @@ mod tests {
         assert_eq!(record.0, None);
         assert_eq!(record.1, "unknown");
         assert_eq!(record.2, 123);
+    }
+
+    #[tokio::test]
+    async fn reopening_state_store_classifies_active_operations_as_unknown() {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let path = dir.path().join("state.sqlite3");
+        let store = StateStore::open(path.clone(), [4; 32]).expect("open state store");
+        store
+            .run(|connection| {
+                connection.execute(
+                    "INSERT INTO idempotency_operations (
+                        scope_hash, tenant_hash, fingerprint_hash, owner_hash, state, created_at
+                    ) VALUES (?1, ?2, ?3, NULL, 'active', 123)",
+                    rusqlite::params![vec![1_u8; 32], vec![2_u8; 32], vec![3_u8; 32]],
+                )?;
+                Ok(())
+            })
+            .await
+            .expect("insert active operation");
+        drop(store);
+
+        let reopened = StateStore::open(path, [4; 32]).expect("reopen state store");
+        let state: String = reopened
+            .connection
+            .lock()
+            .expect("connection lock")
+            .query_row(
+                "SELECT state FROM idempotency_operations WHERE scope_hash = ?1",
+                rusqlite::params![vec![1_u8; 32]],
+                |row| row.get(0),
+            )
+            .expect("read recovered operation");
+        assert_eq!(state, "unknown");
+    }
+
+    #[tokio::test]
+    async fn state_store_bounds_waiting_for_the_connection_lock() {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let store =
+            StateStore::open(dir.path().join("state.sqlite3"), [4; 32]).expect("open state store");
+        let (lock_acquired_tx, lock_acquired_rx) = std::sync::mpsc::channel();
+        let (release_lock_tx, release_lock_rx) = std::sync::mpsc::channel();
+        let lock_store = store.clone();
+        let lock_thread = std::thread::spawn(move || {
+            let _connection_guard = lock_store.connection.lock().expect("connection lock");
+            lock_acquired_tx.send(()).expect("signal acquired lock");
+            release_lock_rx.recv().expect("release connection lock");
+        });
+        lock_acquired_rx.recv().expect("wait for connection lock");
+        let operation_started = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let started_by_operation = operation_started.clone();
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(3),
+            store.run(move |_| {
+                started_by_operation.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            }),
+        )
+        .await;
+        let run_result = result.expect("connection lock wait must be bounded");
+        let operation_returned_error = run_result.is_err();
+        release_lock_tx.send(()).expect("release connection lock");
+        lock_thread.join().expect("join connection lock holder");
+
+        assert!(
+            operation_returned_error,
+            "timed out connection lock must return an error"
+        );
+        assert!(!operation_started.load(std::sync::atomic::Ordering::SeqCst));
     }
 
     #[test]

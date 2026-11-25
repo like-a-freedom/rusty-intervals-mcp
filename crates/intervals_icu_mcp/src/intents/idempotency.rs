@@ -166,7 +166,7 @@ impl IdempotencyMiddleware {
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = Result<IntentOutput, IntentError>>,
     {
-        self.execute_for_owner_with_legacy(token, request_fingerprint, owner, None, action)
+        self.execute_for_owner_with_legacy(token, request_fingerprint, owner, None, None, action)
             .await
     }
 
@@ -176,6 +176,7 @@ impl IdempotencyMiddleware {
         request_fingerprint: &str,
         owner: Option<&str>,
         legacy_token: Option<&str>,
+        tenant_scope: Option<&str>,
         action: F,
     ) -> Result<IntentOutput, IntentError>
     where
@@ -213,7 +214,14 @@ impl IdempotencyMiddleware {
         }
         if let Some(journal) = &self.journal {
             return self
-                .execute_with_journal(journal, token, request_fingerprint, owner, action)
+                .execute_with_journal(
+                    journal,
+                    token,
+                    request_fingerprint,
+                    owner,
+                    tenant_scope,
+                    action,
+                )
                 .await;
         }
         if let Some(entry) = self
@@ -266,6 +274,7 @@ impl IdempotencyMiddleware {
         token: &str,
         request_fingerprint: &str,
         owner: Option<&str>,
+        tenant_scope: Option<&str>,
         action: F,
     ) -> Result<IntentOutput, IntentError>
     where
@@ -273,24 +282,43 @@ impl IdempotencyMiddleware {
         Fut: std::future::Future<Output = Result<IntentOutput, IntentError>>,
     {
         match journal
-            .reserve(token, request_fingerprint, owner)
+            .reserve(token, request_fingerprint, owner, tenant_scope)
             .await
             .map_err(map_reservation_error)?
         {
             Reservation::Replay(output) => {
                 self.cache.write().await.stats.hits += 1;
                 crate::metrics::record_idempotency("hit");
-                Ok(output)
+                Ok(*output)
             }
             Reservation::Reserved => {
-                let output = action().await?;
-                journal.complete(token, request_fingerprint, owner, &output)
+                let output = match action().await {
+                    Ok(output) => output,
+                    Err(action_error) => {
+                        if journal
+                            .mark_unknown(token, request_fingerprint, owner)
+                            .await
+                            .is_err()
+                        {
+                            return Err(IntentError::InternalError(
+                                "The upstream operation may have succeeded, but its uncertain outcome could not be recorded. Do not retry automatically; investigate the upstream system.".to_string(),
+                            ));
+                        }
+                        return Err(action_error);
+                    }
+                };
+                if journal
+                    .complete(token, request_fingerprint, owner, &output)
                     .await
-                    .map_err(|_| {
-                        IntentError::InternalError(
-                            "The upstream operation may have succeeded, but its result could not be durably recorded. Do not retry automatically.".to_string(),
-                        )
-                    })?;
+                    .is_err()
+                {
+                    let _ = journal
+                        .mark_unknown(token, request_fingerprint, owner)
+                        .await;
+                    return Err(IntentError::InternalError(
+                        "The upstream operation may have succeeded, and its outcome could not be confirmed or durably recorded. Do not retry automatically; investigate the upstream system.".to_string(),
+                    ));
+                }
                 let mut cache = self.cache.write().await;
                 cache.stats.misses += 1;
                 cache.stats.sets += 1;
@@ -377,7 +405,7 @@ fn map_reservation_error(error: OperationJournalError) -> IntentError {
         OperationJournalError::UnknownOutcome => IntentError::InternalError(
             "The previous request has an unknown outcome. Check upstream before taking further action; do not retry this request automatically.".to_string(),
         ),
-        OperationJournalError::CapacityExhausted => IntentError::InternalError(
+        OperationJournalError::CapacityExhausted(_) => IntentError::InternalError(
             "Idempotency capacity exhausted; no action was started. Check unresolved upstream outcomes before restarting the server.".to_string(),
         ),
         OperationJournalError::Store(_) | OperationJournalError::InvalidResult => {
@@ -791,6 +819,110 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sqlite_reservation_is_active_while_the_action_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = StateStore::open(dir.path().join("operations.sqlite3"), [5; 32]).unwrap();
+        let action_store = store.clone();
+        let middleware = IdempotencyMiddleware::with_journal(OperationJournal::new(store));
+
+        middleware
+            .execute_with_idempotency("same", "fp", move || async move {
+                let state = action_store
+                    .run(|connection| {
+                        connection
+                            .query_row("SELECT state FROM idempotency_operations", [], |row| {
+                                row.get::<_, String>(0)
+                            })
+                            .map_err(Into::into)
+                    })
+                    .await
+                    .unwrap();
+                assert_eq!(state, "active");
+                Ok(IntentOutput::markdown("confirmed result"))
+            })
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn sqlite_action_error_transitions_active_reservation_to_unknown() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = StateStore::open(directory.path().join("operations.sqlite3"), [6; 32]).unwrap();
+        let action_store = store.clone();
+        let middleware = IdempotencyMiddleware::with_journal(OperationJournal::new(store.clone()));
+
+        let result = middleware
+            .execute_with_idempotency("failed", "fingerprint", move || async move {
+                let state = action_store
+                    .run(|connection| {
+                        connection
+                            .query_row("SELECT state FROM idempotency_operations", [], |row| {
+                                row.get::<_, String>(0)
+                            })
+                            .map_err(Into::into)
+                    })
+                    .await
+                    .expect("read reservation state");
+                assert_eq!(state, "active");
+                Err(IntentError::InternalError("upstream failed".to_string()))
+            })
+            .await;
+        assert!(result.is_err());
+
+        let state = store
+            .run(|connection| {
+                connection
+                    .query_row("SELECT state FROM idempotency_operations", [], |row| {
+                        row.get::<_, String>(0)
+                    })
+                    .map_err(Into::into)
+            })
+            .await
+            .unwrap();
+        assert_eq!(state, "unknown");
+    }
+
+    #[tokio::test]
+    async fn failed_unknown_transition_still_returns_non_retryable_error() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = StateStore::open(directory.path().join("operations.sqlite3"), [7; 32]).unwrap();
+        store
+            .run(|connection| {
+                connection.execute_batch(
+                    "CREATE TRIGGER fail_unknown_transition BEFORE UPDATE OF state ON idempotency_operations WHEN NEW.state = 'unknown' BEGIN SELECT RAISE(FAIL, 'injected unknown transition failure'); END;",
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let middleware = IdempotencyMiddleware::with_journal(OperationJournal::new(store));
+
+        let first = middleware
+            .execute_with_idempotency("failed", "fingerprint", || async {
+                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Err(IntentError::InternalError(
+                    "upstream response lost".to_string(),
+                ))
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            first,
+            IntentError::InternalError(message) if message.contains("Do not retry automatically")
+        ));
+
+        let retry = middleware
+            .execute_with_idempotency("failed", "fingerprint", || async {
+                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(IntentOutput::markdown("must not run again"))
+            })
+            .await;
+        assert!(retry.is_err());
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
     async fn failed_sqlite_reservation_never_starts_the_action() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("operations.sqlite3");
@@ -832,6 +964,7 @@ mod tests {
             })
             .await
             .unwrap();
+        let inspect_store = store.clone();
         let middleware = IdempotencyMiddleware::with_journal(OperationJournal::new(store));
         let calls = std::sync::atomic::AtomicUsize::new(0);
         assert!(
@@ -843,6 +976,17 @@ mod tests {
                 .await
                 .is_err()
         );
+        let state = inspect_store
+            .run(|connection| {
+                connection
+                    .query_row("SELECT state FROM idempotency_operations", [], |row| {
+                        row.get::<_, String>(0)
+                    })
+                    .map_err(Into::into)
+            })
+            .await
+            .unwrap();
+        assert_eq!(state, "unknown");
 
         let restarted_store = StateStore::open(path, [5; 32]).unwrap();
         let restarted = IdempotencyMiddleware::with_journal(OperationJournal::new(restarted_store));

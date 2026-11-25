@@ -14,6 +14,37 @@
 
 use serial_test::serial;
 
+struct EnvironmentSnapshot(Vec<(&'static str, Option<std::ffi::OsString>)>);
+
+impl EnvironmentSnapshot {
+    fn capture(keys: &'static [&'static str]) -> Self {
+        Self(
+            keys.iter()
+                .map(|key| (*key, std::env::var_os(key)))
+                .collect(),
+        )
+    }
+
+    fn set(&self, key: &str, value: &str) {
+        unsafe { std::env::set_var(key, value) };
+    }
+
+    fn remove(&self, key: &str) {
+        unsafe { std::env::remove_var(key) };
+    }
+}
+
+impl Drop for EnvironmentSnapshot {
+    fn drop(&mut self) {
+        for (key, value) in &self.0 {
+            match value {
+                Some(value) => unsafe { std::env::set_var(key, value) },
+                None => unsafe { std::env::remove_var(key) },
+            }
+        }
+    }
+}
+
 /// Helper to ensure Prometheus recorder is available for tests.
 /// Safe to call multiple times - uses #[serial] to avoid env var races.
 fn ensure_recorder_initialized() {
@@ -28,8 +59,88 @@ fn ensure_recorder_initialized() {
     });
 }
 
+#[tokio::test]
+#[serial]
+async fn mutation_journal_metrics_expose_only_low_cardinality_signals() {
+    ensure_recorder_initialized();
+
+    intervals_icu_mcp::metrics::record_operation_journal_error();
+    intervals_icu_mcp::metrics::record_operation_journal_quota_rejected("unknown_per_tenant");
+    intervals_icu_mcp::metrics::set_operation_journal_unknown_snapshot(3, 42);
+
+    let output = intervals_icu_mcp::metrics::get_prometheus_handle()
+        .expect("Prometheus handle should be available after init")
+        .render();
+
+    assert!(output.contains("intervals_icu_mcp_operation_journal_errors_total"));
+    assert!(output.contains("intervals_icu_mcp_operation_journal_quota_rejections_total"));
+    assert!(output.contains("quota=\"unknown_per_tenant\""));
+    assert!(output.contains("intervals_icu_mcp_operation_journal_unknown_operations 3"));
+    assert!(output.contains("intervals_icu_mcp_operation_journal_oldest_unknown_age_seconds 42"));
+}
+
 /// Test that upstream metrics are emitted when HTTP calls are made
 /// to intervals.icu API through the client crate.
+#[tokio::test]
+#[serial]
+async fn http_startup_refreshes_unknown_operation_metrics_from_sqlite() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let directory = tempfile::tempdir().unwrap();
+    let database_path = directory.path().join("state.sqlite3");
+    let database_path = database_path.to_str().unwrap();
+    let environment = EnvironmentSnapshot::capture(&[
+        "MCP_TRANSPORT",
+        "JWT_MASTER_KEY",
+        "MCP_STATE_DB_PATH",
+        "MCP_STATE_ENCRYPTION_KEY",
+        "MCP_TOKEN_REGISTRY_PATH",
+        "PROMETHEUS_METRICS_TOKEN",
+    ]);
+    environment.set("MCP_TRANSPORT", "http");
+    environment.set("JWT_MASTER_KEY", &"11".repeat(64));
+    environment.set("MCP_STATE_DB_PATH", database_path);
+    environment.set("MCP_STATE_ENCRYPTION_KEY", &"22".repeat(32));
+    environment.remove("MCP_TOKEN_REGISTRY_PATH");
+    environment.remove("PROMETHEUS_METRICS_TOKEN");
+    ensure_recorder_initialized();
+
+    intervals_icu_mcp::metrics::set_operation_journal_unknown_snapshot(2, 99);
+
+    let reservation = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = reservation.local_addr().unwrap();
+    drop(reservation);
+
+    let server = intervals_icu_mcp::run_http_server(address, 1024);
+    tokio::pin!(server);
+    let response = tokio::select! {
+        result = &mut server => panic!("HTTP server stopped before metrics could be scraped: {result:?}"),
+        response = async {
+            for _ in 0..100 {
+                if let Ok(mut stream) = tokio::net::TcpStream::connect(address).await {
+                    stream
+                        .write_all(b"GET /metrics HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+                        .await
+                        .unwrap();
+                    let mut bytes = Vec::new();
+                    stream.read_to_end(&mut bytes).await.unwrap();
+                    return Some(String::from_utf8_lossy(&bytes).into_owned());
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            None
+        } => response.expect("HTTP server should expose /metrics"),
+    };
+    assert!(
+        response.contains("intervals_icu_mcp_operation_journal_unknown_operations 0"),
+        "startup should replace stale unknown count with the SQLite snapshot: {response}"
+    );
+    assert!(
+        response.contains("intervals_icu_mcp_operation_journal_oldest_unknown_age_seconds 0"),
+        "startup should replace stale unknown age with the SQLite snapshot: {response}"
+    );
+}
+
 #[tokio::test]
 #[serial]
 async fn test_upstream_metrics_are_recorded() {

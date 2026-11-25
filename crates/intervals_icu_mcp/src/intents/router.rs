@@ -90,6 +90,7 @@ impl IntentRouter {
                         let request_fingerprint = fingerprint_request(name, &input);
                         let base_url = base_url.map(|url| url.trim_end_matches('/'));
                         let scope = serde_json::json!([base_url, athlete_id, token]).to_string();
+                        let tenant_scope = serde_json::json!([base_url, athlete_id]).to_string();
                         let scoped_token = hex::encode(Sha256::digest(scope.as_bytes()));
                         self.idempotency
                             .execute_for_owner_with_legacy(
@@ -97,6 +98,7 @@ impl IntentRouter {
                                 &request_fingerprint,
                                 owner,
                                 Some(&token),
+                                Some(&tenant_scope),
                                 || async {
                                     handler
                                         .execute(input.clone(), self.client.clone(), None)
@@ -319,6 +321,374 @@ mod tests {
                 .await;
             assert!(result.is_ok());
         }
+    }
+
+    #[tokio::test]
+    async fn durable_journal_isolates_active_quotas_by_tenant_and_allows_replay() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tokio::sync::Semaphore;
+
+        struct QuotaHandler {
+            calls: Arc<AtomicUsize>,
+            release: Arc<Semaphore>,
+        }
+
+        #[async_trait]
+        impl IntentHandler for QuotaHandler {
+            fn name(&self) -> &'static str {
+                "quota_test"
+            }
+
+            fn description(&self) -> &'static str {
+                "Tracks calls for journal quota tests"
+            }
+
+            fn input_schema(&self) -> serde_json::Value {
+                json!({})
+            }
+
+            fn requires_idempotency_token(&self) -> bool {
+                true
+            }
+
+            fn extract_idempotency_token(&self, input: &Value) -> Option<String> {
+                input
+                    .get("idempotency_token")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            }
+
+            async fn execute(
+                &self,
+                input: Value,
+                _client: Arc<dyn IntervalsClient>,
+                _idempotency_cache: Option<&IdempotencyCache>,
+            ) -> Result<IntentOutput, IntentError> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                if input.get("hold").and_then(Value::as_bool) == Some(true) {
+                    let permit = self.release.acquire().await.unwrap();
+                    drop(permit);
+                }
+                Ok(IntentOutput::markdown("handled"))
+            }
+        }
+
+        const ACTIVE_PER_TENANT_LIMIT: usize = 16;
+        let directory = tempfile::tempdir().unwrap();
+        let store = crate::state_store::StateStore::open(
+            directory.path().join("operations.sqlite3"),
+            [8; 32],
+        )
+        .unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let release = Arc::new(Semaphore::new(0));
+        let router = Arc::new(IntentRouter::new(
+            vec![Box::new(QuotaHandler {
+                calls: calls.clone(),
+                release: release.clone(),
+            })],
+            Arc::new(MockIntervalsClient::default()),
+            Arc::new(IdempotencyMiddleware::with_journal(
+                crate::intents::journal::OperationJournal::new(store),
+            )),
+        ));
+
+        let completed_input = json!({"idempotency_token": "completed", "hold": false});
+        let completed = router
+            .route_with_base_url(
+                "quota_test",
+                completed_input.clone(),
+                Some("athlete-a"),
+                Some("https://tenant-a.example/"),
+                Some("jwt-a"),
+            )
+            .await
+            .unwrap();
+
+        let mut active = Vec::new();
+        for index in 0..ACTIVE_PER_TENANT_LIMIT {
+            let router = router.clone();
+            active.push(tokio::spawn(async move {
+                router
+                    .route_with_base_url(
+                        "quota_test",
+                        json!({"idempotency_token": format!("active-{index}"), "hold": true}),
+                        Some("athlete-a"),
+                        Some("https://tenant-a.example"),
+                        Some("jwt-a"),
+                    )
+                    .await
+            }));
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            while calls.load(Ordering::SeqCst) < ACTIVE_PER_TENANT_LIMIT + 1 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("all tenant A mutations should reach the handler");
+
+        let overflow = router
+            .route_with_base_url(
+                "quota_test",
+                json!({"idempotency_token": "overflow", "hold": false}),
+                Some("athlete-a"),
+                Some("https://tenant-a.example"),
+                Some("jwt-b"),
+            )
+            .await;
+        assert!(
+            overflow.is_err(),
+            "tenant A must be rejected at its active quota"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), ACTIVE_PER_TENANT_LIMIT + 1);
+
+        let tenant_b = router
+            .route_with_base_url(
+                "quota_test",
+                json!({"idempotency_token": "tenant-b", "hold": false}),
+                Some("athlete-b"),
+                Some("https://tenant-a.example/"),
+                Some("jwt-b"),
+            )
+            .await;
+        assert!(
+            tenant_b.is_ok(),
+            "a different athlete at the same upstream should have its own quota"
+        );
+
+        let tenant_c = router
+            .route_with_base_url(
+                "quota_test",
+                json!({"idempotency_token": "tenant-c", "hold": false}),
+                Some("athlete-a"),
+                Some("https://tenant-b.example"),
+                Some("jwt-c"),
+            )
+            .await;
+        assert!(
+            tenant_c.is_ok(),
+            "the same athlete at a different upstream should have its own quota"
+        );
+
+        let replay = router
+            .route_with_base_url(
+                "quota_test",
+                completed_input,
+                Some("athlete-a"),
+                Some("https://tenant-a.example"),
+                Some("jwt-a"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(replay.content, completed.content);
+        assert_eq!(calls.load(Ordering::SeqCst), ACTIVE_PER_TENANT_LIMIT + 3);
+
+        release.add_permits(ACTIVE_PER_TENANT_LIMIT);
+        for task in active {
+            assert!(task.await.unwrap().is_ok());
+        }
+    }
+
+    #[tokio::test]
+    async fn durable_journal_isolates_unknown_outcome_quotas_by_tenant() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct UncertainHandler(Arc<AtomicUsize>);
+
+        #[async_trait]
+        impl IntentHandler for UncertainHandler {
+            fn name(&self) -> &'static str {
+                "uncertain_quota_test"
+            }
+
+            fn description(&self) -> &'static str {
+                "Creates unresolved outcomes for quota tests"
+            }
+
+            fn input_schema(&self) -> serde_json::Value {
+                json!({})
+            }
+
+            fn requires_idempotency_token(&self) -> bool {
+                true
+            }
+
+            fn extract_idempotency_token(&self, input: &Value) -> Option<String> {
+                input
+                    .get("idempotency_token")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            }
+
+            async fn execute(
+                &self,
+                _input: Value,
+                _client: Arc<dyn IntervalsClient>,
+                _idempotency_cache: Option<&IdempotencyCache>,
+            ) -> Result<IntentOutput, IntentError> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                Err(IntentError::InternalError("uncertain outcome".to_string()))
+            }
+        }
+
+        const UNKNOWN_PER_TENANT_LIMIT: usize = 128;
+        let directory = tempfile::tempdir().unwrap();
+        let store = crate::state_store::StateStore::open(
+            directory.path().join("operations.sqlite3"),
+            [9; 32],
+        )
+        .unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let router = IntentRouter::new(
+            vec![Box::new(UncertainHandler(calls.clone()))],
+            Arc::new(MockIntervalsClient::default()),
+            Arc::new(IdempotencyMiddleware::with_journal(
+                crate::intents::journal::OperationJournal::new(store),
+            )),
+        );
+
+        for index in 0..UNKNOWN_PER_TENANT_LIMIT {
+            let result = router
+                .route_with_base_url(
+                    "uncertain_quota_test",
+                    json!({"idempotency_token": format!("unknown-{index}")}),
+                    Some("athlete-a"),
+                    Some("https://tenant-a.example"),
+                    Some("jwt-a"),
+                )
+                .await;
+            assert!(result.is_err());
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), UNKNOWN_PER_TENANT_LIMIT);
+
+        let tenant_a_overflow = router
+            .route_with_base_url(
+                "uncertain_quota_test",
+                json!({"idempotency_token": "unknown-overflow"}),
+                Some("athlete-a"),
+                Some("https://tenant-a.example"),
+                Some("jwt-a"),
+            )
+            .await;
+        assert!(tenant_a_overflow.is_err());
+        assert_eq!(calls.load(Ordering::SeqCst), UNKNOWN_PER_TENANT_LIMIT);
+
+        let tenant_b = router
+            .route_with_base_url(
+                "uncertain_quota_test",
+                json!({"idempotency_token": "unknown-tenant-b"}),
+                Some("athlete-b"),
+                Some("https://tenant-a.example/"),
+                Some("jwt-b"),
+            )
+            .await;
+        assert!(tenant_b.is_err());
+        assert_eq!(calls.load(Ordering::SeqCst), UNKNOWN_PER_TENANT_LIMIT + 1);
+    }
+
+    #[tokio::test]
+    async fn durable_journal_bounds_completed_storage_without_evicting_replay() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct CompletedHandler(Arc<AtomicUsize>);
+
+        #[async_trait]
+        impl IntentHandler for CompletedHandler {
+            fn name(&self) -> &'static str {
+                "completed_quota_test"
+            }
+
+            fn description(&self) -> &'static str {
+                "Tracks completed results for quota tests"
+            }
+
+            fn input_schema(&self) -> serde_json::Value {
+                json!({})
+            }
+
+            fn requires_idempotency_token(&self) -> bool {
+                true
+            }
+
+            fn extract_idempotency_token(&self, input: &Value) -> Option<String> {
+                input
+                    .get("idempotency_token")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            }
+
+            async fn execute(
+                &self,
+                _input: Value,
+                _client: Arc<dyn IntervalsClient>,
+                _idempotency_cache: Option<&IdempotencyCache>,
+            ) -> Result<IntentOutput, IntentError> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                Ok(IntentOutput::markdown("saved"))
+            }
+        }
+
+        const COMPLETED_PER_TENANT_LIMIT: usize = 2048;
+        let directory = tempfile::tempdir().unwrap();
+        let store = crate::state_store::StateStore::open(
+            directory.path().join("operations.sqlite3"),
+            [10; 32],
+        )
+        .unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let router = IntentRouter::new(
+            vec![Box::new(CompletedHandler(calls.clone()))],
+            Arc::new(MockIntervalsClient::default()),
+            Arc::new(IdempotencyMiddleware::with_journal(
+                crate::intents::journal::OperationJournal::new(store),
+            )),
+        );
+
+        for index in 0..COMPLETED_PER_TENANT_LIMIT {
+            router
+                .route_with_base_url(
+                    "completed_quota_test",
+                    json!({"idempotency_token": format!("completed-{index}")}),
+                    Some("athlete-a"),
+                    Some("https://tenant-a.example"),
+                    Some("jwt-a"),
+                )
+                .await
+                .expect("operation should fit within the completed-result quota");
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), COMPLETED_PER_TENANT_LIMIT);
+
+        let overflow = router
+            .route_with_base_url(
+                "completed_quota_test",
+                json!({"idempotency_token": "completed-overflow"}),
+                Some("athlete-a"),
+                Some("https://tenant-a.example"),
+                Some("jwt-a"),
+            )
+            .await;
+        assert!(
+            overflow.is_err(),
+            "full result storage must reject before a write"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), COMPLETED_PER_TENANT_LIMIT);
+
+        let replay = router
+            .route_with_base_url(
+                "completed_quota_test",
+                json!({"idempotency_token": "completed-0"}),
+                Some("athlete-a"),
+                Some("https://tenant-a.example"),
+                Some("jwt-a"),
+            )
+            .await
+            .expect("completed replay must remain available at capacity");
+        assert!(matches!(
+            &replay.content[0],
+            crate::content::ContentBlock::Markdown { markdown } if markdown == "saved"
+        ));
+        assert_eq!(calls.load(Ordering::SeqCst), COMPLETED_PER_TENANT_LIMIT);
     }
 
     #[tokio::test]

@@ -212,6 +212,27 @@ pub fn record_idempotency(result: &str) {
     .increment(1);
 }
 
+/// Record a failure to read or update the durable mutation journal.
+pub fn record_operation_journal_error() {
+    counter!("intervals_icu_mcp_operation_journal_errors_total").increment(1);
+}
+
+/// Record a rejected journal reservation, labelled by its fixed quota class.
+pub fn record_operation_journal_quota_rejected(quota: &'static str) {
+    counter!(
+        "intervals_icu_mcp_operation_journal_quota_rejections_total",
+        "quota" => quota
+    )
+    .increment(1);
+}
+
+/// Publish the current count and oldest age of unresolved mutation outcomes.
+pub fn set_operation_journal_unknown_snapshot(count: u64, oldest_age_seconds: u64) {
+    gauge!("intervals_icu_mcp_operation_journal_unknown_operations").set(count as f64);
+    gauge!("intervals_icu_mcp_operation_journal_oldest_unknown_age_seconds")
+        .set(oldest_age_seconds as f64);
+}
+
 /// Record a dynamic upstream dispatch attempt and its outcome.
 ///
 /// Outcomes:

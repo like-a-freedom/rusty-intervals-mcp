@@ -1007,6 +1007,8 @@ pub async fn run_http_server(
         .unwrap_or_else(|_| "https://intervals.icu".to_string());
 
     let state_store = state_store::StateStore::from_env()?;
+    let operation_journal = OperationJournal::new(state_store.clone());
+    operation_journal.refresh_unknown_metrics().await;
     let token_registry = token_registry::TokenRegistry::from_store(state_store.clone());
 
     let app_state = std::sync::Arc::new(auth::AppState {
@@ -1016,8 +1018,7 @@ pub async fn run_http_server(
         tokens: token_registry.clone(),
     });
 
-    let handler =
-        IntervalsMcpHandler::new_multi_tenant_with_journal(OperationJournal::new(state_store))?;
+    let handler = IntervalsMcpHandler::new_multi_tenant_with_journal(operation_journal)?;
 
     let cookie_secure = std::env::var("MCP_COOKIE_SECURE")
         .map(|v| v != "false" && v != "0")
