@@ -207,6 +207,7 @@ pub mod mock {
         pub update_error: Option<String>,
         pub update_error_on_call: Option<(usize, String)>,
         pub bulk_create_error: Option<IntervalsError>,
+        pub bulk_create_return_count: Option<usize>,
         pub upcoming_workouts: Option<Value>,
         pub upcoming_workouts_error: Option<IntervalsError>,
         pub upcoming_workouts_calls: Arc<AtomicUsize>,
@@ -358,6 +359,11 @@ pub mod mock {
 
         pub fn with_bulk_create_error(mut self, error: IntervalsError) -> Self {
             self.bulk_create_error = Some(error);
+            self
+        }
+
+        pub fn with_bulk_create_return_count(mut self, count: usize) -> Self {
+            self.bulk_create_return_count = Some(count);
             self
         }
 
@@ -1733,7 +1739,11 @@ pub mod mock {
             &self,
             events: Vec<Event>,
         ) -> Result<Vec<Event>, IntervalsError> {
-            self.observations.bulk_events.lock().unwrap().push(events);
+            self.observations
+                .bulk_events
+                .lock()
+                .unwrap()
+                .push(events.clone());
             if let Some(error) = &self.bulk_create_error {
                 return Err(match error {
                     IntervalsError::Transport(transport_error) => {
@@ -1746,7 +1756,10 @@ pub mod mock {
                     _ => super::clone_intervals_error(error),
                 });
             }
-            Ok(vec![])
+            if let Some(count) = self.bulk_create_return_count {
+                return Ok(events.into_iter().take(count).collect());
+            }
+            Ok(events)
         }
 
         async fn search_activities(

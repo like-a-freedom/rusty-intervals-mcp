@@ -1434,3 +1434,51 @@ async fn lost_bulk_create_response_warns_that_upstream_may_have_applied_events()
         "lost response must be treated as an uncertain write: {error}"
     );
 }
+
+#[tokio::test]
+async fn short_bulk_response_is_unknown_and_retry_after_reopen_does_not_dispatch() {
+    let client = Arc::new(MockIntervalsClient::builder().with_bulk_create_return_count(1));
+    let observations = client.observations();
+    let directory = tempfile::tempdir().unwrap();
+    let database_path = directory.path().join("operations.sqlite3");
+    let store = crate::state_store::StateStore::open(database_path.clone(), [9; 32]).unwrap();
+    let router = crate::intents::IntentRouter::new(
+        vec![Box::new(PlanTrainingHandler::new())],
+        client.clone(),
+        Arc::new(crate::intents::IdempotencyMiddleware::with_journal(
+            crate::intents::journal::OperationJournal::new(store),
+        )),
+    );
+    let input = json!({
+        "period_start": "2026-03-01",
+        "period_end": "2026-03-28",
+        "adaptive": false,
+        "idempotency_token": "short-bulk-response"
+    });
+
+    let first_error = router
+        .route("plan_training", input.clone(), None)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        first_error.contains("returned 1 of") && first_error.contains("unknown outcome"),
+        "partial bulk response must be reported as uncertain: {first_error}"
+    );
+
+    let restarted_store = crate::state_store::StateStore::open(database_path, [9; 32]).unwrap();
+    let restarted_router = crate::intents::IntentRouter::new(
+        vec![Box::new(PlanTrainingHandler::new())],
+        client,
+        Arc::new(crate::intents::IdempotencyMiddleware::with_journal(
+            crate::intents::journal::OperationJournal::new(restarted_store),
+        )),
+    );
+    let retry_error = restarted_router
+        .route("plan_training", input, None)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(retry_error.contains("unknown outcome"), "{retry_error}");
+    assert_eq!(observations.bulk_events.lock().unwrap().len(), 1);
+}

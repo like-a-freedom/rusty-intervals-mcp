@@ -640,6 +640,7 @@ impl IntentHandler for PlanTrainingHandler {
                 "No workouts generated for the selected period; no events were created.",
             ));
         } else {
+            let expected_event_count = validated_events.len();
             let created_events = client
                 .bulk_create_events(validated_events)
                 .await
@@ -648,6 +649,13 @@ impl IntentHandler for PlanTrainingHandler {
                         "Bulk event creation failed with an unknown outcome: the events may have been applied upstream ({error}). Do not retry automatically; check the calendar before taking further action."
                     ))
                 })?;
+
+            if created_events.len() != expected_event_count {
+                return Err(IntentError::api(format!(
+                    "Bulk event creation returned {} of {expected_event_count} expected events; the operation has an unknown outcome because some events may have been applied upstream. Do not retry automatically; check the calendar before taking further action.",
+                    created_events.len()
+                )));
+            }
 
             content.push(ContentBlock::markdown(format!(
                 "Created Events: {} workouts\nEvents successfully created in Intervals.icu.",
