@@ -2,7 +2,6 @@
 debug/
 target/
 .cargo/
-.noindex/
 
 dev/
 docs/*
@@ -39,3 +38,4 @@ tarpaulin-report.html
 cobertura.xml
 data/
 .impeccable/
+.noindex
