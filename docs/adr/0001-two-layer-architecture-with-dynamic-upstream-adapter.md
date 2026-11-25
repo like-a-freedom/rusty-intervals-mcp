@@ -46,8 +46,8 @@ Dynamic errors surface (no silent fallback). The `intervals_icu_mcp_dynamic_disp
 
 ## Consequences
 
-- **Positive:** The dynamic runtime is no longer dead code. It is wired through `DynamicClientAdapter`, env-var gated (`INTERVALS_ICU_DYNAMIC_DISPATCH_ENABLED`), and proven through a real call site (`get_athlete_training_plan`).
-- **Positive:** New upstream operations can be exposed without touching the typed trait. Handlers that need an operation not in the trait use the dynamic adapter directly.
+- **Positive:** The dynamic runtime is wired through `DynamicClientAdapter` for mapped `IntervalsClient` methods when `INTERVALS_ICU_DYNAMIC_DISPATCH_ENABLED` is enabled.
+- **Potential:** Adapter-specific methods can dispatch upstream operations without adding them to the typed trait. `get_athlete_training_plan` is such a method, but no production handler calls it.
 - **Positive:** The intent layer's nine-tool boundary is preserved. No upstream operation id is ever visible to MCP clients.
 - **Negative:** Two code paths exist for each upstream operation (typed + dynamic). Migration is incremental, so some operations may never be typed. This is acceptable — the strangler fig is a migration pattern, not a mandate.
 
@@ -59,4 +59,4 @@ Dynamic errors surface (no silent fallback). The `intervals_icu_mcp_dynamic_disp
 
 ## Verification Gate
 
-ADR-0001 is verified when a handler uses an upstream operation not in the typed `IntervalsClient` trait, proving the adaptivity claim. This gate is closed by `DynamicClientAdapter::get_athlete_training_plan` (Phase 2C).
+The adaptivity gate requires a handler to use an upstream operation absent from the typed `IntervalsClient` trait. It remains open: `DynamicClientAdapter::get_athlete_training_plan` is called only by unit tests, not by a production handler. One test checks that an unavailable registry returns `NotFound`; another uses a synthetic spec and checks for an error other than `NotFound`. These tests do not establish a successful upstream request or handler integration.
