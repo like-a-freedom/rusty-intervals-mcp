@@ -65,6 +65,81 @@ struct CacheInner {
     stats: IdempotencyStats,
 }
 
+async fn mark_cancelled_reservation_unknown(
+    journal: &OperationJournal,
+    token: &str,
+    request_fingerprint: &str,
+    owner: Option<&str>,
+) {
+    if let Err(error) = journal
+        .mark_unknown(token, request_fingerprint, owner)
+        .await
+    {
+        tracing::warn!(error = %error, "failed to persist cancelled operation reservation as unknown");
+    }
+}
+
+async fn reserve_with_cancellation(
+    journal: &OperationJournal,
+    token: &str,
+    request_fingerprint: &str,
+    owner: Option<&str>,
+    tenant_scope: Option<&str>,
+) -> Result<(Reservation, tokio::sync::oneshot::Sender<()>), IntentError> {
+    let journal = journal.clone();
+    let token = token.to_owned();
+    let request_fingerprint = request_fingerprint.to_owned();
+    let owner = owner.map(str::to_owned);
+    let tenant_scope = tenant_scope.map(str::to_owned);
+    let (reservation_tx, reservation_rx) = tokio::sync::oneshot::channel();
+    let (dispatch_ack_tx, dispatch_ack_rx) = tokio::sync::oneshot::channel();
+
+    tokio::spawn(async move {
+        let reservation = journal
+            .reserve(
+                &token,
+                &request_fingerprint,
+                owner.as_deref(),
+                tenant_scope.as_deref(),
+            )
+            .await;
+        let was_reserved = matches!(&reservation, Ok(Reservation::Reserved));
+
+        if reservation_tx.send(reservation).is_err() {
+            if was_reserved {
+                mark_cancelled_reservation_unknown(
+                    &journal,
+                    &token,
+                    &request_fingerprint,
+                    owner.as_deref(),
+                )
+                .await;
+            }
+            return;
+        }
+
+        if was_reserved && dispatch_ack_rx.await.is_err() {
+            mark_cancelled_reservation_unknown(
+                &journal,
+                &token,
+                &request_fingerprint,
+                owner.as_deref(),
+            )
+            .await;
+        }
+    });
+
+    let reservation = reservation_rx
+        .await
+        .map_err(|_| {
+            IntentError::InternalError(
+                "The operation reservation was interrupted. Do not retry automatically; investigate the upstream system.".to_string(),
+            )
+        })?
+        .map_err(map_reservation_error)?;
+    Ok((reservation, dispatch_ack_tx))
+}
+
 impl IdempotencyMiddleware {
     pub fn new() -> Self {
         Self::with_ttl(Duration::from_secs(86400))
@@ -281,17 +356,23 @@ impl IdempotencyMiddleware {
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = Result<IntentOutput, IntentError>>,
     {
-        match journal
-            .reserve(token, request_fingerprint, owner, tenant_scope)
-            .await
-            .map_err(map_reservation_error)?
-        {
+        let (reservation, dispatch_ack) =
+            reserve_with_cancellation(journal, token, request_fingerprint, owner, tenant_scope)
+                .await?;
+
+        match reservation {
             Reservation::Replay(output) => {
                 self.cache.write().await.stats.hits += 1;
                 crate::metrics::record_idempotency("hit");
                 Ok(*output)
             }
             Reservation::Reserved => {
+                if dispatch_ack.send(()).is_err() {
+                    return Err(IntentError::InternalError(
+                        "The operation reservation could not be acknowledged. Do not retry automatically; investigate the upstream system.".to_string(),
+                    ));
+                }
+
                 let output = match action().await {
                     Ok(output) => output,
                     Err(action_error) => {
@@ -816,6 +897,81 @@ mod tests {
             .await;
         assert!(matches!(replay, Err(IntentError::IdempotencyConflict(_))));
         assert!(!called.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn cancelled_sqlite_reservation_is_unknown_after_pending_reservation_finishes() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = StateStore::open(dir.path().join("operations.sqlite3"), [5; 32]).unwrap();
+        let lock_store = store.clone();
+        let (lock_started_tx, lock_started_rx) = tokio::sync::oneshot::channel();
+        let (release_lock_tx, release_lock_rx) = std::sync::mpsc::channel();
+        let lock_holder = tokio::spawn(async move {
+            lock_store
+                .run(move |_| {
+                    lock_started_tx.send(()).unwrap();
+                    release_lock_rx.recv().unwrap();
+                    Ok(())
+                })
+                .await
+        });
+        lock_started_rx.await.unwrap();
+
+        let middleware = IdempotencyMiddleware::with_journal(OperationJournal::new(store.clone()));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let request = {
+            let middleware = middleware.clone();
+            let calls = calls.clone();
+            tokio::spawn(async move {
+                middleware
+                    .execute_with_idempotency("same", "fp", || async move {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        Ok(IntentOutput::markdown("must not run"))
+                    })
+                    .await
+            })
+        };
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        request.abort();
+        assert!(request.await.unwrap_err().is_cancelled());
+
+        release_lock_tx.send(()).unwrap();
+        lock_holder.await.unwrap().unwrap();
+
+        let mut state = String::from("missing");
+        for _ in 0..100 {
+            state = store
+                .run(|connection| {
+                    connection
+                        .query_row(
+                            "SELECT COALESCE((SELECT state FROM idempotency_operations LIMIT 1), 'missing')",
+                            [],
+                            |row| row.get::<_, String>(0),
+                        )
+                        .map_err(Into::into)
+                })
+                .await
+                .unwrap();
+            if state != "missing" {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(state, "unknown");
+
+        let retry = middleware
+            .execute_with_idempotency("same", "fp", || async {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok(IntentOutput::markdown("duplicate"))
+            })
+            .await;
+        assert!(retry.is_err());
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]
