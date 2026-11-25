@@ -902,6 +902,30 @@ async fn test_execute_with_wellness_data() {
 }
 
 #[tokio::test]
+async fn recovery_index_labels_distinguish_raw_ratio_from_baseline_relative_index() {
+    let handler = AnalyzeRaceHandler::new();
+    let recent = json!({"hrv": 70.0, "resting_hr": 50.0});
+    let baseline = json!({"hrv": 70.0, "resting_hr": 50.0});
+    let mut history = vec![baseline; 7];
+    history.extend(vec![recent.clone(); 7]);
+
+    for (wellness, expected) in [
+        (
+            vec![recent; 7],
+            "Recovery index: 1.40 (raw HRV/resting HR ratio; baseline unavailable)",
+        ),
+        (history, "Recovery index: 1.00 (watch)"),
+    ] {
+        let client = Arc::new(
+            make_minimal_client("race-1", "2026-05-24", "10K").with_wellness(json!(wellness)),
+        );
+        let output = handler.execute(json!({}), client, None).await.unwrap();
+        let content = format!("{:?}", output.content);
+        assert!(content.contains(expected), "expected {expected}: {content}");
+    }
+}
+
+#[tokio::test]
 async fn test_execute_race_readiness_shows_ctl_drop() {
     // Wellness data with CTL series showing a drop (peak 70 → current 50)
     let detail = json!({"distance": 10000.0, "moving_time": 2700});

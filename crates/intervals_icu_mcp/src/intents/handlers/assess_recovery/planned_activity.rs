@@ -58,7 +58,9 @@ impl PlannedActivity {
         red_flags: &[String],
     ) -> (String, String) {
         let sleep = wellness.avg_sleep_hours.unwrap_or(0.0);
-        let recovery_index = wellness.recovery_index.unwrap_or(0.0);
+        // The fallback HRV/RHR ratio is not on the baseline-relative scale
+        // used by these thresholds. Missing baselines cannot satisfy them.
+        let recovery_index = wellness.baseline_relative_recovery_index().unwrap_or(0.0);
         let tsb = fitness.tsb.unwrap_or(0.0);
         let has_flags = !red_flags.is_empty();
 

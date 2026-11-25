@@ -170,6 +170,15 @@ impl IntentHandler for AssessRecoveryHandler {
             rows,
         ));
 
+        if wellness.recovery_index.is_some()
+            && wellness.baseline_relative_recovery_index().is_none()
+        {
+            content.push(ContentBlock::markdown(
+                "Recovery Index uses the raw HRV/resting HR ratio because both baselines are not available. It cannot be compared with baseline-relative readiness thresholds; readiness for intensity, long, and race activities is conservative until both baselines are available. This is a data limitation, not a diagnosis."
+                    .to_string(),
+            ));
+        }
+
         if wellness.recovery_index.is_none()
             && (wellness.avg_resting_hr.is_some() || wellness.avg_hrv.is_some())
         {
@@ -1043,6 +1052,8 @@ mod tests {
     #[test]
     fn readiness_copy_intensity_ready() {
         let wellness = WellnessMetrics {
+            hrv_baseline: Some(60.0),
+            resting_hr_baseline: Some(50.0),
             avg_sleep_hours: Some(8.0),
             recovery_index: Some(1.2),
             wellness_days_count: 5,
@@ -1075,6 +1086,8 @@ mod tests {
     #[test]
     fn readiness_copy_long_ready() {
         let wellness = WellnessMetrics {
+            hrv_baseline: Some(60.0),
+            resting_hr_baseline: Some(50.0),
             avg_sleep_hours: Some(7.0),
             recovery_index: Some(1.0),
             wellness_days_count: 5,
@@ -1107,6 +1120,8 @@ mod tests {
     #[test]
     fn readiness_copy_race_ready() {
         let wellness = WellnessMetrics {
+            hrv_baseline: Some(60.0),
+            resting_hr_baseline: Some(50.0),
             avg_sleep_hours: Some(8.0),
             recovery_index: Some(1.2),
             wellness_days_count: 5,
@@ -1374,6 +1389,8 @@ mod tests {
     fn recovery_rows_recovery_index_watch() {
         let rows = AssessRecoveryHandler::build_recovery_metric_rows(
             &WellnessMetrics {
+                hrv_baseline: Some(60.0),
+                resting_hr_baseline: Some(50.0),
                 avg_sleep_hours: Some(7.5),
                 avg_resting_hr: Some(50.0),
                 avg_hrv: Some(65.0),
@@ -1397,6 +1414,8 @@ mod tests {
     fn recovery_rows_recovery_index_low() {
         let rows = AssessRecoveryHandler::build_recovery_metric_rows(
             &WellnessMetrics {
+                hrv_baseline: Some(60.0),
+                resting_hr_baseline: Some(50.0),
                 avg_sleep_hours: Some(7.5),
                 avg_resting_hr: Some(50.0),
                 avg_hrv: Some(65.0),
@@ -1463,6 +1482,19 @@ mod tests {
     fn make_good_client() -> MockIntervalsClient {
         MockIntervalsClient::builder()
             .with_wellness(json!([
+                {"sleep_hours": 8.0, "resting_hr": 50.0, "hrv": 60.0},
+                {"sleep_hours": 8.0, "resting_hr": 50.0, "hrv": 60.0},
+                {"sleep_hours": 8.0, "resting_hr": 50.0, "hrv": 60.0},
+                {"sleep_hours": 8.0, "resting_hr": 50.0, "hrv": 60.0},
+                {"sleep_hours": 8.0, "resting_hr": 50.0, "hrv": 60.0},
+                {"sleep_hours": 8.0, "resting_hr": 50.0, "hrv": 60.0},
+                {"sleep_hours": 8.0, "resting_hr": 50.0, "hrv": 60.0},
+                {"sleep_hours": 8.0, "resting_hr": 50.0, "hrv": 70.0},
+                {"sleep_hours": 8.0, "resting_hr": 50.0, "hrv": 70.0},
+                {"sleep_hours": 8.0, "resting_hr": 50.0, "hrv": 70.0},
+                {"sleep_hours": 8.0, "resting_hr": 50.0, "hrv": 70.0},
+                {"sleep_hours": 8.0, "resting_hr": 50.0, "hrv": 70.0},
+                {"sleep_hours": 8.0, "resting_hr": 50.0, "hrv": 70.0},
                 {"sleep_hours": 8.0, "resting_hr": 50.0, "hrv": 70.0}
             ]))
             .with_fitness_summary(json!({"form": 15.0}))
@@ -1544,6 +1576,64 @@ mod tests {
             !content_str.contains("Red Flags"),
             "Expected no red flags in content when disabled"
         );
+    }
+
+    #[tokio::test]
+    async fn readiness_requires_baselines_for_the_same_recent_readings() {
+        let handler = AssessRecoveryHandler::new();
+        let recent = json!({"sleep_hours": 8.0, "resting_hr": 50.0, "hrv": 70.0});
+        let baseline = json!({"sleep_hours": 8.0, "resting_hr": 50.0, "hrv": 60.0});
+        let mut with_history = vec![baseline; 7];
+        with_history.extend(vec![recent.clone(); 7]);
+
+        for (activity, ready, conservative) in [
+            ("intensity", "Ready for quality", "Hold intensity"),
+            ("long", "Long run acceptable", "Trim the long day"),
+            ("race", "Race-ready", "Not race-ready"),
+        ] {
+            for (wellness, expected) in [
+                (vec![recent.clone(); 7], conservative),
+                (with_history.clone(), ready),
+            ] {
+                let client = Arc::new(
+                    MockIntervalsClient::builder()
+                        .with_wellness(json!(wellness))
+                        .with_fitness_summary(json!({"form": 15.0}))
+                        .with_activities(vec![]),
+                );
+                let output = handler
+                    .execute(json!({"for_activity": activity}), client, None)
+                    .await
+                    .unwrap();
+                let text = content_text(&output.content);
+                assert!(
+                    text.contains(expected),
+                    "{activity}: expected {expected}: {text}"
+                );
+                if expected == conservative {
+                    assert!(text.contains("Raw ratio; baseline unavailable"));
+                    assert!(text.contains("This is a data limitation, not a diagnosis"));
+                } else {
+                    assert!(!text.contains("Raw ratio; baseline unavailable"));
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn raw_recovery_index_does_not_generate_a_recovery_first_red_flag() {
+        let handler = AssessRecoveryHandler::new();
+        let client = Arc::new(
+            MockIntervalsClient::builder()
+                .with_wellness(json!([{"sleep_hours": 8.0, "resting_hr": 60.0, "hrv": 30.0}]))
+                .with_fitness_summary(json!({"form": 0.0}))
+                .with_activities(vec![]),
+        );
+        let output = handler.execute(json!({}), client, None).await.unwrap();
+        let text = content_text(&output.content);
+        assert!(text.contains("Raw ratio; baseline unavailable"), "{text}");
+        assert!(!text.contains("Recovery-first signal"), "{text}");
+        assert!(text.contains("Red Flags: None detected"), "{text}");
     }
 
     #[tokio::test]

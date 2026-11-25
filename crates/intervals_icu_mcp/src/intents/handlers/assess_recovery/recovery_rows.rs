@@ -139,7 +139,9 @@ pub(super) fn build_recovery_metric_rows(
     }
 
     if let Some(recovery_index) = wellness.recovery_index {
-        let recovery_status = if recovery_index >= 1.2 {
+        let recovery_status = if wellness.baseline_relative_recovery_index().is_none() {
+            "⚪ Raw ratio; baseline unavailable"
+        } else if recovery_index >= 1.2 {
             "✅ Supportive"
         } else if recovery_index >= 0.9 {
             "⚠️ Watch"

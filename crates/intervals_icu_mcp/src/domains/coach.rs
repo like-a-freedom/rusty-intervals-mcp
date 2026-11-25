@@ -172,6 +172,16 @@ pub struct WellnessMetrics {
     pub resting_hr_personal_baseline: Option<PersonalBaselineDeviation>,
 }
 
+impl WellnessMetrics {
+    /// The recovery index is baseline-relative only when both baselines exist.
+    pub(crate) fn baseline_relative_recovery_index(&self) -> Option<f64> {
+        self.hrv_baseline
+            .zip(self.resting_hr_baseline)
+            .filter(|(hrv, rhr)| *hrv > 0.0 && *rhr > 0.0)
+            .and(self.recovery_index)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct TrendMetrics {
     pub activity_count_delta: Option<i64>,

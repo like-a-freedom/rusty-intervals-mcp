@@ -441,7 +441,9 @@ impl IntentHandler for AnalyzeRaceHandler {
                     wellness_lines.push(format!("HRV trend: {}", trend));
                 }
                 if let Some(index) = wellness.recovery_index {
-                    let status = if index >= 1.2 {
+                    let status = if wellness.baseline_relative_recovery_index().is_none() {
+                        "raw HRV/resting HR ratio; baseline unavailable"
+                    } else if index >= 1.2 {
                         "supportive"
                     } else if index >= 0.9 {
                         "watch"

@@ -735,9 +735,37 @@ mod tests {
     }
 
     #[test]
+    fn raw_recovery_index_does_not_trigger_baseline_relative_alert() {
+        let recent = serde_json::json!({"hrv": 30.0, "resting_hr": 60.0});
+        let baseline = serde_json::json!({"hrv": 80.0, "resting_hr": 50.0});
+        let mut history = vec![baseline; 7];
+        history.extend(vec![recent.clone(); 7]);
+
+        for (entries, expected_alert) in [(vec![recent; 7], false), (history, true)] {
+            let payload = serde_json::json!(entries);
+            let wellness =
+                crate::engines::coach_metrics::parse_wellness_metrics(Some(&payload)).unwrap();
+            let metrics = CoachMetrics {
+                wellness: Some(wellness),
+                ..Default::default()
+            };
+            let alerts = build_alerts(&metrics);
+            assert_eq!(
+                alerts
+                    .iter()
+                    .any(|alert| alert.code == "low_recovery_index"),
+                expected_alert,
+                "alerts: {alerts:?}"
+            );
+        }
+    }
+
+    #[test]
     fn low_recovery_index_creates_recovery_first_guidance() {
         let metrics = CoachMetrics {
             wellness: Some(WellnessMetrics {
+                hrv_baseline: Some(60.0),
+                resting_hr_baseline: Some(60.0),
                 avg_sleep_hours: Some(7.1),
                 avg_resting_hr: Some(60.0),
                 avg_hrv: Some(32.0),

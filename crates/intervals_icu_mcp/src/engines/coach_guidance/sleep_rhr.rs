@@ -78,7 +78,7 @@ pub(super) fn push_wellness_alerts(metrics: &CoachMetrics, alerts: &mut Vec<Coac
     }
 
     // Low recovery index alert.
-    if let Some(recovery_index) = wellness.recovery_index
+    if let Some(recovery_index) = wellness.baseline_relative_recovery_index()
         && recovery_index < super::RECOVERY_INDEX_ALERT
     {
         alerts.push(CoachAlert {
