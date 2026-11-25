@@ -1,7 +1,8 @@
 # Release Checklist Specification
 
-> Status: Verified against current codebase and implementation
-> Source: `docs/RELEASE_CHECKLIST.md`
+> Status: Historical design summary.
+> Original source (no longer tracked): `docs/RELEASE_CHECKLIST.md`.
+> Use the maintained [release checklist](../../../RELEASING.md#release-checklist) for actual release gates.
 
 ## Problem
 

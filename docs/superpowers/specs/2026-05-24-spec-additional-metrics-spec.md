@@ -1,7 +1,8 @@
 # Additional Metrics Specification (Montis Reference)
 
-> Status: Verified against current codebase and implementation
-> Source: `docs/SPEC_ADDITIONAL_METRICS.md`
+> Status: Historical design summary.
+> Original source (no longer tracked): `docs/SPEC_ADDITIONAL_METRICS.md`.
+> The original proposals do not establish which metrics shipped; see [metric methods](../../METRIC_METHODS.md) and [deterministic coaching analytics](../../../README.md#deterministic-coaching-analytics). The old cache-path discussion is not current configuration; see [ADR-0012](../../adr/0012-single-process-sqlite-state.md).
 
 ## Problem
 
@@ -17,7 +18,7 @@ Normalize definitions and integration guidance for extra metrics (including fati
 
 - Metric definitions and implementation notes
 - Integration strategy for existing system
-- Configuration/environment concerns such as idempotency cache path context
+- Historical configuration concerns, including the old idempotency cache path
 
 ### Out of Scope
 

@@ -1,7 +1,8 @@
 # Deterministic Analytical Coach Logic Specification
 
-> Status: Verified against current codebase and implementation
-> Source: `docs/ANALYTICAL_COACH_REPORTING.md`
+> Status: Historical design summary.
+> Original source (no longer tracked): `docs/ANALYTICAL_COACH_REPORTING.md`.
+> For implemented analyses, see [deterministic coaching analytics](../../../README.md#deterministic-coaching-analytics) and [metric methods](../../METRIC_METHODS.md). This is design context, not a list of all shipped behavior.
 
 ## Problem
 

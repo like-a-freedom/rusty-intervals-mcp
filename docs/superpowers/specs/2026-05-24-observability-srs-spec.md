@@ -1,7 +1,8 @@
 # Observability and Prometheus Metrics Specification
 
-> Status: Verified against current codebase and implementation
-> Source: `docs/OBSERVABILITY_SRS.md`
+> Status: Historical design summary.
+> Original source (no longer tracked): `docs/OBSERVABILITY_SRS.md`.
+> For current metric families and endpoint behavior, see [README observability](../../../README.md#observability--metrics) and [HTTP reliability](../../HTTP_RELIABILITY.md).
 
 ## Problem
 
@@ -31,7 +32,7 @@ Define observability architecture, metric emission points, endpoint contracts, a
 - Metrics are grouped by concern: upstream calls, MCP protocol behavior, authentication.
 - Endpoint and emission placement are explicit for reliable instrumentation.
 
-## Current Implementation Alignment
+## v3.0.0 implementation notes
 
 - Metrics recorder is initialized in HTTP mode startup (`run_http_server` calling `metrics::init_prometheus_recorder`).
 - Metrics subsystem is HTTP-only by design; STDIO mode returns no-op/error for recorder initialization (`crates/intervals_icu_mcp/src/metrics.rs`).

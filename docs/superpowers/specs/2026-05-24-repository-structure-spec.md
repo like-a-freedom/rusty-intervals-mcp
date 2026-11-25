@@ -1,7 +1,8 @@
 # Repository Structure Specification
 
-> Status: Verified against current codebase and implementation
-> Source: `docs/REPOSITORY_STRUCTURE.md`
+> Status: Historical design summary.
+> Original source (no longer tracked): `docs/REPOSITORY_STRUCTURE.md`.
+> Use the maintained [crate layout](../../ARCHITECTURE.md#crate-layout) and [contribution guide](../../../CONTRIBUTING.md) for navigation.
 
 ## Problem
 

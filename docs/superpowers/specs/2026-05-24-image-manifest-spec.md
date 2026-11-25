@@ -1,7 +1,8 @@
 # Container Image Manifest Specification
 
-> Status: Verified against current codebase and implementation
-> Source: `docs/IMAGE_MANIFEST.md`
+> Status: Historical design summary.
+> Original source (no longer tracked): `docs/IMAGE_MANIFEST.md`.
+> For current packaging instructions, see [container builds](../../../README.md#build-the-container) and the [release checklist](../../../RELEASING.md#release-checklist).
 
 ## Problem
 

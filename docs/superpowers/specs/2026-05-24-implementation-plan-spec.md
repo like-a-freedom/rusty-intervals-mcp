@@ -1,7 +1,8 @@
 # Intervals.icu MCP Implementation Plan Specification
 
-> Status: Verified against current codebase and implementation
-> Source: `docs/IMPLEMENTATION_PLAN.md`
+> Status: Historical design summary.
+> Original source (no longer tracked): `docs/IMPLEMENTATION_PLAN.md`.
+> This records the original delivery approach, not the active implementation plan. For current contributor checks, see the [contribution guide](../../../CONTRIBUTING.md).
 
 ## Problem
 

@@ -4,9 +4,9 @@
 
 **Scope:** Establish a reproducible behavioral baseline for the current interval-count heuristic and define the corpus contract required before claiming accuracy improvements for a future local detector.
 
-## Problem
+## Original problem
 
-`analyze_training` with `analysis_type: "intervals"` requests already structured intervals from Intervals.icu, normalizes `icu_intervals` or `icu_groups`, and calls `count_work_intervals`. The current helper classifies each upstream segment from median `average_speed` and `average_heartrate`; it does not find boundaries in streams and cannot identify session type.
+The legacy `analyze_training` interval path used Intervals.icu’s structured `icu_intervals` or `icu_groups` and `count_work_intervals`. That heuristic classifies upstream segments from median `average_speed` and `average_heartrate`; it does not find boundaries in streams or identify session type. See Implementation Status below for the separately wired local detector and the accuracy gate.
 
 The three supplied GPX tracks are valuable positive candidates, but they are untracked raw GPS files without work/recovery boundaries, session labels, or negative examples. They cannot support an accuracy claim until human-reviewed labels and a held-out corpus exist.
 

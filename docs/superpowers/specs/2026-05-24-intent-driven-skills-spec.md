@@ -1,7 +1,8 @@
 # Intent-Driven Skills Architecture Specification
 
-> Status: Verified against current codebase and implementation
-> Source: `docs/INTENT_DRIVEN_SKILLS.md`
+> Status: Historical design summary.
+> Original source (no longer tracked): `docs/INTENT_DRIVEN_SKILLS.md`.
+> For current layering and tools, see [ADR-0001](../../adr/0001-two-layer-architecture-with-dynamic-upstream-adapter.md) and the [README intent list](../../../README.md#intents). The design summary records original intent, not a separate skills runtime.
 
 ## Problem
 
@@ -31,9 +32,9 @@ Capture core architecture, principles, user scenarios, edge cases, and identifie
 - Core model: intents represent business outcomes; skills compose reusable capability paths.
 - Emphasis on deterministic routing, safe boundaries, and explicit edge-case handling.
 
-## Current Implementation Alignment
+## v3.0.0 implementation notes
 
-- The server currently creates and wires 8 intent handlers: `plan_training`, `analyze_training`, `modify_training`, `compare_periods`, `assess_recovery`, `manage_profile`, `manage_gear`, `analyze_race` (`crates/intervals_icu_mcp/src/lib.rs`).
+- The server currently registers nine intent handlers: `plan_training`, `analyze_training`, `modify_training`, `compare_periods`, `assess_recovery`, `manage_profile`, `manage_gear`, `analyze_race`, `track_progress` (`crates/intervals_icu_mcp/src/lib.rs`).
 - Tool listing intentionally exposes only intent tools; dynamic OpenAPI operations remain internal-only (`list_tools`, `tool_count`).
 - README intent table matches current handler set and mutating/non-mutating semantics (`README.md`, intents table).
 

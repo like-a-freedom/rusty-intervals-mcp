@@ -1,7 +1,8 @@
 # OpenAPI Event Schema Fix Specification
 
-> Status: Verified against current codebase and implementation
-> Source: `docs/OPENAPI_EVENT_FIX.md`
+> Status: Historical design summary.
+> Original source (no longer tracked): `docs/OPENAPI_EVENT_FIX.md`.
+> Historical schema correction, not a guarantee about today’s upstream OpenAPI contents. See [OpenAPI runtime behavior](../../../README.md#openapi-runtime-behavior) for how the server consumes the live spec.
 
 ## Problem
 

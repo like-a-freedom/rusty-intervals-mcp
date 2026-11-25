@@ -1,7 +1,7 @@
 # OAuth Flow Realignment Specification
 
-> Status: Strengthened and grounded on current implementation
-> Source: `docs/OAUTH_FLOW.md`
+> Status: OAuth (Plan A) is proposed, not implemented in v3.0.0. The JWT operator UI exists, but Plan B below is the historical proposal, not a route or security contract.
+> Original source (no longer tracked): `docs/OAUTH_FLOW.md`. For shipped auth and token management see [ADR-0011](../../adr/0011-server-side-token-registry.md) and the [README](../../../README.md#token-management-web-ui).
 
 ## Problem
 
@@ -35,15 +35,15 @@ Define a realistic migration target where HTTP auth remains production-safe toda
 - Hard dependency on unsupported upstream OAuth grants
 - User account registration or password management
 
-## Current Implementation Baseline
+## v3.0.0 implementation baseline
 
 - HTTP mode is enabled via `MCP_TRANSPORT=http` and requires `JWT_MASTER_KEY`.
-- `POST /auth` validates Intervals credentials via `get_athlete_profile`, then issues encrypted JWT claims (`athlete_id`, encrypted API key).
-- `auth_middleware` verifies JWT on `/mcp`, extracts per-request credentials, and injects them into request extensions.
+- `POST /auth` and the operator UI validate Intervals.icu credentials before issuing and recording an identity-only JWT (`athlete_id`, `jti`). The encrypted API key is stored in the SQLite registry, not in new JWTs.
+- `auth_middleware` verifies the bearer JWT on `/mcp` and resolves its credential per request. The shipped routes do not provide OAuth resource discovery, authorization, or callback exchange.
 - `/mcp` is protected by auth middleware, request timeout, body-size limits, and rate limiting.
 - `/health` and `/metrics` are available in HTTP mode; auth metrics are already emitted.
 
-## Gap Analysis (Weak Points)
+## Original Gap Analysis
 
 1. **Bootstrap friction**
 	- raw API key must be handled by the user/client before any MCP call.

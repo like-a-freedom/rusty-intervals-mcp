@@ -1,7 +1,7 @@
 # Intervals.icu MCP Architecture Specification
 
-> Status: Verified against current codebase and implementation
-> Source: `docs/ARCHITECTURE.md`
+> Status: Historical design summary.
+> Original and maintained source: [architecture overview](../../ARCHITECTURE.md) (layering). See [ADR-0012](../../adr/0012-single-process-sqlite-state.md) for v3.0.0 persistence.
 
 ## Problem
 
@@ -32,12 +32,12 @@ Summarize transport modes, intent-driven runtime, dynamic OpenAPI internals, and
 - Dynamic OpenAPI layer supports internal API-driven extensibility.
 - Deterministic coach functionality remains integrated with intent handlers.
 
-## Current Implementation Alignment
+## v3.0.0 implementation notes
 
 - Transport modes are currently `stdio` and `http` via `MCP_TRANSPORT`; unknown values exit with error (`crates/intervals_icu_mcp/src/lib.rs`, `run`).
 - Handler initialization is split by mode: single-user credentials from env in STDIO and multi-tenant JWT flow in HTTP (`initialize_handler_single_user`, `run_http_server`).
-- Intent router exposes 8 high-level business intents to host tools (`tool_count`, `list_tools`).
-- Dynamic OpenAPI runtime is present and preloaded internally, but dynamic tools are not exposed directly to the LLM host (`preload_dynamic_registry`, `dynamic` module, `list_tools`).
+- The intent router exposes nine coaching tools, including `track_progress` (`tool_count`, `list_tools`).
+- The dynamic OpenAPI runtime is private; only STDIO startup preloads it. Neither transport exposes upstream operation IDs as MCP tools.
 
 ## Success Criteria
 

@@ -1,7 +1,7 @@
 # Relative date support across intent tools
 
 **Date:** 2026-03-21
-**Status:** Approved for implementation
+**Status:** Historical design; the shared `parse_date` parser now handles `today`, `tomorrow`, `yesterday`, and `YYYY-MM-DD` for ordinary date fields. The design below records the original migration scope, not every current handler contract.
 
 ## Goal
 

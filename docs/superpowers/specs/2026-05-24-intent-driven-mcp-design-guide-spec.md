@@ -1,7 +1,8 @@
 # Intent-Driven MCP Design Guide Specification
 
-> Status: Verified against current codebase and implementation
-> Source: `docs/INTENT_DRIVEN_MCP_DESIGN_GUIDE.md`
+> Status: Historical design summary.
+> Original source (no longer tracked): `docs/INTENT_DRIVEN_MCP_DESIGN_GUIDE.md`.
+> For the current architectural decision see [ADR-0001](../../adr/0001-two-layer-architecture-with-dynamic-upstream-adapter.md); this summary does not reproduce the original bibliography.
 
 ## Problem
 

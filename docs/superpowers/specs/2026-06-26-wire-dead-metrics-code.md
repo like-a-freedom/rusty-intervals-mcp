@@ -1,6 +1,8 @@
 # Wire Dead Metrics Code into Production (v4 — Strengthened)
 
-## Problem Statement
+> Status: Historical design and audit; file locations, response examples, and proposed changes below describe that review, not the v3.0.0 output contract. See [current period comparison behavior](../../../README.md#compare_periods).
+
+## Original Problem Statement
 
 Audit of the metrics calculation logic found 11 dead code items. After verification, 5 items cannot be wired (missing API data or MCP contract break), 1 is already wired, and 5 can be wired. The highest-value item is `AnalysisEngine::compare_periods` which provides richer comparison than the current ad-hoc rendering in `compare_periods.rs`.
 
@@ -15,9 +17,9 @@ compare_periods.rs handler
   → MCP client receives JSON with content, suggestions, next_actions
 ```
 
-## Current Handler Output Structure
+## Handler Output Before the Proposed Changes
 
-The `compare_periods.rs` handler currently produces this ContentBlock sequence:
+The audit recorded this ContentBlock sequence from `compare_periods.rs`:
 
 1. `Markdown("# Comparison: {a} vs {b}")` — title
 2. `Table(Metric | A | B | Δ)` — ad-hoc comparison: Activities, Total Time, Distance, Elevation  

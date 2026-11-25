@@ -1,7 +1,8 @@
 # Improvement Plan Specification
 
-> Status: Verified against current codebase and implementation
-> Source: improvement-plan source document in `docs/`
+> Status: Historical design summary.
+> Original source (no longer tracked): improvement-plan source document in `docs/`.
+> May 2026 audit and priorities, not a current backlog or capability inventory. See the [README intent list](../../../README.md#intents) for the public tools.
 
 ## Problem
 

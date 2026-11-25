@@ -2,8 +2,8 @@
 
 > Date: 2026-03-25
 > Updated: 2026-03-25 (revised after peer review)
-> Status: Draft
-> Scope: Intent handler output formatting across all 8 intent tools
+> Status: Historical draft. For current behavior, see the [compact output guidance](../../../README.md#compact-outputs).
+> Original scope: The eight intents at the time; v3.0.0 has nine, including `track_progress`.
 
 ## Problem
 
@@ -56,7 +56,7 @@ Activity readiness
 
 ### In Scope
 1. Establish baseline token measurements on 3-5 real intent responses (Task 0)
-2. Apply compact markdown rules to all 8 intent handlers
+2. Apply compact markdown rules to the eight intent handlers in the original scope
 3. Update `render/analysis.rs` shared rendering functions
 4. Update `intents/utils.rs` data availability block
 5. Keep `ContentBlock::Markdown` variant (no wire format change)
@@ -142,7 +142,9 @@ Before making changes, measure token counts on 3-5 representative intent respons
 
 **Method:** Run each handler with a mock/fixed input, serialize the `IntentOutput` to JSON, count characters as a proxy for tokens (1 token ≈ 4 chars for English). Compare before/after.
 
-## File Impact Map
+## Original File Impact Map
+
+The paths below record the proposed edits at the time, not the current layout. `docs/OUTPUT_SCHEMA.md` and `docs/SPEC.md` are no longer tracked.
 
 | File | Change Type | Description |
 |------|------------|-------------|

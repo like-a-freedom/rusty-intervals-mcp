@@ -1,7 +1,8 @@
 # Test Coverage Strategy and Status Specification
 
-> Status: Verified against current codebase and implementation
-> Source: `docs/TEST_COVERAGE.md`
+> Status: Historical design summary.
+> Original source (no longer tracked): `docs/TEST_COVERAGE.md`.
+> This is not a current coverage report. See the [contribution guide](../../../CONTRIBUTING.md) and [CI workflow](../../../.github/workflows/ci.yml) for current checks.
 
 ## Problem
 

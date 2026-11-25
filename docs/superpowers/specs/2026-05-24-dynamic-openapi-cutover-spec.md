@@ -1,7 +1,8 @@
 # Dynamic OpenAPI Cutover Specification
 
-> Status: Verified against current codebase and implementation
-> Source: `docs/DYNAMIC_OPENAPI_CUTOVER.md`
+> Status: Historical design summary.
+> Original source (no longer tracked): `docs/DYNAMIC_OPENAPI_CUTOVER.md`.
+> The direct-cutover design below is not the v3.0.0 runtime contract. [ADR-0001](../../adr/0001-two-layer-architecture-with-dynamic-upstream-adapter.md) records the incremental adapter with typed fallback and opt-in mapped dispatch.
 
 ## Problem
 

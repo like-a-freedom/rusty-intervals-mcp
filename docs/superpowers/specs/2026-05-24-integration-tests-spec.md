@@ -1,7 +1,8 @@
 # Integration Tests Guide Specification
 
-> Status: Verified against current codebase and implementation
-> Source: `docs/INTEGRATION_TESTS.md`
+> Status: Historical design summary.
+> Original source (no longer tracked): `docs/INTEGRATION_TESTS.md`.
+> Use the [contribution guide](../../../CONTRIBUTING.md) and [README testing notes](../../../README.md#testing-notes) for current commands and prerequisites.
 
 ## Problem
 

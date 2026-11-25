@@ -1,7 +1,8 @@
 # Streamable HTTP Migration Specification
 
-> Status: Verified against current codebase and implementation
-> Source: `docs/MIGRATION_TO_STREAMABLE_HTTP.md`
+> Status: Historical design summary.
+> Original source (no longer tracked): `docs/MIGRATION_TO_STREAMABLE_HTTP.md`.
+> The v2.1 migration is retained as history. For current STDIO/HTTP setup, use the [README quick start](../../../README.md#quick-start) and [HTTP reliability](../../HTTP_RELIABILITY.md).
 
 ## Problem
 

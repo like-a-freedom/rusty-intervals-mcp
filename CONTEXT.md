@@ -50,16 +50,34 @@ See ADR-0001.
   `jti`, athlete, issue/expiry timestamps, revocation state, and the athlete's
   upstream credential encrypted at rest.
 - **Token registry** — the repository of token records, keyed by `jti`. The
-  single source of truth for revocation and credential resolution; every token
-  (from `/auth` and the UI alike) is recorded here. See ADR-0011.
+  single source of truth for revocation and credential resolution for newly
+  issued JWTs (from `/auth` and the UI alike). See [ADR-0011](docs/adr/0011-server-side-token-registry.md).
 - **Upstream credential** — an athlete's Intervals.icu API key. Stored encrypted
-  in the token registry; never embedded in the JWT.
-- **Legacy token** — a token issued before ADR-0011. It carries its encrypted
-  credential in the JWT claims and no registry `jti`; it stays verifiable until
-  it expires.
+  in the token registry; never embedded in a newly issued JWT.
+- **Credential rotation** — replacement of the upstream API key on the same
+  token record, preserving JWT identity, expiry, and replay ownership. Available
+  to Rust embedders, not via HTTP, the operator panel, or MCP.
+- **Legacy token** — a JWT that carries its encrypted upstream credential in
+  its claims, with or without a registry `jti`. Valid legacy claims can still
+  supply credentials when no stored credential is available; a known revocation,
+  athlete mismatch, or registry read failure is not bypassed.
 - **Operator panel** — the `/ui` token-management surface. A trusted,
   network-protected operator view (like `/metrics`), not a multi-tenant
-  authenticated surface._Avoid_: “session-scoped inventory”, “API key in JWT”.
+  authenticated surface. OAuth discovery and exchange are proposed, not implemented.
+
+### Mutation safety terms
+
+- **Mutation journal** — local SQLite record of mutation reservations and outcomes,
+  scoped by upstream base URL, athlete, and idempotency token. Standard STDIO
+  and HTTP share this storage model; HTTP also persists the token registry there.
+  MCP and browser sessions are separate. See [ADR-0012](docs/adr/0012-single-process-sqlite-state.md).
+- **Replay owner** — the verified JWT `jti`, or a digest of the exact JWT when
+  it lacks a `jti`. A reissued JWT is a different owner; STDIO uses its configured
+  upstream and athlete without a JWT owner.
+- **Replay** — return a retained completed result for the same operation scope,
+  request fingerprint, and owner without repeating the upstream write.
+- **Unknown outcome** — a reserved write whose effect could not be confirmed.
+  It stays blocked across restarts; there is no supported in-server resolution action.
 
 ### Metric-domain terms
 

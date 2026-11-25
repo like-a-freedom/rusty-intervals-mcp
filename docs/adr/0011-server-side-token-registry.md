@@ -29,9 +29,9 @@ tokens, keyed by `jti`.
   **encrypted at rest** with the master-key-derived AES-256-GCM key.
 - The JWT carries only `athlete_id` + `jti` and the standard registered claims.
   The upstream credential never travels in the token.
-- The auth middleware resolves credentials from the registry by `jti`, rejects
-  revoked records unconditionally, and **fails closed** on an unknown `jti` that
-  carries no legacy credential.
+- The auth middleware resolves credentials from the registry by `jti` on each
+  request. It rejects revoked records and athlete mismatches, and **fails closed**
+  on a registry read failure or an unknown `jti` with no legacy credential.
 - The UI lists the registry (filterable by athlete), not a session-scoped
   subset; the browser session only supplies a default filter.
 - **Backward compatibility:** legacy tokens (credential embedded in claims, no
@@ -40,16 +40,32 @@ tokens, keyed by `jti`.
 
 ## Consequences
 
-- Revocation now works for *every* token, not just UI-issued ones. Because the
-  credential lives in the registry rather than the token, an upstream key can
-  also be rotated by updating its record — no token re-issue required.
-- Bearer tokens no longer carry secret material.
-- The registry must be persisted (`MCP_TOKEN_REGISTRY_PATH`) or newly issued
-  tokens are rejected after a restart — the deliberate cost of a stateful,
-  revocable token model. The server warns at startup when the registry is
-  in-memory.
+- Revocation applies to every newly issued token, not just UI-issued ones.
+  Historical tokens with embedded credentials still use the compatibility path
+  above when no registry record is available; that is not durable revocation.
+- Newly issued bearer tokens no longer carry the upstream credential. The bearer
+  token itself still grants access and must be kept secret.
 - The `/ui` surface is a trusted operator panel (like `/metrics`); it is not
   multi-tenant authenticated. It lists token metadata only, never credentials.
+
+## v3.0.0 implementation
+
+- Standard HTTP startup requires the local SQLite store described in
+  [ADR-0012](0012-single-process-sqlite-state.md); there is no in-memory fallback.
+  Keep the database and `JWT_MASTER_KEY` across restarts. The old
+  `MCP_TOKEN_REGISTRY_PATH` setting is rejected at startup, JSON registry records
+  (including revocations) are not imported, and JWTs that depend on those
+  records must be reissued. This is separate from legacy claims compatibility.
+- Rust embedders can call `AppState::rotate_upstream_api_key` with a verified JWT
+  and a nonblank replacement key. It updates only the encrypted credential of
+  the matching, non-revoked `jti` and athlete. The embedder must validate the new
+  key with Intervals.icu. The JWT, expiry, and mutation replay owner are unchanged.
+  Subsequent requests see the replacement; already authenticated requests may
+  still use the old key. No HTTP route, operator UI action, or MCP tool exposes
+  this method.
+
+See the [README token-management section](../../README.md#token-management-web-ui)
+for operational usage.
 
 ## Alternatives considered
 

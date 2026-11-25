@@ -1,7 +1,8 @@
 # API Coverage Diff Specification
 
-> Status: Verified against current codebase and implementation
-> Source: `docs/API_DIFF.md`
+> Status: Historical design summary.
+> Original source (no longer tracked): `docs/API_DIFF.md`.
+> No maintained coverage diff is linked here. See the [README intent list](../../../README.md#intents) for the current public contract; this summary is not a current gap inventory.
 
 ## Problem
 

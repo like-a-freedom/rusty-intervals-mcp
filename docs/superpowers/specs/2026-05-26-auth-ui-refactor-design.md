@@ -1,8 +1,10 @@
 # `auth_ui.rs` maintainability refactor design
 
-## Context
+> Status: Historical refactor proposal, not a description of the current persistence layer. For v3.0.0 UI routes and registry behavior see the [README](../../../README.md#token-management-web-ui), [ADR-0011](../../adr/0011-server-side-token-registry.md) and [ADR-0012](../../adr/0012-single-process-sqlite-state.md).
 
-`crates/intervals_icu_mcp/src/auth_ui.rs` currently combines several concerns in one module:
+## Original context
+
+At the time, `crates/intervals_icu_mcp/src/auth_ui.rs` combined several concerns in one module:
 
 - HTTP handlers and redirects
 - session and CSRF state management

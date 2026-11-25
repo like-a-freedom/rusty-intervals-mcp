@@ -1,7 +1,8 @@
 # Output Schema Documentation Specification
 
-> Status: Verified against current codebase and implementation
-> Source: `docs/OUTPUT_SCHEMA.md`
+> Status: Historical design summary.
+> Original source (no longer tracked): `docs/OUTPUT_SCHEMA.md`.
+> For current output conventions see the [compact output guidance](../../../README.md#compact-outputs) and [public contract rules](../../../README.md#public-contract-rules).
 
 ## Problem
 
@@ -31,7 +32,7 @@ Define the standard output schema approach, IntentOutput mapping to MCP results,
 - Contract clarifies schema behavior for analytical intents and general tools.
 - Migration notes provide backward-compatible transition guidance.
 
-## Current Implementation Alignment
+## v3.0.0 implementation notes
 
 - Tool construction in `list_tools` still propagates `output_schema` when present using `with_raw_output_schema` (`crates/intervals_icu_mcp/src/lib.rs`).
 - Intent tool exposure remains explicit and bounded to router definitions; schema-bearing tool metadata is preserved for host consumption.

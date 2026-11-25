@@ -1,7 +1,7 @@
 # Progress Tracking Engine Specification
 
-> Status: Draft — grounded against the current codebase as of 2026-05-24; not implemented yet.
-> Source of truth: this file.
+> Status: `track_progress` is implemented and registered as one of the nine public intents in v3.0.0. The design below is retained as historical context, not an exact runtime contract.
+> Current behavior: [README progress tracking](../../../README.md#track_progress) and [`TrackProgressHandler`](../../../crates/intervals_icu_mcp/src/intents/handlers/track_progress.rs).
 
 ## Goal
 
@@ -264,6 +264,6 @@ Exact Rust type layout is an implementation concern, but the semantic fields abo
 ## Non-goals and anti-requirements
 
 - do not claim the feature is already implemented
-- do not cite `docs/PROGRESS_TRACKING_ENGINE.md` as a source; that file does not exist in the repository
+- `docs/PROGRESS_TRACKING_ENGINE.md` is not a tracked source; this file records the original design
 - do not describe heuristic thresholds as settled scientific law
 - do not require `domains/mod.rs`, `engines/mod.rs`, or `intents/handlers/render/mod.rs`; the current repository uses `domains.rs`, `engines.rs`, `intents/handlers.rs`, and `intents/handlers/render.rs`
