@@ -164,7 +164,7 @@ impl OperationJournal {
                         QuotaKind::ActivePerTenant,
                     ));
                 }
-                if unknown_count >= MAX_UNKNOWN_PER_TENANT {
+                if unknown_count.saturating_add(active_count) >= MAX_UNKNOWN_PER_TENANT {
                     transaction.commit()?;
                     return Ok(StoredReservation::CapacityExhausted(
                         QuotaKind::UnknownPerTenant,
@@ -423,5 +423,71 @@ mod tests {
                 QuotaKind::UnresolvedGlobal
             ))
         ));
+    }
+
+    #[tokio::test]
+    async fn active_reservations_preserve_per_tenant_unknown_capacity() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = StateStore::open(directory.path().join("operations.sqlite3"), [4; 32]).unwrap();
+        let tenant_hash = digest(TENANT_HASH_DOMAIN, b"tenant-a");
+        let seed_store = store.clone();
+        seed_store
+            .run(move |connection| {
+                let transaction = connection.transaction()?;
+                for index in 0..(MAX_UNKNOWN_PER_TENANT - 1) {
+                    let mut scope_hash = [0u8; 32];
+                    scope_hash[..8].copy_from_slice(&(index + 1).to_be_bytes());
+                    transaction.execute(
+                        "INSERT INTO idempotency_operations
+                         (scope_hash, tenant_hash, fingerprint_hash, state, created_at)
+                         VALUES (?1, ?2, ?3, 'unknown', 0)",
+                        params![
+                            scope_hash.as_slice(),
+                            tenant_hash.as_slice(),
+                            [0u8; 32].as_slice()
+                        ],
+                    )?;
+                }
+                transaction.commit()?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+
+        let journal = OperationJournal::new(store.clone());
+        assert!(matches!(
+            journal
+                .reserve("active-1", "fingerprint", None, Some("tenant-a"))
+                .await,
+            Ok(Reservation::Reserved)
+        ));
+        assert!(matches!(
+            journal
+                .reserve("active-2", "fingerprint", None, Some("tenant-a"))
+                .await,
+            Err(OperationJournalError::CapacityExhausted(
+                QuotaKind::UnknownPerTenant
+            ))
+        ));
+
+        journal
+            .mark_unknown("active-1", "fingerprint", None)
+            .await
+            .unwrap();
+        let unknown_count = store
+            .run(move |connection| {
+                connection
+                    .query_row(
+                        "SELECT COUNT(*) FROM idempotency_operations
+                         WHERE tenant_hash = ?1 AND state = 'unknown'",
+                        params![tenant_hash.as_slice()],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .map_err(Into::into)
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(unknown_count, MAX_UNKNOWN_PER_TENANT);
     }
 }
