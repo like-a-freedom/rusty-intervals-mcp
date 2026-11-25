@@ -10,6 +10,255 @@ use wiremock::{
     matchers::{method, path},
 };
 
+fn stdio_command(db: &std::path::Path, base_url: &str, athlete: &str) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_intervals_icu_mcp"));
+    command
+        .env("MCP_STATE_DB_PATH", db)
+        .env("MCP_STATE_ENCRYPTION_KEY", "11".repeat(32))
+        .env("INTERVALS_ICU_BASE_URL", base_url)
+        .env("INTERVALS_ICU_ATHLETE_ID", athlete)
+        .env("INTERVALS_ICU_API_KEY", "test-key")
+        .env("MCP_TRANSPORT", "stdio")
+        .env("RUST_LOG", "error")
+        .env_remove("MCP_TOKEN_REGISTRY_PATH")
+        .env_remove("INTERVALS_ICU_OPENAPI_SPEC")
+        .env_remove("INTERVALS_ICU_DYNAMIC_DISPATCH_ENABLED");
+    command
+}
+
+fn mutation_call(token: &str) -> CallToolRequestParams {
+    CallToolRequestParams::new("modify_training").with_arguments(
+        serde_json::json!({
+            "action": "create", "new_date": "2026-01-01", "new_name": "Run",
+            "idempotency_token": token
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+    )
+}
+
+async fn mount_create(upstream: &MockServer, athlete: &str) {
+    Mock::given(method("POST"))
+        .and(path(format!("/api/v1/athlete/{athlete}/events")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": 123, "name": "Run", "category": "WORKOUT", "start_date_local": "2026-01-01"
+        })))
+        .expect(1)
+        .mount(upstream)
+        .await;
+}
+
+#[tokio::test]
+async fn stdio_restarts_isolate_mutations_by_athlete_and_upstream() {
+    let state = tempfile::tempdir().unwrap();
+    let db = state.path().join("state.sqlite3");
+    let first = MockServer::start().await;
+    let second = MockServer::start().await;
+    mount_create(&first, "i111").await;
+    mount_create(&first, "i222").await;
+    mount_create(&second, "i111").await;
+
+    for (upstream, athlete) in [
+        (&first, "i111"),
+        (&first, "i111"),
+        (&first, "i222"),
+        (&second, "i111"),
+    ] {
+        let transport =
+            TokioChildProcess::new(stdio_command(&db, &upstream.uri(), athlete)).unwrap();
+        let service = ().serve(transport).await.unwrap();
+        let result = service
+            .call_tool(mutation_call("shared-key"))
+            .await
+            .unwrap();
+        assert_ne!(result.is_error, Some(true));
+        service.cancel().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn stdio_blocks_unscoped_sqlite_history_without_replaying_it() {
+    use sha2::{Digest, Sha256};
+
+    let state = tempfile::tempdir().unwrap();
+    let db = state.path().join("state.sqlite3");
+    let upstream = MockServer::start().await;
+    let transport = TokioChildProcess::new(stdio_command(&db, &upstream.uri(), "i111")).unwrap();
+    ().serve(transport).await.unwrap().cancel().await.unwrap();
+
+    {
+        let connection = rusqlite::Connection::open(&db).unwrap();
+        for (token, state) in [
+            ("legacy-unknown", "unknown"),
+            ("legacy-completed", "completed"),
+        ] {
+            // Storage key used by the unscoped STDIO router before this cutover.
+            let prior_key = hex::encode(Sha256::digest(format!(r#"[null,null,"{token}"]"#)));
+            let scope_hash = Sha256::digest(
+                [
+                    b"intervals-icu-mcp:operation-scope:v1\0".as_slice(),
+                    prior_key.as_bytes(),
+                ]
+                .concat(),
+            );
+            let completed = state == "completed";
+            connection.execute(
+                "INSERT INTO idempotency_operations (scope_hash, fingerprint_hash, state, created_at,
+                    expires_at, result_nonce, result_ciphertext) VALUES (?1, zeroblob(32), ?2, 0, ?3, ?4, ?5)",
+                rusqlite::params![scope_hash.as_slice(), state, completed.then_some(i64::MAX), completed.then_some([0u8;12]), completed.then_some([0u8;16])],
+            ).unwrap();
+        }
+    }
+
+    let transport = TokioChildProcess::new(stdio_command(&db, &upstream.uri(), "i222")).unwrap();
+    let service = ().serve(transport).await.unwrap();
+    for token in ["legacy-unknown", "legacy-completed"] {
+        let error = service.call_tool(mutation_call(token)).await.unwrap_err();
+        assert!(error.to_string().contains("do not retry"), "{error}");
+    }
+    service.cancel().await.unwrap();
+    assert!(
+        upstream
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .all(|request| request.method != wiremock::http::Method::POST)
+    );
+}
+
+#[tokio::test]
+async fn stdio_restart_blocks_a_mutation_interrupted_before_or_after_dispatch() {
+    use std::time::Duration;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    for (tool, boundary_method, boundary_path, arguments, expected_writes) in [
+        (
+            "plan_training",
+            "GET",
+            "/api/v1/athlete/i111/profile",
+            serde_json::json!({"period_start":"2026-01-01", "period_end":"2026-01-07", "adaptive":false, "idempotency_token":"interrupted"}),
+            0,
+        ),
+        (
+            "modify_training",
+            "POST",
+            "/api/v1/athlete/i111/events",
+            serde_json::json!({"action":"create", "new_date":"2026-01-01", "new_name":"Run", "idempotency_token":"interrupted"}),
+            1,
+        ),
+    ] {
+        let upstream = MockServer::start().await;
+        Mock::given(method(boundary_method))
+            .and(path(boundary_path))
+            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(15)))
+            .expect(1)
+            .mount(&upstream)
+            .await;
+
+        let state = tempfile::tempdir().unwrap();
+        let db = state.path().join("state.sqlite3");
+        let mut child = stdio_command(&db, &upstream.uri(), "i111")
+            .kill_on_drop(true)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut input = child.stdin.take().unwrap();
+        let mut output = BufReader::new(child.stdout.take().unwrap()).lines();
+        input.write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-03-26\",\"capabilities\":{},\"clientInfo\":{\"name\":\"test\",\"version\":\"1\"}}}\n").await.unwrap();
+        let initialized = tokio::time::timeout(Duration::from_secs(10), output.next_line())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(
+            serde_json::from_str::<serde_json::Value>(&initialized)
+                .unwrap()
+                .get("result")
+                .is_some(),
+            "{initialized}"
+        );
+        input
+            .write_all(b"{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n")
+            .await
+            .unwrap();
+        let call = serde_json::json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":tool,"arguments":arguments}});
+        input
+            .write_all(format!("{call}\n").as_bytes())
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if upstream
+                    .received_requests()
+                    .await
+                    .unwrap()
+                    .iter()
+                    .any(|request| request.url.path() == boundary_path)
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the server should reach the controlled boundary");
+        child.kill().await.unwrap();
+        drop(input);
+        drop(output);
+
+        let transport =
+            TokioChildProcess::new(stdio_command(&db, &upstream.uri(), "i111")).unwrap();
+        let service = ().serve(transport).await.unwrap();
+        let retry =
+            CallToolRequestParams::new(tool).with_arguments(arguments.as_object().unwrap().clone());
+        let error = tokio::time::timeout(Duration::from_secs(5), service.call_tool(retry))
+            .await
+            .unwrap()
+            .unwrap_err();
+        assert!(error.to_string().contains("unknown outcome"), "{error}");
+        service.cancel().await.unwrap();
+        let requests = upstream.received_requests().await.unwrap();
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request.method == wiremock::http::Method::POST)
+                .count(),
+            expected_writes
+        );
+    }
+}
+
+#[tokio::test]
+async fn stdio_refuses_a_legacy_file_as_the_state_database() {
+    let state = tempfile::tempdir().unwrap();
+    let db = state.path().join("old-journal.json");
+    let legacy = br#"[["legacy-key",{"result":{"content":[]}}]]"#;
+    std::fs::write(&db, legacy).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o640)).unwrap();
+    }
+    let result = stdio_command(&db, "http://127.0.0.1:1", "i111")
+        .output()
+        .await
+        .unwrap();
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("durable state store"));
+    assert_eq!(std::fs::read(&db).unwrap(), legacy);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(db).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
+    }
+}
+
 #[tokio::test]
 async fn e2e_stdio_lists_tools_and_calls_profile() {
     // Start a mock Intervals API

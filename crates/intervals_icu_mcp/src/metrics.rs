@@ -226,11 +226,61 @@ pub fn record_operation_journal_quota_rejected(quota: &'static str) {
     .increment(1);
 }
 
+#[derive(Clone, Copy)]
+struct UnknownSnapshot {
+    count: u64,
+    oldest_created_at: Option<i64>,
+}
+
+static UNKNOWN_SNAPSHOT: Mutex<Option<UnknownSnapshot>> = Mutex::new(None);
+
 /// Publish the current count and oldest age of unresolved mutation outcomes.
 pub fn set_operation_journal_unknown_snapshot(count: u64, oldest_age_seconds: u64) {
-    gauge!("intervals_icu_mcp_operation_journal_unknown_operations").set(count as f64);
-    gauge!("intervals_icu_mcp_operation_journal_oldest_unknown_age_seconds")
-        .set(oldest_age_seconds as f64);
+    let age_ms = i64::try_from(oldest_age_seconds.saturating_mul(1_000)).unwrap_or(i64::MAX);
+    let oldest_created_at =
+        (count != 0).then(|| chrono::Utc::now().timestamp_millis().saturating_sub(age_ms));
+    publish_operation_journal_unknown_snapshot(count, oldest_created_at);
+}
+
+pub(crate) fn publish_operation_journal_unknown_snapshot(
+    count: u64,
+    oldest_created_at: Option<i64>,
+) {
+    let snapshot = UnknownSnapshot {
+        count,
+        oldest_created_at,
+    };
+    let mut stored = UNKNOWN_SNAPSHOT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *stored = Some(snapshot);
+    snapshot.update_gauges();
+}
+
+impl UnknownSnapshot {
+    fn update_gauges(self) {
+        let oldest_age_seconds = self.oldest_created_at.map_or(0, |created_at| {
+            chrono::Utc::now()
+                .timestamp_millis()
+                .saturating_sub(created_at)
+                .max(0)
+                / 1_000
+        });
+        gauge!("intervals_icu_mcp_operation_journal_unknown_operations").set(self.count as f64);
+        gauge!("intervals_icu_mcp_operation_journal_oldest_unknown_age_seconds")
+            .set(oldest_age_seconds as f64);
+    }
+}
+
+fn render_scrape(handle: &PrometheusHandle) -> String {
+    // Keep both gauges from the same snapshot through rendering, even on concurrent scrapes.
+    let stored = UNKNOWN_SNAPSHOT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(snapshot) = *stored {
+        snapshot.update_gauges();
+    }
+    handle.render()
 }
 
 /// Record a dynamic upstream dispatch attempt and its outcome.
@@ -344,7 +394,7 @@ pub fn create_metrics_router() -> axum::Router {
         // Get metrics output
         match get_prometheus_handle() {
             Some(handle) => {
-                let body = handle.render();
+                let body = render_scrape(handle);
                 ([("content-type", "text/plain; version=0.0.4")], body).into_response()
             }
             None => (StatusCode::SERVICE_UNAVAILABLE, "Metrics not initialized").into_response(),

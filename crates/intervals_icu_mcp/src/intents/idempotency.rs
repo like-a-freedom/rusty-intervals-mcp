@@ -79,12 +79,17 @@ async fn mark_cancelled_operation_unknown(
     }
 }
 
+struct JournalScope<'a> {
+    tenant: Option<&'a str>,
+    legacy_token: Option<&'a str>,
+}
+
 async fn reserve_with_cancellation(
     journal: &OperationJournal,
     token: &str,
     request_fingerprint: &str,
     owner: Option<&str>,
-    tenant_scope: Option<&str>,
+    scope: JournalScope<'_>,
 ) -> Result<
     (
         Reservation,
@@ -97,7 +102,8 @@ async fn reserve_with_cancellation(
     let token = token.to_owned();
     let request_fingerprint = request_fingerprint.to_owned();
     let owner = owner.map(str::to_owned);
-    let tenant_scope = tenant_scope.map(str::to_owned);
+    let tenant_scope = scope.tenant.map(str::to_owned);
+    let legacy_token = scope.legacy_token.map(str::to_owned);
     let (reservation_tx, reservation_rx) = tokio::sync::oneshot::channel();
     let (dispatch_ack_tx, dispatch_ack_rx) = tokio::sync::oneshot::channel();
     let (operation_finished_tx, operation_finished_rx) = tokio::sync::oneshot::channel();
@@ -109,6 +115,7 @@ async fn reserve_with_cancellation(
                 &request_fingerprint,
                 owner.as_deref(),
                 tenant_scope.as_deref(),
+                legacy_token.as_deref(),
             )
             .await;
         let was_reserved = matches!(&reservation, Ok(Reservation::Reserved));
@@ -315,7 +322,10 @@ impl IdempotencyMiddleware {
                     token,
                     request_fingerprint,
                     owner,
-                    tenant_scope,
+                    JournalScope {
+                        tenant: tenant_scope,
+                        legacy_token,
+                    },
                     action,
                 )
                 .await;
@@ -370,7 +380,7 @@ impl IdempotencyMiddleware {
         token: &str,
         request_fingerprint: &str,
         owner: Option<&str>,
-        tenant_scope: Option<&str>,
+        scope: JournalScope<'_>,
         action: F,
     ) -> Result<IntentOutput, IntentError>
     where
@@ -378,8 +388,7 @@ impl IdempotencyMiddleware {
         Fut: std::future::Future<Output = Result<IntentOutput, IntentError>>,
     {
         let (reservation, dispatch_ack, operation_finished) =
-            reserve_with_cancellation(journal, token, request_fingerprint, owner, tenant_scope)
-                .await?;
+            reserve_with_cancellation(journal, token, request_fingerprint, owner, scope).await?;
 
         match reservation {
             Reservation::Replay(output) => {
@@ -948,48 +957,43 @@ mod tests {
 
         let middleware = IdempotencyMiddleware::with_journal(OperationJournal::new(store.clone()));
         let calls = Arc::new(AtomicUsize::new(0));
-        let request = {
-            let middleware = middleware.clone();
-            let calls = calls.clone();
-            tokio::spawn(async move {
-                middleware
-                    .execute_with_idempotency("same", "fp", || async move {
-                        calls.fetch_add(1, Ordering::SeqCst);
-                        Ok(IntentOutput::markdown("must not run"))
-                    })
-                    .await
-            })
-        };
-        for _ in 0..10 {
-            tokio::task::yield_now().await;
+        let mut request = Box::pin(middleware.execute_with_idempotency("same", "fp", || async {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Ok(IntentOutput::markdown("must not run"))
+        }));
+        // Poll through reservation startup while the database lock is still held.
+        tokio::select! {
+            biased;
+            result = &mut request => panic!("reservation should still be pending: {result:?}"),
+            () = std::future::ready(()) => {}
         }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        request.abort();
-        assert!(request.await.unwrap_err().is_cancelled());
+        drop(request);
 
         release_lock_tx.send(()).unwrap();
         lock_holder.await.unwrap().unwrap();
 
-        let mut state = String::from("missing");
-        for _ in 0..100 {
-            state = store
-                .run(|connection| {
-                    connection
-                        .query_row(
-                            "SELECT COALESCE((SELECT state FROM idempotency_operations LIMIT 1), 'missing')",
-                            [],
-                            |row| row.get::<_, String>(0),
-                        )
-                        .map_err(Into::into)
-                })
-                .await
-                .unwrap();
-            if state != "missing" {
-                break;
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let unknown = store
+                    .run(|connection| {
+                        connection
+                            .query_row(
+                                "SELECT EXISTS(SELECT 1 FROM idempotency_operations WHERE state = 'unknown')",
+                                [],
+                                |row| row.get::<_, bool>(0),
+                            )
+                            .map_err(Into::into)
+                    })
+                    .await
+                    .unwrap();
+                if unknown {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
             }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        assert_eq!(state, "unknown");
+        })
+        .await
+        .expect("the cancelled reservation should become unknown");
 
         let retry = middleware
             .execute_with_idempotency("same", "fp", || async {
@@ -1185,7 +1189,7 @@ mod tests {
         store
             .run(|connection| {
                 connection.execute_batch(
-                    "CREATE TRIGGER fail_operation_reservation BEFORE INSERT ON idempotency_operations BEGIN SELECT RAISE(FAIL, 'injected reservation failure'); END;", 
+                    "CREATE TRIGGER fail_operation_reservation BEFORE INSERT ON idempotency_operations BEGIN SELECT RAISE(FAIL, 'injected reservation failure'); END;",
                 )?;
                 Ok(())
             })
@@ -1213,7 +1217,7 @@ mod tests {
         store
             .run(|connection| {
                 connection.execute_batch(
-                    "CREATE TRIGGER fail_operation_completion BEFORE UPDATE OF state ON idempotency_operations WHEN NEW.state = 'completed' BEGIN SELECT RAISE(FAIL, 'injected transition failure'); END;", 
+                    "CREATE TRIGGER fail_operation_completion BEFORE UPDATE OF state ON idempotency_operations WHEN NEW.state = 'completed' BEGIN SELECT RAISE(FAIL, 'injected transition failure'); END;",
                 )?;
                 Ok(())
             })

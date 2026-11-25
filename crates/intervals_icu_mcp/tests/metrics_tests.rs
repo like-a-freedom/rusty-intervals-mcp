@@ -79,8 +79,54 @@ async fn mutation_journal_metrics_expose_only_low_cardinality_signals() {
     assert!(output.contains("intervals_icu_mcp_operation_journal_oldest_unknown_age_seconds 42"));
 }
 
-/// Test that upstream metrics are emitted when HTTP calls are made
-/// to intervals.icu API through the client crate.
+#[tokio::test]
+#[serial]
+async fn oldest_unknown_age_advances_between_scrapes_without_a_refresh() {
+    let environment = EnvironmentSnapshot::capture(&["PROMETHEUS_METRICS_TOKEN"]);
+    environment.remove("PROMETHEUS_METRICS_TOKEN");
+    ensure_recorder_initialized();
+    intervals_icu_mcp::metrics::set_operation_journal_unknown_snapshot(3, 42);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/metrics", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            intervals_icu_mcp::metrics::create_metrics_router(),
+        )
+        .await
+        .unwrap();
+    });
+    let client = reqwest::Client::new();
+    let scrape_age = || async {
+        let text = client
+            .get(&url)
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        text.lines()
+            .find_map(|line| {
+                line.strip_prefix("intervals_icu_mcp_operation_journal_oldest_unknown_age_seconds ")
+            })
+            .unwrap()
+            .parse::<u64>()
+            .unwrap()
+    };
+    let before = scrape_age().await;
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    let after = scrape_age().await;
+    server.abort();
+    assert!(
+        after > before,
+        "age should advance between scrapes: {before} -> {after}"
+    );
+}
+
+/// Verify HTTP startup replaces stale in-process metrics with the SQLite snapshot.
 #[tokio::test]
 #[serial]
 async fn http_startup_refreshes_unknown_operation_metrics_from_sqlite() {

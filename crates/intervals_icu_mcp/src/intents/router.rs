@@ -1,11 +1,12 @@
 use super::idempotency::IdempotencyMiddleware;
+use super::journal::scoped_operation_token;
 use super::types::{
     IntentError, IntentHandler, IntentOutput, ToolDefinition, standard_output_schema,
 };
 use crate::metrics;
 use intervals_icu_client::IntervalsClient;
 use serde_json::{Map, Value};
-use sha2::{Digest, Sha256};
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{debug, info};
@@ -89,9 +90,8 @@ impl IntentRouter {
                     } else {
                         let request_fingerprint = fingerprint_request(name, &input);
                         let base_url = base_url.map(|url| url.trim_end_matches('/'));
-                        let scope = serde_json::json!([base_url, athlete_id, token]).to_string();
                         let tenant_scope = serde_json::json!([base_url, athlete_id]).to_string();
-                        let scoped_token = hex::encode(Sha256::digest(scope.as_bytes()));
+                        let scoped_token = scoped_operation_token(base_url, athlete_id, &token);
                         self.idempotency
                             .execute_for_owner_with_legacy(
                                 &scoped_token,

@@ -1,5 +1,5 @@
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
-use rusqlite::{Connection, TransactionBehavior};
+use rusqlite::{Connection, OpenFlags, TransactionBehavior};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, TryLockError};
 use std::time::Duration;
@@ -64,15 +64,31 @@ impl StateStore {
                 "MCP_STATE_DB_PATH cannot be empty".to_string(),
             ));
         }
+        if path == Path::new(":memory:") {
+            return Err(StateStoreError::Configuration(
+                "MCP_STATE_DB_PATH must be a durable file path".to_string(),
+            ));
+        }
         if let Some(parent) = path.parent()
             && !parent.as_os_str().is_empty()
         {
             std::fs::create_dir_all(parent)?;
         }
 
-        let mut connection = Connection::open(&path)?;
+        prepare_database_files(&path)?;
+        // Interpret the configured path literally so SQLite opens the file we secured.
+        let flags = OpenFlags::default() - OpenFlags::SQLITE_OPEN_URI;
+        #[cfg(unix)]
+        let flags = flags - OpenFlags::SQLITE_OPEN_CREATE;
+        let mut connection = Connection::open_with_flags(&path, flags)?;
         connection.busy_timeout(BUSY_TIMEOUT)?;
-        connection.pragma_update(None, "journal_mode", "WAL")?;
+        let mode: String =
+            connection.pragma_update_and_check(None, "journal_mode", "WAL", |row| row.get(0))?;
+        if !mode.eq_ignore_ascii_case("wal") {
+            return Err(StateStoreError::Configuration(
+                "state-store database requires WAL mode".to_string(),
+            ));
+        }
         connection.pragma_update(None, "synchronous", "FULL")?;
         connection.pragma_update(None, "foreign_keys", "ON")?;
         Self::initialize_schema(&mut connection)?;
@@ -80,7 +96,6 @@ impl StateStore {
             "UPDATE idempotency_operations SET state = 'unknown' WHERE state = 'active'",
             [],
         )?;
-        set_database_sidecar_permissions(&path)?;
 
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
@@ -177,10 +192,8 @@ impl StateStore {
                     }
                 }
             };
-            let operation_result = operation(&mut connection);
-            let permission_result = set_database_sidecar_permissions(&path);
-            permission_result?;
-            operation_result
+            secure_database_files(&path)?;
+            operation(&mut connection)
         })
         .await
         .map_err(|error| StateStoreError::Join(error.to_string()))?
@@ -237,34 +250,88 @@ fn decode_encryption_key(value: &str) -> Result<[u8; 32], StateStoreError> {
         .map_err(|_| StateStoreError::InvalidEncryptionKey)
 }
 
-#[cfg(unix)]
-fn set_private_permissions(path: &Path) -> Result<(), StateStoreError> {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-    Ok(())
-}
+fn prepare_database_files(path: &Path) -> Result<(), StateStoreError> {
+    #[cfg(unix)]
+    {
+        use std::io::Read;
+        use std::os::unix::fs::OpenOptionsExt;
 
-#[cfg(not(unix))]
-fn set_private_permissions(_path: &Path) -> Result<(), StateStoreError> {
-    Ok(())
-}
-
-#[cfg(unix)]
-fn set_database_sidecar_permissions(path: &Path) -> Result<(), StateStoreError> {
-    use std::os::unix::fs::PermissionsExt;
-    for suffix in ["-wal", "-shm"] {
-        let mut sidecar = path.as_os_str().to_os_string();
-        sidecar.push(suffix);
-        let sidecar = PathBuf::from(sidecar);
-        if sidecar.exists() {
-            std::fs::set_permissions(sidecar, std::fs::Permissions::from_mode(0o600))?;
+        // SQLite derives new journal, WAL and SHM permissions from the database file.
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path)
+        {
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                let metadata = std::fs::symlink_metadata(path)?;
+                if !metadata.is_file() {
+                    return Err(StateStoreError::Configuration(
+                        "state-store database must be a regular file".to_string(),
+                    ));
+                }
+                // Reject an old JSON journal or other non-SQLite file before changing its mode.
+                if metadata.len() != 0 {
+                    let mut header = [0; 16];
+                    let mut file = std::fs::File::open(path)?;
+                    if metadata.len() < header.len() as u64 {
+                        return Err(invalid_database_header());
+                    }
+                    file.read_exact(&mut header)?;
+                    if &header != b"SQLite format 3\0" {
+                        return Err(invalid_database_header());
+                    }
+                }
+            }
+            Err(error) => return Err(error.into()),
         }
     }
-    set_private_permissions(path)
+    secure_database_files(path)
+}
+
+#[cfg(unix)]
+fn invalid_database_header() -> StateStoreError {
+    StateStoreError::Configuration(
+        "the existing state-store file is not SQLite; no legacy history was imported".to_string(),
+    )
+}
+
+#[cfg(unix)]
+fn secure_database_files(path: &Path) -> Result<(), StateStoreError> {
+    set_private_permissions(path, false)?;
+    for suffix in ["-journal", "-wal", "-shm"] {
+        let mut sidecar = path.as_os_str().to_os_string();
+        sidecar.push(suffix);
+        set_private_permissions(Path::new(&sidecar), true)?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_private_permissions(path: &Path, allow_missing: bool) -> Result<(), StateStoreError> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if allow_missing && error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(());
+        }
+        Err(error) => return Err(error.into()),
+    };
+    if !metadata.is_file() {
+        return Err(StateStoreError::Configuration(
+            "state-store database and sidecars must be regular files".to_string(),
+        ));
+    }
+    if metadata.permissions().mode() & 0o7777 != 0o600 {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
 }
 
 #[cfg(not(unix))]
-fn set_database_sidecar_permissions(_path: &Path) -> Result<(), StateStoreError> {
+fn secure_database_files(_path: &Path) -> Result<(), StateStoreError> {
     Ok(())
 }
 
@@ -408,27 +475,118 @@ mod tests {
         assert!(!operation_started.load(std::sync::atomic::Ordering::SeqCst));
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn sqlite_files_are_private_before_mutation() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.sqlite3");
+        let store = StateStore::open(path.clone(), [4; 32]).unwrap();
+        let files = [
+            path,
+            dir.path().join("state.sqlite3-wal"),
+            dir.path().join("state.sqlite3-shm"),
+        ];
+        for file in &files {
+            std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        store
+            .run(move |connection| {
+                for file in files {
+                    assert_eq!(std::fs::metadata(file)?.permissions().mode() & 0o777, 0o600);
+                }
+                connection.execute(
+                    "INSERT INTO token_registry VALUES ('id', 'athlete', 'now', 'later', 0, NULL)",
+                    [],
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn sqlite_commit_is_not_reported_as_failure_when_path_becomes_unavailable() {
+        let dir = tempfile::tempdir().unwrap();
+        let original = dir.path().join("original");
+        let moved = dir.path().join("moved");
+        let store = StateStore::open(original.join("state.sqlite3"), [4; 32]).unwrap();
+        let original_in_operation = original.clone();
+        let moved_in_operation = moved.clone();
+        let result = store
+            .run(move |connection| {
+                let transaction = connection.transaction()?;
+                transaction.execute(
+                    "INSERT INTO token_registry VALUES ('id', 'athlete', 'now', 'later', 0, NULL)",
+                    [],
+                )?;
+                transaction.commit()?;
+                std::fs::rename(original_in_operation, moved_in_operation)?;
+                Ok(())
+            })
+            .await;
+        std::fs::rename(moved, original).unwrap();
+        let count = store
+            .run(|connection| {
+                Ok(
+                    connection.query_row("SELECT COUNT(*) FROM token_registry", [], |row| {
+                        row.get::<_, i64>(0)
+                    })?,
+                )
+            })
+            .await
+            .unwrap();
+        assert_eq!(count, 1);
+        assert!(
+            result.is_ok(),
+            "the committed insert was reported as failed: {result:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sqlite_open_rejects_invalid_sidecar_before_initializing_schema() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.sqlite3");
+        let sidecar = dir.path().join("state.sqlite3-journal");
+        std::fs::create_dir(&sidecar).unwrap();
+        assert!(matches!(
+            StateStore::open(path.clone(), [4; 32]),
+            Err(StateStoreError::Configuration(_))
+        ));
+        std::fs::remove_dir(sidecar).unwrap();
+        let connection = Connection::open(path).unwrap();
+        let version: i64 = connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 0);
+    }
+
     #[test]
     fn sqlite_open_creates_private_database_and_schema() {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("nested/state.sqlite3");
         let store = StateStore::open(path.clone(), [4; 32]).expect("open store");
         assert!(path.exists());
-        let version: i64 = store
-            .connection
-            .lock()
-            .expect("connection lock")
+        let connection = store.connection.lock().expect("connection lock");
+        let version: i64 = connection
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .expect("read schema version");
         assert_eq!(version, SCHEMA_VERSION);
+        let mode: String = connection
+            .pragma_query_value(None, "journal_mode", |row| row.get(0))
+            .unwrap();
+        assert_eq!(mode, "wal");
 
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            assert_eq!(
-                std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
-                0o600
-            );
+            for name in ["state.sqlite3", "state.sqlite3-wal", "state.sqlite3-shm"] {
+                let metadata = std::fs::metadata(path.with_file_name(name)).unwrap();
+                assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+            }
         }
     }
 }

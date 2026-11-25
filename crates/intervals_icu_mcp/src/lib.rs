@@ -75,10 +75,16 @@ pub struct IntervalsMcpHandler {
     dynamic_runtime: dynamic::DynamicRuntime,
     intent_router: Arc<IntentRouter>,
     idempotency: Arc<IdempotencyMiddleware>,
+    stdio_scope: Option<Arc<StdioOperationScope>>,
     transports: Arc<
         Mutex<HashMap<(String, String), intervals_icu_client::http_client::IntervalsTransport>>,
     >,
     dynamic_runtimes: Arc<Mutex<HashMap<String, Arc<dynamic::DynamicRuntime>>>>,
+}
+
+struct StdioOperationScope {
+    base_url: String,
+    athlete_id: String,
 }
 
 impl IntervalsMcpHandler {
@@ -174,6 +180,7 @@ impl IntervalsMcpHandler {
             dynamic_runtime,
             intent_router,
             idempotency,
+            stdio_scope: None,
             transports: Arc::new(Mutex::new(HashMap::new())),
             dynamic_runtimes: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -390,13 +397,19 @@ impl ServerHandler for IntervalsMcpHandler {
     ) -> Result<CallToolResponse, ErrorData> {
         metrics::record_mcp_method_call("tools/call");
         let client_for_request = self.client_for_extensions(&context.extensions);
-        let athlete_id = Self::request_credentials(&context.extensions).map(|c| c.athlete_id);
-        if athlete_id.is_some() && client_for_request.is_none() {
+        let request_athlete_id =
+            Self::request_credentials(&context.extensions).map(|c| c.athlete_id);
+        if request_athlete_id.is_some() && client_for_request.is_none() {
             return Err(ErrorData::internal_error(
                 "failed to create request client",
                 None,
             ));
         }
+        let athlete_id = request_athlete_id.or_else(|| {
+            self.stdio_scope
+                .as_ref()
+                .map(|scope| scope.athlete_id.clone())
+        });
         let request_id = Self::request_request_id(&context.extensions);
         let (client_name, client_version) = Self::request_client(&context);
         let started = std::time::Instant::now();
@@ -433,10 +446,14 @@ impl ServerHandler for IntervalsMcpHandler {
             }
             None => {
                 self.intent_router
-                    .route(
+                    .route_with_base_url(
                         intent_name,
                         serde_json::Value::Object(args.clone()),
                         athlete_id.as_deref(),
+                        self.stdio_scope
+                            .as_ref()
+                            .map(|scope| scope.base_url.as_str()),
+                        None,
                     )
                     .await
             }
@@ -752,18 +769,25 @@ pub async fn initialize_handler_single_user() -> Result<IntervalsMcpHandler, Str
     tracing::info!(athlete_id = %athlete, "credentials validated");
 
     let api_key = secrecy::SecretString::new(api_key.into());
-    let client =
-        intervals_icu_client::http_client::ReqwestIntervalsClient::new(&base, athlete, api_key)
-            .map_err(|e| format!("failed to create client: {e}"))?;
+    let client = intervals_icu_client::http_client::ReqwestIntervalsClient::new(
+        &base,
+        athlete.clone(),
+        api_key,
+    )
+    .map_err(|e| format!("failed to create client: {e}"))?;
     let state_store = state_store::StateStore::from_env()
         .map_err(|error| format!("failed to initialize durable state store: {error}"))?;
     let journal = OperationJournal::new(state_store);
     let runtime = dynamic::DynamicRuntime::from_env().with_typed_client(client.clone());
-    let handler = IntervalsMcpHandler::with_dynamic_runtime_and_journal(
+    let mut handler = IntervalsMcpHandler::with_dynamic_runtime_and_journal(
         std::sync::Arc::new(client),
         runtime,
         journal,
     );
+    handler.stdio_scope = Some(Arc::new(StdioOperationScope {
+        base_url: base,
+        athlete_id: athlete,
+    }));
 
     let dynamic_tools = if let Ok(count) = tokio::time::timeout(
         std::time::Duration::from_secs(3),

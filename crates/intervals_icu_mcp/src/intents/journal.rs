@@ -76,8 +76,13 @@ impl OperationJournal {
         fingerprint: &str,
         owner: Option<&str>,
         tenant_scope: Option<&str>,
+        legacy_token: Option<&str>,
     ) -> Result<Reservation, OperationJournalError> {
         let scope_hash = digest(SCOPE_HASH_DOMAIN, token.as_bytes());
+        let legacy_scope_hash = legacy_token
+            .map(|token| scoped_operation_token(None, None, token))
+            .map(|token| digest(SCOPE_HASH_DOMAIN, token.as_bytes()))
+            .filter(|legacy| *legacy != scope_hash);
         let fingerprint_hash = digest(FINGERPRINT_HASH_DOMAIN, fingerprint.as_bytes());
         let owner_hash = owner.map(|value| digest(OWNER_HASH_DOMAIN, value.as_bytes()).to_vec());
         let tenant_hash =
@@ -94,9 +99,20 @@ impl OperationJournal {
                     "DELETE FROM idempotency_operations WHERE state = 'completed' AND expires_at <= ?1",
                     params![now],
                 )?;
-                let mut record = transaction
+                // Old STDIO records cannot establish which upstream or athlete owns a result.
+                if let Some(legacy) = legacy_scope_hash
+                    && transaction.query_row(
+                        "SELECT EXISTS(SELECT 1 FROM idempotency_operations WHERE scope_hash = ?1)",
+                        params![legacy.as_slice()],
+                        |row| row.get::<_, bool>(0),
+                    )?
+                {
+                    transaction.commit()?;
+                    return Ok(StoredReservation::Unknown);
+                }
+                let record = transaction
                     .query_row(
-                        "SELECT fingerprint_hash, owner_hash, state, expires_at, result_nonce, result_ciphertext
+                        "SELECT fingerprint_hash, owner_hash, state, result_nonce, result_ciphertext
                          FROM idempotency_operations WHERE scope_hash = ?1",
                         params![scope_hash.as_slice()],
                         |row| {
@@ -104,25 +120,14 @@ impl OperationJournal {
                                 row.get::<_, Vec<u8>>(0)?,
                                 row.get::<_, Option<Vec<u8>>>(1)?,
                                 row.get::<_, String>(2)?,
-                                row.get::<_, Option<i64>>(3)?,
+                                row.get::<_, Option<Vec<u8>>>(3)?,
                                 row.get::<_, Option<Vec<u8>>>(4)?,
-                                row.get::<_, Option<Vec<u8>>>(5)?,
                             ))
                         },
                     )
                     .optional()?;
 
-                if record.as_ref().is_some_and(|(_, _, state, expires_at, _, _)| {
-                    state == "completed" && expires_at.is_some_and(|expiry| expiry <= now)
-                }) {
-                    transaction.execute(
-                        "DELETE FROM idempotency_operations WHERE scope_hash = ?1",
-                        params![scope_hash.as_slice()],
-                    )?;
-                    record = None;
-                }
-
-                if let Some((stored_fingerprint, stored_owner, state, _, nonce, ciphertext)) = record
+                if let Some((stored_fingerprint, stored_owner, state, nonce, ciphertext)) = record
                 {
                     if stored_owner != owner_hash {
                         transaction.commit()?;
@@ -270,30 +275,23 @@ impl OperationJournal {
     }
 
     pub(crate) async fn refresh_unknown_metrics(&self) {
-        let snapshot = self
-            .store
-            .run(|connection| {
-                connection
-                    .query_row(
-                        "SELECT COUNT(*), MIN(created_at) FROM idempotency_operations WHERE state = 'unknown'",
-                        [],
-                        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<i64>>(1)?)),
-                    )
-                    .map_err(Into::into)
-            })
-            .await;
+        // Process-wide gauges describe one database. Serialize reads through publication,
+        // even if separate SQLite connections share that database.
+        static REFRESH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let result = self.store.run(|connection| {
+            let _refresh = REFRESH_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let (count, oldest_created_at) = connection.query_row(
+                "SELECT COUNT(*), MIN(created_at) FROM idempotency_operations WHERE state = 'unknown'",
+                [],
+                |row| Ok((row.get::<_, u64>(0)?, row.get::<_, Option<i64>>(1)?)),
+            )?;
+            metrics::publish_operation_journal_unknown_snapshot(count, oldest_created_at);
+            Ok(())
+        }).await;
 
-        match snapshot {
-            Ok((count, oldest_created_at)) => {
-                let oldest_age_seconds = oldest_created_at
-                    .map(|created_at| now_millis().saturating_sub(created_at).max(0) as u64 / 1_000)
-                    .unwrap_or(0);
-                metrics::set_operation_journal_unknown_snapshot(
-                    u64::try_from(count).unwrap_or_default(),
-                    oldest_age_seconds,
-                );
-            }
-            Err(_) => metrics::record_operation_journal_error(),
+        if result.is_err() {
+            metrics::record_operation_journal_error();
+            tracing::warn!("failed to refresh operation journal metrics");
         }
     }
 
@@ -363,6 +361,15 @@ enum StoredReservation {
     Replay { nonce: Vec<u8>, ciphertext: Vec<u8> },
 }
 
+pub(super) fn scoped_operation_token(
+    base_url: Option<&str>,
+    athlete_id: Option<&str>,
+    token: &str,
+) -> String {
+    let scope = serde_json::json!([base_url, athlete_id, token]).to_string();
+    hex::encode(Sha256::digest(scope.as_bytes()))
+}
+
 fn digest(domain: &[u8], value: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(domain);
@@ -386,6 +393,34 @@ mod tests {
     #[test]
     fn reservation_does_not_embed_completed_output() {
         assert!(std::mem::size_of::<Reservation>() < std::mem::size_of::<IntentOutput>());
+    }
+
+    #[tokio::test]
+    async fn completed_operation_replays_until_expired_then_can_be_reserved_again() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = StateStore::open(directory.path().join("operations.sqlite3"), [3; 32]).unwrap();
+        let journal = OperationJournal::new(store.clone());
+        let reserve = || journal.reserve("token", "fingerprint", None, Some("tenant"), None);
+        assert!(matches!(reserve().await.unwrap(), Reservation::Reserved));
+        journal
+            .complete(
+                "token",
+                "fingerprint",
+                None,
+                &IntentOutput::markdown("saved"),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(reserve().await.unwrap(), Reservation::Replay(_)));
+
+        store
+            .run(|connection| {
+                connection.execute("UPDATE idempotency_operations SET expires_at = 0", [])?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        assert!(matches!(reserve().await.unwrap(), Reservation::Reserved));
     }
 
     #[tokio::test]
@@ -414,7 +449,13 @@ mod tests {
 
         let journal = OperationJournal::new(store);
         let result = journal
-            .reserve("new-operation", "fingerprint", None, Some("new-tenant"))
+            .reserve(
+                "new-operation",
+                "fingerprint",
+                None,
+                Some("new-tenant"),
+                None,
+            )
             .await;
 
         assert!(matches!(
@@ -457,13 +498,13 @@ mod tests {
         let journal = OperationJournal::new(store.clone());
         assert!(matches!(
             journal
-                .reserve("active-1", "fingerprint", None, Some("tenant-a"))
+                .reserve("active-1", "fingerprint", None, Some("tenant-a"), None)
                 .await,
             Ok(Reservation::Reserved)
         ));
         assert!(matches!(
             journal
-                .reserve("active-2", "fingerprint", None, Some("tenant-a"))
+                .reserve("active-2", "fingerprint", None, Some("tenant-a"), None)
                 .await,
             Err(OperationJournalError::CapacityExhausted(
                 QuotaKind::UnknownPerTenant
