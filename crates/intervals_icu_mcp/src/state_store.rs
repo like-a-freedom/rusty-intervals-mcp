@@ -5,8 +5,24 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use thiserror::Error;
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+const CREATE_IDEMPOTENCY_TABLE_V2: &str = "CREATE TABLE idempotency_operations (
+    scope_hash BLOB PRIMARY KEY NOT NULL CHECK(length(scope_hash) = 32),
+    tenant_hash BLOB CHECK(tenant_hash IS NULL OR length(tenant_hash) = 32),
+    fingerprint_hash BLOB NOT NULL CHECK(length(fingerprint_hash) = 32),
+    owner_hash BLOB,
+    state TEXT NOT NULL CHECK(state IN ('active', 'unknown', 'completed')),
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER,
+    result_nonce BLOB,
+    result_ciphertext BLOB,
+    CHECK(
+        (state IN ('active', 'unknown') AND expires_at IS NULL AND result_nonce IS NULL AND result_ciphertext IS NULL)
+        OR
+        (state = 'completed' AND expires_at IS NOT NULL AND result_nonce IS NOT NULL AND result_ciphertext IS NOT NULL)
+    )
+);";
 
 #[derive(Debug, Error)]
 pub(crate) enum StateStoreError {
@@ -92,34 +108,40 @@ impl StateStore {
         }
 
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        transaction.execute_batch(
-            "CREATE TABLE IF NOT EXISTS idempotency_operations (
-                scope_hash BLOB PRIMARY KEY NOT NULL CHECK(length(scope_hash) = 32),
-                fingerprint_hash BLOB NOT NULL CHECK(length(fingerprint_hash) = 32),
-                owner_hash BLOB,
-                state TEXT NOT NULL CHECK(state IN ('unknown', 'completed')),
-                created_at INTEGER NOT NULL,
-                expires_at INTEGER,
-                result_nonce BLOB,
-                result_ciphertext BLOB,
-                CHECK(
-                    (state = 'unknown' AND expires_at IS NULL AND result_nonce IS NULL AND result_ciphertext IS NULL)
-                    OR
-                    (state = 'completed' AND expires_at IS NOT NULL AND result_nonce IS NOT NULL AND result_ciphertext IS NOT NULL)
+        if schema_version == 1 {
+            transaction.execute_batch(
+                "ALTER TABLE idempotency_operations RENAME TO idempotency_operations_v1;",
+            )?;
+            transaction.execute_batch(CREATE_IDEMPOTENCY_TABLE_V2)?;
+            transaction.execute_batch(
+                "INSERT INTO idempotency_operations (
+                    scope_hash, tenant_hash, fingerprint_hash, owner_hash, state, created_at,
+                    expires_at, result_nonce, result_ciphertext
                 )
-            );
-            CREATE INDEX IF NOT EXISTS idempotency_operations_state_created
-                ON idempotency_operations(state, created_at);
-            CREATE TABLE IF NOT EXISTS token_registry (
-                jti TEXT PRIMARY KEY NOT NULL,
-                athlete_id TEXT NOT NULL,
-                issued_at TEXT NOT NULL,
-                expires_at TEXT NOT NULL,
-                revoked INTEGER NOT NULL CHECK(revoked IN (0, 1)),
-                encrypted_api_key TEXT
-            );
-            PRAGMA user_version = 1;",
-        )?;
+                SELECT scope_hash, NULL, fingerprint_hash, owner_hash, state, created_at,
+                    expires_at, result_nonce, result_ciphertext
+                FROM idempotency_operations_v1;
+                DROP TABLE idempotency_operations_v1;
+                CREATE INDEX idempotency_operations_state_created
+                    ON idempotency_operations(state, created_at);
+                PRAGMA user_version = 2;",
+            )?;
+        } else {
+            transaction.execute_batch(CREATE_IDEMPOTENCY_TABLE_V2)?;
+            transaction.execute_batch(
+                "CREATE INDEX idempotency_operations_state_created
+                    ON idempotency_operations(state, created_at);
+                CREATE TABLE token_registry (
+                    jti TEXT PRIMARY KEY NOT NULL,
+                    athlete_id TEXT NOT NULL,
+                    issued_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    revoked INTEGER NOT NULL CHECK(revoked IN (0, 1)),
+                    encrypted_api_key TEXT
+                );
+                PRAGMA user_version = 2;",
+            )?;
+        }
         transaction.commit()?;
         Ok(())
     }
@@ -233,6 +255,65 @@ mod tests {
         assert!(decode_encryption_key(&"ab".repeat(32)).is_ok());
         assert!(decode_encryption_key("not-hex").is_err());
         assert!(decode_encryption_key(&"ab".repeat(31)).is_err());
+    }
+
+    #[test]
+    fn schema_v1_migration_preserves_unknown_operations_without_tenant_scope() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("state.sqlite3");
+        let connection = Connection::open(&path).expect("create v1 database");
+        connection
+            .execute_batch(
+                "CREATE TABLE idempotency_operations (
+                    scope_hash BLOB PRIMARY KEY NOT NULL CHECK(length(scope_hash) = 32),
+                    fingerprint_hash BLOB NOT NULL CHECK(length(fingerprint_hash) = 32),
+                    owner_hash BLOB,
+                    state TEXT NOT NULL CHECK(state IN ('unknown', 'completed')),
+                    created_at INTEGER NOT NULL,
+                    expires_at INTEGER,
+                    result_nonce BLOB,
+                    result_ciphertext BLOB,
+                    CHECK(
+                        (state = 'unknown' AND expires_at IS NULL AND result_nonce IS NULL AND result_ciphertext IS NULL)
+                        OR
+                        (state = 'completed' AND expires_at IS NOT NULL AND result_nonce IS NOT NULL AND result_ciphertext IS NOT NULL)
+                    )
+                );
+                CREATE INDEX idempotency_operations_state_created
+                    ON idempotency_operations(state, created_at);
+                CREATE TABLE token_registry (
+                    jti TEXT PRIMARY KEY NOT NULL,
+                    athlete_id TEXT NOT NULL,
+                    issued_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    revoked INTEGER NOT NULL CHECK(revoked IN (0, 1)),
+                    encrypted_api_key TEXT
+                );
+                INSERT INTO idempotency_operations (
+                    scope_hash, fingerprint_hash, owner_hash, state, created_at
+                ) VALUES (zeroblob(32), zeroblob(32), NULL, 'unknown', 123);
+                PRAGMA user_version = 1;",
+            )
+            .expect("create v1 schema and record");
+        drop(connection);
+
+        let store = StateStore::open(path, [4; 32]).expect("migrate v1 database");
+        let (version, record): (i64, (Option<Vec<u8>>, String, i64)) = store
+            .connection
+            .lock()
+            .expect("connection lock")
+            .query_row(
+                "SELECT (SELECT user_version FROM pragma_user_version), tenant_hash, state, created_at
+                 FROM idempotency_operations",
+                [],
+                |row| Ok((row.get(0)?, (row.get(1)?, row.get(2)?, row.get(3)?))),
+            )
+            .expect("read migrated record");
+
+        assert_eq!(version, 2);
+        assert_eq!(record.0, None);
+        assert_eq!(record.1, "unknown");
+        assert_eq!(record.2, 123);
     }
 
     #[test]
