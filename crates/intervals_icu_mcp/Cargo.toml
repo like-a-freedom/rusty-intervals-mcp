@@ -28,6 +28,7 @@ tracing = "0.1.44"
 tower-http = { version = "0.7.0", features = ["timeout"] }
 uuid = { version = "1.23.4", features = ["v4"] }
 reqwest = { version = "0.13.4", features = ["json", "query"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
 hmac = "0.13"
 sha2 = "0.11"
 hkdf = "0.13"

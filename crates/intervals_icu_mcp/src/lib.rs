@@ -14,7 +14,6 @@
 //! - [`token_registry`] — server-side record of issued tokens (ADR-0011)
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use rmcp::ErrorData;
@@ -34,6 +33,7 @@ use crate::intents::handlers::{
     ManageGearHandler, ManageProfileHandler, ModifyTrainingHandler, PlanTrainingHandler,
     TrackProgressHandler,
 };
+use crate::intents::journal::OperationJournal;
 use crate::intents::{
     IdempotencyMiddleware, IntentRouter, intent_error_to_error_data,
     intent_output_to_call_tool_result,
@@ -50,6 +50,7 @@ pub mod engines;
 pub mod intents;
 pub mod metrics;
 pub mod session;
+pub(crate) mod state_store;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 pub mod token_registry;
@@ -86,34 +87,66 @@ impl IntervalsMcpHandler {
         Self::with_dynamic_runtime(client, dynamic::DynamicRuntime::from_env())
     }
 
-    /// Create handler for multi-tenant HTTP mode.
-    /// In this mode, credentials are extracted from JWT tokens per-request,
-    /// and a new client is created for each request.
-    /// The client field is initialized with a placeholder that will be ignored.
+    /// Create a non-durable handler for multi-tenant embedding.
+    /// Standard HTTP startup uses `new_multi_tenant_with_journal` instead.
     pub fn new_multi_tenant() -> Result<Self, Box<dyn std::error::Error>> {
-        // Create a minimal placeholder client - it won't be used in multi-tenant mode
-        // because we create per-request clients from JWT credentials
-        let placeholder_client = Arc::new(
+        Ok(Self::with_dynamic_runtime(
+            Self::placeholder_client()?,
+            dynamic::DynamicRuntime::from_env(),
+        ))
+    }
+
+    pub(crate) fn new_multi_tenant_with_journal(
+        journal: OperationJournal,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        Ok(Self::with_dynamic_runtime_and_journal(
+            Self::placeholder_client()?,
+            dynamic::DynamicRuntime::from_env(),
+            journal,
+        ))
+    }
+
+    fn placeholder_client() -> Result<Arc<dyn IntervalsClient>, Box<dyn std::error::Error>> {
+        Ok(Arc::new(
             intervals_icu_client::http_client::ReqwestIntervalsClient::new(
                 "https://intervals.icu",
                 "placeholder".to_string(),
                 SecretString::new("placeholder".into()),
             )?,
-        );
-        Ok(Self::with_dynamic_runtime(
-            placeholder_client,
-            dynamic::DynamicRuntime::from_env(),
         ))
     }
 
+    /// Create a non-durable handler around a custom client and runtime.
+    /// Use the standard server entry points for SQLite-backed mutation safety.
     #[must_use]
     pub fn with_dynamic_runtime(
         client: Arc<dyn IntervalsClient>,
         dynamic_runtime: dynamic::DynamicRuntime,
     ) -> Self {
-        // Create idempotency middleware
-        let idempotency = Arc::new(IdempotencyMiddleware::new());
+        Self::with_parts(
+            client,
+            dynamic_runtime,
+            Arc::new(IdempotencyMiddleware::new()),
+        )
+    }
 
+    pub(crate) fn with_dynamic_runtime_and_journal(
+        client: Arc<dyn IntervalsClient>,
+        dynamic_runtime: dynamic::DynamicRuntime,
+        journal: OperationJournal,
+    ) -> Self {
+        Self::with_parts(
+            client,
+            dynamic_runtime,
+            Arc::new(IdempotencyMiddleware::with_journal(journal)),
+        )
+    }
+
+    fn with_parts(
+        client: Arc<dyn IntervalsClient>,
+        dynamic_runtime: dynamic::DynamicRuntime,
+        idempotency: Arc<IdempotencyMiddleware>,
+    ) -> Self {
         // Phase 2B (ADR-0001): when dynamic dispatch is enabled via
         // env var, wrap the typed client in `DynamicClientAdapter` so
         // mapped trait methods dispatch through the OpenAPI runtime;
@@ -130,8 +163,6 @@ impl IntervalsMcpHandler {
         };
 
         let handlers = all_intent_handlers();
-
-        // Create intent router
         let intent_router = Arc::new(IntentRouter::new(
             handlers,
             client.clone(),
@@ -693,8 +724,20 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
     (if month <= 2 { year + 1 } else { year }, month, day)
 }
 
+fn reject_legacy_token_registry_path() -> Result<(), String> {
+    if std::env::var_os("MCP_TOKEN_REGISTRY_PATH").is_some() {
+        return Err(
+            "MCP_TOKEN_REGISTRY_PATH is no longer supported. Set MCP_STATE_DB_PATH to a separate SQLite file; existing JSON tokens are not imported and must be reissued."
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
 /// STDIO mode: initialize with credentials from env vars.
 pub async fn initialize_handler_single_user() -> Result<IntervalsMcpHandler, String> {
+    reject_legacy_token_registry_path()?;
+
     let base = std::env::var("INTERVALS_ICU_BASE_URL")
         .unwrap_or_else(|_| "https://intervals.icu".to_string());
     let athlete = std::env::var("INTERVALS_ICU_ATHLETE_ID")
@@ -712,8 +755,15 @@ pub async fn initialize_handler_single_user() -> Result<IntervalsMcpHandler, Str
     let client =
         intervals_icu_client::http_client::ReqwestIntervalsClient::new(&base, athlete, api_key)
             .map_err(|e| format!("failed to create client: {e}"))?;
+    let state_store = state_store::StateStore::from_env()
+        .map_err(|error| format!("failed to initialize durable state store: {error}"))?;
+    let journal = OperationJournal::new(state_store);
     let runtime = dynamic::DynamicRuntime::from_env().with_typed_client(client.clone());
-    let handler = IntervalsMcpHandler::with_dynamic_runtime(std::sync::Arc::new(client), runtime);
+    let handler = IntervalsMcpHandler::with_dynamic_runtime_and_journal(
+        std::sync::Arc::new(client),
+        runtime,
+        journal,
+    );
 
     let dynamic_tools = if let Ok(count) = tokio::time::timeout(
         std::time::Duration::from_secs(3),
@@ -920,6 +970,7 @@ pub async fn run_http_server(
     address: std::net::SocketAddr,
     max_body_size: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    reject_legacy_token_registry_path()?;
     let _ = metrics::init_prometheus_recorder();
 
     let jwt_master_key_hex = std::env::var("JWT_MASTER_KEY")
@@ -955,16 +1006,8 @@ pub async fn run_http_server(
     let base_url = std::env::var("INTERVALS_ICU_BASE_URL")
         .unwrap_or_else(|_| "https://intervals.icu".to_string());
 
-    let registry_path = std::env::var("MCP_TOKEN_REGISTRY_PATH")
-        .ok()
-        .map(PathBuf::from);
-    let token_registry = token_registry::TokenRegistry::load(registry_path);
-    if !token_registry.is_persistent() {
-        tracing::warn!(
-            "token registry is in-memory: issued tokens are rejected after restart; \
-             set MCP_TOKEN_REGISTRY_PATH to persist them"
-        );
-    }
+    let state_store = state_store::StateStore::from_env()?;
+    let token_registry = token_registry::TokenRegistry::from_store(state_store.clone());
 
     let app_state = std::sync::Arc::new(auth::AppState {
         jwt_manager: jwt_manager.clone(),
@@ -973,7 +1016,8 @@ pub async fn run_http_server(
         tokens: token_registry.clone(),
     });
 
-    let handler = IntervalsMcpHandler::new_multi_tenant().expect("new_multi_tenant");
+    let handler =
+        IntervalsMcpHandler::new_multi_tenant_with_journal(OperationJournal::new(state_store))?;
 
     let cookie_secure = std::env::var("MCP_COOKIE_SECURE")
         .map(|v| v != "false" && v != "0")
@@ -2087,6 +2131,38 @@ mod tests {
         assert!(result.is_ok());
         let handler = result.unwrap();
         assert!(handler.tool_count() > 0);
+    }
+
+    #[test]
+    fn stdio_startup_rejects_legacy_json_token_registry_path() {
+        let _guard = crate::test_support::EnvVarGuard::acquire_blocking(&[
+            "MCP_TOKEN_REGISTRY_PATH",
+            "MCP_STATE_DB_PATH",
+            "MCP_STATE_ENCRYPTION_KEY",
+            "INTERVALS_ICU_ATHLETE_ID",
+            "INTERVALS_ICU_API_KEY",
+            "INTERVALS_ICU_BASE_URL",
+        ]);
+        unsafe {
+            std::env::set_var("MCP_TOKEN_REGISTRY_PATH", "legacy-tokens.json");
+            std::env::remove_var("MCP_STATE_DB_PATH");
+            std::env::remove_var("MCP_STATE_ENCRYPTION_KEY");
+            std::env::set_var("INTERVALS_ICU_ATHLETE_ID", "athlete");
+            std::env::set_var("INTERVALS_ICU_API_KEY", "upstream-key");
+            std::env::remove_var("INTERVALS_ICU_BASE_URL");
+        }
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("create runtime");
+
+        let error = match runtime.block_on(crate::initialize_handler_single_user()) {
+            Err(error) => error,
+            Ok(_) => panic!("legacy JSON registry configuration must stop STDIO startup"),
+        };
+
+        assert!(error.contains("MCP_TOKEN_REGISTRY_PATH"), "{error}");
+        assert!(error.contains("MCP_STATE_DB_PATH"), "{error}");
     }
 
     #[test]

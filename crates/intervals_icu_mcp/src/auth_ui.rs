@@ -1216,9 +1216,19 @@ pub async fn ui_list_tokens(
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
         .or_else(|| session.athlete_id.clone());
-    let filtered = match requested_athlete.as_deref() {
+    let filtered = match match requested_athlete.as_deref() {
         Some(athlete) => ui.app_state.tokens.list_for_athlete(athlete).await,
         None => ui.app_state.tokens.all().await,
+    } {
+        Ok(records) => records,
+        Err(error) => {
+            tracing::error!(%error, "failed to list tokens from registry");
+            return (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                "Token registry unavailable",
+            )
+                .into_response();
+        }
     };
 
     let sort = parse_sort_field(query.sort.as_deref().unwrap_or("issued"));
@@ -1449,7 +1459,34 @@ pub async fn ui_revoke_token(
         .await;
     }
 
-    ui.app_state.tokens.revoke(&jti).await;
+    match ui.app_state.tokens.revoke(&jti).await {
+        Ok(true) => {}
+        Ok(false) => {
+            return redirect_with_flash(
+                &ui,
+                &session.session_id,
+                "/ui/tokens",
+                Flash {
+                    kind: FlashKind::Error,
+                    message: "Token not found. Refresh the list and try again.".into(),
+                },
+            )
+            .await;
+        }
+        Err(error) => {
+            tracing::error!(%error, "failed to revoke token in registry");
+            return redirect_with_flash(
+                &ui,
+                &session.session_id,
+                "/ui/tokens",
+                Flash {
+                    kind: FlashKind::Error,
+                    message: "Could not revoke the token. Please try again.".into(),
+                },
+            )
+            .await;
+        }
+    }
 
     crate::metrics::record_ui_action("token_revoked");
     tracing::info!(
@@ -1483,7 +1520,7 @@ mod tests {
             jwt_manager,
             jwt_ttl_seconds: 3600,
             base_url: "https://intervals.icu".to_string(),
-            tokens: TokenRegistry::load(None),
+            tokens: TokenRegistry::in_memory(),
         });
 
         UiState::new(app_state, false, String::new())
@@ -1496,7 +1533,7 @@ mod tests {
             jwt_manager,
             jwt_ttl_seconds: 3600,
             base_url: "https://intervals.icu".to_string(),
-            tokens: TokenRegistry::load(None),
+            tokens: TokenRegistry::in_memory(),
         });
 
         UiState::new(app_state, false, base.to_string())
@@ -1674,7 +1711,8 @@ mod tests {
                 revoked: false,
                 encrypted_api_key: Some("enc-a".to_string()),
             })
-            .await;
+            .await
+            .expect("record first token");
         ui.app_state
             .tokens
             .record(TokenRecord {
@@ -1685,17 +1723,40 @@ mod tests {
                 revoked: false,
                 encrypted_api_key: Some("enc-b".to_string()),
             })
-            .await;
+            .await
+            .expect("record second token");
 
-        let athlete_tokens = ui.app_state.tokens.list_for_athlete("athlete-a").await;
+        let athlete_tokens = ui
+            .app_state
+            .tokens
+            .list_for_athlete("athlete-a")
+            .await
+            .expect("list athlete tokens");
         assert_eq!(athlete_tokens.len(), 1);
         assert_eq!(athlete_tokens[0].jti, "jti-1");
         assert!(!athlete_tokens[0].revoked);
 
-        assert!(ui.app_state.tokens.revoke("jti-1").await);
-        assert!(!ui.app_state.tokens.revoke("missing-jti").await);
+        assert!(
+            ui.app_state
+                .tokens
+                .revoke("jti-1")
+                .await
+                .expect("revoke known token")
+        );
+        assert!(
+            !ui.app_state
+                .tokens
+                .revoke("missing-jti")
+                .await
+                .expect("revoke missing token")
+        );
 
-        let athlete_tokens = ui.app_state.tokens.list_for_athlete("athlete-a").await;
+        let athlete_tokens = ui
+            .app_state
+            .tokens
+            .list_for_athlete("athlete-a")
+            .await
+            .expect("list athlete tokens after revocation");
         assert!(athlete_tokens[0].revoked);
     }
 

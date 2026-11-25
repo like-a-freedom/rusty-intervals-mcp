@@ -134,7 +134,11 @@ impl AppState {
                 revoked: false,
                 encrypted_api_key: Some(encrypted_api_key),
             })
-            .await;
+            .await
+            .map_err(|error| {
+                tracing::error!(%error, "failed to persist issued token");
+                AuthError::ServerConfig
+            })?;
 
         Ok(IssuedToken {
             token,
@@ -152,7 +156,10 @@ impl AppState {
         let claims = self.jwt_manager.verify_claims(token)?;
 
         let record = match claims.jti.as_deref() {
-            Some(jti) => self.tokens.find(jti).await,
+            Some(jti) => self.tokens.find(jti).await.map_err(|error| {
+                tracing::error!(%error, "failed to read token registry during authentication");
+                AuthError::ServerConfig
+            })?,
             None => None,
         };
 
@@ -607,7 +614,13 @@ pub async fn auth_middleware(
                 let status = match &e {
                     AuthError::TokenExpired => "expired",
                     AuthError::TokenRevoked => "revoked",
+                    AuthError::ServerConfig => "registry_error",
                     _ => "invalid",
+                };
+                let response_status = if matches!(&e, AuthError::ServerConfig) {
+                    StatusCode::INTERNAL_SERVER_ERROR
+                } else {
+                    StatusCode::UNAUTHORIZED
                 };
                 tracing::warn!(
                     client_ip = %client_ip,
@@ -618,8 +631,10 @@ pub async fn auth_middleware(
                     "Failed JWT verification"
                 );
                 metrics::record_token_verification(status);
-                metrics::record_auth_failure("invalid_token");
-                return Err(StatusCode::UNAUTHORIZED);
+                if response_status == StatusCode::UNAUTHORIZED {
+                    metrics::record_auth_failure("invalid_token");
+                }
+                return Err(response_status);
             }
         }
     } else {
@@ -716,8 +731,140 @@ mod tests {
             jwt_manager: Arc::new(create_test_manager()),
             jwt_ttl_seconds: 3600,
             base_url: "https://intervals.icu".to_string(),
-            tokens: TokenRegistry::load(None),
+            tokens: TokenRegistry::in_memory(),
         }
+    }
+
+    #[tokio::test]
+    async fn sqlite_token_registry_survives_restart_and_persists_revocation() {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let path = dir.path().join("state.sqlite3");
+        let token = {
+            let manager = Arc::new(create_test_manager());
+            let registry = TokenRegistry::from_store(
+                crate::state_store::StateStore::open(path.clone(), [8; 32])
+                    .expect("open state store"),
+            );
+            let state = AppState {
+                jwt_manager: manager,
+                jwt_ttl_seconds: 3600,
+                base_url: "https://intervals.icu".to_string(),
+                tokens: registry,
+            };
+            let issued = state
+                .issue_recorded_token("athlete", "upstream-key", 3600)
+                .await
+                .expect("issue token");
+            assert_eq!(
+                state
+                    .authenticate(&issued.token)
+                    .await
+                    .expect("authenticate before restart")
+                    .api_key
+                    .expose_secret(),
+                "upstream-key"
+            );
+            issued.token
+        };
+
+        let manager = Arc::new(create_test_manager());
+        let registry = TokenRegistry::from_store(
+            crate::state_store::StateStore::open(path.clone(), [8; 32])
+                .expect("reopen state store"),
+        );
+        let state = AppState {
+            jwt_manager: manager.clone(),
+            jwt_ttl_seconds: 3600,
+            base_url: "https://intervals.icu".to_string(),
+            tokens: registry,
+        };
+        state
+            .authenticate(&token)
+            .await
+            .expect("authenticate after restart");
+        let jti = manager
+            .verify_claims(&token)
+            .expect("verify issued token")
+            .jti
+            .expect("issued token has a jti");
+        assert!(state.tokens.revoke(&jti).await.expect("revoke token"));
+        drop(state);
+
+        let restarted = AppState {
+            jwt_manager: manager,
+            jwt_ttl_seconds: 3600,
+            base_url: "https://intervals.icu".to_string(),
+            tokens: TokenRegistry::from_store(
+                crate::state_store::StateStore::open(path, [8; 32])
+                    .expect("reopen after revocation"),
+            ),
+        };
+        assert!(matches!(
+            restarted.authenticate(&token).await,
+            Err(AuthError::TokenRevoked)
+        ));
+    }
+
+    #[tokio::test]
+    async fn token_issue_returns_no_token_when_sqlite_insert_fails() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = crate::state_store::StateStore::open(dir.path().join("state.sqlite3"), [8; 32])
+            .expect("open state store");
+        let tokens = TokenRegistry::from_store(store.clone());
+        store
+            .run(|connection| {
+                connection.execute_batch(
+                    "CREATE TRIGGER reject_token_insert BEFORE INSERT ON token_registry
+                     BEGIN SELECT RAISE(ABORT, 'injected insert failure'); END;",
+                )?;
+                Ok(())
+            })
+            .await
+            .expect("install failure trigger");
+        let state = AppState {
+            jwt_manager: Arc::new(create_test_manager()),
+            jwt_ttl_seconds: 3600,
+            base_url: "https://intervals.icu".to_string(),
+            tokens,
+        };
+
+        assert!(matches!(
+            state
+                .issue_recorded_token("athlete", "upstream-key", 3600)
+                .await,
+            Err(AuthError::ServerConfig)
+        ));
+        assert!(state.tokens.all().await.expect("list tokens").is_empty());
+    }
+
+    #[tokio::test]
+    async fn authentication_fails_closed_when_sqlite_registry_read_fails() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = crate::state_store::StateStore::open(dir.path().join("state.sqlite3"), [8; 32])
+            .expect("open state store");
+        let manager = Arc::new(create_test_manager());
+        let state = AppState {
+            jwt_manager: manager.clone(),
+            jwt_ttl_seconds: 3600,
+            base_url: "https://intervals.icu".to_string(),
+            tokens: TokenRegistry::from_store(store.clone()),
+        };
+        let token = manager
+            .issue_token("athlete", 3600, "read-failure-jti")
+            .expect("sign token");
+        record_token(&state, "read-failure-jti", "athlete", "upstream-key").await;
+        store
+            .run(|connection| {
+                connection.execute_batch("DROP TABLE token_registry;")?;
+                Ok(())
+            })
+            .await
+            .expect("remove token table to inject read failure");
+
+        assert!(matches!(
+            state.authenticate(&token).await,
+            Err(AuthError::ServerConfig)
+        ));
     }
 
     async fn record_token(state: &AppState, jti: &str, athlete_id: &str, api_key: &str) {
@@ -731,7 +878,8 @@ mod tests {
                 revoked: false,
                 encrypted_api_key: Some(state.jwt_manager.encrypt_credential(api_key).unwrap()),
             })
-            .await;
+            .await
+            .expect("record token");
     }
 
     #[test]
@@ -805,9 +953,15 @@ mod tests {
             .tokens
             .record(TokenRecord {
                 encrypted_api_key: None,
-                ..state.tokens.find("jti-1").await.expect("record")
+                ..state
+                    .tokens
+                    .find("jti-1")
+                    .await
+                    .expect("registry lookup")
+                    .expect("record")
             })
-            .await;
+            .await
+            .expect("update legacy record");
 
         let manager = &state.jwt_manager;
         let custom = IntervalsClaims {
@@ -833,7 +987,7 @@ mod tests {
             .jwt_manager
             .issue_token("i123456", 3600, "jti-1")
             .unwrap();
-        assert!(state.tokens.revoke("jti-1").await);
+        assert!(state.tokens.revoke("jti-1").await.expect("revoke token"));
 
         let result = state.authenticate(&token).await;
         assert!(matches!(result, Err(AuthError::TokenRevoked)));
@@ -1086,7 +1240,7 @@ mod tests {
             jwt_manager: jwt_manager.clone(),
             jwt_ttl_seconds: 3600,
             base_url: "https://intervals.icu".to_string(),
-            tokens: TokenRegistry::load(None),
+            tokens: TokenRegistry::in_memory(),
         };
 
         let cloned = state.clone();
@@ -1115,7 +1269,7 @@ mod tests {
             jwt_manager,
             jwt_ttl_seconds: 3600,
             base_url: "https://intervals.icu".to_string(),
-            tokens: TokenRegistry::load(None),
+            tokens: TokenRegistry::in_memory(),
         });
 
         let req = AuthRequest {
@@ -1216,7 +1370,7 @@ mod tests {
             jwt_manager: manager,
             jwt_ttl_seconds: 3600,
             base_url: "https://intervals.icu".to_string(),
-            tokens: TokenRegistry::load(None),
+            tokens: TokenRegistry::in_memory(),
         };
 
         let athlete_id = "i123456";

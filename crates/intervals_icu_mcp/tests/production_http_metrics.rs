@@ -15,10 +15,16 @@ async fn production_router_records_http_metrics() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     drop(listener);
+    let state_dir = tempfile::tempdir().expect("create temporary state directory");
 
     let _server = Server(
         Command::new(env!("CARGO_BIN_EXE_intervals_icu_mcp"))
             .env("MCP_TRANSPORT", "http")
+            .env(
+                "MCP_STATE_DB_PATH",
+                state_dir.path().join("mcp-state.sqlite3"),
+            )
+            .env("MCP_STATE_ENCRYPTION_KEY", "11".repeat(32))
             .env("MCP_HTTP_ADDRESS", address.to_string())
             .env("JWT_MASTER_KEY", "00".repeat(64))
             .env("MCP_PUBLIC_BASE_PATH", "/test")

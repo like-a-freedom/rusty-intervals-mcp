@@ -2,6 +2,7 @@
 pub mod error;
 pub mod handlers;
 pub mod idempotency;
+pub(crate) mod journal;
 pub mod router;
 pub mod types;
 

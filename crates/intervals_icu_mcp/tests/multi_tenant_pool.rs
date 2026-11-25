@@ -67,7 +67,7 @@ async fn authenticated_typed_requests_reuse_connections_with_fresh_keys() {
         jwt_manager: Arc::new(JwtManager::from_master_key(&key)),
         jwt_ttl_seconds: 3600,
         base_url: base.clone(),
-        tokens: TokenRegistry::load(None),
+        tokens: TokenRegistry::in_memory(),
     });
     let first = state
         .issue_recorded_token("i111111", "pool-first", 3600)

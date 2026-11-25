@@ -28,7 +28,7 @@ async fn legacy_jwt_replays_only_its_own_result() {
         jwt_manager: Arc::new(JwtManager::from_master_key(&key)),
         jwt_ttl_seconds: 3600,
         base_url: first.uri(),
-        tokens: TokenRegistry::load(None),
+        tokens: TokenRegistry::in_memory(),
     });
     let legacy = |api_key: &str| {
         let custom = IntervalsClaims {

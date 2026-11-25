@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 
+use super::journal::{OperationJournal, OperationJournalError, Reservation};
 use super::types::{IntentError, IntentOutput};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,6 +57,7 @@ pub struct IdempotencyMiddleware {
     uncertain: Arc<std::sync::Mutex<HashMap<Digest256, Digest256>>>,
     default_ttl: Duration,
     persistence_path: Option<PathBuf>,
+    journal: Option<OperationJournal>,
 }
 
 struct CacheInner {
@@ -68,44 +70,45 @@ impl IdempotencyMiddleware {
         Self::with_ttl(Duration::from_secs(86400))
     }
     pub fn with_ttl(ttl: Duration) -> Self {
+        Self::with_parts(ttl, None, HashMap::new(), None)
+    }
+
+    pub(crate) fn with_journal(journal: OperationJournal) -> Self {
+        Self::with_parts(
+            Duration::from_secs(86400),
+            None,
+            HashMap::new(),
+            Some(journal),
+        )
+    }
+
+    fn with_parts(
+        default_ttl: Duration,
+        persistence_path: Option<PathBuf>,
+        entries: HashMap<String, IdempotencyEntry>,
+        journal: Option<OperationJournal>,
+    ) -> Self {
         Self {
             cache: Arc::new(RwLock::new(CacheInner {
-                entries: HashMap::new(),
+                entries,
                 stats: IdempotencyStats::default(),
             })),
             in_flight: Arc::default(),
             uncertain: Arc::default(),
-            default_ttl: ttl,
-            persistence_path: None,
+            default_ttl,
+            persistence_path,
+            journal,
         }
     }
 
     pub fn with_file(path: PathBuf) -> Self {
         let entries = Self::load_from_file(&path);
-        Self {
-            cache: Arc::new(RwLock::new(CacheInner {
-                entries,
-                stats: IdempotencyStats::default(),
-            })),
-            in_flight: Arc::default(),
-            uncertain: Arc::default(),
-            default_ttl: Duration::from_secs(86400),
-            persistence_path: Some(path),
-        }
+        Self::with_parts(Duration::from_secs(86400), Some(path), entries, None)
     }
 
     pub fn with_ttl_and_file(ttl: Duration, path: PathBuf) -> Self {
         let entries = Self::load_from_file(&path);
-        Self {
-            cache: Arc::new(RwLock::new(CacheInner {
-                entries,
-                stats: IdempotencyStats::default(),
-            })),
-            in_flight: Arc::default(),
-            uncertain: Arc::default(),
-            default_ttl: ttl,
-            persistence_path: Some(path),
-        }
+        Self::with_parts(ttl, Some(path), entries, None)
     }
 
     pub async fn flush(&self) -> std::io::Result<()> {
@@ -208,6 +211,11 @@ impl IdempotencyMiddleware {
                 ));
             }
         }
+        if let Some(journal) = &self.journal {
+            return self
+                .execute_with_journal(journal, token, request_fingerprint, owner, action)
+                .await;
+        }
         if let Some(entry) = self
             .get_for_owner(token, request_fingerprint, owner)
             .await?
@@ -252,6 +260,46 @@ impl IdempotencyMiddleware {
         }
         Ok(result)
     }
+    async fn execute_with_journal<F, Fut>(
+        &self,
+        journal: &OperationJournal,
+        token: &str,
+        request_fingerprint: &str,
+        owner: Option<&str>,
+        action: F,
+    ) -> Result<IntentOutput, IntentError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<IntentOutput, IntentError>>,
+    {
+        match journal
+            .reserve(token, request_fingerprint, owner)
+            .await
+            .map_err(map_reservation_error)?
+        {
+            Reservation::Replay(output) => {
+                self.cache.write().await.stats.hits += 1;
+                crate::metrics::record_idempotency("hit");
+                Ok(output)
+            }
+            Reservation::Reserved => {
+                let output = action().await?;
+                journal.complete(token, request_fingerprint, owner, &output)
+                    .await
+                    .map_err(|_| {
+                        IntentError::InternalError(
+                            "The upstream operation may have succeeded, but its result could not be durably recorded. Do not retry automatically.".to_string(),
+                        )
+                    })?;
+                let mut cache = self.cache.write().await;
+                cache.stats.misses += 1;
+                cache.stats.sets += 1;
+                crate::metrics::record_idempotency("miss");
+                Ok(output)
+            }
+        }
+    }
+
     pub async fn get(
         &self,
         token: &str,
@@ -318,6 +366,28 @@ impl IdempotencyMiddleware {
     }
 }
 
+fn map_reservation_error(error: OperationJournalError) -> IntentError {
+    match error {
+        OperationJournalError::OwnerMismatch => {
+            IntentError::IdempotencyConflict("idempotency token is unavailable".to_string())
+        }
+        OperationJournalError::FingerprintMismatch => IntentError::IdempotencyConflict(
+            "idempotency token was already used for a different request".to_string(),
+        ),
+        OperationJournalError::UnknownOutcome => IntentError::InternalError(
+            "The previous request has an unknown outcome. Check upstream before taking further action; do not retry this request automatically.".to_string(),
+        ),
+        OperationJournalError::CapacityExhausted => IntentError::InternalError(
+            "Idempotency capacity exhausted; no action was started. Check unresolved upstream outcomes before restarting the server.".to_string(),
+        ),
+        OperationJournalError::Store(_) | OperationJournalError::InvalidResult => {
+            IntentError::InternalError(
+                "The durable operation journal is unavailable or invalid; no action was started.".to_string(),
+            )
+        }
+    }
+}
+
 impl Default for IdempotencyMiddleware {
     fn default() -> Self {
         Self::new()
@@ -336,6 +406,8 @@ pub fn generate_idempotency_token(intent: &str, params: &[&str]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::intents::journal::OperationJournal;
+    use crate::state_store::StateStore;
 
     #[tokio::test]
     async fn concurrent_owners_share_lock_and_only_winner_can_replay() {
@@ -570,6 +642,245 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unknown_outcome_remains_blocked_after_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("idempotency.sqlite3");
+        let store = StateStore::open(path.clone(), [7; 32]).unwrap();
+        let middleware = IdempotencyMiddleware::with_journal(OperationJournal::new(store));
+        let first = middleware
+            .execute_with_idempotency("token", "fp", || async {
+                Err(IntentError::InternalError("response lost".into()))
+            })
+            .await;
+        assert!(first.is_err());
+
+        let restarted_store = StateStore::open(path, [7; 32]).unwrap();
+        let restarted = IdempotencyMiddleware::with_journal(OperationJournal::new(restarted_store));
+        let called = std::sync::atomic::AtomicBool::new(false);
+        let retry = restarted
+            .execute_with_idempotency("token", "fp", || async {
+                called.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(IntentOutput::markdown("duplicate"))
+            })
+            .await;
+        assert!(retry.is_err(), "an unknown outcome must remain blocked");
+        assert!(!called.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn sqlite_process_death_after_upstream_acceptance_never_replays_write() {
+        if let Ok(path) = std::env::var("DURABLE_JOURNAL_CRASH_CHILD_PATH") {
+            let store = StateStore::open(path.clone().into(), [4; 32]).expect("open child journal");
+            let middleware = IdempotencyMiddleware::with_journal(OperationJournal::new(store));
+            let marker = format!("{path}.side-effect-applied");
+            let _ = middleware
+                .execute_with_idempotency("process-crash", "fingerprint", || async move {
+                    std::fs::write(marker, b"upstream accepted").expect("write side-effect marker");
+                    std::process::exit(77);
+                })
+                .await;
+            panic!("child must terminate after the simulated upstream effect");
+        }
+
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let path = dir.path().join("operations.sqlite3");
+        let marker = dir.path().join("operations.sqlite3.side-effect-applied");
+        let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
+            .args([
+                "--exact",
+                "intents::idempotency::tests::sqlite_process_death_after_upstream_acceptance_never_replays_write",
+                "--nocapture",
+            ])
+            .env("DURABLE_JOURNAL_CRASH_CHILD_PATH", &path)
+            .output()
+            .expect("run child test process");
+        assert_eq!(output.status.code(), Some(77));
+        assert_eq!(
+            std::fs::read(marker).expect("side effect marker"),
+            b"upstream accepted"
+        );
+
+        let store = StateStore::open(path, [4; 32]).expect("reopen journal");
+        let middleware = IdempotencyMiddleware::with_journal(OperationJournal::new(store));
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let retry = middleware
+            .execute_with_idempotency("process-crash", "fingerprint", || async {
+                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(IntentOutput::markdown("duplicate write"))
+            })
+            .await;
+        assert!(retry.is_err());
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn sqlite_reservations_are_atomic_across_independent_connections() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("operations.sqlite3");
+        let first_store = StateStore::open(path.clone(), [9; 32]).unwrap();
+        let second_store = StateStore::open(path, [9; 32]).unwrap();
+        let first = IdempotencyMiddleware::with_journal(OperationJournal::new(first_store));
+        let second = IdempotencyMiddleware::with_journal(OperationJournal::new(second_store));
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let worker = {
+            let calls = calls.clone();
+            tokio::spawn(async move {
+                first
+                    .execute_with_idempotency("same", "fp", || async move {
+                        calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        started_tx.send(()).unwrap();
+                        std::future::pending::<Result<IntentOutput, IntentError>>().await
+                    })
+                    .await
+            })
+        };
+        started_rx.await.unwrap();
+
+        let retry = second
+            .execute_with_idempotency("same", "fp", || async {
+                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(IntentOutput::markdown("duplicate"))
+            })
+            .await;
+        assert!(retry.is_err());
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        worker.abort();
+        assert!(worker.await.unwrap_err().is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn sqlite_completed_result_is_private_to_its_original_owner() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("operations.sqlite3");
+        let first_store = StateStore::open(path.clone(), [3; 32]).unwrap();
+        let first = IdempotencyMiddleware::with_journal(OperationJournal::new(first_store));
+        let result = first
+            .execute_for_owner("same", "fp", Some("owner-a"), || async {
+                Ok(IntentOutput::markdown("private result"))
+            })
+            .await
+            .unwrap();
+        assert!(matches!(
+            &result.content[0],
+            crate::content::ContentBlock::Markdown { markdown } if markdown == "private result"
+        ));
+
+        let second_store = StateStore::open(path, [3; 32]).unwrap();
+        let second = IdempotencyMiddleware::with_journal(OperationJournal::new(second_store));
+        let replayed = second
+            .execute_for_owner("same", "fp", Some("owner-a"), || async {
+                panic!("a completed result must be replayed without executing again")
+            })
+            .await
+            .unwrap();
+        assert!(matches!(
+            &replayed.content[0],
+            crate::content::ContentBlock::Markdown { markdown } if markdown == "private result"
+        ));
+
+        let called = std::sync::atomic::AtomicBool::new(false);
+        let replay = second
+            .execute_for_owner("same", "fp", Some("owner-b"), || async {
+                called.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(IntentOutput::markdown("leaked result"))
+            })
+            .await;
+        assert!(matches!(replay, Err(IntentError::IdempotencyConflict(_))));
+        assert!(!called.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn failed_sqlite_reservation_never_starts_the_action() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("operations.sqlite3");
+        let store = StateStore::open(path, [5; 32]).unwrap();
+        store
+            .run(|connection| {
+                connection.execute_batch(
+                    "CREATE TRIGGER fail_operation_reservation BEFORE INSERT ON idempotency_operations BEGIN SELECT RAISE(FAIL, 'injected reservation failure'); END;", 
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let middleware = IdempotencyMiddleware::with_journal(OperationJournal::new(store));
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        assert!(
+            middleware
+                .execute_with_idempotency("same", "fp", || async {
+                    calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Ok(IntentOutput::markdown("must not run"))
+                })
+                .await
+                .is_err()
+        );
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn failed_sqlite_completion_transition_keeps_operation_unknown() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("operations.sqlite3");
+        let store = StateStore::open(path.clone(), [5; 32]).unwrap();
+        store
+            .run(|connection| {
+                connection.execute_batch(
+                    "CREATE TRIGGER fail_operation_completion BEFORE UPDATE OF state ON idempotency_operations WHEN NEW.state = 'completed' BEGIN SELECT RAISE(FAIL, 'injected transition failure'); END;", 
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let middleware = IdempotencyMiddleware::with_journal(OperationJournal::new(store));
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        assert!(
+            middleware
+                .execute_with_idempotency("same", "fp", || async {
+                    calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Ok(IntentOutput::markdown("confirmed result"))
+                })
+                .await
+                .is_err()
+        );
+
+        let restarted_store = StateStore::open(path, [5; 32]).unwrap();
+        let restarted = IdempotencyMiddleware::with_journal(OperationJournal::new(restarted_store));
+        let retry = restarted
+            .execute_with_idempotency("same", "fp", || async {
+                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(IntentOutput::markdown("duplicate"))
+            })
+            .await;
+        assert!(retry.is_err());
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn sqlite_refuses_corrupt_database_without_overwriting_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("old-idempotency.json");
+        let legacy_data = b"legacy operation records";
+        std::fs::write(&path, legacy_data).unwrap();
+
+        assert!(StateStore::open(path.clone(), [1; 32]).is_err());
+        assert_eq!(std::fs::read(path).unwrap(), legacy_data);
+    }
+
+    #[test]
+    fn sqlite_refuses_unknown_schema_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("future-schema.sqlite3");
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection
+            .pragma_update(None, "user_version", 999_i64)
+            .unwrap();
+        drop(connection);
+
+        assert!(StateStore::open(path, [1; 32]).is_err());
+    }
+
+    #[tokio::test]
     async fn action_error_leaves_unknown_outcome() {
         let middleware = IdempotencyMiddleware::new();
         let first = middleware
@@ -588,6 +899,56 @@ mod tests {
         assert!(
             matches!(retry, Err(IntentError::InternalError(message)) if message.contains("unknown outcome"))
         );
+    }
+
+    #[tokio::test]
+    async fn transport_failure_after_possible_dispatch_blocks_retry() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let middleware = IdempotencyMiddleware::new();
+        let calls = AtomicUsize::new(0);
+        let first = middleware
+            .execute_with_idempotency("transport", "fp", || async {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Err(IntentError::api("connection reset after dispatch"))
+            })
+            .await;
+        assert!(first.is_err());
+
+        let retry = middleware
+            .execute_with_idempotency("transport", "fp", || async {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok(IntentOutput::markdown("duplicate"))
+            })
+            .await;
+        assert!(retry.is_err());
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn response_decode_failure_after_possible_dispatch_blocks_retry() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let middleware = IdempotencyMiddleware::new();
+        let calls = AtomicUsize::new(0);
+        let first = middleware
+            .execute_with_idempotency("decode", "fp", || async {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Err(IntentError::internal(
+                    "upstream response could not be decoded after dispatch",
+                ))
+            })
+            .await;
+        assert!(first.is_err());
+
+        let retry = middleware
+            .execute_with_idempotency("decode", "fp", || async {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok(IntentOutput::markdown("duplicate"))
+            })
+            .await;
+        assert!(retry.is_err());
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

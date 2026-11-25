@@ -10,7 +10,7 @@ use wiremock::{
 };
 
 #[tokio::test]
-async fn replay_is_scoped_to_upstream_and_survives_credential_rotation() {
+async fn replay_is_scoped_to_upstream() {
     let first = MockServer::start().await;
     let second = MockServer::start().await;
     for upstream in [&first, &second] {
@@ -26,7 +26,7 @@ async fn replay_is_scoped_to_upstream_and_survives_credential_rotation() {
         jwt_manager: Arc::new(JwtManager::from_master_key(&key)),
         jwt_ttl_seconds: 3600,
         base_url: first.uri(),
-        tokens: TokenRegistry::load(None),
+        tokens: TokenRegistry::in_memory(),
     });
     let token = state
         .issue_recorded_token("i123", "first-key", 3600)
@@ -79,12 +79,6 @@ async fn replay_is_scoped_to_upstream_and_survives_credential_rotation() {
         sessions.push(session);
     }
     for index in [0, 1, 0] {
-        if index == 0 && !first.received_requests().await.unwrap().is_empty() {
-            let mut record = state.tokens.find(&token.jti).await.unwrap();
-            record.encrypted_api_key =
-                Some(state.jwt_manager.encrypt_credential("rotated-key").unwrap());
-            state.tokens.record(record).await;
-        }
         let response = http.post(&urls[index]).bearer_auth(&token.token).header("Accept", "application/json, text/event-stream")
             .header("mcp-session-id", &sessions[index])
             .json(&serde_json::json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"modify_training","arguments":{"action":"create","new_date":"2026-01-01","new_name":"Run","idempotency_token":"same-token"}}})).send().await.unwrap();

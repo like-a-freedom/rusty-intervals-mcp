@@ -26,7 +26,7 @@ async fn another_jwt_cannot_replay_same_athletes_result() {
         jwt_manager: Arc::new(JwtManager::from_master_key(&key)),
         jwt_ttl_seconds: 3600,
         base_url: first.uri(),
-        tokens: TokenRegistry::load(None),
+        tokens: TokenRegistry::in_memory(),
     });
     let token = state
         .issue_recorded_token("i123", "first-key", 3600)

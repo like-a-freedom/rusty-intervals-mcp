@@ -62,7 +62,7 @@ async fn authenticated_dynamic_uses_current_tenant_and_rotated_key() {
         jwt_manager: Arc::new(JwtManager::from_master_key(&key)),
         jwt_ttl_seconds: 3600,
         base_url: upstream.uri(),
-        tokens: TokenRegistry::load(None),
+        tokens: TokenRegistry::in_memory(),
     });
     let first = state
         .issue_recorded_token("i111111", "key-one", 3600)
@@ -70,6 +70,10 @@ async fn authenticated_dynamic_uses_current_tenant_and_rotated_key() {
         .unwrap();
     let second = state
         .issue_recorded_token("i222222", "key-two", 3600)
+        .await
+        .unwrap();
+    let rotated = state
+        .issue_recorded_token("i111111", "key-rotated", 3600)
         .await
         .unwrap();
     let handler = intervals_icu_mcp::IntervalsMcpHandler::new_multi_tenant().unwrap();
@@ -117,20 +121,7 @@ async fn authenticated_dynamic_uses_current_tenant_and_rotated_key() {
         assert!(response.status().is_success());
         sessions.push(session);
     }
-    for (index, token) in [(0, &first.token), (1, &second.token), (0, &first.token)] {
-        if index == 0
-            && upstream
-                .received_requests()
-                .await
-                .unwrap()
-                .iter()
-                .any(|r| r.url.path() == "/api/v1/athlete/i111111")
-        {
-            let mut record = state.tokens.find(&first.jti).await.unwrap();
-            record.encrypted_api_key =
-                Some(state.jwt_manager.encrypt_credential("key-rotated").unwrap());
-            state.tokens.record(record).await;
-        }
+    for (index, token) in [(0, &first.token), (1, &second.token), (0, &rotated.token)] {
         let response = http.post(&url).bearer_auth(token).header("Accept", "application/json, text/event-stream").header("mcp-session-id", &sessions[index])
             .json(&serde_json::json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"manage_profile","arguments":{"action":"get","sections":[]}}})).send().await.unwrap();
         assert!(response.status().is_success());

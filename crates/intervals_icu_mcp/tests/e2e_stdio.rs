@@ -109,7 +109,11 @@ async fn e2e_stdio_lists_tools_and_calls_profile() {
             }
             path
         });
+    let state_dir = tempfile::tempdir().expect("create temporary state directory");
+    let state_db_path = state_dir.path().join("mcp-state.sqlite3");
     let mut cmd = Command::new(bin);
+    cmd.env("MCP_STATE_DB_PATH", state_db_path);
+    cmd.env("MCP_STATE_ENCRYPTION_KEY", "11".repeat(32));
     cmd.env("INTERVALS_ICU_BASE_URL", mock.uri());
     cmd.env("INTERVALS_ICU_ATHLETE_ID", "ath123");
     cmd.env("INTERVALS_ICU_API_KEY", "tok");

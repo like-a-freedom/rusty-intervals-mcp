@@ -847,7 +847,7 @@ async fn test_auth_endpoint_issues_jwt_for_valid_credentials() {
         jwt_manager: jwt_manager.clone(),
         jwt_ttl_seconds: 3600,
         base_url: mock_server.uri(),
-        tokens: TokenRegistry::load(None),
+        tokens: TokenRegistry::in_memory(),
     });
 
     let app = axum::Router::new()
@@ -905,9 +905,19 @@ async fn test_auth_endpoint_issues_jwt_for_valid_credentials() {
 
     // The /auth-issued token is recorded, so it is revocable — and once revoked
     // it no longer authenticates.
-    let records = app_state.tokens.list_for_athlete("i123456").await;
+    let records = app_state
+        .tokens
+        .list_for_athlete("i123456")
+        .await
+        .expect("token registry should be available");
     assert_eq!(records.len(), 1, "the /auth token must be recorded");
-    assert!(app_state.tokens.revoke(&records[0].jti).await);
+    assert!(
+        app_state
+            .tokens
+            .revoke(&records[0].jti)
+            .await
+            .expect("token revocation should succeed")
+    );
     assert!(matches!(
         app_state.authenticate(token).await,
         Err(intervals_icu_mcp::auth::AuthError::TokenRevoked)
@@ -936,7 +946,7 @@ async fn authenticated_http_replays_are_isolated_by_athlete() {
         jwt_manager: Arc::new(JwtManager::from_master_key(&key)),
         jwt_ttl_seconds: 3600,
         base_url: upstream.uri(),
-        tokens: TokenRegistry::load(None),
+        tokens: TokenRegistry::in_memory(),
     });
     let mut tokens = Vec::new();
     for athlete in ["i111111", "i222222"] {
@@ -1049,7 +1059,7 @@ async fn test_mcp_route_requires_bearer_token_and_accepts_valid_jwt() {
         jwt_manager: jwt_manager.clone(),
         jwt_ttl_seconds: 3600,
         base_url: "https://intervals.icu".to_string(),
-        tokens: TokenRegistry::load(None),
+        tokens: TokenRegistry::in_memory(),
     });
     let token = app_state
         .issue_recorded_token("i777777", "test_api_key", 3600)
@@ -1122,13 +1132,19 @@ async fn test_revoked_token_is_rejected_by_mcp_route() {
         jwt_manager: jwt_manager.clone(),
         jwt_ttl_seconds: 3600,
         base_url: "https://intervals.icu".to_string(),
-        tokens: TokenRegistry::load(None),
+        tokens: TokenRegistry::in_memory(),
     });
     let issued = app_state
         .issue_recorded_token("i888888", "test_api_key", 3600)
         .await
         .expect("token should issue");
-    assert!(app_state.tokens.revoke(&issued.jti).await);
+    assert!(
+        app_state
+            .tokens
+            .revoke(&issued.jti)
+            .await
+            .expect("token revocation should succeed")
+    );
     let token = issued.token;
 
     let handler =

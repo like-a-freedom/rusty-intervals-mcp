@@ -7,10 +7,12 @@
 //! resolves credentials through it; the web UI manages tokens through it. See
 //! ADR-0011.
 
+use crate::state_store::{StateStore, StateStoreError};
+use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use thiserror::Error;
 use tokio::sync::RwLock;
 
 /// One issued token: the aggregate the registry owns.
@@ -22,143 +24,196 @@ pub struct TokenRecord {
     pub expires_at: String,
     pub revoked: bool,
     /// The athlete's upstream API key, encrypted with the master-key-derived
-    /// AES-256-GCM key. Never embedded in the JWT. `None` for records written
-    /// before ADR-0011 (`serde(default)`), which fall back to the credential
-    /// embedded in the legacy token's claims.
+    /// AES-256-GCM key. Never embedded in the JWT. `None` for legacy records
+    /// whose credential is still carried in the token claims.
     #[serde(default)]
     pub encrypted_api_key: Option<String>,
 }
 
-/// Shared, optionally-persistent registry of issued tokens.
-#[derive(Clone, Default)]
+/// Token-registry operations can fail when the durable store is unavailable.
+#[derive(Debug, Error)]
+pub enum TokenRegistryError {
+    #[error("token registry storage is unavailable")]
+    Storage,
+}
+
+/// Authoritative registry of issued tokens.
+///
+/// SQLite-backed registries query the database for every operation. The explicit
+/// in-memory constructor is intended for tests and non-durable embedding only.
+#[derive(Clone)]
 pub struct TokenRegistry {
-    records: Arc<RwLock<HashMap<String, TokenRecord>>>,
-    path: Option<PathBuf>,
+    store: Option<StateStore>,
+    records: Option<Arc<RwLock<HashMap<String, TokenRecord>>>>,
 }
 
 impl TokenRegistry {
-    /// Load a registry from `path`, or start empty and in-memory when `None`.
-    ///
-    /// A missing or unreadable file is treated as an empty registry: the server
-    /// must still start when the volume is not yet populated.
-    pub fn load(path: Option<PathBuf>) -> Self {
-        let records = path
-            .as_deref()
-            .and_then(read_records)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|record| (record.jti.clone(), record))
-            .collect();
+    /// Use the shared SQLite state store as the registry's source of truth.
+    pub(crate) fn from_store(store: StateStore) -> Self {
         Self {
-            records: Arc::new(RwLock::new(records)),
-            path,
+            store: Some(store),
+            records: None,
         }
     }
 
-    /// Whether recorded tokens survive a restart.
-    pub fn is_persistent(&self) -> bool {
-        self.path.is_some()
+    /// Create an explicitly non-durable registry for tests or embedding.
+    pub fn in_memory() -> Self {
+        Self {
+            store: None,
+            records: Some(Arc::default()),
+        }
     }
 
-    /// Record a newly issued token. Overwrites any record with the same `jti`.
-    pub async fn record(&self, record: TokenRecord) {
-        self.records
-            .write()
-            .await
-            .insert(record.jti.clone(), record);
-        self.persist().await;
+    /// Whether recorded tokens survive a process restart.
+    pub fn is_persistent(&self) -> bool {
+        self.store.is_some()
+    }
+
+    /// Record a newly issued token. A duplicate JTI is rejected by SQLite.
+    pub async fn record(&self, record: TokenRecord) -> Result<(), TokenRegistryError> {
+        if let Some(store) = &self.store {
+            store
+                .run(move |connection| {
+                    connection.execute(
+                        "INSERT INTO token_registry
+                         (jti, athlete_id, issued_at, expires_at, revoked, encrypted_api_key)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                        params![
+                            record.jti,
+                            record.athlete_id,
+                            record.issued_at,
+                            record.expires_at,
+                            i64::from(record.revoked),
+                            record.encrypted_api_key,
+                        ],
+                    )?;
+                    Ok(())
+                })
+                .await
+                .map_err(|_| TokenRegistryError::Storage)?;
+        } else if let Some(records) = &self.records {
+            records.write().await.insert(record.jti.clone(), record);
+        }
+        Ok(())
     }
 
     /// Look a token up by its `jti`.
-    pub async fn find(&self, jti: &str) -> Option<TokenRecord> {
-        self.records.read().await.get(jti).cloned()
+    pub async fn find(&self, jti: &str) -> Result<Option<TokenRecord>, TokenRegistryError> {
+        if let Some(store) = &self.store {
+            let jti = jti.to_owned();
+            return store
+                .run(move |connection| {
+                    connection
+                        .query_row(
+                            "SELECT jti, athlete_id, issued_at, expires_at, revoked, encrypted_api_key
+                             FROM token_registry WHERE jti = ?1",
+                            params![jti],
+                            token_record_from_row,
+                        )
+                        .optional()
+                        .map_err(StateStoreError::from)
+                })
+                .await
+                .map_err(|_| TokenRegistryError::Storage);
+        }
+        if let Some(records) = &self.records {
+            return Ok(records.read().await.get(jti).cloned());
+        }
+        Ok(None)
     }
 
     /// Mark a token revoked. Returns `false` when the `jti` is unknown.
-    pub async fn revoke(&self, jti: &str) -> bool {
-        let revoked = {
-            let mut records = self.records.write().await;
-            match records.get_mut(jti) {
-                Some(record) => {
-                    record.revoked = true;
-                    true
-                }
-                None => false,
-            }
-        };
-        if revoked {
-            self.persist().await;
+    pub async fn revoke(&self, jti: &str) -> Result<bool, TokenRegistryError> {
+        if let Some(store) = &self.store {
+            let jti = jti.to_owned();
+            return store
+                .run(move |connection| {
+                    let updated = connection.execute(
+                        "UPDATE token_registry SET revoked = 1 WHERE jti = ?1",
+                        params![jti],
+                    )?;
+                    Ok(updated == 1)
+                })
+                .await
+                .map_err(|_| TokenRegistryError::Storage);
         }
-        revoked
+        if let Some(records) = &self.records {
+            let mut records = records.write().await;
+            if let Some(record) = records.get_mut(jti) {
+                record.revoked = true;
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// Every record, oldest first.
-    pub async fn all(&self) -> Vec<TokenRecord> {
-        let mut records: Vec<TokenRecord> = self.records.read().await.values().cloned().collect();
-        records.sort_by(|a, b| a.issued_at.cmp(&b.issued_at));
-        records
+    pub async fn all(&self) -> Result<Vec<TokenRecord>, TokenRegistryError> {
+        self.list(None).await
     }
 
     /// The records for one athlete, oldest first.
-    pub async fn list_for_athlete(&self, athlete_id: &str) -> Vec<TokenRecord> {
-        let mut records: Vec<TokenRecord> = self
-            .records
+    pub async fn list_for_athlete(
+        &self,
+        athlete_id: &str,
+    ) -> Result<Vec<TokenRecord>, TokenRegistryError> {
+        self.list(Some(athlete_id)).await
+    }
+
+    async fn list(&self, athlete_id: Option<&str>) -> Result<Vec<TokenRecord>, TokenRegistryError> {
+        if let Some(store) = &self.store {
+            let athlete_id = athlete_id.map(str::to_owned);
+            return store
+                .run(move |connection| {
+                    let mut records = Vec::new();
+                    if let Some(athlete_id) = athlete_id {
+                        let mut statement = connection.prepare(
+                            "SELECT jti, athlete_id, issued_at, expires_at, revoked, encrypted_api_key
+                             FROM token_registry WHERE athlete_id = ?1 ORDER BY issued_at ASC",
+                        )?;
+                        let rows = statement.query_map(params![athlete_id], token_record_from_row)?;
+                        for row in rows {
+                            records.push(row?);
+                        }
+                    } else {
+                        let mut statement = connection.prepare(
+                            "SELECT jti, athlete_id, issued_at, expires_at, revoked, encrypted_api_key
+                             FROM token_registry ORDER BY issued_at ASC",
+                        )?;
+                        let rows = statement.query_map([], token_record_from_row)?;
+                        for row in rows {
+                            records.push(row?);
+                        }
+                    }
+                    Ok(records)
+                })
+                .await
+                .map_err(|_| TokenRegistryError::Storage);
+        }
+        let Some(records) = &self.records else {
+            return Ok(Vec::new());
+        };
+        let mut selected: Vec<_> = records
             .read()
             .await
             .values()
-            .filter(|record| record.athlete_id == athlete_id)
+            .filter(|record| athlete_id.is_none_or(|id| record.athlete_id == id))
             .cloned()
             .collect();
-        records.sort_by(|a, b| a.issued_at.cmp(&b.issued_at));
-        records
-    }
-
-    /// Write the registry to disk when a path is configured. Best effort: a
-    /// failed write is logged but never fails the caller's request.
-    async fn persist(&self) {
-        let Some(path) = self.path.as_ref() else {
-            return;
-        };
-        if let Some(parent) = path.parent()
-            && !parent.as_os_str().is_empty()
-        {
-            let _ = tokio::fs::create_dir_all(parent).await;
-        }
-        let records = self.all().await;
-        match serde_json::to_vec(&records) {
-            Ok(data) => {
-                if let Err(error) = tokio::fs::write(path, data).await {
-                    tracing::warn!(path = %path.display(), %error, "token registry write failed");
-                }
-            }
-            Err(error) => {
-                tracing::warn!(path = %path.display(), %error, "token registry serialization failed");
-            }
-        }
+        selected.sort_by(|a, b| a.issued_at.cmp(&b.issued_at));
+        Ok(selected)
     }
 }
 
-/// Load records from `path`.
-///
-/// A missing file is a normal first run (no record). A file that exists but
-/// cannot be read or parsed is an operator-actionable failure: warn, because
-/// every token recorded in it will be rejected until the file is repaired.
-fn read_records(path: &Path) -> Option<Vec<TokenRecord>> {
-    let content = match std::fs::read_to_string(path) {
-        Ok(content) => content,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
-        Err(error) => {
-            tracing::warn!(path = %path.display(), %error, "token registry file is unreadable; starting empty — previously issued tokens will be rejected");
-            return None;
-        }
-    };
-    match serde_json::from_str(&content) {
-        Ok(records) => Some(records),
-        Err(error) => {
-            tracing::warn!(path = %path.display(), %error, "token registry file is corrupt; starting empty — previously issued tokens will be rejected");
-            None
-        }
-    }
+fn token_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TokenRecord> {
+    Ok(TokenRecord {
+        jti: row.get(0)?,
+        athlete_id: row.get(1)?,
+        issued_at: row.get(2)?,
+        expires_at: row.get(3)?,
+        revoked: row.get::<_, i64>(4)? != 0,
+        encrypted_api_key: row.get(5)?,
+    })
 }
 
 #[cfg(test)]
@@ -178,49 +233,79 @@ mod tests {
 
     #[tokio::test]
     async fn record_then_find_is_keyed_by_jti() {
-        let registry = TokenRegistry::load(None);
+        let registry = TokenRegistry::in_memory();
         registry
             .record(record("jti-1", "athlete-a", "2026-01-01T00:00:00Z", false))
-            .await;
+            .await
+            .expect("record token");
 
-        let found = registry.find("jti-1").await.expect("record present");
+        let found = registry
+            .find("jti-1")
+            .await
+            .expect("lookup succeeds")
+            .expect("record present");
         assert_eq!(found.athlete_id, "athlete-a");
         assert_eq!(found.encrypted_api_key.as_deref(), Some("encrypted-jti-1"));
-        assert!(registry.find("missing").await.is_none());
+        assert!(
+            registry
+                .find("missing")
+                .await
+                .expect("lookup succeeds")
+                .is_none()
+        );
     }
 
     #[tokio::test]
     async fn revoke_marks_known_and_reports_unknown() {
-        let registry = TokenRegistry::load(None);
+        let registry = TokenRegistry::in_memory();
         registry
             .record(record("jti-1", "athlete-a", "2026-01-01T00:00:00Z", false))
-            .await;
+            .await
+            .expect("record token");
 
-        assert!(registry.revoke("jti-1").await);
-        assert!(registry.find("jti-1").await.expect("record").revoked);
-        assert!(!registry.revoke("missing").await);
+        assert!(registry.revoke("jti-1").await.expect("revoke token"));
+        assert!(
+            registry
+                .find("jti-1")
+                .await
+                .expect("lookup succeeds")
+                .expect("record")
+                .revoked
+        );
+        assert!(
+            !registry
+                .revoke("missing")
+                .await
+                .expect("revoke missing token")
+        );
     }
 
     #[tokio::test]
     async fn lists_are_scoped_and_ordered_by_issue_time() {
-        let registry = TokenRegistry::load(None);
+        let registry = TokenRegistry::in_memory();
         registry
             .record(record("late", "athlete-a", "2026-01-03T00:00:00Z", false))
-            .await;
+            .await
+            .expect("record late token");
         registry
             .record(record("early", "athlete-a", "2026-01-01T00:00:00Z", false))
-            .await;
+            .await
+            .expect("record early token");
         registry
             .record(record("other", "athlete-b", "2026-01-02T00:00:00Z", false))
-            .await;
+            .await
+            .expect("record other token");
 
-        let athlete_a = registry.list_for_athlete("athlete-a").await;
+        let athlete_a = registry
+            .list_for_athlete("athlete-a")
+            .await
+            .expect("list athlete tokens");
         assert_eq!(
             athlete_a.iter().map(|r| r.jti.as_str()).collect::<Vec<_>>(),
             vec!["early", "late"]
         );
 
-        let all = registry.all().await;
+        let all = registry.all().await.expect("list all tokens");
         assert_eq!(
             all.iter().map(|r| r.jti.as_str()).collect::<Vec<_>>(),
             vec!["early", "other", "late"]
@@ -228,52 +313,273 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn persists_and_reloads_from_disk() {
+    async fn concurrent_insertions_of_the_same_jti_have_one_winner() {
         let dir = tempfile::tempdir().expect("temp dir");
-        let path = dir.path().join("nested/tokens.json");
+        let store =
+            StateStore::open(dir.path().join("state.sqlite3"), [6; 32]).expect("open state store");
+        let registry = TokenRegistry::from_store(store);
+        let first = registry.clone();
+        let second = registry.clone();
+        let gate = Arc::new(tokio::sync::Barrier::new(3));
+        let first_gate = gate.clone();
+        let second_gate = gate.clone();
+
+        let first_insert = tokio::spawn(async move {
+            first_gate.wait().await;
+            first
+                .record(record(
+                    "racing-jti",
+                    "athlete-a",
+                    "2026-01-01T00:00:00Z",
+                    false,
+                ))
+                .await
+        });
+        let second_insert = tokio::spawn(async move {
+            second_gate.wait().await;
+            second
+                .record(record(
+                    "racing-jti",
+                    "athlete-a",
+                    "2026-01-02T00:00:00Z",
+                    false,
+                ))
+                .await
+        });
+        gate.wait().await;
+
+        let results = [
+            first_insert.await.expect("first task"),
+            second_insert.await.expect("second task"),
+        ];
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert_eq!(results.iter().filter(|result| result.is_err()).count(), 1);
+        assert_eq!(registry.all().await.expect("list registry").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn cloned_sqlite_registries_observe_revocation_without_a_cache() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store =
+            StateStore::open(dir.path().join("state.sqlite3"), [6; 32]).expect("open state store");
+        let first = TokenRegistry::from_store(store.clone());
+        let second = TokenRegistry::from_store(store);
+        first
+            .record(record(
+                "shared-jti",
+                "athlete-a",
+                "2026-01-01T00:00:00Z",
+                false,
+            ))
+            .await
+            .expect("record token");
+
+        assert!(second.revoke("shared-jti").await.expect("revoke token"));
+        assert!(
+            first
+                .find("shared-jti")
+                .await
+                .expect("read current token state")
+                .expect("token exists")
+                .revoked
+        );
+    }
+
+    #[tokio::test]
+    async fn persists_and_reloads_from_sqlite() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("nested/tokens.sqlite3");
 
         {
-            let registry = TokenRegistry::load(Some(path.clone()));
+            let store = StateStore::open(path.clone(), [6; 32]).expect("open state store");
+            let registry = TokenRegistry::from_store(store);
             registry
                 .record(record("jti-1", "athlete-a", "2026-01-01T00:00:00Z", false))
-                .await;
-            assert!(registry.revoke("jti-1").await);
+                .await
+                .expect("persist token");
+            assert!(registry.revoke("jti-1").await.expect("persist revocation"));
         }
 
-        let reloaded = TokenRegistry::load(Some(path));
-        let found = reloaded.find("jti-1").await.expect("record persisted");
+        let store = StateStore::open(path, [6; 32]).expect("reopen state store");
+        let reloaded = TokenRegistry::from_store(store);
+        let found = reloaded
+            .find("jti-1")
+            .await
+            .expect("lookup succeeds")
+            .expect("record persisted");
         assert_eq!(found.athlete_id, "athlete-a");
         assert!(found.revoked);
         assert!(reloaded.is_persistent());
     }
 
     #[tokio::test]
-    async fn missing_file_starts_empty() {
+    async fn new_sqlite_registry_starts_empty() {
         let dir = tempfile::tempdir().expect("temp dir");
-        let registry = TokenRegistry::load(Some(dir.path().join("absent.json")));
-        assert!(registry.all().await.is_empty());
+        let store =
+            StateStore::open(dir.path().join("state.sqlite3"), [6; 32]).expect("open state store");
+        let registry = TokenRegistry::from_store(store);
+        assert!(registry.all().await.expect("list registry").is_empty());
     }
 
     #[test]
     fn in_memory_registry_is_not_persistent() {
-        assert!(!TokenRegistry::load(None).is_persistent());
+        assert!(!TokenRegistry::in_memory().is_persistent());
     }
 
     #[test]
     fn legacy_records_without_api_key_deserialize() {
-        // Registry files written before ADR-0011 have no `encrypted_api_key`.
+        // Legacy JWT claims may still supply the credential when no registry row exists.
         let json = r#"[{"jti":"old","athlete_id":"a","issued_at":"2026-01-01T00:00:00Z","expires_at":"2026-02-01T00:00:00Z","revoked":false}]"#;
         let records: Vec<TokenRecord> = serde_json::from_str(json).expect("legacy json parses");
         assert_eq!(records.len(), 1);
         assert!(records[0].encrypted_api_key.is_none());
     }
 
-    #[tokio::test]
-    async fn corrupt_file_starts_empty() {
+    #[test]
+    fn existing_json_registry_file_is_not_overwritten_as_sqlite() {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("tokens.json");
-        std::fs::write(&path, b"{not json").expect("write corrupt file");
-        let registry = TokenRegistry::load(Some(path));
-        assert!(registry.all().await.is_empty());
+        let legacy_json = b"[{\"jti\":\"old\"}]";
+        std::fs::write(&path, legacy_json).expect("write legacy registry");
+
+        assert!(StateStore::open(path.clone(), [6; 32]).is_err());
+        assert_eq!(
+            std::fs::read(path).expect("read legacy registry"),
+            legacy_json
+        );
+    }
+
+    #[tokio::test]
+    async fn sqlite_insert_failure_is_reported_without_creating_a_token() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store =
+            StateStore::open(dir.path().join("state.sqlite3"), [6; 32]).expect("open state store");
+        let registry = TokenRegistry::from_store(store.clone());
+        store
+            .run(|connection| {
+                connection.execute_batch(
+                    "CREATE TRIGGER reject_token_insert BEFORE INSERT ON token_registry
+                     BEGIN SELECT RAISE(ABORT, 'injected insert failure'); END;",
+                )?;
+                Ok(())
+            })
+            .await
+            .expect("install failure trigger");
+
+        assert!(matches!(
+            registry
+                .record(record(
+                    "jti-fail",
+                    "athlete-a",
+                    "2026-01-01T00:00:00Z",
+                    false
+                ))
+                .await,
+            Err(TokenRegistryError::Storage)
+        ));
+        assert!(
+            registry
+                .find("jti-fail")
+                .await
+                .expect("read after failed insert")
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn sqlite_revoke_failure_is_reported_without_changing_token_state() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store =
+            StateStore::open(dir.path().join("state.sqlite3"), [6; 32]).expect("open state store");
+        let registry = TokenRegistry::from_store(store.clone());
+        registry
+            .record(record(
+                "jti-revoke",
+                "athlete-a",
+                "2026-01-01T00:00:00Z",
+                false,
+            ))
+            .await
+            .expect("record token");
+        store
+            .run(|connection| {
+                connection.execute_batch(
+                    "CREATE TRIGGER reject_token_revoke BEFORE UPDATE OF revoked ON token_registry
+                     BEGIN SELECT RAISE(ABORT, 'injected revoke failure'); END;",
+                )?;
+                Ok(())
+            })
+            .await
+            .expect("install failure trigger");
+
+        assert!(matches!(
+            registry.revoke("jti-revoke").await,
+            Err(TokenRegistryError::Storage)
+        ));
+        assert!(
+            !registry
+                .find("jti-revoke")
+                .await
+                .expect("read token after failed revoke")
+                .expect("token remains present")
+                .revoked
+        );
+    }
+
+    #[tokio::test]
+    async fn sqlite_rejects_reusing_a_revoked_jti_without_reviving_it() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store =
+            StateStore::open(dir.path().join("state.sqlite3"), [6; 32]).expect("open state store");
+        let registry = TokenRegistry::from_store(store);
+        registry
+            .record(record(
+                "same-jti",
+                "athlete-a",
+                "2026-01-01T00:00:00Z",
+                true,
+            ))
+            .await
+            .expect("record revoked token");
+
+        assert!(matches!(
+            registry
+                .record(record(
+                    "same-jti",
+                    "athlete-a",
+                    "2026-01-02T00:00:00Z",
+                    false
+                ))
+                .await,
+            Err(TokenRegistryError::Storage)
+        ));
+        assert!(
+            registry
+                .find("same-jti")
+                .await
+                .expect("lookup token")
+                .expect("revoked token remains present")
+                .revoked
+        );
+    }
+
+    #[tokio::test]
+    async fn sqlite_lookup_failure_is_reported() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store =
+            StateStore::open(dir.path().join("state.sqlite3"), [6; 32]).expect("open state store");
+        let registry = TokenRegistry::from_store(store.clone());
+        store
+            .run(|connection| {
+                connection.execute_batch("DROP TABLE token_registry;")?;
+                Ok(())
+            })
+            .await
+            .expect("remove token table to inject read failure");
+
+        assert!(matches!(
+            registry.find("jti-read-fail").await,
+            Err(TokenRegistryError::Storage)
+        ));
     }
 }

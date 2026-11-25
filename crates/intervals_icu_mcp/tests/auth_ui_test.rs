@@ -15,7 +15,7 @@ fn test_ui_state() -> UiState {
         jwt_manager,
         jwt_ttl_seconds: 3600,
         base_url: "https://intervals.icu".to_string(),
-        tokens: TokenRegistry::load(None),
+        tokens: TokenRegistry::in_memory(),
     });
 
     UiState::new(app_state, false, String::new())
@@ -34,7 +34,7 @@ fn test_ui_state_with_base(base: &str) -> UiState {
         jwt_manager,
         jwt_ttl_seconds: 3600,
         base_url: "https://intervals.icu".to_string(),
-        tokens: TokenRegistry::load(None),
+        tokens: TokenRegistry::in_memory(),
     });
 
     UiState::new(app_state, false, base.to_string())

@@ -382,6 +382,34 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn locally_invalid_request_does_not_reserve_its_token() {
+        let router = IntentRouter::new(
+            vec![Box::new(MockIntentHandler::new("modify_training", true))],
+            Arc::new(MockIntervalsClient::default()),
+            Arc::new(IdempotencyMiddleware::new()),
+        );
+        let invalid = json!({"action": "create", "idempotency_token": "same-token"});
+        assert!(matches!(
+            router
+                .route("modify_training", invalid, Some("athlete"))
+                .await,
+            Err(IntentError::ValidationError(_))
+        ));
+
+        let corrected = json!({
+            "action": "create",
+            "target_date": "2030-01-01",
+            "idempotency_token": "same-token"
+        });
+        assert!(
+            router
+                .route("modify_training", corrected, Some("athlete"))
+                .await
+                .is_ok()
+        );
+    }
+
     #[test]
     fn fingerprint_request_is_stable_across_key_order() {
         let a = json!({
