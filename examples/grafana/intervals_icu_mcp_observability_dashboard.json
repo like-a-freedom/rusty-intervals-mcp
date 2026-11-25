@@ -343,7 +343,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum(rate(intervals_icu_mcp_upstream_errors_total{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval])) / clamp_min(sum(rate(intervals_icu_mcp_upstream_requests_total{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval])), 0.001)",
+          "expr": "sum(rate(intervals_icu_client_upstream_errors_total{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval])) / clamp_min(sum(rate(intervals_icu_client_upstream_requests_total{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval])), 0.001)",
           "instant": true,
           "legendFormat": "upstream error ratio",
           "range": false,
@@ -901,7 +901,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum by (status) (rate(intervals_icu_mcp_upstream_requests_total{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval]))",
+          "expr": "sum by (status) (rate(intervals_icu_client_upstream_requests_total{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval]))",
           "legendFormat": "{{status}}",
           "range": true,
           "refId": "A"
@@ -951,7 +951,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(intervals_icu_mcp_upstream_request_duration_seconds_bucket{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(intervals_icu_client_upstream_request_duration_seconds_bucket{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval])))",
           "legendFormat": "p95",
           "range": true,
           "refId": "A"
@@ -1001,7 +1001,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum by (error_type) (rate(intervals_icu_mcp_upstream_errors_total{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval]))",
+          "expr": "sum by (error_type) (rate(intervals_icu_client_upstream_errors_total{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval]))",
           "legendFormat": "{{error_type}}",
           "range": true,
           "refId": "A"
@@ -1046,7 +1046,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "topk(10, sum by (error_type) (increase(intervals_icu_mcp_upstream_errors_total{job=~\"$job\",instance=~\"$instance\"}[$__range])))",
+          "expr": "topk(10, sum by (error_type) (increase(intervals_icu_client_upstream_errors_total{job=~\"$job\",instance=~\"$instance\"}[$__range])))",
           "format": "table",
           "instant": true,
           "range": false,
@@ -1660,8 +1660,8 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum by (endpoint) (rate(intervals_icu_mcp_rate_limited_total{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval]))",
-          "legendFormat": "{{endpoint}}",
+          "expr": "sum by (scope) (rate(intervals_icu_mcp_rate_limited_total{job=~\"$job\",instance=~\"$instance\"}[$__rate_interval]))",
+          "legendFormat": "{{scope}}",
           "range": true,
           "refId": "A"
         }

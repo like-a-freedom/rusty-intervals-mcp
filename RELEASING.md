@@ -1,17 +1,19 @@
 # Releasing
 
 This guide describes how to cut a release of `rusty-intervals-mcp` (the
-`intervals_icu_mcp` crate). Releases are tag-triggered: pushing an annotated
-`vX.Y.Z` tag runs the GitHub Actions release workflow, which builds
-cross-platform binaries + checksums and publishes multi-arch GHCR images.
+`intervals_icu_mcp` crate). Creating a GitHub release from a pushed annotated
+`vX.Y.Z` tag triggers `Build and Release` (`release: created`). A tag push alone
+does not build artifacts. The workflow builds cross-platform binaries and
+checksums and publishes multi-arch GHCR images.
 
 `intervals_icu_client` is versioned independently and is only bumped when it
-changes (it currently sits at `2.17.0` and has no `rmcp` dependency).
+changes. It has no `rmcp` dependency.
 
 ## Version numbering
 
-- **Major** (`v3.0.0`): breaking changes to the intent API or wire format.
-- **Minor** (`v2.21.0`): new intents, features, or dependency/MRST migrations
+- **Major** (`v3.0.0`): breaking changes to the intent API, wire format,
+  required configuration, or on-disk state.
+- **Minor** (`v2.21.0`): new intents, features, or dependency/MSRV migrations
   that are backward compatible for MCP clients. Example: the `rmcp` 2.x → 3.x
   migration landed as `2.21.0` (new MSRV declared, new major dependency, but
   no change to the negotiated protocol version).
@@ -29,7 +31,13 @@ changes (it currently sits at `2.17.0` and has no `rmcp` dependency).
    cargo fmt --all -- --check
    cargo clippy --all-targets --all-features -- -D warnings
    cargo test --all-targets --all-features
+   cargo test --all --all-features --no-fail-fast
+   CARGO_INCREMENTAL=0 cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info --no-fail-fast
+   cargo build -p intervals_icu_mcp --release
    ```
+   Install `cargo-llvm-cov` and `llvm-tools-preview` for the coverage check.
+   Keep `lcov.info` out of the release commit. The native build is a local
+   check; Actions covers the platform matrix, Codecov upload, and publishing.
    Fix root causes; never mute warnings or delete tests to go green.
 
 3. **CHANGELOG.** Add the new `## [X.Y.Z] - YYYY-MM-DD` section (Keep a
@@ -51,10 +59,11 @@ changes (it currently sits at `2.17.0` and has no `rmcp` dependency).
 
 6. **Commit** with the `release:` prefix, mirroring the changelog scope:
    ```sh
-   git commit -am "release: bump version to X.Y.Z"
+   git add CHANGELOG.md crates/intervals_icu_mcp/Cargo.toml
+   git commit -m "release: bump version to X.Y.Z"
    ```
 
-7. **Tag and push** (the tag is what triggers CI):
+7. **Tag the release commit and push** the branch and tag:
    ```sh
    git tag -a vX.Y.Z -m "vX.Y.Z — <short title>
 
@@ -64,8 +73,9 @@ changes (it currently sits at `2.17.0` and has no `rmcp` dependency).
    ```
    Tags are annotated and follow `vX.Y.Z — title` (see `git log v2.26.0`).
 
-8. **Create the GitHub release** from the pushed tag (UI or `gh`). The CI
-   workflow (`on: release`) attaches binary artifacts and checksums for
+8. **Create the GitHub release** after verifying the remote tag points to the
+   release commit. Use `gh release create vX.Y.Z --title vX.Y.Z --notes-file <file> --verify-tag`
+   with short English notes. The workflow attaches binary artifacts and checksums for
    Linux, macOS, and Windows, and publishes multi-arch images to GHCR
    (`ghcr.io/<org-or-user>/rusty-intervals-mcp`).
 
@@ -74,9 +84,8 @@ changes (it currently sits at `2.17.0` and has no `rmcp` dependency).
 
 ## Notes
 
-- `docs/` is gitignored (except `ARCHITECTURE.md` and `METRIC_METHODS.md`).
-  ADRs and planning artifacts there are local-only unless explicitly
-  force-added — do not expect them in release diffs.
+- Keep tracked ADRs and specs as design records. Keep temporary plans and
+  generated reports out of release commits.
 - Never commit secrets. GHCR publishing uses `GITHUB_TOKEN`; any other
   publishing credentials must come from GitHub repository secrets.
 - Keep release diffs minimal and task-scoped. Do not fold unrelated refactors

@@ -4,6 +4,9 @@
             "name": "intervals-icu-remote",
             "url": "https://mcp.example.com/mcp",
             "description": "Remote Intervals.icu MCP server",
+            "headers": {
+                "Authorization": "Bearer <MCP_JWT>"
+            },
             "tls": {
                 "insecureSkipVerify": false
             }

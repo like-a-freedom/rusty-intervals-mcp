@@ -1,77 +1,37 @@
 # intervals_icu_mcp
 
-Minimal MCP server scaffold for Intervals.icu using the `rmcp` SDK.
+The Intervals.icu MCP server uses `rmcp` and exposes nine curated intents:
 
-Current status:
-- Implements an `IntervalsMcpHandler` exposing 9 curated intents via `rmcp`:
-	- `plan_training` — build a training plan for a date range
-	- `analyze_training` — analyze recent training load and fitness
-	- `modify_training` — create/adjust/delete planned workouts
-	- `compare_periods` — compare two training periods
-	- `assess_recovery` — assess readiness and recovery
-	- `manage_profile` — read/update athlete profile
-	- `manage_gear` — manage bikes and gear
-	- `analyze_race` — analyze race performance
-	- `track_progress` — track long-term progress and trends
+| Intent | Purpose |
+|---|---|
+| `plan_training` | Build a training plan for a date range |
+| `analyze_training` | Analyze a workout or training period |
+| `modify_training` | Create, adjust, or delete planned workouts and events |
+| `compare_periods` | Compare two training periods |
+| `assess_recovery` | Assess readiness and recovery |
+| `manage_profile` | Read or update the athlete profile |
+| `manage_gear` | Manage bikes and gear |
+| `analyze_race` | Analyze race performance |
+| `track_progress` | Track long-term progress and trends |
 
-Examples & usage
+OpenAPI operations stay internal. Durable mutation replay is limited to `plan_training` and `modify_training` writes using `idempotency_token`; it does not apply to previews or profile and gear updates.
 
-- Run the main binary in HTTP streamable mode:
+## Run the server
 
-```sh
-export INTERVALS_ICU_API_KEY=...
-export INTERVALS_ICU_ATHLETE_ID=...
-export MCP_TRANSPORT=http
-export MCP_HTTP_ADDRESS=127.0.0.1:3000
-export JWT_MASTER_KEY=$(openssl rand -hex 64)
-cargo run -p intervals_icu_mcp --bin intervals_icu_mcp
-```
+Both transports require [persistent local state](../../README.md#configure-persistent-local-state): `MCP_STATE_DB_PATH` points to a writable SQLite file and `MCP_STATE_ENCRYPTION_KEY` is a stable 32-byte key encoded as 64 hex characters. Use one process per database. The server does not import legacy JSON token or mutation history. [Review the cutover guidance](../../docs/ARCHITECTURE.md#durable-local-state) before replacing a file-backed installation.
 
-Or install the binary locally using `cargo install --locked --path` and run it directly:
+From the repository root, run the binary with `cargo run -p intervals_icu_mcp --bin intervals_icu_mcp`, or install it with `cargo install --locked --path crates/intervals_icu_mcp` and run `intervals_icu_mcp`.
 
-```sh
-# From inside the crate directory
-cargo install --locked --path .
-# Or from the repository root
-cargo install --locked --path crates/intervals_icu_mcp
+- **STDIO** (default): run as an MCP client's child process with `INTERVALS_ICU_API_KEY` and `INTERVALS_ICU_ATHLETE_ID` in the process environment. See the [root setup guide](../../README.md#stdio-mode-default) or the [STDIO integration tests](tests/e2e_stdio.rs).
+- **Streamable HTTP**: set `MCP_TRANSPORT=http` and a stable `JWT_MASTER_KEY` (64 bytes encoded as 128 hex characters). The binary listens on `127.0.0.1:3000` unless `MCP_HTTP_ADDRESS` overrides it. It does not read an athlete ID or API key at startup: clients exchange their credentials at [`POST /auth`](../../README.md#authenticating-with-auth) and send the returned bearer JWT to `/mcp`.
 
-# The binary will be installed to $CARGO_HOME/bin (usually ~/.cargo/bin)
-# Run the installed server:
-export INTERVALS_ICU_API_KEY=...
-export INTERVALS_ICU_ATHLETE_ID=...
-export MCP_TRANSPORT=http   # omit or set to stdio for local child-process use
-export MCP_HTTP_ADDRESS=127.0.0.1:3000
-export JWT_MASTER_KEY=$(openssl rand -hex 64)
-intervals_icu_mcp
-```
+HTTP also serves `/health`, `/metrics` (optionally protected by `PROMETHEUS_METRICS_TOKEN`), and the operator token UI at `/ui`. Restrict UI access at the proxy or on a private network. If you set `MCP_PUBLIC_BASE_PATH`, forward the prefix unchanged and include it in client and probe URLs. Set `MCP_ALLOWED_HOSTS` for the `Host` header rmcp receives.
 
-(Use `--bin <name>` if you need to select a specific binary.)
-- Run MCP server for stdio or other transports:
+See the [Docker guide](../../README.md#docker-and-remote-deployment) for container setup and [HTTP reliability notes](../../docs/HTTP_RELIABILITY.md) for limits, timeouts, and proxy behavior. The [standalone HTTP example](examples/servers_http.rs) only demonstrates `/health` and `/metrics`; it is not the MCP binary and does not exercise JWTs, SQLite, or Streamable HTTP.
 
-The crate supports RMCP transports (stdio, streamable HTTP). In stdio mode, the binary reads `INTERVALS_ICU_API_KEY` and `INTERVALS_ICU_ATHLETE_ID` directly from the environment. In HTTP mode, the server mounts `/auth`, `/health`, and the streamable MCP service at `/mcp` and requires `JWT_MASTER_KEY`. Setting `MCP_PUBLIC_BASE_PATH` (e.g. `/intervals`) serves all of these routes under that prefix for reverse-proxy pass-through deployments.
-
-If you need a concrete stdio example, run an example from the RMCP SDK or see the `tests/e2e_stdio.rs` test for an example of launching the server as a child process.
-
-Useful HTTP-mode environment variables:
-
-- `MCP_HTTP_ADDRESS` (default `127.0.0.1:3000`)
-- `MAX_HTTP_BODY_SIZE` (default `4194304` bytes)
-- `REQUEST_TIMEOUT_SECONDS` (default `30`)
-- `IDLE_TIMEOUT_SECONDS` (default `60`)
-- `JWT_MASTER_KEY` (required, 64-byte hex key)
-- `JWT_TTL_SECONDS` (default `7776000` = 90 days)
-- `MCP_TOKEN_REGISTRY_PATH` (unset = in-memory registry; set a writable path to persist issued tokens across restarts)
-
-For containerized deployment, prefer the repository-level `Dockerfile` and `docker-compose.yml`; those artifacts are intended for HTTP streamable MCP, not stdio child-process usage.
-- Running tests:
+## Tests
 
 ```sh
-# Library unit tests
 cargo test -p intervals_icu_mcp --lib
-
-# E2E HTTP integration tests
-cargo test -p intervals_icu_mcp --test e2e_http -- --nocapture
+cargo test -p intervals_icu_mcp --test e2e_http --test e2e_stdio
 ```
-
-Notes
-- The public MCP surface is the 9 curated intents listed above; dynamic OpenAPI operations stay internal and are never exposed as tool names.

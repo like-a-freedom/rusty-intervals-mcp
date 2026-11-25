@@ -12,15 +12,15 @@ Purpose: operating manual for coding agents working in `rusty-intervals-mcp`.
 ## Project snapshot
 
 - Language: Rust; toolchain is `channel = "stable"` in `rust-toolchain.toml`
-  (currently 1.99.0; `rust-version` in the mcp manifest tracks the stable
-  in use)
+  (the MCP crate declares Rust 1.99 as its minimum supported version)
 - Workspace crates:
   - `crates/intervals_icu_client` — HTTP client, circuit breaker, upstream
     metrics + failure logging, API compatibility helpers
   - `crates/intervals_icu_mcp` — MCP server, 9 intent handlers (including
     `track_progress`), dynamic OpenAPI tool registry, prompts/resources,
     request correlation (`request_id` / real client IP) and session
-    lifecycle logging (`session.rs`)
+    lifecycle logging (`session.rs`), and local SQLite state for the
+    token registry and training mutation journal
 - Important docs:
   - `README.md` — setup, runtime usage, token-efficiency behavior, env vars
     (incl. `RUST_LOG_FORMAT` / `RUST_LOG_COLOR`)

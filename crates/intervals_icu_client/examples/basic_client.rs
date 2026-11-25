@@ -2,7 +2,7 @@ use intervals_icu_client::{IntervalsClient, config::Config, http_client::Reqwest
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Example: expects INTERVALS_ICU_API_KEY in env
+    // Set INTERVALS_ICU_API_KEY and INTERVALS_ICU_ATHLETE_ID before running.
     let cfg = match Config::from_env() {
         Ok(c) => c,
         Err(e) => {

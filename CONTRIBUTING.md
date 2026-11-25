@@ -28,22 +28,16 @@ Starting with version 2.0, this project implements an **intent-driven architectu
    - Output format (Markdown + guidance hints)
    - Business rules and validation
 
-2. **Implement IntentHandler**:
-   ```rust
-   pub trait IntentHandler: Send + Sync {
-       fn name(&self) -> &'static str;
-       fn description(&self) -> &'static str;
-       fn input_schema(&self) -> serde_json::Value;
-       fn execute(&self, input: Value, client: Arc<dyn IntervalsClient>) -> Result<IntentOutput, IntentError>;
-   }
-   ```
+2. **Implement [`IntentHandler`](crates/intervals_icu_mcp/src/intents/types.rs)**:
+   follow an [existing handler](crates/intervals_icu_mcp/src/intents/handlers/plan_training.rs)
+   for the async interface and business validation.
 
 3. **Follow key principles**:
    - **Outcomes, Not Operations**: One intent = one business outcome
    - **Flatten Arguments**: Only primitives at top level (no nested dicts)
    - **Business Identifiers**: Use `date`, `description` instead of `event_id`
    - **Tool Response as Prompt**: Include `suggestions` and `next_actions`
-   - **Idempotency**: Require `idempotency_token` for mutating operations
+   - **Idempotency**: Preserve the `idempotency_token` and durable replay contract of `plan_training` and `modify_training` (see [ADR 0012](docs/adr/0012-single-process-sqlite-state.md)).
    - **NO LLM inside**: Deterministic Rust logic only
 
 4. **Add tests**:
@@ -59,7 +53,7 @@ Starting with version 2.0, this project implements an **intent-driven architectu
 
 ### Token Efficiency
 
-- Prefer 9 intents over 146 low-level tools
+- Prefer the nine business intents over low-level upstream operations
 - Use compact responses by default
 - Aggregate data instead of raw payloads
 - Include guidance hints in all responses
@@ -72,26 +66,9 @@ Starting with version 2.0, this project implements an **intent-driven architectu
 
 ## Testing Intent Handlers
 
-```rust
-#[tokio::test]
-async fn test_plan_training_intent() {
-    let client = MockIntervalsClient::new();
-    let handler = PlanTrainingHandler;
-    
-    let input = json!({
-        "period_start": "2026-03-01",
-        "period_end": "2026-06-15",
-        "focus": "aerobic_base",
-        "idempotency_token": "test-token"
-    });
-    
-    let result = handler.execute(input, Arc::new(client)).await.unwrap();
-    
-    assert!(!result.suggestions.is_empty());
-    assert!(!result.next_actions.is_empty());
-    assert!(result.metadata.events_created > 0);
-}
-```
+See the [`plan_training` unit tests](crates/intervals_icu_mcp/src/intents/handlers/plan_training/tests.rs)
+for input and outcome checks, and the [HTTP integration tests](crates/intervals_icu_mcp/tests/http_mode_integration.rs)
+for authenticated calls and mutation replay.
 
 ## Releases & Binaries
 
@@ -101,17 +78,9 @@ Linux (x86_64/aarch64), macOS (x86_64/aarch64) and Windows (x86_64).
 The full step-by-step release guide — version numbering, checklist, tag/push,
 GHCR publishing — lives in [`RELEASING.md`](RELEASING.md). In short:
 
-1. Ensure all checks pass locally (format, clippy, tests).
-2. Update `CHANGELOG.md` with intent changes and migration notes.
-3. Bump the version in `crates/intervals_icu_mcp/Cargo.toml`.
-4. Create a GitHub release (tag `vX.Y.Z`) — the workflow will produce and
-   attach binary artifacts and checksums, and push multi-arch images to GHCR
-   (`ghcr.io/<your-org-or-user>/rusty-intervals-mcp`).
-
-**Version numbering:**
-- Major version (v2.0.0): Breaking changes to intent API
-- Minor version (v2.1.0): New intents or features, backward compatible
-- Patch version (v2.1.1): Bug fixes, no API changes
+Run the release quality gates, update `CHANGELOG.md`, and bump the server
+version. Push the annotated tag, then create the GitHub release from it.
+The release event triggers the build and publishing workflow; a tag push alone does not.
 
 Security: do not store secrets in the repository; GHCR publishing uses
 `GITHUB_TOKEN` and the workflow already requests `packages: write`.

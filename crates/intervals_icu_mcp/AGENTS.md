@@ -21,15 +21,18 @@ Purpose: crate-level operating manual for coding agents working in `crates/inter
 
 `intervals_icu_mcp` is the MCP server crate that:
 - implements `IntervalsMcpHandler` (RMCP `ServerHandler`),
-- dynamically builds tool definitions from OpenAPI (`dynamic` module),
-- dispatches OpenAPI operations via `IntervalsClient`,
+- exposes exactly nine curated intents; OpenAPI definitions and operation IDs stay internal,
+- uses `IntervalsClient` for typed upstream calls, optionally dispatching mapped calls through the dynamic OpenAPI runtime,
 - exposes prompts/resources for training analytics workflows,
 - supports HTTP/stdio MCP usage.
 
 ## Important files and modules
 
 - `src/lib.rs` — MCP handler, prompt/resource routing, dynamic dispatch entry.
-- `src/main.rs` — CLI/server startup path.
+- `src/main.rs` — binary entry point; `run` in `src/lib.rs` selects STDIO or Streamable HTTP and wires transport-specific state.
+- `src/auth.rs`, `src/auth_ui.rs`, `src/token_registry.rs` — JWT exchange and verification, browser token administration, and registry persistence.
+- `src/state_store.rs`, `src/intents/journal.rs` — SQLite startup and durable replay for `plan_training` and `modify_training` writes using `idempotency_token`.
+- `src/metrics.rs`, `src/session.rs` — HTTP/Prometheus instrumentation and rmcp session lifecycle.
 - `src/dynamic/` — OpenAPI parsing, registry generation, dispatch runtime.
 - `src/compact.rs` — compact response shaping/token-efficiency behavior.
 - `src/domains/` — domain-specific prompt/resource/tool helpers (including `progress.rs` for progress tracking domain types).
@@ -41,7 +44,7 @@ Purpose: crate-level operating manual for coding agents working in `crates/inter
 
 ## Implementation rules
 
-- Preserve dynamic OpenAPI-first behavior; avoid reintroducing hardcoded static tool maps.
+- Keep the typed client as the default execution path and preserve the opt-in dynamic adapter and internal registry.
 - Keep MCP contract stable (`list_tools`, `call_tool`, prompts/resources behavior).
 - Prefer additive changes with backward compatibility in tool argument handling.
 - Use `?` and typed errors; do not use `unwrap()`/`expect()` in non-test code.
@@ -58,15 +61,11 @@ Purpose: crate-level operating manual for coding agents working in `crates/inter
 
 ## Environment and runtime notes
 
-- Required runtime vars for real API calls:
-  - `INTERVALS_ICU_API_KEY`
-  - `INTERVALS_ICU_ATHLETE_ID`
-- Dynamic registry tuning vars:
-  - `INTERVALS_ICU_OPENAPI_SPEC`
-  - `INTERVALS_ICU_SPEC_REFRESH_SECS`
-- Logging:
-  - `RUST_LOG` (preferred)
-- Reverse proxy (HTTP mode): `MCP_PUBLIC_BASE_PATH` (optional) mounts all routes under a public path prefix with pass-through (no rewrite); empty = root.
+- Both standard transports require `MCP_STATE_DB_PATH` (persistent local SQLite, one process per database) and `MCP_STATE_ENCRYPTION_KEY` (64 hex characters). There is no JSON import or standard in-memory fallback.
+- STDIO requires `INTERVALS_ICU_API_KEY` and `INTERVALS_ICU_ATHLETE_ID`. HTTP instead requires `JWT_MASTER_KEY` (128 hex characters); `/auth` and the UI validate per-athlete credentials before issuing tokens.
+- Dynamic registry settings: `INTERVALS_ICU_OPENAPI_SPEC`, `INTERVALS_ICU_SPEC_REFRESH_SECS`, and `INTERVALS_ICU_DYNAMIC_DISPATCH_ENABLED` (off by default).
+- Use `RUST_LOG` for logging filters. With a reverse proxy, pass `MCP_PUBLIC_BASE_PATH` through unchanged and configure `MCP_ALLOWED_HOSTS` for the MCP `Host` check. Restrict access to the operator UI separately.
+- See the [root README](../../README.md#runtime-configuration) and [HTTP reliability notes](../../docs/HTTP_RELIABILITY.md).
 
 ## Code Navigation Rules
 
@@ -105,5 +104,5 @@ WORKFLOW for any task:
 
 - Hardcode secrets or log API keys/tokens.
 - Bypass failing checks by suppressing warnings globally.
-- Replace dynamic registry architecture with a static tool list.
+- Expose internal OpenAPI operations as public MCP tools or replace the dynamic registry with static endpoint definitions.
 - Modify unrelated workspace crates/files “while here”.
