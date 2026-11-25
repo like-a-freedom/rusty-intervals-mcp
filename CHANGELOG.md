@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.0.0] - 2026-11-25
+
+### Breaking changes
+- Standard HTTP and STDIO startup now require a writable local SQLite path (`MCP_STATE_DB_PATH`) and a stable 64-hex-character key (`MCP_STATE_ENCRYPTION_KEY`). Use one server process per database.
+- The JSON token registry is not imported. Remove the old registry-path setting, configure SQLite, and reissue JWTs backed by the old registry. The server leaves the old file untouched.
+
+### Added
+- A durable mutation journal protects `plan_training` and `modify_training` across process restarts. Matching requests can replay confirmed results for 24 hours; uncertain operations stay blocked and are not automatically cleared. Journal metrics surface failures, quota rejections, and unknown outcomes.
+- Rust embedders can rotate a registry-backed JWT's upstream API key without replacing the JWT. No HTTP endpoint or UI for in-place rotation was added.
+
+### Changed
+- Intervals.icu clients can share a transport while keeping circuit-breaker state isolated by upstream and athlete. The independently versioned client crate is now `2.18.0`.
+- The server bundles SQLite via `rusqlite` 0.37. MCP tool schemas, the JSON-RPC response shape, and the Rust 1.99 minimum are unchanged.
+
+### Fixed
+- Training mutations report partial or uncertain outcomes without inviting an unsafe retry. Batch event IDs are validated, and deletes validate all matches before sending the first write.
+- Progress reports compare complete adjacent weeks, and recovery uses thresholds on the normalized scale.
+
 ## [2.27.0] - 2026-10-09
 
 ### Added
