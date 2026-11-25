@@ -12,10 +12,28 @@ use crate::content::date::{parse_date, validate_date_range};
 use crate::domains::events::{validate_and_prepare_event, validation_error_to_string};
 use crate::domains::workout_validator::{format_duration_short, validate_workout_description};
 use crate::intents::{ContentBlock, IntentError, IntentOutput, OutputMetadata};
-use intervals_icu_client::IntervalsClient;
+use intervals_icu_client::{Event, IntervalsClient};
 use serde_json::Value;
+use std::collections::HashSet;
 
 use super::TargetScope;
+
+fn matched_event_ids(events: &[Event]) -> Result<Vec<&str>, IntentError> {
+    events
+        .iter()
+        .map(|event| {
+            event
+                .id
+                .as_deref()
+                .filter(|id| !id.is_empty() && *id == id.trim() && !matches!(*id, "." | ".."))
+                .ok_or_else(|| {
+                    IntentError::api(
+                        "Matched event has a missing or invalid ID; no changes were made.",
+                    )
+                })
+        })
+        .collect()
+}
 
 impl super::ModifyTrainingHandler {
     pub(super) fn resolve_target_scope(input: &Value) -> Result<TargetScope, IntentError> {
@@ -210,31 +228,18 @@ impl super::ModifyTrainingHandler {
         }
 
         if !dry_run {
-            let event_ids = matching
-                .iter()
-                .map(|event| {
-                    event
-                        .id
-                        .as_deref()
-                        .filter(|id| !id.trim().is_empty())
-                        .ok_or_else(|| {
-                            IntentError::api(
-                                "Matched event is missing or has a blank id and cannot be updated"
-                                    .to_string(),
-                            )
-                        })
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-
+            let event_ids = matched_event_ids(&matching)?;
             for (index, event_id) in event_ids.into_iter().enumerate() {
-                if let Err(error) = client.update_event(event_id, &update_fields).await {
-                    let confirmed = index;
-                    let remaining = matching.len().saturating_sub(index + 1);
-                    return Err(IntentError::api(format!(
-                        "Update batch stopped: {confirmed} of {} events were confirmed; event {event_id} has an unknown outcome ({error}); {remaining} not attempted. Do not retry the batch automatically.",
-                        matching.len()
-                    )));
-                }
+                client
+                    .update_event(event_id, &update_fields)
+                    .await
+                    .map_err(|_| {
+                        IntentError::mutation_outcome_unknown(
+                            index,
+                            matching.len(),
+                            matching.len() - index - 1,
+                        )
+                    })?;
             }
         }
 
@@ -335,7 +340,7 @@ impl super::ModifyTrainingHandler {
             let _created = client
                 .create_event(new_event.clone())
                 .await
-                .map_err(|e| IntentError::api(format!("Failed to create event: {}", e)))?;
+                .map_err(|_| IntentError::mutation_outcome_unknown(0, 1, 0))?;
         }
 
         let mut content = Vec::new();
@@ -425,21 +430,28 @@ impl super::ModifyTrainingHandler {
         let count = matching.len();
 
         if !dry_run {
-            if count > 1 {
-                let ids = matching
-                    .iter()
-                    .filter_map(|event| event.id.clone())
-                    .collect::<Vec<_>>();
-                client
-                    .bulk_delete_events(ids)
+            let ids = matched_event_ids(&matching)?;
+            match ids.as_slice() {
+                [] => (),
+                [id] => client
+                    .delete_event(id)
                     .await
-                    .map_err(|e| IntentError::api(format!("Failed to delete events: {}", e)))?;
-            } else if let Some(event) = matching.first()
-                && let Some(event_id) = &event.id
-            {
-                client.delete_event(event_id).await.map_err(|e| {
-                    IntentError::api(format!("Failed to delete event {}: {}", event_id, e))
-                })?;
+                    .map_err(|_| IntentError::mutation_outcome_unknown(0, 1, 0))?,
+                _ => {
+                    // The bulk endpoint sends numeric IDs; reject aliases such as `1` and `01`.
+                    let mut numeric_ids = HashSet::with_capacity(ids.len());
+                    for id in &ids {
+                        if !id.parse::<i32>().is_ok_and(|id| numeric_ids.insert(id)) {
+                            return Err(IntentError::api(
+                                "Bulk delete matched an invalid or duplicate numeric ID; no changes were made.",
+                            ));
+                        }
+                    }
+                    client
+                        .bulk_delete_events(ids.into_iter().map(str::to_owned).collect())
+                        .await
+                        .map_err(|_| IntentError::mutation_outcome_unknown(0, count, 0))?;
+                }
             }
         }
 

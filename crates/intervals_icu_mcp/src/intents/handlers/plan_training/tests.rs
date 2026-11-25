@@ -1506,7 +1506,9 @@ async fn short_bulk_response_is_unknown_and_retry_after_reopen_does_not_dispatch
         .unwrap_err()
         .to_string();
     assert!(
-        first_error.contains("returned 1 of") && first_error.contains("unknown outcome"),
+        first_error.contains("1 of")
+            && first_error.contains("events confirmed")
+            && first_error.contains("unknown outcome"),
         "partial bulk response must be reported as uncertain: {first_error}"
     );
 

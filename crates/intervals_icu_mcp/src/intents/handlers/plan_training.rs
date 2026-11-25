@@ -645,31 +645,27 @@ impl IntentHandler for PlanTrainingHandler {
             let created_events = client
                 .bulk_create_events(validated_events)
                 .await
-                .map_err(|error| {
-                    IntentError::api(format!(
-                        "Bulk event creation failed with an unknown outcome: the events may have been applied upstream ({error}). Do not retry automatically; check the calendar before taking further action."
-                    ))
-                })?;
+                .map_err(|_| IntentError::mutation_outcome_unknown(0, expected_event_count, 0))?;
 
-            if created_events.len() != expected_event_count {
-                return Err(IntentError::api(format!(
-                    "Bulk event creation returned {} of {expected_event_count} expected events; the operation has an unknown outcome because some events may have been applied upstream. Do not retry automatically; check the calendar before taking further action.",
-                    created_events.len()
-                )));
-            }
-
-            let mut created_ids = HashSet::with_capacity(created_events.len());
-            for event in &created_events {
-                let Some(id) = event.id.as_deref().filter(|id| !id.trim().is_empty()) else {
-                    return Err(IntentError::api(
-                        "Bulk event creation returned an event with a missing or blank ID; the operation has an unknown outcome because events may have been applied upstream. Do not retry automatically; check the calendar before taking further action.",
-                    ));
+            let created_ids: HashSet<_> = created_events
+                .iter()
+                .filter_map(|event| event.id.as_deref())
+                .filter(|id| !id.is_empty() && *id == id.trim())
+                .collect();
+            if created_events.len() != expected_event_count
+                || created_ids.len() != expected_event_count
+            {
+                // An oversized response cannot be reliably attributed to this batch.
+                let confirmed = if created_events.len() > expected_event_count {
+                    0
+                } else {
+                    created_ids.len()
                 };
-                if !created_ids.insert(id) {
-                    return Err(IntentError::api(
-                        "Bulk event creation returned duplicate event IDs; the operation has an unknown outcome because events may have been applied upstream. Do not retry automatically; check the calendar before taking further action.",
-                    ));
-                }
+                return Err(IntentError::mutation_outcome_unknown(
+                    confirmed,
+                    expected_event_count,
+                    0,
+                ));
             }
 
             content.push(ContentBlock::markdown(format!(

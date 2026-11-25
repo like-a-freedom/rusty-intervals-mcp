@@ -44,6 +44,7 @@ pub enum IntentError {
     IdempotencyConflict(String),
     #[error("API client error: {0}")]
     ApiClientError(String),
+
     #[error("Internal error: {0}")]
     InternalError(String),
 }
@@ -59,6 +60,16 @@ impl IntentError {
         Self::InternalError(msg.into())
     }
 
+    pub(crate) fn mutation_outcome_unknown(
+        confirmed: usize,
+        total: usize,
+        not_attempted: usize,
+    ) -> Self {
+        Self::internal(format!(
+            "Mutation has an unknown outcome: {confirmed} of {total} events confirmed; {not_attempted} not attempted. Unconfirmed changes may have been applied upstream. Do not retry automatically; check the calendar before taking further action."
+        ))
+    }
+
     /// Stable machine-readable class for log fields (`error_kind`).
     pub fn kind(&self) -> &'static str {
         match self {
@@ -66,6 +77,7 @@ impl IntentError {
             Self::ValidationError(_) => "validation",
             Self::IdempotencyConflict(_) => "idempotency_conflict",
             Self::ApiClientError(_) => "upstream",
+
             Self::InternalError(_) => "internal",
         }
     }

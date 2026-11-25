@@ -1577,7 +1577,9 @@ async fn partial_modify_reports_progress_and_retry_does_not_restart_batch() {
         .to_string();
     assert!(first_error.contains("1 of 3"), "{first_error}");
     assert!(
-        first_error.contains("event-2") && first_error.contains("unknown"),
+        !first_error.contains("event-2")
+            && !first_error.contains("response lost")
+            && first_error.contains("unknown outcome"),
         "{first_error}"
     );
     assert!(first_error.contains("1 not attempted"), "{first_error}");

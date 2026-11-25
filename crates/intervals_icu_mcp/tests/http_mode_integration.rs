@@ -1056,6 +1056,337 @@ async fn authenticated_http_replays_are_isolated_by_athlete() {
     server.abort();
 }
 
+async fn mutation_test_server(
+    upstream: &MockServer,
+) -> (String, String, tokio::task::JoinHandle<()>) {
+    let client = intervals_icu_client::http_client::ReqwestIntervalsClient::new(
+        &upstream.uri(),
+        "i123456",
+        secrecy::SecretString::new("test-mutation-key".into()),
+    )
+    .unwrap();
+    let handler = intervals_icu_mcp::IntervalsMcpHandler::new(Arc::new(client));
+    let service = rmcp::transport::streamable_http_server::tower::StreamableHttpService::new(
+        move || -> Result<_, std::io::Error> { Ok(handler.clone()) },
+        Arc::new(
+            rmcp::transport::streamable_http_server::session::local::LocalSessionManager::default(),
+        ),
+        rmcp::transport::streamable_http_server::tower::StreamableHttpServerConfig::default(),
+    );
+    let app = axum::Router::new().nest_service("/mcp", service);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/mcp", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let http = Client::new();
+    let response = http.post(&url)
+        .header("Accept", "application/json, text/event-stream")
+        .json(&serde_json::json!({"jsonrpc":"2.0","id":0,"method":"initialize","params":{
+            "protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"1"}
+        }}))
+        .send().await.unwrap().error_for_status().unwrap();
+    let session = response.headers()["mcp-session-id"]
+        .to_str()
+        .unwrap()
+        .to_owned();
+    response.text().await.unwrap();
+    http.post(&url)
+        .header("Accept", "application/json, text/event-stream")
+        .header("mcp-session-id", &session)
+        .json(&serde_json::json!({"jsonrpc":"2.0","method":"notifications/initialized"}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    (url, session, server)
+}
+
+async fn mutation_tool_call(
+    url: &str,
+    session: &str,
+    name: &str,
+    arguments: serde_json::Value,
+) -> serde_json::Value {
+    let body = Client::new()
+        .post(url)
+        .header("Accept", "application/json, text/event-stream")
+        .header("mcp-session-id", session)
+        .timeout(Duration::from_secs(5))
+        .json(
+            &serde_json::json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+                "name":name,"arguments":arguments
+            }}),
+        )
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    let payload = body
+        .lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .find(|payload| !payload.trim().is_empty())
+        .unwrap_or(&body);
+    serde_json::from_str(payload).unwrap_or_else(|error| panic!("{error}: {body}"))
+}
+
+#[tokio::test]
+async fn mutation_tools_call_reports_sanitized_progress_and_blocks_replay() {
+    use serde_json::json;
+
+    let upstream = MockServer::start().await;
+    let events_path = "/api/v1/athlete/i123456/events";
+    Mock::given(method("GET")).and(path(events_path))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            {"id":"first-private-id","start_date_local":"2026-03-01","category":"WORKOUT","name":"First"},
+            {"id":"second-private-id","start_date_local":"2026-03-02","category":"WORKOUT","name":"Second"},
+            {"id":"third-private-id","start_date_local":"2026-03-03","category":"WORKOUT","name":"Third"}
+        ]))).mount(&upstream).await;
+    Mock::given(method("PUT"))
+        .and(path(format!("{events_path}/first-private-id")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    Mock::given(method("PUT"))
+        .and(path(format!("{events_path}/second-private-id")))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string("upstream-secret test-mutation-key"),
+        )
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    Mock::given(method("PUT"))
+        .and(path(format!("{events_path}/third-private-id")))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&upstream)
+        .await;
+    let profile_path = "/api/v1/athlete/i123456/profile";
+    Mock::given(method("GET"))
+        .and(path(profile_path))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"athlete":{"id":"i123456"}})))
+        .mount(&upstream)
+        .await;
+    Mock::given(method("POST"))
+        .and(path(format!("{events_path}/bulk")))
+        .respond_with(|request: &wiremock::Request| {
+            let events: Vec<serde_json::Value> = serde_json::from_slice(&request.body).unwrap();
+            let mut first = events[0].clone();
+            first["id"] = json!("created-private-id");
+            ResponseTemplate::new(200).set_body_json([first])
+        })
+        .expect(1)
+        .mount(&upstream)
+        .await;
+
+    let (url, session, server) = mutation_test_server(&upstream).await;
+    for (tool, input) in [
+        (
+            "modify_training",
+            json!({"action":"modify","target_date_from":"2026-03-01",
+            "target_date_to":"2026-03-03","new_name":"Updated","idempotency_token":"modify-key"}),
+        ),
+        (
+            "plan_training",
+            json!({"period_start":"2026-02-01","period_end":"2026-02-28",
+            "adaptive":false,"idempotency_token":"plan-key"}),
+        ),
+    ] {
+        let response = mutation_tool_call(&url, &session, tool, input.clone()).await;
+        assert_eq!(response["jsonrpc"], "2.0");
+        assert_eq!(response["id"], 1);
+        assert!(response.get("result").is_none(), "{response}");
+        let error = &response["error"];
+        assert_eq!(error["code"], -32603, "{response}");
+        assert!(error.get("data").is_none(), "{response}");
+        let message = error["message"].as_str().unwrap();
+        assert!(
+            message.contains("Do not retry") && message.contains("unknown outcome"),
+            "{response}"
+        );
+        assert!(
+            message.contains("1 of ") && message.contains("confirmed"),
+            "{response}"
+        );
+        if tool == "modify_training" {
+            assert!(
+                message.contains("1 of 3") && message.contains("1 not attempted"),
+                "{response}"
+            );
+        }
+        for secret in [
+            "private-id",
+            "upstream-secret",
+            "test-mutation-key",
+            "i123456",
+            "modify-key",
+            "plan-key",
+        ] {
+            assert!(!response.to_string().contains(secret), "{response}");
+        }
+        let retry = mutation_tool_call(&url, &session, tool, input).await;
+        assert!(
+            retry["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("unknown outcome"),
+            "{retry}"
+        );
+    }
+
+    upstream.verify().await;
+    upstream.reset().await;
+    Mock::given(method("GET"))
+        .and(path(profile_path))
+        .respond_with(ResponseTemplate::new(400).set_body_string("ordinary upstream-secret"))
+        .mount(&upstream)
+        .await;
+    let response = mutation_tool_call(
+        &url,
+        &session,
+        "plan_training",
+        json!({
+            "period_start":"2026-03-01","period_end":"2026-03-28","adaptive":false,
+            "idempotency_token":"ordinary-failure"
+        }),
+    )
+    .await;
+    assert_eq!(
+        response["error"],
+        json!({"code":-32603,"message":"API request failed. Please try again."})
+    );
+    server.abort();
+}
+
+#[tokio::test]
+async fn mutation_create_and_delete_do_not_invite_retry_after_dispatch() {
+    use serde_json::json;
+
+    let upstream = MockServer::start().await;
+    let events_path = "/api/v1/athlete/i123456/events";
+    Mock::given(method("GET"))
+        .and(path(events_path))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            {"id": "123", "start_date_local": "2026-03-01", "category": "WORKOUT", "name": "Run"}
+        ])))
+        .mount(&upstream)
+        .await;
+    for (verb, endpoint) in [
+        ("POST", events_path.to_owned()),
+        ("DELETE", format!("{events_path}/123")),
+    ] {
+        Mock::given(method(verb))
+            .and(path(endpoint))
+            .respond_with(ResponseTemplate::new(502).set_body_string("private upstream body"))
+            .expect(1)
+            .mount(&upstream)
+            .await;
+    }
+    let (url, session, server) = mutation_test_server(&upstream).await;
+    for input in [
+        json!({"action":"create", "new_date":"2026-03-01", "new_name":"Run", "idempotency_token":"create-key"}),
+        json!({"action":"delete", "target_date":"2026-03-01", "idempotency_token":"delete-key"}),
+    ] {
+        let response = mutation_tool_call(&url, &session, "modify_training", input.clone()).await;
+        let message = response["error"]["message"].as_str().unwrap();
+        assert!(
+            message.contains("unknown outcome") && message.contains("Do not retry"),
+            "{message}"
+        );
+        assert!(!message.contains("private upstream body"), "{message}");
+        let retry = mutation_tool_call(&url, &session, "modify_training", input).await;
+        assert!(
+            retry["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("unknown outcome"),
+            "{retry}"
+        );
+    }
+    upstream.verify().await;
+    server.abort();
+}
+
+#[tokio::test]
+async fn mutation_delete_preflights_all_matches_before_any_write() {
+    use serde_json::json;
+
+    for (ids, valid) in [
+        (vec![serde_json::Value::Null], false),
+        (vec![json!(101), serde_json::Value::Null], false),
+        (vec![json!(101), json!("  ")], false),
+        (vec![json!(101), json!("not-a-bulk-id")], false),
+        (vec![json!(101), json!("0101")], false),
+        (vec![json!(101), json!(101), json!(102)], true),
+    ] {
+        let upstream = MockServer::start().await;
+        let events_path = "/api/v1/athlete/i123456/events";
+        let events: Vec<_> = ids.iter().enumerate().map(|(index, id)| {
+            let mut event = json!({"start_date_local":"2026-03-01","category":"WORKOUT","name":format!("Workout {index}")});
+            if !id.is_null() { event["id"] = id.clone(); }
+            event
+        }).collect();
+        Mock::given(method("GET"))
+            .and(path(events_path))
+            .respond_with(ResponseTemplate::new(200).set_body_json(events))
+            .mount(&upstream)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path(format!("{events_path}/bulk-delete")))
+            .and(wiremock::matchers::body_json(
+                json!([{"id":101},{"id":102}]),
+            ))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&upstream)
+            .await;
+        let (url, session, server) = mutation_test_server(&upstream).await;
+        let mut input = json!({"action":"delete","target_date":"2026-03-01",
+            "dry_run":true,"idempotency_token":"delete-key"});
+        let preview = mutation_tool_call(&url, &session, "modify_training", input.clone()).await;
+        assert_eq!(
+            preview["result"]["structuredContent"]["metadata"]["events_deleted"],
+            if valid { 2 } else { ids.len() },
+            "{preview}"
+        );
+        assert!(
+            upstream
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .all(|request| request.method.as_str() == "GET")
+        );
+
+        input["dry_run"] = json!(false);
+        let apply = mutation_tool_call(&url, &session, "modify_training", input).await;
+        let writes = upstream
+            .received_requests()
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|request| request.method.as_str() != "GET")
+            .count();
+        if valid {
+            assert_eq!(
+                apply["result"]["structuredContent"]["metadata"]["events_deleted"], 2,
+                "{apply}"
+            );
+            assert_eq!(writes, 1);
+        } else {
+            assert_eq!(writes, 0, "invalid targets triggered a write: {ids:?}");
+            assert!(
+                apply.get("error").is_some(),
+                "accepted invalid targets {ids:?}: {apply}"
+            );
+        }
+        server.abort();
+    }
+}
+
 #[tokio::test]
 async fn test_mcp_route_requires_bearer_token_and_accepts_valid_jwt() {
     let master_key_hex = test_master_key_hex();
