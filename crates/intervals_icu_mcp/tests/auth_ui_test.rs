@@ -903,20 +903,39 @@ async fn test_ui_tokens_lists_whole_registry_without_a_session() {
     );
 }
 
-/// TEMP probe
 #[test]
-fn zz_dump_copy() {
+fn test_token_success_renders_token_and_copy_control() {
+    let token = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJpMTIzNDUifQ.c2lnbmF0dXJlLWhlcmUtZm9yLXRlc3Rpbmc";
     let body = auth_ui::render_token_success_for_test(
-        "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJpMTIzNDUifQ.c2lnbmF0dXJlLWhlcmUtZm9yLXRlc3Rpbmc",
+        token,
         "i12345",
         "9 Nov 2026, 12:00",
         "30 days",
-        "",
+        "/intervals",
     );
-    let css = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/static/maud-ui.css"))
+
+    assert!(body.contains("Copy this token now"));
+    assert!(body.contains("see it again."));
+    assert!(body.contains(&format!(
+        r#"<textarea id="generated-token" class="token-display__value" readonly spellcheck="false">{token}</textarea>"#
+    )));
+    let button = body
+        .split("<button")
+        .nth(1)
+        .unwrap()
+        .split('>')
+        .next()
         .unwrap();
-    let page_css = auth_ui::inline_style_for_test();
-    std::fs::write("/tmp/uicopy/page.html", format!(
-        "<!doctype html><html><head><meta charset=utf-8><style>{css}</style><style>{page_css}</style></head><body><main class=\"mui-container\">{body}</main></body></html>"
-    )).unwrap();
+    assert!(button.contains(&format!(r#"data-clipboard="{token}""#)));
+    assert!(button.contains(r#"aria-label="Copy token to clipboard""#));
+    let status_start = body.find(r#"id="copy-status""#).unwrap();
+    let status_end = body[status_start..].find('>').unwrap() + status_start;
+    let status = &body[status_start..status_end];
+    assert!(status.contains(r#"role="status""#));
+    assert!(status.contains(r#"aria-live="polite""#));
+    for text in ["i12345", "9 Nov 2026, 12:00", "30 days"] {
+        assert!(body.contains(text), "missing token information: {text}");
+    }
+    assert!(body.contains(r#"href="/intervals/ui""#));
+    assert!(body.contains(r#"href="/intervals/ui/tokens""#));
 }
