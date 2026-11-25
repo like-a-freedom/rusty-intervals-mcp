@@ -134,35 +134,13 @@ Mutating intents are designed for agents:
 - `dry_run` previews for risky changes
 - `idempotency_token` support for safe retries
 
-If a token-protected action is cancelled, panics, or returns an error after it
-starts, its upstream outcome may be unknown. Further attempts with that token
-are rejected rather than repeated; check the upstream state before taking any
-further action. This conservative in-memory protection lasts for the process
-lifetime, including for errors that cannot be proven to precede a write. Local
-input validation for `plan_training` and `modify_training` runs before a slot is
-reserved. In HTTP mode the operation is scoped to the normalized upstream base URL,
-athlete ID, and idempotency token, independently of credentials. A cached result
-is replayed only to the original verified JWT identity: its `jti`, or, for legacy
-JWTs without one, a SHA-256 digest of that exact JWT. A different JWT cannot replay
-the result or repeat the operation, even for the same athlete. Rotating the API
-key behind the same `jti` preserves replay; issuing a new JWT does not. Older
-persisted entries without an owner fail closed for authenticated HTTP calls until
-expiration. Older files also used raw idempotency tokens as keys, without recording
-upstream, athlete, or owner. A matching unexpired raw key blocks both HTTP and stdio
-in every scope; it is never replayed or assigned a new owner. This can reject an
-unrelated operation that happens to use the same token. After expiration the old
-record no longer prevents execution; confirm upstream state before retrying.
-JWTs and API keys are not stored in the owner namespace.
-Unknown outcomes are not persisted, so restarts or other server instances can still repeat a
-write; avoid automatic retries across them. Each middleware instance reserves
-up to 1,024 slots shared across tenants for active or unknown outcomes, each storing a 32-byte SHA-256
-hash of the token and a 32-byte SHA-256 hash of the fingerprint (plus map
-overhead). Success releases its slot; unknown outcomes retain theirs until the
-process exits. At capacity, new actions are rejected before they start, while
-cached successes remain available. This limit does not bound the success cache,
-request bodies, or the number of concurrent requests waiting on locks. Hash
-collisions, although extremely unlikely, may cause distinct requests to be
-mistaken for one another.
+When a mutation is cancelled, panics, loses its response, or returns an error after it may have reached Intervals.icu, its outcome is uncertain. Retries with the same idempotency token are blocked rather than dispatched again. Local validation for `plan_training` and `modify_training` runs before the journal reserves an operation.
+
+The standard HTTP and STDIO server modes use a local SQLite journal. The operation key includes the normalized upstream base URL, athlete ID, and idempotency token. The journal commits a reservation before invoking the mutation handler. It stores hashes rather than raw operation tokens, fingerprints, or owners. An uncertain operation remains in the database indefinitely; process restarts do not make it retryable. A confirmed result is encrypted and retained for 24 hours, then the same token can be treated as a new operation. Do not reuse tokens for separate user actions.
+
+In authenticated HTTP mode, only the JWT owner recorded with the operation can replay its saved result. The owner is the JWT `jti`, or a digest of the exact JWT for legacy tokens without a `jti`. Reissuing a JWT creates a different owner: it cannot replay the previous result, and the same operation key remains blocked if its outcome is uncertain. Rotating an upstream API key without changing the JWT owner does not change operation ownership. A saved result is not an authorization grant to a different JWT.
+
+This guarantee applies to the standard single-process server using one persistent local database. It does not provide cross-process or multi-host coordination. Handlers or runtimes assembled by library users without the standard startup wiring may use non-durable idempotency protection. The database, SQLite WAL/SHM sidecars, and backups contain unencrypted metadata and encrypted saved results; the token registry's upstream API keys retain their existing AES-GCM encryption. Keep the database and backups private, and preserve `MCP_STATE_ENCRYPTION_KEY` across restarts so saved results remain readable. Unknown outcomes cannot be cleared automatically. There is currently no supported operator tool to resolve them; inspect Intervals.icu before taking any separate action, and do not delete journal records to make a retry pass.
 
 ### 6. Rust-first operational profile
 
@@ -394,9 +372,9 @@ The server includes a minimal browser-based token management UI at `/ui` when ru
 
 Endpoint paths above assume the default root deployment. With `MCP_PUBLIC_BASE_PATH=/intervals` they live under `/intervals/ui…`, the session cookie is scoped to `Path=/intervals/ui`, and all generated links/redirects carry the prefix.
 
-The UI is server-rendered HTML with rate limiting (2 req/s, burst 5). No additional environment variables are needed — it uses the same `JWT_MASTER_KEY` and `JWT_TTL_SECONDS` as the JSON `/auth` endpoint.
+The UI is server-rendered HTML with rate limiting (2 req/s, burst 5). It uses the same SQLite-backed token registry as the JSON `/auth` endpoint.
 
-**Revocation scope:** every token the server issues — via `/auth` or the UI — is recorded in the server-side **token registry**, keyed by its `jti`, and can be revoked. The registry is the source of truth for revocation and for the athlete's upstream credential (stored encrypted at rest; the credential never travels inside the JWT). The token list shows the whole registry, filterable by athlete with `?athlete=`; the browser session only supplies a default filter. Set `MCP_TOKEN_REGISTRY_PATH` to a writable file path to persist the registry across restarts (e.g., `/data/tokens.json` in Docker) — without it the registry is in-memory and **tokens issued in the previous process are rejected after a restart** (the server warns about this at startup).
+**Revocation scope:** every token the server issues — via `/auth` or the UI — is recorded in the server-side **token registry**, keyed by its `jti`, and can be revoked. The registry is the source of truth for revocation and for the athlete's upstream credential (stored encrypted at rest; the credential never travels inside the JWT). The token list shows the whole registry, filterable by athlete with `?athlete=`; the browser session only supplies a default filter. Token records live in the SQLite database configured by `MCP_STATE_DB_PATH`.
 
 ## VS Code / Copilot setup
 
@@ -686,9 +664,11 @@ back to the typed client.
 | `IDLE_TIMEOUT_SECONDS` | `60` | Idle connection timeout and TCP keepalive idle time in HTTP mode |
 | `MCP_RATE_LIMIT_PER_SECOND` | `5` | Per-athlete rate limit (requests per second) for `/mcp` |
 | `MCP_RATE_LIMIT_BURST` | `15` | Per-athlete burst capacity for `/mcp` |
-| `JWT_MASTER_KEY` | unset | 64-byte hex key (128 hex chars) required for JWT in HTTP mode |
+| `JWT_MASTER_KEY` | unset | Required in HTTP mode: 64-byte hex key (128 hex chars) for JWT signing and upstream API-key encryption. Keep it stable across restarts to preserve issued tokens and decrypt stored credentials |
 | `JWT_TTL_SECONDS` | `7776000` | JWT lifetime in seconds (default 90 days) |
-| `MCP_TOKEN_REGISTRY_PATH` | unset | Writable file path for the server-side token registry; without it the registry is in-memory and issued tokens do not survive a restart |
+| `MCP_STATE_DB_PATH` | unset | Required for standard STDIO and HTTP startup: path to the persistent local SQLite database for the operation journal and token registry. Use one process on one host; do not point multiple instances at it |
+| `MCP_STATE_ENCRYPTION_KEY` | unset | Required for standard STDIO and HTTP startup: 32-byte key as 64 hex characters for encrypting saved operation results. Keep it stable across restarts and backups |
+
 | `MCP_ALLOWED_HOSTS` | `localhost,127.0.0.1,::1` | Allowed Host headers (anti-DNS-rebinding); set to public hostname(s) when behind a reverse proxy |
 | `MCP_PUBLIC_BASE_PATH` | unset | Public path prefix for reverse-proxy pass-through (e.g. `/intervals`); empty = serve at the domain root. See [Path prefix](#path-prefix-multiple-services-per-domain) |
 
@@ -769,14 +749,29 @@ This uses the default `Dockerfile` and compiles the project inside the builder s
 
 #### HTTP mode
 
+The server requires a persistent local SQLite database and runs as a non-root user. Create a private bind-mount directory and run the container with your host UID/GID so it can write there:
+
+```sh
+mkdir -p ./mcp-state
+chmod 700 ./mcp-state
+export MCP_UID="$(id -u)"
+export MCP_GID="$(id -g)"
+```
+
+Generate `JWT_MASTER_KEY` and `MCP_STATE_ENCRYPTION_KEY` once, store them in a secret manager, and export the same values on every restart. Do not regenerate them when restarting: `JWT_MASTER_KEY` signs JWTs and encrypts stored upstream credentials; `MCP_STATE_ENCRYPTION_KEY` encrypts saved operation results.
+
 ```sh
 docker run --rm \
+  --user "$MCP_UID:$MCP_GID" \
+  --mount "type=bind,source=$PWD/mcp-state,target=/var/lib/intervals-mcp" \
   -p 3000:3000 \
   -e INTERVALS_ICU_API_KEY=your_key \
   -e INTERVALS_ICU_ATHLETE_ID=i123456 \
   -e MCP_TRANSPORT=http \
   -e MCP_HTTP_ADDRESS=0.0.0.0:3000 \
-  -e JWT_MASTER_KEY=$(openssl rand -hex 64) \
+  -e JWT_MASTER_KEY \
+  -e MCP_STATE_DB_PATH=/var/lib/intervals-mcp/state.sqlite3 \
+  -e MCP_STATE_ENCRYPTION_KEY \
   -e MAX_HTTP_BODY_SIZE=4194304 \
   rusty-intervals:latest
 ```
@@ -790,7 +785,7 @@ The container exposes:
 
 ### Docker Compose
 
-`docker-compose.yml` is preconfigured for HTTP mode and builds from the default `Dockerfile`. Provide the required secrets and credentials in your shell or `.env` file, then start the service:
+`docker-compose.yml` is preconfigured for HTTP mode and builds from the default `Dockerfile`. It binds `./data` to `/data` for the SQLite database and maps the container process to `MCP_UID:MCP_GID` so it can write to that directory. Set these to the host user's IDs (for example, `export MCP_UID="$(id -u)"` and `export MCP_GID="$(id -g)"`), and provide the required secrets and credentials in your shell or `.env` file. Keep both keys stable across restarts and backups. Use local persistent storage, not a shared filesystem or a network mount.
 
 ```sh
 docker compose up -d
@@ -801,6 +796,9 @@ At minimum, set these variables before launch:
 - `INTERVALS_ICU_API_KEY`
 - `INTERVALS_ICU_ATHLETE_ID`
 - `JWT_MASTER_KEY`
+- `MCP_STATE_ENCRYPTION_KEY`
+
+The database path defaults to `/data/state.sqlite3`. Back up the database using SQLite's backup mechanism, or stop the server and copy the database together with any `-wal` and `-shm` sidecars. Preserve both encryption/signing keys with the backup. A restore must use the same `JWT_MASTER_KEY` and `MCP_STATE_ENCRYPTION_KEY`.
 
 ### Remote MCP clients
 

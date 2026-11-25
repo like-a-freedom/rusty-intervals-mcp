@@ -5,6 +5,7 @@ services:
       dockerfile: Dockerfile
     image: ghcr.io/like-a-freedom/rusty-intervals-mcp:latest
     container_name: intervals_icu_mcp
+    user: "${MCP_UID:-65532}:${MCP_GID:-65532}"
     ports:
       - "3000:3000"
     environment:
@@ -15,13 +16,14 @@ services:
       IDLE_TIMEOUT_SECONDS: ${IDLE_TIMEOUT_SECONDS:-60}
       JWT_TTL_SECONDS: ${JWT_TTL_SECONDS:-7776000}
       JWT_MASTER_KEY: ${JWT_MASTER_KEY:-}
+      MCP_STATE_DB_PATH: ${MCP_STATE_DB_PATH:-/data/state.sqlite3}
+      MCP_STATE_ENCRYPTION_KEY: ${MCP_STATE_ENCRYPTION_KEY:-}
       MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:-localhost,127.0.0.1,::1}
       MCP_PUBLIC_BASE_PATH: ${MCP_PUBLIC_BASE_PATH:-}
       RUST_LOG: ${RUST_LOG:-info}
       INTERVALS_ICU_BASE_URL: ${INTERVALS_ICU_BASE_URL:-https://intervals.icu}
       INTERVALS_ICU_ATHLETE_ID: ${INTERVALS_ICU_ATHLETE_ID:-""}
       INTERVALS_ICU_API_KEY: ${INTERVALS_ICU_API_KEY:-""}
-      MCP_TOKEN_REGISTRY_PATH: ${MCP_TOKEN_REGISTRY_PATH:-/data/tokens.json}
     volumes:
       - ./data:/data
     restart: unless-stopped
