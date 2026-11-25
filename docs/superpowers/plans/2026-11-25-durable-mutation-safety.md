@@ -54,10 +54,10 @@
 
 **Files:** `crates/intervals_icu_mcp/src/intents/idempotency.rs`, `crates/intervals_icu_mcp/src/intents/router.rs`, existing handler tests.
 
-- [ ] Add tests showing that a proven local validation failure does not reserve an uncertain outcome, while cancellation, panic, transport failure, and response-decode failure after possible dispatch block a retry.
-- [ ] Run the focused tests and record the expected failures. Do not classify an upstream error as pre-write merely by its HTTP status.
-- [ ] Define internal states and error handling so the transition to potentially dispatched occurs before the first side effect. Preserve owner checks and current STDIO behavior.
-- [ ] Run the focused tests and existing idempotency tests. Verify that another owner receives neither cached content nor permission to execute.
+- [x] Add tests showing that a proven local validation failure does not reserve an uncertain outcome, while cancellation, panic, transport failure, and response-decode failure after possible dispatch block a retry.
+- [x] Run the focused tests and record the expected failures. Do not classify an upstream error as pre-write merely by its HTTP status.
+- [x] Define internal states and error handling so the transition to potentially dispatched occurs before the first side effect. Preserve owner checks and current STDIO behavior.
+- [x] Run the focused tests and existing idempotency tests. Verify that another owner receives neither cached content nor permission to execute.
 
 ## Task 2: Add a transactional SQLite operation journal
 
@@ -65,23 +65,23 @@
 
 **Files:** `crates/intervals_icu_mcp/src/intents/idempotency.rs`, a focused journal module under `crates/intervals_icu_mcp/src/intents/`, `crates/intervals_icu_mcp/src/lib.rs`, backend-specific tests, `README.md`.
 
-- [ ] Define a small internal journal interface with atomic reserve/read and conditional transitions, storing a versioned scope hash, fingerprint hash, owner, state, timestamps and an authorized completed result. The backend is the source of truth; local locks alone are insufficient.
-- [ ] Write failing tests for concurrent same-key reservations, same key with a different fingerprint or owner, a full or unavailable journal, and failed transition writes. Assert upstream call counts and absence of result leakage.
-- [ ] Implement the approved backend and wire it into the explicitly supported mode. Mark dispatch before upstream write; write completion only after a confirmed result. A failed journal operation must not degrade silently to an empty cache.
-- [ ] Add a subprocess test that starts a mutation, terminates the process at controlled boundaries, starts a new process on the same journal and verifies that the repeated key cannot dispatch twice. Include termination after upstream accepts the mutation and before completion is recorded.
-- [ ] Test corruption and schema-version mismatch. JSON token-registry import is explicitly out of scope; for existing idempotency records without scope or owner, do not silently ignore history and permit a duplicate. Define and test a fail-closed cutover or obtain explicit authorization for another policy.
-- [ ] Run targeted tests and the full workspace checks. Document the single-node guarantee, retention, configuration and recovery procedure.
+- [x] Define a small internal journal interface with atomic reserve/read and conditional transitions, storing a versioned scope hash, fingerprint hash, owner, state, timestamps and an authorized completed result. The backend is the source of truth; local locks alone are insufficient.
+- [x] Write failing tests for concurrent same-key reservations, same key with a different fingerprint or owner, a full or unavailable journal, and failed transition writes. Assert upstream call counts and absence of result leakage.
+- [x] Implement the approved backend and wire it into the explicitly supported mode. Mark dispatch before upstream write; write completion only after a confirmed result. A failed journal operation must not degrade silently to an empty cache.
+- [x] Add a subprocess test that starts a mutation, terminates the process at controlled boundaries, starts a new process on the same journal and verifies that the repeated key cannot dispatch twice. Include termination after upstream accepts the mutation and before completion is recorded.
+- [x] Test corruption and schema-version mismatch. JSON token-registry import is explicitly out of scope; for existing idempotency records without scope or owner, do not silently ignore history and permit a duplicate. Define and test a fail-closed cutover or obtain explicit authorization for another policy.
+- [x] Run targeted tests and the full workspace checks. Document the single-node guarantee, retention, configuration and recovery procedure.
 
 ## Task 2B: Store the token registry in SQLite
 
 **Files:** `crates/intervals_icu_mcp/src/token_registry.rs`, `crates/intervals_icu_mcp/src/auth.rs`, affected UI/server call sites and tests, approved SQLite storage module, `README.md`.
 
-- [ ] Write a failing integration test that issues a token, restarts against the same database and authenticates it; revoke it, restart again and assert authentication is rejected. Keep the encrypted upstream API key decryptable with the existing master key.
-- [ ] Run the test and confirm that it fails because current storage is JSON/best-effort rather than the required SQLite contract; then implement transactional insert, lookup and revoke.
-- [ ] Write failing fault-injection tests for unavailable, read-only, full or corrupt SQLite: failed issuance must not return a usable token; failed revocation must not report success; authentication on registry read failure must fail closed. Implement error propagation through callers and run the tests again.
-- [ ] Test concurrent issue/revoke and same-token lookups against the database as source of truth; do not serve stale revocation state from an unsynchronised memory cache.
-- [ ] Test first startup with a pre-existing JSON token registry: no automatic import, deletion, overwrite or silent reinterpretation as SQLite. Require explicit operator configuration of a separate SQLite path, or fail with an actionable error if the old JSON path is supplied.
-- [ ] Document the breaking change and reissue procedure, local-disk and backup requirements, path and permissions, encrypted API keys, unencrypted SQLite metadata/results, and failure behavior. Never log secrets or actual file contents.
+- [x] Write a failing integration test that issues a token, restarts against the same database and authenticates it; revoke it, restart again and assert authentication is rejected. Keep the encrypted upstream API key decryptable with the existing master key.
+- [x] Run the test and confirm that it fails because current storage is JSON/best-effort rather than the required SQLite contract; then implement transactional insert, lookup and revoke.
+- [x] Write failing fault-injection tests for unavailable, read-only, full or corrupt SQLite: failed issuance must not return a usable token; failed revocation must not report success; authentication on registry read failure must fail closed. Implement error propagation through callers and run the tests again.
+- [x] Test concurrent issue/revoke and same-token lookups against the database as source of truth; do not serve stale revocation state from an unsynchronised memory cache.
+- [x] Test first startup with a pre-existing JSON token registry: no automatic import, deletion, overwrite or silent reinterpretation as SQLite. Require explicit operator configuration of a separate SQLite path, or fail with an actionable error if the old JSON path is supplied.
+- [x] Document the breaking change and reissue procedure, local-disk and backup requirements, path and permissions, encrypted API keys, unencrypted SQLite metadata/results, and failure behavior. Never log secrets or actual file contents.
 
 ## Task 3: Reconcile unknown and partial operations
 
@@ -109,4 +109,4 @@
 - [x] `cargo clippy --all-targets --all-features -- -D warnings`
 - [x] `cargo test --all-targets --all-features`
 - [x] `cargo test --all --all-features --no-fail-fast`
-- [ ] Review failure-injection coverage, legacy-journal cutover, confidentiality and operational documentation. Report unverified upstream guarantees and remaining limitations explicitly.
+- [x] Review failure-injection coverage, legacy-journal cutover, confidentiality and operational documentation. Report unverified upstream guarantees and remaining limitations explicitly.
