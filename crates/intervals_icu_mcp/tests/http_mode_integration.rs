@@ -937,7 +937,14 @@ async fn authenticated_http_replays_are_isolated_by_athlete() {
             .await;
         Mock::given(method("POST"))
             .and(path(format!("/api/v1/athlete/{athlete}/events/bulk")))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .respond_with(|request: &wiremock::Request| {
+                let mut events: Vec<serde_json::Value> =
+                    serde_json::from_slice(&request.body).expect("bulk-create request is JSON");
+                for (index, event) in events.iter_mut().enumerate() {
+                    event["id"] = serde_json::json!(format!("created-event-{index}"));
+                }
+                ResponseTemplate::new(200).set_body_json(events)
+            })
             .mount(&upstream)
             .await;
     }
