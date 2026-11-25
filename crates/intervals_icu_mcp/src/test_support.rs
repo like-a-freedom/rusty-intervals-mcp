@@ -208,6 +208,7 @@ pub mod mock {
         pub update_error_on_call: Option<(usize, String)>,
         pub bulk_create_error: Option<IntervalsError>,
         pub bulk_create_return_count: Option<usize>,
+        pub bulk_create_response_ids: Option<Vec<Option<String>>>,
         pub upcoming_workouts: Option<Value>,
         pub upcoming_workouts_error: Option<IntervalsError>,
         pub upcoming_workouts_calls: Arc<AtomicUsize>,
@@ -364,6 +365,11 @@ pub mod mock {
 
         pub fn with_bulk_create_return_count(mut self, count: usize) -> Self {
             self.bulk_create_return_count = Some(count);
+            self
+        }
+
+        pub fn with_bulk_create_response_ids(mut self, ids: Vec<Option<String>>) -> Self {
+            self.bulk_create_response_ids = Some(ids);
             self
         }
 
@@ -1756,10 +1762,21 @@ pub mod mock {
                     _ => super::clone_intervals_error(error),
                 });
             }
-            if let Some(count) = self.bulk_create_return_count {
-                return Ok(events.into_iter().take(count).collect());
+            let mut response = events;
+            for (index, event) in response.iter_mut().enumerate() {
+                event.id = match self
+                    .bulk_create_response_ids
+                    .as_ref()
+                    .and_then(|ids| ids.get(index))
+                {
+                    Some(id) => id.clone(),
+                    None => Some(format!("mock-created-event-{index}")),
+                };
             }
-            Ok(events)
+            if let Some(count) = self.bulk_create_return_count {
+                return Ok(response.into_iter().take(count).collect());
+            }
+            Ok(response)
         }
 
         async fn search_activities(

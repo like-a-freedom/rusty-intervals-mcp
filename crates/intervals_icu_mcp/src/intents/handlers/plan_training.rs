@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use chrono::Datelike;
 use intervals_icu_client::IntervalsClient;
 use serde_json::{Value, json};
+use std::collections::HashSet;
 /// Plan Training Intent Handler
 ///
 /// Plans training across various horizons (microcycle to annual plan).
@@ -655,6 +656,20 @@ impl IntentHandler for PlanTrainingHandler {
                     "Bulk event creation returned {} of {expected_event_count} expected events; the operation has an unknown outcome because some events may have been applied upstream. Do not retry automatically; check the calendar before taking further action.",
                     created_events.len()
                 )));
+            }
+
+            let mut created_ids = HashSet::with_capacity(created_events.len());
+            for event in &created_events {
+                let Some(id) = event.id.as_deref().filter(|id| !id.trim().is_empty()) else {
+                    return Err(IntentError::api(
+                        "Bulk event creation returned an event with a missing or blank ID; the operation has an unknown outcome because events may have been applied upstream. Do not retry automatically; check the calendar before taking further action.",
+                    ));
+                };
+                if !created_ids.insert(id) {
+                    return Err(IntentError::api(
+                        "Bulk event creation returned duplicate event IDs; the operation has an unknown outcome because events may have been applied upstream. Do not retry automatically; check the calendar before taking further action.",
+                    ));
+                }
             }
 
             content.push(ContentBlock::markdown(format!(

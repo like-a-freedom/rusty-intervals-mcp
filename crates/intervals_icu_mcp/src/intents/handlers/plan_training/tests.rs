@@ -1435,6 +1435,50 @@ async fn lost_bulk_create_response_warns_that_upstream_may_have_applied_events()
     );
 }
 
+async fn assert_invalid_bulk_response_ids_are_unknown(ids: Vec<Option<String>>, token: &str) {
+    let client = Arc::new(MockIntervalsClient::builder().with_bulk_create_response_ids(ids));
+    let observations = client.observations();
+    let router = crate::intents::IntentRouter::new(
+        vec![Box::new(PlanTrainingHandler::new())],
+        client,
+        Arc::new(crate::intents::IdempotencyMiddleware::new()),
+    );
+    let input = json!({
+        "period_start": "2026-03-01",
+        "period_end": "2026-03-28",
+        "adaptive": false,
+        "idempotency_token": token
+    });
+
+    let first = router.route("plan_training", input.clone(), None).await;
+    assert!(first.is_err(), "invalid response IDs were accepted");
+    assert!(first.unwrap_err().to_string().contains("unknown outcome"));
+
+    let retry = router.route("plan_training", input, None).await;
+    assert!(retry.unwrap_err().to_string().contains("unknown outcome"));
+    assert_eq!(observations.bulk_events.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn bulk_create_response_without_ids_is_unknown_and_not_retried() {
+    assert_invalid_bulk_response_ids_are_unknown(vec![None], "missing-bulk-response-id").await;
+}
+
+#[tokio::test]
+async fn bulk_create_response_with_blank_id_is_unknown_and_not_retried() {
+    assert_invalid_bulk_response_ids_are_unknown(vec![Some("  ".into())], "blank-bulk-response-id")
+        .await;
+}
+
+#[tokio::test]
+async fn bulk_create_response_with_duplicate_ids_is_unknown_and_not_retried() {
+    assert_invalid_bulk_response_ids_are_unknown(
+        vec![Some("duplicate".into()), Some("duplicate".into())],
+        "duplicate-bulk-response-id",
+    )
+    .await;
+}
+
 #[tokio::test]
 async fn short_bulk_response_is_unknown_and_retry_after_reopen_does_not_dispatch() {
     let client = Arc::new(MockIntervalsClient::builder().with_bulk_create_return_count(1));
