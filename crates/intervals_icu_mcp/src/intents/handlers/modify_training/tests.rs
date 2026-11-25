@@ -845,6 +845,47 @@ async fn test_modify_training_update_action_apply() {
 }
 
 #[tokio::test]
+async fn missing_id_in_later_match_prevents_all_updates() {
+    let client = Arc::new(MockIntervalsClient::builder().with_events(vec![
+        Event {
+            id: Some("event-1".into()),
+            start_date_local: "2026-03-01".into(),
+            name: "Workout 1".into(),
+            category: EventCategory::Workout,
+            description: None,
+            r#type: None,
+        },
+        Event {
+            id: None,
+            start_date_local: "2026-03-01".into(),
+            name: "Workout 2".into(),
+            category: EventCategory::Workout,
+            description: None,
+            r#type: None,
+        },
+    ]));
+    let observations = client.observations();
+    let handler = ModifyTrainingHandler::new();
+
+    let result = handler
+        .execute(
+            json!({
+                "action": "modify",
+                "target_date": "2026-03-01",
+                "new_name": "Updated workout",
+                "dry_run": false,
+                "idempotency_token": "missing-later-event-id"
+            }),
+            client,
+            None,
+        )
+        .await;
+
+    assert!(result.is_err());
+    assert!(observations.update_event_ids.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn test_modify_training_no_events_found() {
     let handler = ModifyTrainingHandler::new();
     let client = Arc::new(MockIntervalsClient::builder().with_events(vec![]));

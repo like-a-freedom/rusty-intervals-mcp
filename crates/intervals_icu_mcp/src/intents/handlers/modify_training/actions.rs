@@ -210,12 +210,18 @@ impl super::ModifyTrainingHandler {
         }
 
         if !dry_run {
-            for (index, event) in matching.iter().enumerate() {
-                let event_id = event.id.as_deref().ok_or_else(|| {
-                    IntentError::api(
-                        "Matched event is missing id and cannot be updated".to_string(),
-                    )
-                })?;
+            let event_ids = matching
+                .iter()
+                .map(|event| {
+                    event.id.as_deref().ok_or_else(|| {
+                        IntentError::api(
+                            "Matched event is missing id and cannot be updated".to_string(),
+                        )
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+
+            for (index, event_id) in event_ids.into_iter().enumerate() {
                 if let Err(error) = client.update_event(event_id, &update_fields).await {
                     let confirmed = index;
                     let remaining = matching.len().saturating_sub(index + 1);
