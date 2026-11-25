@@ -21,6 +21,8 @@ struct CircuitBreakerInner {
     state: CircuitState,
     failure_count: u32,
     last_failure_at: Option<Instant>,
+    generation: u64,
+    probe_in_flight: bool,
 }
 
 pub struct CircuitBreaker {
@@ -49,6 +51,8 @@ impl CircuitBreaker {
                 state: CircuitState::Closed,
                 failure_count: 0,
                 last_failure_at: None,
+                generation: 0,
+                probe_in_flight: false,
             }),
             failure_threshold,
             reset_timeout,
@@ -71,6 +75,38 @@ impl CircuitBreaker {
         inner.state
     }
 
+    /// Acquire an outcome-tracked permit, reserving the sole half-open probe.
+    /// Dropping it without completion releases the probe for another request.
+    ///
+    /// # Panics
+    /// Panics if the internal mutex is poisoned.
+    #[must_use]
+    pub fn acquire(&self) -> Option<RequestPermit<'_>> {
+        let mut inner = self.inner.lock().unwrap();
+        if inner.state == CircuitState::Open
+            && inner
+                .last_failure_at
+                .is_some_and(|last| last.elapsed() >= self.reset_timeout)
+        {
+            inner.state = CircuitState::HalfOpen;
+        }
+        let probe = match inner.state {
+            CircuitState::Open => return None,
+            CircuitState::HalfOpen if inner.probe_in_flight => return None,
+            CircuitState::HalfOpen => {
+                inner.probe_in_flight = true;
+                true
+            }
+            CircuitState::Closed => false,
+        };
+        Some(RequestPermit {
+            breaker: self,
+            generation: inner.generation,
+            probe,
+            completed: false,
+        })
+    }
+
     fn record_state(state: CircuitState) {
         let value = match state {
             CircuitState::Closed => 0.0,
@@ -80,18 +116,24 @@ impl CircuitBreaker {
         gauge!("intervals_icu_client_circuit_state").set(value);
     }
 
-    /// Records a successful request.
+    /// Records a successful request without tracking its admission generation.
+    /// Prefer [`Self::acquire`] for concurrent requests.
     ///
     /// # Panics
     /// Panics if the internal mutex is poisoned.
     pub fn record_success(&self) {
         let mut inner = self.inner.lock().unwrap();
         inner.failure_count = 0;
+        if inner.state != CircuitState::Closed {
+            inner.generation = inner.generation.wrapping_add(1);
+        }
+        inner.probe_in_flight = false;
         inner.state = CircuitState::Closed;
         Self::record_state(CircuitState::Closed);
     }
 
-    /// Records a failed request.
+    /// Records a failed request without tracking its admission generation.
+    /// Prefer [`Self::acquire`] for concurrent requests.
     ///
     /// # Panics
     /// Panics if the internal mutex is poisoned.
@@ -101,15 +143,72 @@ impl CircuitBreaker {
         inner.last_failure_at = Some(Instant::now());
 
         if inner.failure_count >= self.failure_threshold {
+            if inner.state != CircuitState::Open {
+                inner.generation = inner.generation.wrapping_add(1);
+            }
+            inner.probe_in_flight = false;
             inner.state = CircuitState::Open;
             Self::record_state(CircuitState::Open);
         }
     }
 
+    /// Check whether requests are allowed without reserving a half-open probe.
+    /// Prefer [`Self::acquire`] for concurrent requests.
     pub fn allow_request(&self) -> bool {
         match self.state() {
             CircuitState::Open => false,
             CircuitState::Closed | CircuitState::HalfOpen => true,
+        }
+    }
+}
+
+/// An admitted request whose outcome is associated with its breaker generation.
+#[must_use]
+pub struct RequestPermit<'a> {
+    breaker: &'a CircuitBreaker,
+    generation: u64,
+    probe: bool,
+    completed: bool,
+}
+
+impl RequestPermit<'_> {
+    /// Record the request outcome if its breaker generation is still current.
+    ///
+    /// # Panics
+    /// Panics if the internal mutex is poisoned.
+    pub fn complete(mut self, success: bool) {
+        let mut inner = self.breaker.inner.lock().unwrap();
+        if inner.generation == self.generation {
+            if success {
+                inner.failure_count = 0;
+                if inner.state != CircuitState::Closed {
+                    inner.state = CircuitState::Closed;
+                    inner.generation = inner.generation.wrapping_add(1);
+                    CircuitBreaker::record_state(CircuitState::Closed);
+                }
+                inner.probe_in_flight = false;
+            } else {
+                inner.failure_count = inner.failure_count.saturating_add(1);
+                inner.last_failure_at = Some(Instant::now());
+                if inner.failure_count >= self.breaker.failure_threshold {
+                    inner.state = CircuitState::Open;
+                    inner.generation = inner.generation.wrapping_add(1);
+                    inner.probe_in_flight = false;
+                    CircuitBreaker::record_state(CircuitState::Open);
+                }
+            }
+        }
+        self.completed = true;
+    }
+}
+
+impl Drop for RequestPermit<'_> {
+    fn drop(&mut self) {
+        if self.probe && !self.completed {
+            let mut inner = self.breaker.inner.lock().unwrap();
+            if inner.generation == self.generation && inner.state == CircuitState::HalfOpen {
+                inner.probe_in_flight = false;
+            }
         }
     }
 }

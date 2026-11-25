@@ -73,6 +73,38 @@ const ERROR_BODY_MAX: usize = 256;
 pub(super) const DECODE_BODY_SNIPPET_MAX: usize = 512;
 use tokio::io::AsyncWriteExt;
 
+/// Reusable HTTP connection pool and circuit breaker, without credentials.
+#[derive(Clone)]
+pub struct IntervalsTransport {
+    client: reqwest::Client,
+    circuit_breaker: Arc<CircuitBreaker>,
+}
+
+impl IntervalsTransport {
+    /// Whether the transport is shared or its circuit is still in cooldown.
+    #[must_use]
+    pub fn is_in_use(&self) -> bool {
+        Arc::strong_count(&self.circuit_breaker) > 1
+            || self.circuit_breaker.state() == crate::circuit_breaker::CircuitState::Open
+    }
+
+    /// Create an independent transport and circuit breaker.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP client cannot be built.
+    pub fn new() -> Result<Self> {
+        let client = reqwest::Client::builder().build().map_err(|e| {
+            IntervalsError::Config(crate::ConfigError::Other(format!(
+                "failed to build HTTP client: {e}"
+            )))
+        })?;
+        Ok(Self {
+            client,
+            circuit_breaker: Arc::new(CircuitBreaker::default()),
+        })
+    }
+}
+
 /// Client for the Intervals.icu API using reqwest.
 #[derive(Clone)]
 pub struct ReqwestIntervalsClient {
@@ -105,18 +137,32 @@ impl ReqwestIntervalsClient {
         athlete_id: impl Into<String>,
         api_key: SecretString,
     ) -> Result<Self> {
-        let client = reqwest::Client::builder().build().map_err(|e| {
-            IntervalsError::Config(crate::ConfigError::Other(format!(
-                "failed to build HTTP client: {e}"
-            )))
-        })?;
-        Ok(Self {
+        Ok(Self::with_transport(
+            base_url,
+            athlete_id,
+            api_key,
+            &IntervalsTransport::new()?,
+        ))
+    }
+
+    /// Bind fresh credentials to an existing transport.
+    ///
+    /// All clients bound to the same transport share a circuit breaker. Callers
+    /// must isolate transports for upstreams or tenants that must fail independently.
+    #[must_use]
+    pub fn with_transport(
+        base_url: &str,
+        athlete_id: impl Into<String>,
+        api_key: SecretString,
+        transport: &IntervalsTransport,
+    ) -> Self {
+        Self {
             base_url: base_url.trim_end_matches('/').to_string(),
             athlete_id: athlete_id.into(),
             api_key,
-            client,
-            circuit_breaker: Arc::new(CircuitBreaker::default()),
-        })
+            client: transport.client.clone(),
+            circuit_breaker: transport.circuit_breaker.clone(),
+        }
     }
 
     /// Build an API URL from path segments.
@@ -141,7 +187,8 @@ impl ReqwestIntervalsClient {
     /// quartet — all four were identical except for the verb, and callers had to know
     /// which `reqwest::Method` to pick. Single entry point reduces duplication and
     /// makes future auth changes (e.g. switching from Basic to Bearer) one-line.
-    fn request(&self, method: reqwest::Method, url: &str) -> reqwest::RequestBuilder {
+    /// Build an authenticated request using this client's transport.
+    pub fn request(&self, method: reqwest::Method, url: &str) -> reqwest::RequestBuilder {
         self.client
             .request(method, url)
             .basic_auth("API_KEY", Some(self.api_key.expose_secret()))
@@ -205,9 +252,13 @@ impl ReqwestIntervalsClient {
     ///
     /// Handles circuit breaker, timing, metrics, and transport errors.
     /// The caller is responsible for interpreting the response body.
-    async fn execute_raw(&self, request: reqwest::RequestBuilder) -> Result<reqwest::Response> {
+    /// Execute a request through this client's circuit breaker and transport.
+    ///
+    /// # Errors
+    /// Returns a transport error or an error when the circuit is open.
+    pub async fn execute_raw(&self, request: reqwest::RequestBuilder) -> Result<reqwest::Response> {
         let (method, path) = Self::request_method_path(&request);
-        if !self.circuit_breaker.allow_request() {
+        let Some(permit) = self.circuit_breaker.acquire() else {
             tracing::warn!(
                 athlete_id = %self.athlete_id,
                 %method,
@@ -220,7 +271,7 @@ impl ReqwestIntervalsClient {
                 "circuit breaker open — upstream is unavailable",
                 "",
             )));
-        }
+        };
 
         let start = std::time::Instant::now();
         let resp = request.send().await;
@@ -229,11 +280,11 @@ impl ReqwestIntervalsClient {
 
         let resp = match resp {
             Ok(r) => {
-                self.circuit_breaker.record_success();
+                permit.complete(!r.status().is_server_error());
                 r
             }
             Err(e) => {
-                self.circuit_breaker.record_failure();
+                permit.complete(false);
                 histogram!("intervals_icu_client_upstream_request_duration_seconds")
                     .record(duration);
                 let err = IntervalsError::Transport(e.into());
@@ -1271,6 +1322,173 @@ mod tests {
         assert_eq!(
             annotated.get("stream").and_then(serde_json::Value::as_str),
             Some("distance")
+        );
+    }
+
+    #[tokio::test]
+    async fn half_open_allows_one_probe_and_recovers_after_cancellation() {
+        use super::{CircuitBreaker, IntervalsTransport, ReqwestIntervalsClient};
+        use std::{sync::Arc, time::Duration};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+        let server = tokio::spawn(async move {
+            let (mut first, _) = listener.accept().await.unwrap();
+            let mut buf = [0; 4096];
+            assert!(first.read(&mut buf).await.unwrap() > 0);
+            started_tx.send(()).unwrap();
+            let (mut second, _) = listener.accept().await.unwrap();
+            assert!(second.read(&mut buf).await.unwrap() > 0);
+            second
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                .await
+                .unwrap();
+            let _ = release_rx.await;
+        });
+        let transport = IntervalsTransport {
+            client: reqwest::Client::new(),
+            circuit_breaker: Arc::new(CircuitBreaker::new(1, Duration::ZERO)),
+        };
+        transport.circuit_breaker.record_failure();
+        let client = ReqwestIntervalsClient::with_transport(
+            &base,
+            "i1",
+            secrecy::SecretString::new("key".into()),
+            &transport,
+        );
+        let probe_client = client.clone();
+        let probe = tokio::spawn(async move {
+            probe_client
+                .execute_raw(probe_client.request(reqwest::Method::GET, &format!("{base}/probe")))
+                .await
+        });
+        started_rx.await.unwrap();
+        let error = tokio::time::timeout(
+            Duration::from_secs(2),
+            client.execute_raw(client.request(reqwest::Method::GET, "http://127.0.0.1:1/parallel")),
+        )
+        .await
+        .unwrap()
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("circuit breaker open"),
+            "{error}"
+        );
+        probe.abort();
+        let _ = probe.await;
+        let url = format!("{}/retry", client.base_url);
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            client.execute_raw(client.request(reqwest::Method::GET, &url)),
+        )
+        .await
+        .unwrap();
+        assert!(
+            result.is_ok(),
+            "cancelled probe must release the slot: {result:?}"
+        );
+        let _ = release_tx.send(());
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn stale_success_does_not_close_circuit_opened_by_concurrent_failure() {
+        use super::{CircuitBreaker, IntervalsTransport, ReqwestIntervalsClient};
+        use std::{sync::Arc, time::Duration};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+        let server = tokio::spawn(async move {
+            let (mut first, _) = listener.accept().await.unwrap();
+            let mut buf = [0; 4096];
+            assert!(first.read(&mut buf).await.unwrap() > 0);
+            started_tx.send(()).unwrap();
+            let (mut second, _) = listener.accept().await.unwrap();
+            assert!(second.read(&mut buf).await.unwrap() > 0);
+            second
+                .write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n")
+                .await
+                .unwrap();
+            release_rx.await.unwrap();
+            first
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                .await
+                .unwrap();
+        });
+        let transport = IntervalsTransport {
+            client: reqwest::Client::new(),
+            circuit_breaker: Arc::new(CircuitBreaker::new(1, Duration::from_secs(60))),
+        };
+        let client = ReqwestIntervalsClient::with_transport(
+            &base,
+            "i1",
+            secrecy::SecretString::new("key".into()),
+            &transport,
+        );
+        let old_client = client.clone();
+        let old_url = format!("{base}/old");
+        let old = tokio::spawn(async move {
+            old_client
+                .execute_raw(old_client.request(reqwest::Method::GET, &old_url))
+                .await
+        });
+        started_rx.await.unwrap();
+        assert_eq!(
+            client
+                .execute_raw(client.request(reqwest::Method::GET, &format!("{base}/fail")))
+                .await
+                .unwrap()
+                .status(),
+            503
+        );
+        release_tx.send(()).unwrap();
+        assert!(old.await.unwrap().is_ok());
+        let error = client
+            .execute_raw(client.request(reqwest::Method::GET, &format!("{base}/blocked")))
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("circuit breaker open"),
+            "{error}"
+        );
+        server.await.unwrap();
+    }
+
+    #[test]
+    fn expired_idle_breaker_can_be_evicted_but_shared_transport_cannot() {
+        use super::{CircuitBreaker, IntervalsTransport};
+        use std::sync::Arc;
+
+        let transport = IntervalsTransport {
+            client: reqwest::Client::new(),
+            circuit_breaker: Arc::new(CircuitBreaker::new(1, std::time::Duration::from_millis(10))),
+        };
+        transport.circuit_breaker.record_failure();
+        assert!(
+            transport.is_in_use(),
+            "open circuit must remain protected during cooldown"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        let active = super::ReqwestIntervalsClient::with_transport(
+            "http://example.test",
+            "i1",
+            secrecy::SecretString::new("key".into()),
+            &transport,
+        );
+        assert!(
+            transport.is_in_use(),
+            "active client must not be evicted after cooldown"
+        );
+        drop(active);
+        assert!(
+            !transport.is_in_use(),
+            "expired idle circuit must become evictable"
         );
     }
 
