@@ -643,7 +643,11 @@ impl IntentHandler for PlanTrainingHandler {
             let created_events = client
                 .bulk_create_events(validated_events)
                 .await
-                .map_err(|e| IntentError::api(format!("Failed to create events: {}", e)))?;
+                .map_err(|error| {
+                    IntentError::api(format!(
+                        "Bulk event creation failed with an unknown outcome: the events may have been applied upstream ({error}). Do not retry automatically; check the calendar before taking further action."
+                    ))
+                })?;
 
             content.push(ContentBlock::markdown(format!(
                 "Created Events: {} workouts\nEvents successfully created in Intervals.icu.",

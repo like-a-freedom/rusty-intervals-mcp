@@ -210,18 +210,20 @@ impl super::ModifyTrainingHandler {
         }
 
         if !dry_run {
-            for event in &matching {
+            for (index, event) in matching.iter().enumerate() {
                 let event_id = event.id.as_deref().ok_or_else(|| {
                     IntentError::api(
                         "Matched event is missing id and cannot be updated".to_string(),
                     )
                 })?;
-                client
-                    .update_event(event_id, &update_fields)
-                    .await
-                    .map_err(|e| {
-                        IntentError::api(format!("Failed to update event {}: {}", event_id, e))
-                    })?;
+                if let Err(error) = client.update_event(event_id, &update_fields).await {
+                    let confirmed = index;
+                    let remaining = matching.len().saturating_sub(index + 1);
+                    return Err(IntentError::api(format!(
+                        "Update batch stopped: {confirmed} of {} events were confirmed; event {event_id} has an unknown outcome ({error}); {remaining} not attempted. Do not retry the batch automatically.",
+                        matching.len()
+                    )));
+                }
             }
         }
 

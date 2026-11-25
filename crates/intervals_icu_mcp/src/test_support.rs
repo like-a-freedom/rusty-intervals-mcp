@@ -160,6 +160,7 @@ pub mod mock {
         pub wellness_days_history: Mutex<Vec<Option<i32>>>,
         pub wellness_calls: AtomicUsize,
         pub bulk_events: Mutex<Vec<Vec<Event>>>,
+        pub update_event_ids: Mutex<Vec<String>>,
     }
 
     impl MockObservations {
@@ -204,6 +205,8 @@ pub mod mock {
         pub sport_settings: Option<SportSettings>,
         pub gear_list: Option<Value>,
         pub update_error: Option<String>,
+        pub update_error_on_call: Option<(usize, String)>,
+        pub bulk_create_error: Option<IntervalsError>,
         pub upcoming_workouts: Option<Value>,
         pub upcoming_workouts_error: Option<IntervalsError>,
         pub upcoming_workouts_calls: Arc<AtomicUsize>,
@@ -341,6 +344,20 @@ pub mod mock {
 
         pub fn with_update_error(mut self, error: impl Into<String>) -> Self {
             self.update_error = Some(error.into());
+            self
+        }
+
+        pub fn with_update_error_on_call(
+            mut self,
+            call_number: usize,
+            error: impl Into<String>,
+        ) -> Self {
+            self.update_error_on_call = Some((call_number, error.into()));
+            self
+        }
+
+        pub fn with_bulk_create_error(mut self, error: IntervalsError) -> Self {
+            self.bulk_create_error = Some(error);
             self
         }
 
@@ -1717,6 +1734,18 @@ pub mod mock {
             events: Vec<Event>,
         ) -> Result<Vec<Event>, IntervalsError> {
             self.observations.bulk_events.lock().unwrap().push(events);
+            if let Some(error) = &self.bulk_create_error {
+                return Err(match error {
+                    IntervalsError::Transport(transport_error) => {
+                        IntervalsError::Transport(intervals_icu_client::TransportError {
+                            message: transport_error.message.clone(),
+                            is_timeout: transport_error.is_timeout,
+                            is_connect: transport_error.is_connect,
+                        })
+                    }
+                    _ => super::clone_intervals_error(error),
+                });
+            }
             Ok(vec![])
         }
 
@@ -1870,14 +1899,23 @@ pub mod mock {
 
         async fn update_event(
             &self,
-            _event_id: &str,
+            event_id: &str,
             _fields: &Value,
         ) -> Result<Value, IntervalsError> {
-            if let Some(ref err) = self.update_error {
-                Err(IntervalsError::from_status(500, err.clone()))
-            } else {
-                Ok(json!({"updated": true}))
+            let call_number = {
+                let mut calls = self.observations.update_event_ids.lock().unwrap();
+                calls.push(event_id.to_owned());
+                calls.len()
+            };
+            if let Some(error) = &self.update_error {
+                return Err(IntervalsError::from_status(500, error.clone()));
             }
+            if let Some((failing_call, error)) = &self.update_error_on_call
+                && call_number == *failing_call
+            {
+                return Err(IntervalsError::from_status(500, error.clone()));
+            }
+            Ok(json!({"updated": true}))
         }
 
         async fn bulk_delete_events(&self, _event_ids: Vec<String>) -> Result<(), IntervalsError> {

@@ -1355,3 +1355,82 @@ async fn test_execute_with_specific_focus() {
     let content_str = format!("{:?}", output.content);
     assert!(content_str.contains("SPECIFIC"));
 }
+
+#[tokio::test]
+async fn ambiguous_bulk_create_failure_warns_and_same_key_retry_does_not_dispatch() {
+    use intervals_icu_client::IntervalsError;
+
+    let client = Arc::new(MockIntervalsClient::builder().with_bulk_create_error(
+        IntervalsError::Decode {
+            message: "response did not match Event schema".into(),
+            snippet: "{}".into(),
+        },
+    ));
+    let observations = client.observations();
+    let router = crate::intents::IntentRouter::new(
+        vec![Box::new(PlanTrainingHandler::new())],
+        client,
+        Arc::new(crate::intents::IdempotencyMiddleware::new()),
+    );
+    let input = json!({
+        "period_start": "2026-03-01",
+        "period_end": "2026-03-28",
+        "adaptive": false,
+        "idempotency_token": "ambiguous-bulk-create"
+    });
+
+    let first_error = router
+        .route("plan_training", input.clone(), None)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        first_error.contains("may have been applied") && first_error.contains("Do not retry"),
+        "ambiguous bulk error must tell the caller not to retry: {first_error}"
+    );
+
+    let retry_error = router
+        .route("plan_training", input, None)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(retry_error.contains("unknown outcome"), "{retry_error}");
+    assert_eq!(observations.bulk_events.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn lost_bulk_create_response_warns_that_upstream_may_have_applied_events() {
+    use intervals_icu_client::{IntervalsError, TransportError};
+
+    let client = Arc::new(MockIntervalsClient::builder().with_bulk_create_error(
+        IntervalsError::Transport(TransportError {
+            message: "response timed out".into(),
+            is_timeout: true,
+            is_connect: false,
+        }),
+    ));
+    let router = crate::intents::IntentRouter::new(
+        vec![Box::new(PlanTrainingHandler::new())],
+        client,
+        Arc::new(crate::intents::IdempotencyMiddleware::new()),
+    );
+    let error = router
+        .route(
+            "plan_training",
+            json!({
+                "period_start": "2026-03-01",
+                "period_end": "2026-03-28",
+                "adaptive": false,
+                "idempotency_token": "lost-bulk-response"
+            }),
+            None,
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+
+    assert!(
+        error.contains("may have been applied") && error.contains("Do not retry"),
+        "lost response must be treated as an uncertain write: {error}"
+    );
+}

@@ -1429,9 +1429,81 @@ async fn test_modify_training_range_invalid_dates() {
         "action": "modify",
         "target_date_from": "2026-03-07",
         "target_date_to": "2026-03-01",
+        "new_name": "Updated",
         "idempotency_token": "test-token"
     });
 
     let result = handler.execute(input, client, None).await;
     assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn partial_modify_reports_progress_and_retry_does_not_restart_batch() {
+    let client = Arc::new(
+        MockIntervalsClient::builder()
+            .with_events(vec![
+                Event {
+                    id: Some("event-1".into()),
+                    start_date_local: "2026-03-01".into(),
+                    name: "Workout 1".into(),
+                    category: EventCategory::Workout,
+                    description: None,
+                    r#type: None,
+                },
+                Event {
+                    id: Some("event-2".into()),
+                    start_date_local: "2026-03-01".into(),
+                    name: "Workout 2".into(),
+                    category: EventCategory::Workout,
+                    description: None,
+                    r#type: None,
+                },
+                Event {
+                    id: Some("event-3".into()),
+                    start_date_local: "2026-03-01".into(),
+                    name: "Workout 3".into(),
+                    category: EventCategory::Workout,
+                    description: None,
+                    r#type: None,
+                },
+            ])
+            .with_update_error_on_call(2, "response lost"),
+    );
+    let observations = client.observations();
+    let router = crate::intents::IntentRouter::new(
+        vec![Box::new(ModifyTrainingHandler::new())],
+        client,
+        Arc::new(crate::intents::IdempotencyMiddleware::new()),
+    );
+    let input = json!({
+        "action": "modify",
+        "target_date": "2026-03-01",
+        "new_name": "Updated workout",
+        "dry_run": false,
+        "idempotency_token": "partial-modify"
+    });
+
+    let first_error = router
+        .route("modify_training", input.clone(), None)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(first_error.contains("1 of 3"), "{first_error}");
+    assert!(
+        first_error.contains("event-2") && first_error.contains("unknown"),
+        "{first_error}"
+    );
+    assert!(first_error.contains("1 not attempted"), "{first_error}");
+    assert!(first_error.contains("Do not retry"), "{first_error}");
+
+    let retry_error = router
+        .route("modify_training", input, None)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(retry_error.contains("unknown outcome"), "{retry_error}");
+    assert_eq!(
+        *observations.update_event_ids.lock().unwrap(),
+        ["event-1", "event-2"]
+    );
 }
