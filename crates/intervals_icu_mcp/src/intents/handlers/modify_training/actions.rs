@@ -213,11 +213,16 @@ impl super::ModifyTrainingHandler {
             let event_ids = matching
                 .iter()
                 .map(|event| {
-                    event.id.as_deref().ok_or_else(|| {
-                        IntentError::api(
-                            "Matched event is missing id and cannot be updated".to_string(),
-                        )
-                    })
+                    event
+                        .id
+                        .as_deref()
+                        .filter(|id| !id.trim().is_empty())
+                        .ok_or_else(|| {
+                            IntentError::api(
+                                "Matched event is missing or has a blank id and cannot be updated"
+                                    .to_string(),
+                            )
+                        })
                 })
                 .collect::<Result<Vec<_>, _>>()?;
 
