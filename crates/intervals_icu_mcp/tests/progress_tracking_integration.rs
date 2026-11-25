@@ -2,9 +2,204 @@ use std::collections::HashMap;
 
 use intervals_icu_client::ActivitySummary;
 use intervals_icu_mcp::domains::coach::AnalysisWindow;
-use intervals_icu_mcp::domains::progress::{HypothesisDomain, TrendState};
-use intervals_icu_mcp::engines::progress_tracking::build_progress_report;
+use intervals_icu_mcp::domains::progress::{HypothesisDomain, TidDriftState, TrendState};
+use intervals_icu_mcp::engines::progress_tracking::{build_progress_report, compute_tid_drift};
 use serde_json::json;
+
+#[test]
+fn tid_drift_requires_two_complete_four_week_windows() {
+    for weeks in 4..8 {
+        let result = compute_tid_drift(&vec![(100.0, 0.0, 0.0); weeks]);
+        assert!(
+            !result.supported,
+            "{weeks} weeks must not support a comparison"
+        );
+        assert!(result.entropy_prior_4w.is_none());
+        assert!(result.entropy_recent_4w.is_none());
+    }
+}
+
+#[test]
+fn tid_drift_compares_only_the_two_latest_four_week_windows() {
+    let mut weeks = vec![(100.0, 0.0, 0.0); 4];
+    weeks.extend(vec![(1.0, 1.0, 1.0); 4]);
+    weeks.extend(vec![(100.0, 0.0, 0.0); 4]);
+
+    let result = compute_tid_drift(&weeks);
+    let without_old_data = compute_tid_drift(&weeks[4..]);
+    assert!(result.supported);
+    assert_eq!(result.drift_state, TidDriftState::Converging);
+    assert_eq!(result.entropy_prior_4w, without_old_data.entropy_prior_4w);
+    assert_eq!(result.entropy_recent_4w, without_old_data.entropy_recent_4w);
+    assert!(result.entropy_prior_4w.unwrap() > 0.9);
+    assert_eq!(result.entropy_recent_4w, Some(0.0));
+}
+
+#[test]
+fn tid_drift_does_not_bridge_missing_calendar_weeks() {
+    let start = chrono::NaiveDate::from_ymd_opt(2026, 1, 5).unwrap();
+    let activities: Vec<_> = (0..8)
+        .map(|week| ActivitySummary {
+            id: format!("activity-{week}"),
+            start_date_local: (start
+                + chrono::Duration::weeks(if week < 4 { week } else { week + 1 }))
+            .to_string(),
+            ..Default::default()
+        })
+        .collect();
+    let details = activities
+        .iter()
+        .map(|activity| {
+            (
+                activity.id.clone(),
+                json!({"icu_zone_times": [{"id": "Z1", "secs": 1000}]}),
+            )
+        })
+        .collect();
+    let window = AnalysisWindow::new(start, start + chrono::Duration::weeks(8));
+    let report = build_progress_report(&json!([]), &activities, &details, &window);
+    assert!(
+        !report.tid_drift.supported,
+        "missing weeks must not be silently skipped"
+    );
+    assert!(report.warnings.iter().any(|warning| warning.contains("8 consecutive weeks") && warning.contains("7 week(s)")));
+}
+
+#[test]
+fn tid_drift_uses_weeks_ending_at_analysis_window_end() {
+    let start = chrono::NaiveDate::from_ymd_opt(2026, 1, 5).unwrap();
+    let activities: Vec<_> = (0..8)
+        .map(|week| ActivitySummary {
+            id: format!("old-{week}"),
+            start_date_local: (start + chrono::Duration::weeks(week)).to_string(),
+            ..Default::default()
+        })
+        .collect();
+    let details = activities
+        .iter()
+        .map(|activity| {
+            (
+                activity.id.clone(),
+                json!({"icu_zone_times": [{"id": "Z1", "secs": 1000}]}),
+            )
+        })
+        .collect();
+    let window = AnalysisWindow::new(
+        start,
+        start + chrono::Duration::weeks(9) + chrono::Duration::days(2),
+    );
+    let report = build_progress_report(&json!([]), &activities, &details, &window);
+    assert!(
+        !report.tid_drift.supported,
+        "old weeks must not replace the two empty most recent weeks"
+    );
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("6 week(s)"))
+    );
+}
+
+#[test]
+fn tid_drift_excludes_history_before_short_analysis_window() {
+    let start = chrono::NaiveDate::from_ymd_opt(2026, 1, 5).unwrap();
+    let activities: Vec<_> = (0..12)
+        .map(|week| ActivitySummary {
+            id: format!("week-{week}"),
+            start_date_local: (start + chrono::Duration::weeks(week)).to_string(),
+            ..Default::default()
+        })
+        .collect();
+    let details = activities
+        .iter()
+        .map(|activity| {
+            (
+                activity.id.clone(),
+                json!({"icu_zone_times": [{"id": "Z1", "secs": 1000}]}),
+            )
+        })
+        .collect();
+    let window = AnalysisWindow::new(
+        start + chrono::Duration::weeks(8),
+        start + chrono::Duration::weeks(12) - chrono::Duration::days(1),
+    );
+    let report = build_progress_report(&json!([]), &activities, &details, &window);
+    assert!(
+        !report.tid_drift.supported,
+        "older history must not extend the requested four-week period"
+    );
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("4 week(s)"))
+    );
+}
+
+#[test]
+fn tid_drift_excludes_out_of_window_activity_in_first_iso_week() {
+    let monday = chrono::NaiveDate::from_ymd_opt(2026, 1, 5).unwrap();
+    let mut activities: Vec<_> = (0..8)
+        .map(|week| ActivitySummary {
+            id: format!("week-{week}"),
+            start_date_local: (monday + chrono::Duration::weeks(week) + chrono::Duration::days(2))
+                .to_string(),
+            ..Default::default()
+        })
+        .collect();
+    activities.push(ActivitySummary {
+        id: "before-start".into(),
+        start_date_local: monday.to_string(),
+        ..Default::default()
+    });
+    let details = activities
+        .iter()
+        .map(|activity| {
+            let zones = if activity.id == "before-start" {
+                json!([{"id": "Z3", "secs": 1000}])
+            } else {
+                json!([{"id": "Z1", "secs": 1000}])
+            };
+            (activity.id.clone(), json!({"icu_zone_times": zones}))
+        })
+        .collect();
+    let window = AnalysisWindow::new(
+        monday + chrono::Duration::days(2),
+        monday + chrono::Duration::weeks(7) + chrono::Duration::days(2),
+    );
+    let report = build_progress_report(&json!([]), &activities, &details, &window);
+    assert!(report.tid_drift.supported);
+    assert_eq!(report.tid_drift.entropy_prior_4w, Some(0.0));
+}
+
+#[test]
+fn tid_drift_excludes_activities_after_analysis_window_end() {
+    let start = chrono::NaiveDate::from_ymd_opt(2026, 1, 5).unwrap();
+    let activities: Vec<_> = (0..9)
+        .map(|week| ActivitySummary {
+            id: format!("week-{week}"),
+            start_date_local: (start + chrono::Duration::weeks(week)).to_string(),
+            ..Default::default()
+        })
+        .collect();
+    let details = activities
+        .iter()
+        .map(|activity| {
+            (
+                activity.id.clone(),
+                json!({"icu_zone_times": [{"id": "Z1", "secs": 1000}]}),
+            )
+        })
+        .collect();
+    let window = AnalysisWindow::new(
+        start,
+        start + chrono::Duration::weeks(7) + chrono::Duration::days(2),
+    );
+    let report = build_progress_report(&json!([]), &activities, &details, &window);
+    assert!(report.tid_drift.supported);
+    assert_eq!(report.tid_drift.weekly_samples, 8);
+}
 
 #[test]
 fn full_report_detects_flat_tail_and_volume_hypothesis() {

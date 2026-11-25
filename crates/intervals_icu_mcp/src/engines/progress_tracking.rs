@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 
-use chrono::{Datelike, NaiveDate};
+use chrono::{Datelike, Duration, NaiveDate};
 use intervals_icu_client::ActivitySummary;
 use serde_json::Value;
 
@@ -22,7 +22,8 @@ use crate::engines::coach_metrics_constants::{HRV_KEYS, RESTING_HR_KEYS};
 use crate::engines::shared::{compute_zone_distribution, parse_activity_date};
 
 const DEFAULT_TID_DRIFT_DELTA_THRESHOLD: f64 = 0.15;
-const MIN_WEEKS_FOR_TID_DRIFT: usize = 4;
+const TID_WINDOW_WEEKS: usize = 4;
+const MIN_WEEKS_FOR_TID_DRIFT: usize = 2 * TID_WINDOW_WEEKS;
 const MONOTONY_HIGH_THRESHOLD: f64 = 1.5;
 const HYPOTHESIS_MIN_CONFIDENCE: f64 = 0.50;
 const TRAILING_LOAD_WINDOW_DAYS: usize = 7;
@@ -93,11 +94,19 @@ pub fn derive_ctl_series_from_activity_loads(
 
 type ZonePct = (f64, f64, f64);
 
-type WeekKey = (i32, u32);
+type WeekKey = NaiveDate;
 
 pub fn build_weekly_zone_distributions(
     activities: &[ActivitySummary],
     activity_details: &HashMap<String, Value>,
+) -> Vec<ZonePct> {
+    build_weekly_zone_distributions_in_window(activities, activity_details, None)
+}
+
+fn build_weekly_zone_distributions_in_window(
+    activities: &[ActivitySummary],
+    activity_details: &HashMap<String, Value>,
+    window: Option<&AnalysisWindow>,
 ) -> Vec<ZonePct> {
     let mut per_week: BTreeMap<WeekKey, Vec<ZonePct>> = BTreeMap::new();
 
@@ -110,6 +119,9 @@ pub fn build_weekly_zone_distributions(
         let Some(date) = parse_activity_date(&activity.start_date_local) else {
             continue;
         };
+        if window.is_some_and(|window| date < window.start_date || date > window.end_date) {
+            continue;
+        }
         let Some(detail) = activity_details.get(&activity.id) else {
             continue;
         };
@@ -121,16 +133,34 @@ pub fn build_weekly_zone_distributions(
             continue;
         };
 
-        let iso = date.iso_week();
-        per_week
-            .entry((iso.year(), iso.week()))
-            .or_default()
-            .push((z1, z2, z3));
+        let week_start = date - Duration::days(i64::from(date.weekday().num_days_from_monday()));
+        per_week.entry(week_start).or_default().push((z1, z2, z3));
+    }
+
+    let Some((&first_week, _)) = per_week.first_key_value() else {
+        return Vec::new();
+    };
+    let Some((&last_week, _)) = per_week.last_key_value() else {
+        return Vec::new();
+    };
+    let last_week = window
+        .map(|window| {
+            let end = window.end_date;
+            end - Duration::days(i64::from(end.weekday().num_days_from_monday()))
+        })
+        .unwrap_or(last_week);
+    let mut week = first_week;
+    while week <= last_week {
+        per_week.entry(week).or_default();
+        week += Duration::weeks(1);
     }
 
     per_week
         .into_values()
         .map(|samples| {
+            if samples.is_empty() {
+                return (0.0, 0.0, 0.0);
+            }
             let n = samples.len() as f64;
             let z1 = samples.iter().map(|sample| sample.0).sum::<f64>() / n;
             let z2 = samples.iter().map(|sample| sample.1).sum::<f64>() / n;
@@ -145,23 +175,17 @@ pub fn compute_tid_drift(weekly: &[(f64, f64, f64)]) -> TidDriftMetrics {
         return TidDriftMetrics::default();
     }
 
-    let entropies = weekly
+    let Some(entropies) = weekly[weekly.len() - MIN_WEEKS_FOR_TID_DRIFT..]
         .iter()
-        .filter_map(|(z1, z2, z3)| compute_tid_entropy(*z1, *z2, *z3))
-        .collect::<Vec<_>>();
-
-    if entropies.len() < MIN_WEEKS_FOR_TID_DRIFT {
+        .map(|(z1, z2, z3)| compute_tid_entropy(*z1, *z2, *z3))
+        .collect::<Option<Vec<_>>>()
+    else {
         return TidDriftMetrics::default();
-    }
-
-    let recent = &entropies[entropies.len().saturating_sub(MIN_WEEKS_FOR_TID_DRIFT)..];
-    let prior = &entropies[..entropies.len().saturating_sub(MIN_WEEKS_FOR_TID_DRIFT)];
-    let recent_mean = recent.iter().sum::<f64>() / recent.len() as f64;
-    let prior_mean = if prior.is_empty() {
-        recent_mean
-    } else {
-        prior.iter().sum::<f64>() / prior.len() as f64
     };
+
+    let (prior, recent) = entropies.split_at(TID_WINDOW_WEEKS);
+    let recent_mean = recent.iter().sum::<f64>() / recent.len() as f64;
+    let prior_mean = prior.iter().sum::<f64>() / prior.len() as f64;
     let delta = recent_mean - prior_mean;
     let drift_band = DEFAULT_TID_DRIFT_DELTA_THRESHOLD;
 
@@ -483,14 +507,20 @@ pub fn build_progress_report_with_ctl_fallback(
     // hypothesis logic should treat HRV and load features as deviations from that
     // athlete's own baseline before falling back to generic heuristic states.
 
-    let weekly_zones = build_weekly_zone_distributions(activities, activity_details);
+    let weekly_zones =
+        build_weekly_zone_distributions_in_window(activities, activity_details, Some(window));
     report.tid_drift = compute_tid_drift(&weekly_zones);
     if !report.tid_drift.supported {
-        let have = weekly_zones.len();
+        let have = weekly_zones
+            .iter()
+            .rev()
+            .take(MIN_WEEKS_FOR_TID_DRIFT)
+            .filter(|(z1, z2, z3)| compute_tid_entropy(*z1, *z2, *z3).is_some())
+            .count();
         let need = MIN_WEEKS_FOR_TID_DRIFT;
         if have > 0 {
             report.warnings.push(format!(
-                "TID drift needs {} weeks of activity details with zone data, but only {} week(s) were available. \
+                "TID drift needs zone data in each of {} consecutive weeks, but only {} week(s) in the latest window had data. \
                  Check that activities have icu_zone_times populated.",
                 need, have
             ));
