@@ -6,8 +6,10 @@
 //! `athlete_id` and a `jti`, never the upstream credential. The credential and
 //! the revocation state live in the server-side [`crate::token_registry`], keyed
 //! by `jti`; [`AppState::authenticate`] joins the two. Every issued token — via
-//! `POST /auth` or the web UI — is recorded, so every token is revocable and the
-//! upstream key can be rotated without re-issuing. See ADR-0011.
+//! `POST /auth` or the web UI — is recorded, so every token is revocable.
+//! Embedders can use [`AppState::rotate_upstream_api_key`] to change the stored
+//! credential without issuing a new JWT; no HTTP route performs this update.
+//! See ADR-0011.
 //!
 //! Legacy tokens (issued before ADR-0011) embedded the encrypted credential in
 //! their claims and carried no `jti`; they remain verifiable through the
@@ -145,6 +147,37 @@ impl AppState {
             jti,
             expires_at,
         })
+    }
+
+    /// Replace the upstream API key for a verified JWT without issuing a new token.
+    ///
+    /// Only the encrypted credential of the matching, non-revoked JTI and
+    /// athlete is updated. A missing JTI or no eligible record returns
+    /// [`AuthError::InvalidToken`]. Blank keys are rejected; the embedder is
+    /// responsible for validating the replacement key against the upstream.
+    pub async fn rotate_upstream_api_key(
+        &self,
+        token: &str,
+        new_api_key: &str,
+    ) -> Result<(), AuthError> {
+        let claims = self.jwt_manager.verify_claims(token)?;
+        let jti = claims.jti.ok_or(AuthError::InvalidToken)?;
+        if new_api_key.trim().is_empty() {
+            return Err(AuthError::InvalidCredentials);
+        }
+        let encrypted_api_key = self.jwt_manager.encrypt_credential(new_api_key)?;
+        let updated = self
+            .tokens
+            .update_credential(jti, claims.athlete_id, encrypted_api_key)
+            .await
+            .map_err(|error| {
+                tracing::error!(%error, "failed to persist rotated upstream credential");
+                AuthError::ServerConfig
+            })?;
+        if !updated {
+            return Err(AuthError::InvalidToken);
+        }
+        Ok(())
     }
 
     /// Resolve a bearer token to its athlete and upstream credential.
@@ -806,6 +839,104 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn credential_rotation_keeps_the_same_jwt_and_honors_revocation() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = crate::state_store::StateStore::open(dir.path().join("state.sqlite3"), [8; 32])
+            .expect("open state store");
+        let state = AppState {
+            tokens: TokenRegistry::from_store(store),
+            ..app_state()
+        };
+        let issued = state
+            .issue_recorded_token("athlete", "old-key", 3600)
+            .await
+            .expect("issue token");
+        let before = state
+            .authenticate(&issued.token)
+            .await
+            .expect("authenticate");
+        assert_eq!(before.api_key.expose_secret(), "old-key");
+
+        let original = state.tokens.find(&issued.jti).await.unwrap().unwrap();
+        state
+            .rotate_upstream_api_key(&issued.token, "new-key")
+            .await
+            .expect("rotate stored credential");
+        let updated = state.tokens.find(&issued.jti).await.unwrap().unwrap();
+        assert_ne!(updated.encrypted_api_key, original.encrypted_api_key);
+        assert_eq!(
+            updated,
+            TokenRecord {
+                encrypted_api_key: updated.encrypted_api_key.clone(),
+                ..original
+            }
+        );
+
+        let after = state
+            .authenticate(&issued.token)
+            .await
+            .expect("authenticate same JWT");
+        assert_eq!(after.athlete_id, before.athlete_id);
+        assert_eq!(after.api_key.expose_secret(), "new-key");
+
+        let wrong_athlete = state
+            .jwt_manager
+            .issue_token("other-athlete", 3600, &issued.jti)
+            .unwrap();
+        let unknown = state
+            .jwt_manager
+            .issue_token("athlete", 3600, "unknown-jti")
+            .unwrap();
+        let expired = create_expired_token(&state.jwt_manager, "athlete");
+        let legacy = state
+            .jwt_manager
+            .issue_legacy_token("athlete", "legacy-key", 3600)
+            .unwrap();
+        for token in [&wrong_athlete, &unknown, &legacy] {
+            assert!(matches!(
+                state.rotate_upstream_api_key(token, "rejected-key").await,
+                Err(AuthError::InvalidToken)
+            ));
+        }
+        assert!(matches!(
+            state
+                .rotate_upstream_api_key(&expired, "rejected-key")
+                .await,
+            Err(AuthError::TokenExpired)
+        ));
+        assert!(matches!(
+            state.rotate_upstream_api_key(&issued.token, " ").await,
+            Err(AuthError::InvalidCredentials)
+        ));
+        assert_eq!(state.tokens.all().await.unwrap(), vec![updated.clone()]);
+
+        assert!(
+            state
+                .tokens
+                .revoke(&issued.jti)
+                .await
+                .expect("revoke token")
+        );
+        assert!(matches!(
+            state
+                .rotate_upstream_api_key(&issued.token, "rejected-key")
+                .await,
+            Err(AuthError::InvalidToken)
+        ));
+        assert!(matches!(
+            state.authenticate(&issued.token).await,
+            Err(AuthError::TokenRevoked)
+        ));
+        assert_eq!(
+            state.tokens.all().await.unwrap(),
+            vec![TokenRecord {
+                revoked: true,
+                ..updated
+            }]
+        );
+    }
+
+    #[tokio::test]
     async fn token_issue_returns_no_token_when_sqlite_insert_fails() {
         let dir = tempfile::tempdir().expect("temp dir");
         let store = crate::state_store::StateStore::open(dir.path().join("state.sqlite3"), [8; 32])
@@ -948,20 +1079,19 @@ mod tests {
         // Registry files written before ADR-0011 keep the credential in the
         // token's claims; a record with an empty credential must fall back.
         let state = app_state();
-        record_token(&state, "jti-1", "i123456", "stale").await;
+        let now = chrono::Utc::now();
         state
             .tokens
             .record(TokenRecord {
+                jti: "jti-1".to_string(),
+                athlete_id: "i123456".to_string(),
+                issued_at: now.to_rfc3339(),
+                expires_at: (now + chrono::TimeDelta::hours(1)).to_rfc3339(),
+                revoked: false,
                 encrypted_api_key: None,
-                ..state
-                    .tokens
-                    .find("jti-1")
-                    .await
-                    .expect("registry lookup")
-                    .expect("record")
             })
             .await
-            .expect("update legacy record");
+            .expect("insert legacy record");
 
         let manager = &state.jwt_manager;
         let custom = IntervalsClaims {

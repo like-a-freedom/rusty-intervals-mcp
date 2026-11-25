@@ -69,7 +69,7 @@ impl TokenRegistry {
         self.store.is_some()
     }
 
-    /// Record a newly issued token. A duplicate JTI is rejected by SQLite.
+    /// Record a newly issued token. An existing JTI is never overwritten.
     pub async fn record(&self, record: TokenRecord) -> Result<(), TokenRegistryError> {
         if let Some(store) = &self.store {
             store
@@ -92,7 +92,14 @@ impl TokenRegistry {
                 .await
                 .map_err(|_| TokenRegistryError::Storage)?;
         } else if let Some(records) = &self.records {
-            records.write().await.insert(record.jti.clone(), record);
+            match records.write().await.entry(record.jti.clone()) {
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(record);
+                }
+                std::collections::hash_map::Entry::Occupied(_) => {
+                    return Err(TokenRegistryError::Storage);
+                }
+            }
         }
         Ok(())
     }
@@ -120,6 +127,39 @@ impl TokenRegistry {
             return Ok(records.read().await.get(jti).cloned());
         }
         Ok(None)
+    }
+
+    /// Replace only the credential of a matching, non-revoked record.
+    pub(crate) async fn update_credential(
+        &self,
+        jti: String,
+        athlete_id: String,
+        encrypted_api_key: String,
+    ) -> Result<bool, TokenRegistryError> {
+        if let Some(store) = &self.store {
+            return store
+                .run(move |connection| {
+                    let updated = connection.execute(
+                        "UPDATE token_registry SET encrypted_api_key = ?1
+                         WHERE jti = ?2 AND athlete_id = ?3 AND revoked = 0",
+                        params![encrypted_api_key, jti, athlete_id],
+                    )?;
+                    Ok(updated == 1)
+                })
+                .await
+                .map_err(|_| TokenRegistryError::Storage);
+        }
+        if let Some(records) = &self.records {
+            let mut records = records.write().await;
+            if let Some(record) = records.get_mut(&jti)
+                && record.athlete_id == athlete_id
+                && !record.revoked
+            {
+                record.encrypted_api_key = Some(encrypted_api_key);
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// Mark a token revoked. Returns `false` when the `jti` is unknown.
@@ -252,6 +292,33 @@ mod tests {
                 .await
                 .expect("lookup succeeds")
                 .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn in_memory_issuance_never_replaces_an_existing_jti() {
+        let registry = TokenRegistry::in_memory();
+        let original = record("same-jti", "athlete-a", "2026-01-01T00:00:00Z", false);
+        let replacement = record("same-jti", "athlete-b", "2026-01-02T00:00:00Z", false);
+        registry
+            .record(original.clone())
+            .await
+            .expect("record token");
+
+        assert!(registry.record(replacement.clone()).await.is_err());
+        assert_eq!(
+            registry.find("same-jti").await.unwrap(),
+            Some(original.clone())
+        );
+
+        assert!(registry.revoke("same-jti").await.expect("revoke token"));
+        assert!(registry.record(replacement).await.is_err());
+        assert_eq!(
+            registry.find("same-jti").await.unwrap(),
+            Some(TokenRecord {
+                revoked: true,
+                ..original
+            })
         );
     }
 

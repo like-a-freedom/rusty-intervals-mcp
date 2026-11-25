@@ -1,21 +1,24 @@
 use std::sync::Arc;
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+
 use intervals_icu_mcp::auth::{
     AppState, HttpBaseUrl, JwtManager, MasterKeyConfig, auth_middleware,
 };
 use intervals_icu_mcp::token_registry::TokenRegistry;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
-    matchers::{method, path},
+    matchers::{header, method, path},
 };
 
 #[tokio::test]
-async fn replay_is_scoped_to_upstream() {
+async fn replay_is_scoped_to_upstream_and_survives_credential_rotation() {
     let first = MockServer::start().await;
     let second = MockServer::start().await;
-    for upstream in [&first, &second] {
+    for (upstream, key) in [(&first, "first-key"), (&second, "rotated-key")] {
         Mock::given(method("POST"))
             .and(path("/api/v1/athlete/i123/events"))
+            .and(header("authorization", format!("Basic {}", STANDARD.encode(format!("API_KEY:{key}")))))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "id": "1", "name": "Run", "start_date_local": "2026-01-01T00:00:00", "category": "WORKOUT"
             })))
@@ -78,7 +81,13 @@ async fn replay_is_scoped_to_upstream() {
             .unwrap();
         sessions.push(session);
     }
-    for index in [0, 1, 0] {
+    for (step, index) in [0, 1, 0].into_iter().enumerate() {
+        if step == 1 {
+            state
+                .rotate_upstream_api_key(&token.token, "rotated-key")
+                .await
+                .unwrap();
+        }
         let response = http.post(&urls[index]).bearer_auth(&token.token).header("Accept", "application/json, text/event-stream")
             .header("mcp-session-id", &sessions[index])
             .json(&serde_json::json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"modify_training","arguments":{"action":"create","new_date":"2026-01-01","new_name":"Run","idempotency_token":"same-token"}}})).send().await.unwrap();

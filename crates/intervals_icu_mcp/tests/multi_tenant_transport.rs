@@ -15,7 +15,7 @@ fn basic(key: &str) -> String {
 }
 
 #[tokio::test]
-async fn authenticated_dynamic_uses_current_tenant_and_rotated_key() {
+async fn authenticated_dynamic_uses_current_tenant_and_rotated_key_with_same_bearer() {
     let upstream = MockServer::start().await;
     let wrong_upstream = MockServer::start().await;
     let spec = serde_json::json!({"openapi":"3.0.0","info":{"title":"test","version":"1"},"paths":{
@@ -72,10 +72,7 @@ async fn authenticated_dynamic_uses_current_tenant_and_rotated_key() {
         .issue_recorded_token("i222222", "key-two", 3600)
         .await
         .unwrap();
-    let rotated = state
-        .issue_recorded_token("i111111", "key-rotated", 3600)
-        .await
-        .unwrap();
+
     let handler = intervals_icu_mcp::IntervalsMcpHandler::new_multi_tenant().unwrap();
     let sessions = Arc::new(
         rmcp::transport::streamable_http_server::session::local::LocalSessionManager::default(),
@@ -121,7 +118,16 @@ async fn authenticated_dynamic_uses_current_tenant_and_rotated_key() {
         assert!(response.status().is_success());
         sessions.push(session);
     }
-    for (index, token) in [(0, &first.token), (1, &second.token), (0, &rotated.token)] {
+    for (step, (index, token)) in [(0, &first.token), (1, &second.token), (0, &first.token)]
+        .into_iter()
+        .enumerate()
+    {
+        if step == 2 {
+            state
+                .rotate_upstream_api_key(token, "key-rotated")
+                .await
+                .unwrap();
+        }
         let response = http.post(&url).bearer_auth(token).header("Accept", "application/json, text/event-stream").header("mcp-session-id", &sessions[index])
             .json(&serde_json::json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"manage_profile","arguments":{"action":"get","sections":[]}}})).send().await.unwrap();
         assert!(response.status().is_success());
