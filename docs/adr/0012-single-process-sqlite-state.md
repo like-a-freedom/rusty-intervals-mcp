@@ -1,0 +1,7 @@
+# Single-process SQLite state
+
+The mutation journal and JWT token registry support one server process on one host with persistent local SQLite, keeping the guarantee within the deployment model we have validated. Multi-instance operation is intentionally out of scope: separate instance databases do not share mutation deduplication or token revocation, and shared or network SQLite storage is unsupported. Revisit scale-out only when required and after separately approving a shared transactional backend and deployment model.
+
+Operation ownership is tied to the JWT `jti` (legacy tokens use a digest of the token), so a reissued JWT is a different owner and cannot access idempotency records created by the previous token. This limitation is consciously accepted: `athlete_id` and an API-key hash do not establish that two tokens belong to the same person, agent or integration. Do not infer continuity from them. Stable identity across token reissue, including any linking policy or migration, is out of scope until a trusted identity mechanism is designed and separately approved.
+
+Unknown mutation outcomes remain blocked and retained in SQLite. The server has no public MCP tool or admin endpoint to inspect or resolve them; adding one is intentionally excluded until its API, authorization rules and audit behavior are separately approved. Operators must investigate the upstream system out of band. They must not clear an unknown record or retry its mutation without evidence that the original write had no effect.
