@@ -12,6 +12,7 @@ use tokio::sync::{Mutex, RwLock};
 
 const OPENAPI_DEFAULT_PATH: &str = "/api/v1/docs";
 const OPENAPI_FETCH_TIMEOUT_SECS: u64 = 10;
+const COLD_LOAD_FAILURE_BACKOFF: Duration = Duration::from_secs(1);
 
 /// Configuration for the dynamic runtime.
 #[derive(Clone, Debug)]
@@ -104,8 +105,10 @@ impl DynamicRuntimeConfigBuilder {
 #[derive(Clone)]
 pub struct DynamicRuntime {
     http_client: reqwest::Client,
+    typed_client: Option<intervals_icu_client::http_client::ReqwestIntervalsClient>,
     config: DynamicRuntimeConfig,
     last_refresh_attempt: Arc<Mutex<Option<Instant>>>,
+    cold_load: Arc<Mutex<Option<Instant>>>,
     registry: Arc<RwLock<Option<Arc<DynamicRegistry>>>>,
     cached_tool_count: Arc<AtomicUsize>,
 }
@@ -115,8 +118,10 @@ impl DynamicRuntime {
     pub fn new(config: DynamicRuntimeConfig) -> Self {
         Self {
             http_client: reqwest::Client::new(),
+            typed_client: None,
             config,
             last_refresh_attempt: Arc::new(Mutex::new(None)),
+            cold_load: Arc::new(Mutex::new(None)),
             registry: Arc::new(RwLock::new(None)),
             cached_tool_count: Arc::new(AtomicUsize::new(0)),
         }
@@ -125,6 +130,30 @@ impl DynamicRuntime {
     /// Create a new dynamic runtime from environment variables.
     pub fn from_env() -> Self {
         Self::new(DynamicRuntimeConfig::from_env())
+    }
+
+    pub(crate) fn for_request(&self, base_url: &str) -> Self {
+        let mut scoped = self.clone();
+        if self.config.base_url.trim_end_matches('/') != base_url.trim_end_matches('/') {
+            scoped.last_refresh_attempt = Arc::new(Mutex::new(None));
+            scoped.cold_load = Arc::new(Mutex::new(None));
+            scoped.registry = Arc::new(RwLock::new(None));
+            scoped.cached_tool_count = Arc::new(AtomicUsize::new(0));
+        }
+        scoped.config.base_url = base_url.to_string();
+        scoped.typed_client = None;
+        scoped.config.athlete_id.clear();
+        scoped.config.api_key.clear();
+        scoped
+    }
+
+    pub(crate) fn with_typed_client(
+        &self,
+        client: intervals_icu_client::http_client::ReqwestIntervalsClient,
+    ) -> Self {
+        let mut scoped = self.clone();
+        scoped.typed_client = Some(client);
+        scoped
     }
 
     /// Get the cached tool count.
@@ -153,11 +182,31 @@ impl DynamicRuntime {
         operation: &crate::dynamic::types::DynamicOperation,
         arguments: Option<&rmcp::model::JsonObject>,
     ) -> Result<rmcp::model::CallToolResult, ErrorData> {
-        crate::dynamic::dispatch::dispatch_operation(
+        crate::dynamic::dispatch::dispatch_with_client(
             &self.http_client,
+            self.typed_client.as_ref(),
             &self.config.base_url,
             &self.config.athlete_id,
             &self.config.api_key,
+            operation,
+            arguments,
+        )
+        .await
+    }
+
+    pub(crate) async fn dispatch_for_request(
+        &self,
+        credentials: &crate::auth::DecryptedCredentials,
+        operation: &crate::dynamic::types::DynamicOperation,
+        arguments: Option<&rmcp::model::JsonObject>,
+    ) -> Result<rmcp::model::CallToolResult, ErrorData> {
+        use secrecy::ExposeSecret;
+        crate::dynamic::dispatch::dispatch_with_client(
+            &self.http_client,
+            self.typed_client.as_ref(),
+            &self.config.base_url,
+            &credentials.athlete_id,
+            credentials.api_key.expose_secret(),
             operation,
             arguments,
         )
@@ -201,10 +250,30 @@ impl DynamicRuntime {
             }
         }
 
+        let mut cold_load = self.cold_load.lock().await;
+        if let Some(existing) = self.registry.read().await.clone() {
+            return Ok(existing);
+        }
+        if cold_load.is_some_and(|failed_at| failed_at.elapsed() < COLD_LOAD_FAILURE_BACKOFF) {
+            return Err(ErrorData::internal_error(
+                "OpenAPI registry temporarily unavailable; retry after backoff",
+                None,
+            ));
+        }
         tracing::debug!("OpenAPI registry cache miss; loading spec");
-        let parsed = self.try_build_registry().await.map_err(|e| {
-            ErrorData::internal_error(format!("failed to build OpenAPI registry: {e}"), None)
-        })?;
+        let parsed = match self.try_build_registry().await {
+            Ok(parsed) => {
+                *cold_load = None;
+                parsed
+            }
+            Err(error) => {
+                *cold_load = Some(Instant::now());
+                return Err(ErrorData::internal_error(
+                    format!("failed to build OpenAPI registry: {error}"),
+                    None,
+                ));
+            }
+        };
         self.cached_tool_count
             .store(parsed.len(), Ordering::Relaxed);
 
@@ -354,6 +423,308 @@ mod tests {
             .await
             .expect("test spec should be written");
         path
+    }
+
+    #[tokio::test]
+    async fn dynamic_and_typed_5xx_share_circuit_breaker() {
+        use intervals_icu_client::{
+            IntervalsClient,
+            http_client::{IntervalsTransport, ReqwestIntervalsClient},
+        };
+        use secrecy::SecretString;
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+        let transport = IntervalsTransport::new().unwrap();
+        let typed = ReqwestIntervalsClient::with_transport(
+            &server.uri(),
+            "i1",
+            SecretString::new("key".into()),
+            &transport,
+        );
+        let runtime = DynamicRuntime::new(
+            DynamicRuntimeConfig::builder()
+                .base_url(server.uri())
+                .build(),
+        )
+        .with_typed_client(typed.clone());
+        let credentials = crate::auth::DecryptedCredentials {
+            athlete_id: "i1".into(),
+            api_key: SecretString::new("key".into()),
+        };
+        let registry =
+            parse_openapi_spec(&minimal_openapi_spec(), &HashSet::new(), &HashSet::new()).unwrap();
+        let operation = registry.operation("getActivities").unwrap();
+        for _ in 0..4 {
+            let response = runtime
+                .dispatch_for_request(&credentials, operation, None)
+                .await
+                .unwrap();
+            assert_eq!(response.is_error, Some(true));
+        }
+        assert!(
+            !typed
+                .get_athlete_profile()
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("circuit breaker open")
+        );
+        let error = runtime
+            .dispatch_for_request(&credentials, operation, None)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("circuit breaker open"), "{error}");
+        assert_eq!(server.received_requests().await.unwrap().len(), 5);
+    }
+
+    #[tokio::test]
+    async fn dynamic_failures_open_typed_transport_breaker() {
+        use intervals_icu_client::{
+            IntervalsClient,
+            http_client::{IntervalsTransport, ReqwestIntervalsClient},
+        };
+        use secrecy::SecretString;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            loop {
+                let (socket, _) = listener.accept().await.unwrap();
+                drop(socket);
+            }
+        });
+        let transport = IntervalsTransport::new().unwrap();
+        let typed = ReqwestIntervalsClient::with_transport(
+            &base,
+            "i1",
+            SecretString::new("key".into()),
+            &transport,
+        );
+        let runtime = DynamicRuntime::new(DynamicRuntimeConfig::builder().base_url(&base).build())
+            .with_typed_client(typed.clone());
+        let credentials = crate::auth::DecryptedCredentials {
+            athlete_id: "i1".into(),
+            api_key: SecretString::new("key".into()),
+        };
+        let registry =
+            parse_openapi_spec(&minimal_openapi_spec(), &HashSet::new(), &HashSet::new()).unwrap();
+        let operation = registry.operation("getActivities").unwrap();
+        for _ in 0..5 {
+            assert!(
+                runtime
+                    .dispatch_for_request(&credentials, operation, None)
+                    .await
+                    .is_err()
+            );
+        }
+        let error = typed.get_athlete_profile().await.unwrap_err().to_string();
+        assert!(error.contains("circuit breaker open"), "{error}");
+
+        let other_transport = IntervalsTransport::new().unwrap();
+        let other = ReqwestIntervalsClient::with_transport(
+            &base,
+            "i2",
+            SecretString::new("other".into()),
+            &other_transport,
+        );
+        for _ in 0..5 {
+            assert!(
+                !other
+                    .get_athlete_profile()
+                    .await
+                    .unwrap_err()
+                    .to_string()
+                    .contains("circuit breaker open")
+            );
+        }
+        let other_runtime = runtime.with_typed_client(other);
+        let other_credentials = crate::auth::DecryptedCredentials {
+            athlete_id: "i2".into(),
+            api_key: SecretString::new("other".into()),
+        };
+        let error = other_runtime
+            .dispatch_for_request(&other_credentials, operation, None)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("circuit breaker open"), "{error}");
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn failed_cold_load_is_shared_for_fallback_and_retried_after_backoff() {
+        use crate::dynamic::DynamicClientAdapter;
+        use crate::test_support::mock::MockIntervalsClient;
+        use intervals_icu_client::IntervalsClient;
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/spec"))
+            .respond_with(ResponseTemplate::new(503).set_delay(Duration::from_millis(100)))
+            .mount(&server)
+            .await;
+        let runtime = Arc::new(DynamicRuntime::new(
+            DynamicRuntimeConfig::builder()
+                .spec_source(format!("{}/spec", server.uri()))
+                .build(),
+        ));
+        let adapter = Arc::new(DynamicClientAdapter::new(
+            runtime.clone(),
+            Arc::new(MockIntervalsClient::default()),
+        ));
+        let barrier = Arc::new(tokio::sync::Barrier::new(8));
+        let mut tasks = Vec::new();
+        for _ in 0..8 {
+            let adapter = adapter.clone();
+            let barrier = barrier.clone();
+            tasks.push(tokio::spawn(async move {
+                barrier.wait().await;
+                adapter.get_athlete_profile().await.unwrap()
+            }));
+        }
+        tokio::time::timeout(Duration::from_millis(600), async {
+            for task in tasks {
+                assert_eq!(task.await.unwrap().name.as_deref(), Some("Test Athlete"));
+            }
+        })
+        .await
+        .expect("all requests should fall back after one upstream failure");
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+
+        server.reset().await;
+        Mock::given(method("GET"))
+            .and(path("/spec"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(minimal_openapi_spec()))
+            .mount(&server)
+            .await;
+        assert!(
+            runtime.ensure_registry().await.is_err(),
+            "failure must remain cached briefly"
+        );
+        assert_eq!(server.received_requests().await.unwrap().len(), 0);
+        tokio::time::sleep(Duration::from_millis(1100)).await;
+        assert!(
+            runtime.ensure_registry().await.is_ok(),
+            "registry must retry after backoff"
+        );
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn failed_cold_load_backoff_is_isolated_by_base_url() {
+        let first = MockServer::start().await;
+        let second = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/docs"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .expect(1)
+            .mount(&first)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/docs"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(minimal_openapi_spec()))
+            .expect(1)
+            .mount(&second)
+            .await;
+        let root = DynamicRuntime::new(
+            DynamicRuntimeConfig::builder()
+                .base_url(first.uri())
+                .build(),
+        );
+        let first_runtime = root.for_request(&first.uri());
+        let second_runtime = root.for_request(&second.uri());
+        assert!(first_runtime.ensure_registry().await.is_err());
+        assert!(second_runtime.ensure_registry().await.is_ok());
+        assert!(first_runtime.ensure_registry().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn concurrent_cold_registry_load_is_single_flight() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/docs"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_delay(Duration::from_millis(100))
+                    .set_body_json(minimal_openapi_spec()),
+            )
+            .mount(&server)
+            .await;
+        let runtime = DynamicRuntime::new(
+            DynamicRuntimeConfig::builder()
+                .base_url(server.uri())
+                .build(),
+        );
+        let barrier = Arc::new(tokio::sync::Barrier::new(12));
+        let mut tasks = Vec::new();
+        for _ in 0..12 {
+            let runtime = runtime.clone();
+            let barrier = barrier.clone();
+            tasks.push(tokio::spawn(async move {
+                barrier.wait().await;
+                runtime.ensure_registry().await.unwrap()
+            }));
+        }
+        let mut registries = Vec::new();
+        for task in tasks {
+            registries.push(task.await.unwrap());
+        }
+        assert_eq!(
+            server.received_requests().await.unwrap().len(),
+            1,
+            "cold registry load must be shared"
+        );
+        assert!(
+            registries
+                .iter()
+                .all(|registry| Arc::ptr_eq(registry, &registries[0]))
+        );
+    }
+
+    #[tokio::test]
+    async fn request_runtimes_isolate_registries_for_two_base_urls() {
+        let first = MockServer::start().await;
+        let second = MockServer::start().await;
+        let first_spec = minimal_openapi_spec();
+        let mut second_spec = minimal_openapi_spec();
+        second_spec["paths"]["/api/v1/athlete/{id}/activities"]["get"]["operationId"] =
+            serde_json::json!("otherOperation");
+        Mock::given(method("GET"))
+            .and(path("/api/v1/docs"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(first_spec))
+            .expect(1)
+            .mount(&first)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/docs"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(second_spec))
+            .expect(1)
+            .mount(&second)
+            .await;
+        let root = DynamicRuntime::new(
+            DynamicRuntimeConfig::builder()
+                .base_url(first.uri())
+                .build(),
+        );
+        let first_runtime = root.for_request(&first.uri());
+        let second_runtime = root.for_request(&second.uri());
+        let (first_registry, second_registry) = tokio::join!(
+            first_runtime.ensure_registry(),
+            second_runtime.ensure_registry()
+        );
+        let first_registry = first_registry.unwrap();
+        let second_registry = second_registry.unwrap();
+        assert!(first_registry.operation("getActivities").is_some());
+        assert!(first_registry.operation("otherOperation").is_none());
+        assert!(second_registry.operation("otherOperation").is_some());
+        assert!(second_registry.operation("getActivities").is_none());
+        first_runtime.ensure_registry().await.unwrap();
+        second_runtime.ensure_registry().await.unwrap();
     }
 
     async fn start_mock_openapi_server() -> MockServer {

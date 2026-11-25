@@ -110,6 +110,8 @@ All coaching metrics include provenance disclosure and use neutral statistical p
 - Positions are neutral: Below / Within / Above personal range
 - Insufficient data states exactly which requirement failed (recent samples, baseline samples, or date span)
 
+The separate recovery index uses recent HRV and RHR relative to their historical averages when both are available; otherwise it displays the raw HRV/RHR ratio. The raw ratio is not compared with baseline-relative thresholds and is not used to calculate fatigue index. These heuristic indices are not diagnoses. Period analysis currently does not populate wellness for its load-management calculation, so its fatigue index is unavailable even when wellness history exists.
+
 **Critical Power Diagnostics:**
 - Reports sample count, duration coverage, R², RMSE, CP standard error, and W′ standard error
 - "Valid" means mathematically identifiable and finite; it does not imply physiological validation
@@ -131,6 +133,36 @@ Mutating intents are designed for agents:
 - business identifiers instead of opaque system-first flows
 - `dry_run` previews for risky changes
 - `idempotency_token` support for safe retries
+
+If a token-protected action is cancelled, panics, or returns an error after it
+starts, its upstream outcome may be unknown. Further attempts with that token
+are rejected rather than repeated; check the upstream state before taking any
+further action. This conservative in-memory protection lasts for the process
+lifetime, including for errors that cannot be proven to precede a write. Local
+input validation for `plan_training` and `modify_training` runs before a slot is
+reserved. In HTTP mode the operation is scoped to the normalized upstream base URL,
+athlete ID, and idempotency token, independently of credentials. A cached result
+is replayed only to the original verified JWT identity: its `jti`, or, for legacy
+JWTs without one, a SHA-256 digest of that exact JWT. A different JWT cannot replay
+the result or repeat the operation, even for the same athlete. Rotating the API
+key behind the same `jti` preserves replay; issuing a new JWT does not. Older
+persisted entries without an owner fail closed for authenticated HTTP calls until
+expiration. Older files also used raw idempotency tokens as keys, without recording
+upstream, athlete, or owner. A matching unexpired raw key blocks both HTTP and stdio
+in every scope; it is never replayed or assigned a new owner. This can reject an
+unrelated operation that happens to use the same token. After expiration the old
+record no longer prevents execution; confirm upstream state before retrying.
+JWTs and API keys are not stored in the owner namespace.
+Unknown outcomes are not persisted, so restarts or other server instances can still repeat a
+write; avoid automatic retries across them. Each middleware instance reserves
+up to 1,024 slots shared across tenants for active or unknown outcomes, each storing a 32-byte SHA-256
+hash of the token and a 32-byte SHA-256 hash of the fingerprint (plus map
+overhead). Success releases its slot; unknown outcomes retain theirs until the
+process exits. At capacity, new actions are rejected before they start, while
+cached successes remain available. This limit does not bound the success cache,
+request bodies, or the number of concurrent requests waiting on locks. Hash
+collisions, although extremely unlikely, may cause distinct requests to be
+mistaken for one another.
 
 ### 6. Rust-first operational profile
 
@@ -496,7 +528,7 @@ Fetch → Audit → Compute → Interpret → Render
 - athlete-aware flat-band personalisation when 8+ weeks of CTL history exist
 - load context: ACWR ratio and state (underloaded/productive/watch/overreaching), monotony, strain
 - HRV context: baseline-relative ratio, trend state (suppressed/within_range), lnRMSSD 7-day rollup with mean, CV, and trend slope
-- TID drift analysis: weekly 3-zone distributions grouped by ISO week, Shannon entropy delta (recent 4w vs prior 4w), drift classification (stable/converging/polarizing), dominant zone identification
+- TID drift analysis: weekly 3-zone distributions grouped by ISO week, Shannon entropy delta between the latest two adjacent 4-week windows, drift classification (stable/converging/polarizing), dominant zone identification; requires zone data in each of the 8 weeks
 - evidence-weighted coaching hypotheses: volume hypothesis with ACWR and monotony signals, intensity distribution hypothesis with TID drift and monotony, recovery hypothesis with HRV suppression and ACWR state
 - explicit warnings when data is insufficient for specific sub-analyses
 - trailing plateau detection over 4–24 weeks; directs YoY analysis to `compare_periods`
@@ -613,6 +645,22 @@ For production, prefer `credentials_file` over inline bearer tokens so secrets s
 
 See `.env.example` for the standard environment layout.
 
+In multi-tenant HTTP mode, typed and dynamic upstream calls share connections
+and a circuit breaker per base URL and athlete. The transport cache holds up to
+128 entries and no user API keys; credentials are resolved for each request.
+Active transports and runtimes are not evicted. An idle open breaker becomes
+eligible for eviction after its cooldown; eviction resets its state, including
+any failures below the opening threshold. If no cache entry is eligible for
+eviction, a request needing a new entry fails rather than creating an independent
+transport. HTTP 5xx responses count as breaker failures; responses below 500
+reset the consecutive failure count.
+
+When dynamic dispatch is enabled, mapped calls use the request's credentials
+and base URL. The OpenAPI registry is cached separately per base URL (up to 128
+entries), and concurrent cold loads for a cached runtime share one fetch. After
+a failed cold load, retries are suppressed for one second and mapped calls fall
+back to the typed client.
+
 ### Required environment variables
 
 | Variable | Description |
@@ -627,7 +675,7 @@ See `.env.example` for the standard environment layout.
 | `INTERVALS_ICU_BASE_URL` | `https://intervals.icu` | Base URL for the upstream API |
 | `INTERVALS_ICU_OPENAPI_SPEC` | unset | Explicit OpenAPI source (HTTP(S) URL or local file) |
 | `INTERVALS_ICU_SPEC_REFRESH_SECS` | `300` | Refresh cadence for the cached OpenAPI runtime |
-| `INTERVALS_ICU_DYNAMIC_DISPATCH_ENABLED` | unset | When set to `1`/`true`, wraps the typed upstream client in `DynamicClientAdapter` so mapped `IntervalsClient` methods (and adapter-only methods like `get_athlete_training_plan`) dispatch through the live OpenAPI runtime. See ADR-0001. Default off — no behaviour change. |
+| `INTERVALS_ICU_DYNAMIC_DISPATCH_ENABLED` | unset | When set to `1`/`true`, wraps the typed upstream client in `DynamicClientAdapter` so mapped `IntervalsClient` methods can dispatch through the live OpenAPI runtime. The adapter-only `get_athlete_training_plan` method is not called by a production handler. See ADR-0001. Default off — no behaviour change. |
 | `RUST_LOG` | `info` | Log level filter (standard `RUST_LOG` directives); noisy internals pinned to `warn` |
 | `RUST_LOG_FORMAT` | text | Set to `json` for structured one-JSON-object-per-line records; anything else gives dense single-line text with UTC millisecond timestamps |
 | `RUST_LOG_COLOR` | auto | ANSI colors in text mode: `always`/`never` (or `1`/`0`); unset follows stderr TTY detection |

@@ -44,13 +44,30 @@ use crate::dynamic::DynamicRuntime;
 pub struct DynamicClientAdapter {
     runtime: Arc<DynamicRuntime>,
     fallback: Arc<dyn IntervalsClient>,
+    request_credentials: Option<crate::auth::DecryptedCredentials>,
 }
 
 impl DynamicClientAdapter {
     /// Wrap a typed fallback client with a dynamic runtime.
     #[must_use]
     pub fn new(runtime: Arc<DynamicRuntime>, fallback: Arc<dyn IntervalsClient>) -> Self {
-        Self { runtime, fallback }
+        Self {
+            runtime,
+            fallback,
+            request_credentials: None,
+        }
+    }
+
+    pub(crate) fn for_request(
+        runtime: Arc<DynamicRuntime>,
+        fallback: Arc<dyn IntervalsClient>,
+        credentials: crate::auth::DecryptedCredentials,
+    ) -> Self {
+        Self {
+            runtime,
+            fallback,
+            request_credentials: Some(credentials),
+        }
     }
 
     /// Fetch the athlete's training plan via the dynamic OpenAPI runtime.
@@ -123,14 +140,18 @@ impl DynamicClientAdapter {
             return Ok(None);
         };
 
-        let dispatch_result = self
-            .runtime
-            .dispatch_openapi(operation, arguments)
-            .await
-            .map_err(|err| {
-                crate::metrics::record_dynamic_dispatch(operation_id, "dispatch_error");
-                error_data_to_intervals_error(err, operation_id)
-            })?;
+        let result = match &self.request_credentials {
+            Some(credentials) => {
+                self.runtime
+                    .dispatch_for_request(credentials, operation, arguments)
+                    .await
+            }
+            None => self.runtime.dispatch_openapi(operation, arguments).await,
+        };
+        let dispatch_result = result.map_err(|err| {
+            crate::metrics::record_dynamic_dispatch(operation_id, "dispatch_error");
+            error_data_to_intervals_error(err, operation_id)
+        })?;
 
         if dispatch_result.is_error == Some(true) {
             crate::metrics::record_dynamic_dispatch(operation_id, "http_error");
@@ -265,6 +286,13 @@ impl IntervalsClient for DynamicClientAdapter {
 
     async fn get_activity_details(&self, activity_id: &str) -> Result<serde_json::Value> {
         self.fallback.get_activity_details(activity_id).await
+    }
+
+    async fn get_activity_messages(
+        &self,
+        activity_id: &str,
+    ) -> Result<Vec<intervals_icu_client::ActivityMessage>> {
+        self.fallback.get_activity_messages(activity_id).await
     }
 
     async fn search_activities(
@@ -627,6 +655,21 @@ mod tests {
             }
         })
         .to_string()
+    }
+
+    #[tokio::test]
+    async fn activity_messages_delegate_to_fallback() {
+        let runtime = DynamicRuntime::new(DynamicRuntimeConfig::builder().build());
+        let fallback = MockIntervalsClient::default().with_activity_detail(
+            crate::test_support::mock::ACTIVITY_MESSAGES_KEY,
+            json!([{ "id": 101, "content": "Felt controlled" }]),
+        );
+        let adapter = DynamicClientAdapter::new(Arc::new(runtime), Arc::new(fallback));
+
+        let messages = adapter.get_activity_messages("activity-1").await.unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].id, 101);
+        assert_eq!(messages[0].content.as_deref(), Some("Felt controlled"));
     }
 
     #[tokio::test]

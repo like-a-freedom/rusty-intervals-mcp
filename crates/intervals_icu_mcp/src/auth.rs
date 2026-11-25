@@ -79,6 +79,10 @@ pub struct IssuedToken {
     pub expires_at: String,
 }
 
+/// Opaque identity of the verified JWT, used to authorize idempotent replays.
+#[derive(Clone)]
+pub(crate) struct IdempotencyOwner(pub String);
+
 /// Base URL injected into HTTP requests so rmcp handlers can build per-request clients.
 #[derive(Clone, Debug)]
 pub struct HttpBaseUrl(pub String);
@@ -633,6 +637,20 @@ pub async fn auth_middleware(
     // Per-request routine already covered by the access log; keep it quiet.
     tracing::debug!(athlete_id = %credentials.athlete_id, "Authenticated request");
 
+    // Authentication above already verified this bearer token and its registry state.
+    // Domain separation prevents a legacy token digest colliding with a jti digest.
+    let token = auth_header.ok_or(StatusCode::UNAUTHORIZED)?;
+    let claims = app_state
+        .jwt_manager
+        .verify_claims(token)
+        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+    use sha2::{Digest, Sha256};
+    let identity = match claims.jti.as_deref() {
+        Some(jti) => serde_json::json!(["jti", jti]).to_string(),
+        None => serde_json::json!(["legacy-jwt", token]).to_string(),
+    };
+    let owner = IdempotencyOwner(hex::encode(Sha256::digest(identity.as_bytes())));
+    request.extensions_mut().insert(owner);
     request.extensions_mut().insert(credentials);
 
     Ok(next.run(request).await)

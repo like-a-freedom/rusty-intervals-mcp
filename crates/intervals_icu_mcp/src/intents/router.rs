@@ -5,6 +5,7 @@ use super::types::{
 use crate::metrics;
 use intervals_icu_client::IntervalsClient;
 use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{debug, info};
@@ -39,6 +40,18 @@ impl IntentRouter {
         input: Value,
         athlete_id: Option<&str>,
     ) -> Result<IntentOutput, IntentError> {
+        self.route_with_base_url(name, input, athlete_id, None, None)
+            .await
+    }
+
+    pub(crate) async fn route_with_base_url(
+        &self,
+        name: &str,
+        input: Value,
+        athlete_id: Option<&str>,
+        base_url: Option<&str>,
+        owner: Option<&str>,
+    ) -> Result<IntentOutput, IntentError> {
         let start = std::time::Instant::now();
         info!(
             tool = name,
@@ -62,14 +75,36 @@ impl IntentRouter {
                 if dry_run {
                     handler.execute(input, self.client.clone(), None).await
                 } else {
-                    let request_fingerprint = fingerprint_request(name, &input);
-                    self.idempotency
-                        .execute_with_idempotency(&token, &request_fingerprint, || async {
-                            handler
-                                .execute(input.clone(), self.client.clone(), None)
-                                .await
-                        })
-                        .await
+                    let validation = match name {
+                        "plan_training" => {
+                            super::handlers::PlanTrainingHandler::validate_before_write(&input)
+                        }
+                        "modify_training" => {
+                            super::handlers::ModifyTrainingHandler::validate_before_write(&input)
+                        }
+                        _ => Ok(()),
+                    };
+                    if let Err(error) = validation {
+                        Err(error)
+                    } else {
+                        let request_fingerprint = fingerprint_request(name, &input);
+                        let base_url = base_url.map(|url| url.trim_end_matches('/'));
+                        let scope = serde_json::json!([base_url, athlete_id, token]).to_string();
+                        let scoped_token = hex::encode(Sha256::digest(scope.as_bytes()));
+                        self.idempotency
+                            .execute_for_owner_with_legacy(
+                                &scoped_token,
+                                &request_fingerprint,
+                                owner,
+                                Some(&token),
+                                || async {
+                                    handler
+                                        .execute(input.clone(), self.client.clone(), None)
+                                        .await
+                                },
+                            )
+                            .await
+                    }
                 }
             } else {
                 Err(IntentError::validation("Idempotency token required"))
@@ -223,6 +258,129 @@ mod tests {
     }
 
     use crate::test_support::mock::MockIntervalsClient;
+
+    #[tokio::test]
+    async fn router_rejects_raw_legacy_file_token_in_http_and_stdio() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("legacy.json");
+        let input = json!({"idempotency_token": "old-token"});
+        let entry = super::super::idempotency::IdempotencyEntry::new(
+            IntentOutput::markdown("private legacy result"),
+            fingerprint_request("legacy_test", &input),
+            std::time::Duration::from_secs(3600),
+        );
+        let mut expired = entry.clone();
+        expired.expires_at = chrono::Local::now() - chrono::Duration::seconds(1);
+        let fixture = json!([["old-token", entry], ["expired-token", expired]]);
+        std::fs::write(&path, serde_json::to_vec(&fixture).unwrap()).unwrap();
+        let middleware = Arc::new(IdempotencyMiddleware::with_file(path));
+        let router = IntentRouter::new(
+            vec![Box::new(MockIntentHandler::new("legacy_test", true))],
+            Arc::new(MockIntervalsClient::default()),
+            middleware,
+        );
+        for (athlete, upstream, owner) in [
+            (
+                Some("athlete-a"),
+                Some("https://first.example"),
+                Some("jwt-a"),
+            ),
+            (
+                Some("athlete-b"),
+                Some("https://second.example"),
+                Some("jwt-b"),
+            ),
+            (None, None, None),
+        ] {
+            let result = router
+                .route_with_base_url("legacy_test", input.clone(), athlete, upstream, owner)
+                .await;
+            assert!(
+                matches!(result, Err(IntentError::IdempotencyConflict(_))),
+                "legacy token must not replay or execute: {result:?}"
+            );
+        }
+        let changed = json!({"idempotency_token": "old-token", "changed": true});
+        assert!(matches!(
+            router
+                .route_with_base_url(
+                    "legacy_test",
+                    changed,
+                    Some("athlete-a"),
+                    Some("https://first.example"),
+                    Some("jwt-a")
+                )
+                .await,
+            Err(IntentError::IdempotencyConflict(_))
+        ));
+        for token in ["fresh-token", "expired-token"] {
+            let result = router
+                .route("legacy_test", json!({"idempotency_token": token}), None)
+                .await;
+            assert!(result.is_ok());
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_plans_do_not_exhaust_capacity_or_poison_token() {
+        let idempotency = Arc::new(IdempotencyMiddleware::new());
+        let router = IntentRouter::new(
+            vec![Box::new(
+                crate::intents::handlers::PlanTrainingHandler::new(),
+            )],
+            Arc::new(MockIntervalsClient::default()),
+            idempotency.clone(),
+        );
+        for i in 0..1024 {
+            let input = json!({"idempotency_token": format!("invalid-{i}")});
+            assert!(matches!(
+                router
+                    .route("plan_training", input.clone(), Some("athlete"))
+                    .await,
+                Err(IntentError::ValidationError(_))
+            ));
+            if i == 0 {
+                assert!(matches!(
+                    router.route("plan_training", input, Some("athlete")).await,
+                    Err(IntentError::ValidationError(_))
+                ));
+            }
+        }
+        assert!(
+            idempotency
+                .execute_with_idempotency("another-tenant", "fp", || async {
+                    Ok(IntentOutput::markdown("ok"))
+                })
+                .await
+                .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_modify_does_not_poison_token() {
+        let router = IntentRouter::new(
+            vec![Box::new(
+                crate::intents::handlers::ModifyTrainingHandler::new(),
+            )],
+            Arc::new(MockIntervalsClient::default()),
+            Arc::new(IdempotencyMiddleware::new()),
+        );
+        for input in [
+            json!({"action": "invalid", "idempotency_token": "one"}),
+            json!({"action": "modify", "target_date": "bad", "idempotency_token": "two"}),
+            json!({"action": "create", "idempotency_token": "three"}),
+            json!({"action": "delete", "idempotency_token": "four"}),
+        ] {
+            for _ in 0..2 {
+                assert!(matches!(
+                    router
+                        .route("modify_training", input.clone(), Some("athlete"))
+                        .await,
+                    Err(IntentError::ValidationError(_))
+                ));
+            }
+        }
+    }
 
     #[test]
     fn fingerprint_request_is_stable_across_key_order() {
@@ -1122,7 +1280,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn router_idempotency_cache_hit_after_error_not_cached() {
+    async fn router_idempotency_does_not_retry_unknown_outcome_after_error() {
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         static TRY_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -1169,21 +1327,22 @@ mod tests {
         let idempotency = Arc::new(IdempotencyMiddleware::new());
         let router = IntentRouter::new(handlers, client, idempotency);
 
-        // First call fails — result is NOT cached
+        // First call fails; its upstream outcome is unknown.
         let input1 = json!({"idempotency_token": "fail-once-token"});
         let r1 = router.route("fail_once", input1, None).await;
         assert!(r1.is_err());
 
-        // Second call with same token but NOT cached (previous error wasn't stored)
-        // so it retries — this time succeeds
+        // A retry must fail without executing the handler again.
         let input2 = json!({"idempotency_token": "fail-once-token"});
         let r2 = router.route("fail_once", input2, None).await;
-        assert!(r2.is_ok());
+        assert!(
+            matches!(r2, Err(IntentError::InternalError(message)) if message.contains("unknown outcome"))
+        );
 
         assert_eq!(
             TRY_COUNT.load(Ordering::SeqCst),
-            2,
-            "should execute twice (first fails, second succeeds)"
+            1,
+            "must not repeat an action with an unknown outcome"
         );
         TRY_COUNT.store(0, Ordering::SeqCst);
     }

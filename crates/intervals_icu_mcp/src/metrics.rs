@@ -333,6 +333,14 @@ pub fn create_metrics_router() -> axum::Router {
     Router::new().route("/metrics", get(metrics_handler))
 }
 
+struct ActiveRequestGuard;
+
+impl Drop for ActiveRequestGuard {
+    fn drop(&mut self) {
+        decrement_active_requests();
+    }
+}
+
 /// HTTP middleware for tracking request metrics.
 ///
 /// This middleware should be applied to all HTTP routes to collect:
@@ -353,14 +361,14 @@ pub async fn metrics_middleware(
         .map(|p| p.as_str().to_string())
         .unwrap_or_else(|| String::from("unknown"));
 
-    // Increment active requests
+    // Keep the gauge balanced even when the request future is cancelled.
     increment_active_requests();
+    let active_request = ActiveRequestGuard;
 
     // Process request
     let response = next.run(request).await;
 
-    // Decrement active requests
-    decrement_active_requests();
+    drop(active_request);
 
     // Record metrics
     let duration = start.elapsed().as_secs_f64();

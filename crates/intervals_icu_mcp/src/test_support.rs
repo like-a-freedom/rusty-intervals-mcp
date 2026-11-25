@@ -159,6 +159,7 @@ pub mod mock {
         pub wellness_last_days_back: Mutex<Option<i32>>,
         pub wellness_days_history: Mutex<Vec<Option<i32>>>,
         pub wellness_calls: AtomicUsize,
+        pub bulk_events: Mutex<Vec<Vec<Event>>>,
     }
 
     impl MockObservations {
@@ -1713,8 +1714,9 @@ pub mod mock {
 
         async fn bulk_create_events(
             &self,
-            _events: Vec<Event>,
+            events: Vec<Event>,
         ) -> Result<Vec<Event>, IntervalsError> {
+            self.observations.bulk_events.lock().unwrap().push(events);
             Ok(vec![])
         }
 

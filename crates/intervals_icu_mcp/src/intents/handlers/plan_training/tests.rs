@@ -751,6 +751,102 @@ async fn test_execute_basic_success() {
 }
 
 #[tokio::test]
+async fn test_execute_partial_week_bulk_payload_stays_within_inclusive_period() {
+    let client = Arc::new(MockIntervalsClient::builder().with_events(vec![Event {
+        id: None,
+        start_date_local: "2026-03-07".into(),
+        name: "Outside period".into(),
+        category: EventCategory::Workout,
+        description: None,
+        r#type: None,
+    }]));
+    let observations = client.observations();
+    let output = PlanTrainingHandler::new()
+        .execute(
+            json!({
+                "period_start": "2026-03-03",
+                "period_end": "2026-03-05",
+                "adaptive": false
+            }),
+            client,
+            None,
+        )
+        .await
+        .unwrap();
+
+    let payloads = observations.bulk_events.lock().unwrap();
+    assert_eq!(payloads.len(), 1);
+    let dates: Vec<_> = payloads[0]
+        .iter()
+        .map(|event| event.start_date_local.as_str())
+        .collect();
+    assert_eq!(dates, ["2026-03-03T00:00:00", "2026-03-05T00:00:00"]);
+    assert_eq!(output.metadata.events_created, Some(2));
+}
+
+#[tokio::test]
+async fn test_execute_empty_period_skips_bulk_create() {
+    for include_dry_run in [false, true] {
+        let client = Arc::new(MockIntervalsClient::builder());
+        let observations = client.observations();
+        let mut input = json!({
+            "period_start": "2026-03-02",
+            "period_end": "2026-03-02",
+            "adaptive": false
+        });
+        if include_dry_run {
+            input["dry_run"] = json!(false);
+        }
+        let output = PlanTrainingHandler::new()
+            .execute(input, client, None)
+            .await
+            .unwrap();
+
+        assert!(observations.bulk_events.lock().unwrap().is_empty());
+        assert_eq!(output.metadata.events_created, Some(0));
+        let content = format!("{:?}", output.content);
+        assert!(content.contains("No workouts generated"), "{content}");
+        assert!(!content.contains("successfully created"), "{content}");
+    }
+}
+
+#[tokio::test]
+async fn test_router_rejects_unsupported_dry_run_without_writing() {
+    let client = Arc::new(MockIntervalsClient::builder());
+    let observations = client.observations();
+    let router = crate::intents::IntentRouter::new(
+        vec![Box::new(PlanTrainingHandler::new())],
+        client,
+        Arc::new(crate::intents::IdempotencyMiddleware::new()),
+    );
+    for (index, dry_run) in [json!(true), json!("true"), Value::Null]
+        .into_iter()
+        .enumerate()
+    {
+        let result = router
+            .route(
+                "plan_training",
+                json!({
+                    "period_start": "2026-03-03",
+                    "period_end": "2026-03-05",
+                    "adaptive": false,
+                    "idempotency_token": format!("test-dry-run-{index}"),
+                    "dry_run": dry_run
+                }),
+                None,
+            )
+            .await;
+
+        assert!(observations.bulk_events.lock().unwrap().is_empty());
+        let error = result.unwrap_err().to_string();
+        assert!(
+            error.contains("dry_run") && error.contains("not supported"),
+            "{error}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn test_execute_with_existing_conflicts() {
     let handler = PlanTrainingHandler::new();
     let client = Arc::new(MockIntervalsClient::builder().with_events(vec![Event {

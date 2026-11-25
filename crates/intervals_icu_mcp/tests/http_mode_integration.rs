@@ -915,6 +915,131 @@ async fn test_auth_endpoint_issues_jwt_for_valid_credentials() {
 }
 
 #[tokio::test]
+async fn authenticated_http_replays_are_isolated_by_athlete() {
+    let upstream = MockServer::start().await;
+    for athlete in ["i111111", "i222222"] {
+        Mock::given(method("GET"))
+            .and(path(format!("/api/v1/athlete/{athlete}/profile")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "athlete": {"id": athlete, "name": athlete}
+            })))
+            .mount(&upstream)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(format!("/api/v1/athlete/{athlete}/events/bulk")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&upstream)
+            .await;
+    }
+    let key = intervals_icu_mcp::auth::MasterKeyConfig::from_hex(&test_master_key_hex()).unwrap();
+    let state = Arc::new(AppState {
+        jwt_manager: Arc::new(JwtManager::from_master_key(&key)),
+        jwt_ttl_seconds: 3600,
+        base_url: upstream.uri(),
+        tokens: TokenRegistry::load(None),
+    });
+    let mut tokens = Vec::new();
+    for athlete in ["i111111", "i222222"] {
+        tokens.push(
+            state
+                .issue_recorded_token(athlete, "test_key", 3600)
+                .await
+                .unwrap()
+                .token,
+        );
+    }
+    let handler = intervals_icu_mcp::IntervalsMcpHandler::new_multi_tenant().unwrap();
+    let sessions = Arc::new(
+        rmcp::transport::streamable_http_server::session::local::LocalSessionManager::default(),
+    );
+    let service = rmcp::transport::streamable_http_server::tower::StreamableHttpService::new(
+        move || -> Result<_, std::io::Error> { Ok(handler.clone()) },
+        sessions,
+        rmcp::transport::streamable_http_server::tower::StreamableHttpServerConfig::default(),
+    );
+    let app = axum::Router::new()
+        .nest_service("/mcp", service)
+        .layer(axum::Extension(HttpBaseUrl(upstream.uri())))
+        .layer(axum::middleware::from_fn_with_state(state, auth_middleware));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/mcp", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let http = Client::new();
+    let mut session_ids = Vec::new();
+    for token in &tokens {
+        let response = http.post(&url).bearer_auth(token)
+            .header("Accept", "application/json, text/event-stream")
+            .json(&serde_json::json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+                "protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"1"}
+            }})).send().await.unwrap();
+        assert!(response.status().is_success());
+        session_ids.push(
+            response
+                .headers()
+                .get("mcp-session-id")
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_owned(),
+        );
+        let _ = response.text().await.unwrap();
+        let response = http
+            .post(&url)
+            .bearer_auth(token)
+            .header("Accept", "application/json, text/event-stream")
+            .header("mcp-session-id", session_ids.last().unwrap())
+            .json(&serde_json::json!({"jsonrpc":"2.0","method":"notifications/initialized"}))
+            .send()
+            .await
+            .unwrap();
+        assert!(response.status().is_success());
+    }
+    for index in [0, 0, 1, 1] {
+        let response = http
+            .post(&url)
+            .bearer_auth(&tokens[index])
+            .header("Accept", "application/json, text/event-stream")
+            .header("mcp-session-id", &session_ids[index])
+            .json(
+                &serde_json::json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
+                    "name":"plan_training","arguments":{
+                        "period_start":"2026-01-01","period_end":"2026-01-07",
+                        "adaptive":false,"idempotency_token":"same-token"
+                    }
+                }}),
+            )
+            .send()
+            .await
+            .unwrap();
+        assert!(response.status().is_success());
+        let body = response.text().await.unwrap();
+        if body.contains("\"error\":") || body.contains("\"isError\":true") {
+            let paths: Vec<_> = upstream
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .map(|r| r.url.path().to_owned())
+                .collect();
+            panic!("{body} paths: {paths:?}");
+        }
+    }
+    let requests = upstream.received_requests().await.unwrap();
+    for athlete in ["i111111", "i222222"] {
+        let profile_path = format!("/api/v1/athlete/{athlete}/profile");
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request.url.path() == profile_path)
+                .count(),
+            1,
+            "each athlete's repeated call must be served from its own replay cache"
+        );
+    }
+    server.abort();
+}
+
+#[tokio::test]
 async fn test_mcp_route_requires_bearer_token_and_accepts_valid_jwt() {
     let master_key_hex = test_master_key_hex();
     let master_key_config =

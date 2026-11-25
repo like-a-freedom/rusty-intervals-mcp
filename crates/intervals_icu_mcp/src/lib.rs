@@ -13,8 +13,9 @@
 //! - [`dynamic`] — dynamic OpenAPI-driven tool registry
 //! - [`token_registry`] — server-side record of issued tokens (ADR-0011)
 
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use rmcp::ErrorData;
 use rmcp::model::{
@@ -72,6 +73,11 @@ pub struct IntervalsMcpHandler {
     client: Arc<dyn IntervalsClient>,
     dynamic_runtime: dynamic::DynamicRuntime,
     intent_router: Arc<IntentRouter>,
+    idempotency: Arc<IdempotencyMiddleware>,
+    transports: Arc<
+        Mutex<HashMap<(String, String), intervals_icu_client::http_client::IntervalsTransport>>,
+    >,
+    dynamic_runtimes: Arc<Mutex<HashMap<String, Arc<dynamic::DynamicRuntime>>>>,
 }
 
 impl IntervalsMcpHandler {
@@ -126,12 +132,19 @@ impl IntervalsMcpHandler {
         let handlers = all_intent_handlers();
 
         // Create intent router
-        let intent_router = Arc::new(IntentRouter::new(handlers, client.clone(), idempotency));
+        let intent_router = Arc::new(IntentRouter::new(
+            handlers,
+            client.clone(),
+            idempotency.clone(),
+        ));
 
         Self {
             client,
             dynamic_runtime,
             intent_router,
+            idempotency,
+            transports: Arc::new(Mutex::new(HashMap::new())),
+            dynamic_runtimes: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -198,20 +211,69 @@ impl IntervalsMcpHandler {
 
     #[must_use]
     fn client_for_extensions(
+        &self,
         extensions: &rmcp::model::Extensions,
     ) -> Option<Arc<dyn IntervalsClient>> {
         let credentials = Self::request_credentials(extensions)?;
         let base_url = Self::request_base_url(extensions)
             .unwrap_or_else(|| "https://intervals.icu".to_string());
 
-        Some(Arc::new(
-            intervals_icu_client::http_client::ReqwestIntervalsClient::new(
-                &base_url,
-                credentials.athlete_id,
-                credentials.api_key,
-            )
-            .ok()?,
-        ) as Arc<dyn IntervalsClient>)
+        let runtime = if dynamic_dispatch_enabled() {
+            let mut runtimes = self.dynamic_runtimes.lock().ok()?;
+            let key = base_url.trim_end_matches('/').to_owned();
+            if !runtimes.contains_key(&key) {
+                if runtimes.len() >= 128 {
+                    let evicted = runtimes
+                        .iter()
+                        .find(|(_, runtime)| Arc::strong_count(runtime) == 1)
+                        .map(|(key, _)| key.clone())?;
+                    runtimes.remove(&evicted);
+                }
+                runtimes.insert(
+                    key.clone(),
+                    Arc::new(self.dynamic_runtime.for_request(&base_url)),
+                );
+            }
+            runtimes.get(&key).cloned()
+        } else {
+            None
+        };
+        let transport = {
+            let mut transports = self.transports.lock().ok()?;
+            let key = (
+                base_url.trim_end_matches('/').to_owned(),
+                credentials.athlete_id.clone(),
+            );
+            if !transports.contains_key(&key) {
+                if transports.len() >= 128 {
+                    let evicted = transports
+                        .iter()
+                        .find(|(_, transport)| !transport.is_in_use())
+                        .map(|(key, _)| key.clone())?;
+                    transports.remove(&evicted);
+                }
+                transports.insert(
+                    key.clone(),
+                    intervals_icu_client::http_client::IntervalsTransport::new().ok()?,
+                );
+            }
+            transports.get(&key)?.clone()
+        };
+        let typed = intervals_icu_client::http_client::ReqwestIntervalsClient::with_transport(
+            &base_url,
+            credentials.athlete_id.clone(),
+            credentials.api_key.clone(),
+            &transport,
+        );
+        let client: Arc<dyn IntervalsClient> = Arc::new(typed.clone());
+        Some(match runtime {
+            Some(runtime) => Arc::new(dynamic::DynamicClientAdapter::for_request(
+                Arc::new(runtime.with_typed_client(typed)),
+                client,
+                credentials,
+            )),
+            None => client,
+        })
     }
 }
 
@@ -296,8 +358,14 @@ impl ServerHandler for IntervalsMcpHandler {
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
         metrics::record_mcp_method_call("tools/call");
-        let client_for_request = Self::client_for_extensions(&context.extensions);
+        let client_for_request = self.client_for_extensions(&context.extensions);
         let athlete_id = Self::request_credentials(&context.extensions).map(|c| c.athlete_id);
+        if athlete_id.is_some() && client_for_request.is_none() {
+            return Err(ErrorData::internal_error(
+                "failed to create request client",
+                None,
+            ));
+        }
         let request_id = Self::request_request_id(&context.extensions);
         let (client_name, client_version) = Self::request_client(&context);
         let started = std::time::Instant::now();
@@ -309,18 +377,26 @@ impl ServerHandler for IntervalsMcpHandler {
         // are private implementation capabilities, never MCP tool names.
         let intent_result = match &client_for_request {
             Some(client) => {
-                let idempotency = Arc::new(intents::IdempotencyMiddleware::new());
                 let handlers = all_intent_handlers();
                 let router = Arc::new(intents::IntentRouter::new(
                     handlers,
                     client.clone(),
-                    idempotency,
+                    self.idempotency.clone(),
                 ));
+                let base_url = Self::request_base_url(&context.extensions)
+                    .unwrap_or_else(|| "https://intervals.icu".to_string());
+                let owner = Self::request_parts(&context.extensions)
+                    .and_then(|parts| parts.extensions.get::<auth::IdempotencyOwner>())
+                    .ok_or_else(|| {
+                        ErrorData::internal_error("missing authenticated identity", None)
+                    })?;
                 router
-                    .route(
+                    .route_with_base_url(
                         intent_name,
                         serde_json::Value::Object(args.clone()),
                         athlete_id.as_deref(),
+                        Some(&base_url),
+                        Some(&owner.0),
                     )
                     .await
             }
@@ -430,8 +506,16 @@ impl ServerHandler for IntervalsMcpHandler {
         context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResponse, ErrorData> {
         metrics::record_mcp_method_call("resources/read");
-        let client =
-            Self::client_for_extensions(&context.extensions).unwrap_or_else(|| self.client.clone());
+        let client = match self.client_for_extensions(&context.extensions) {
+            Some(client) => client,
+            None if Self::request_credentials(&context.extensions).is_some() => {
+                return Err(ErrorData::internal_error(
+                    "failed to create request client",
+                    None,
+                ));
+            }
+            None => self.client.clone(),
+        };
 
         // P4.3 — activity stream resources
         if request.uri.starts_with("activity://") {
@@ -628,7 +712,8 @@ pub async fn initialize_handler_single_user() -> Result<IntervalsMcpHandler, Str
     let client =
         intervals_icu_client::http_client::ReqwestIntervalsClient::new(&base, athlete, api_key)
             .map_err(|e| format!("failed to create client: {e}"))?;
-    let handler = IntervalsMcpHandler::new(std::sync::Arc::new(client));
+    let runtime = dynamic::DynamicRuntime::from_env().with_typed_client(client.clone());
+    let handler = IntervalsMcpHandler::with_dynamic_runtime(std::sync::Arc::new(client), runtime);
 
     let dynamic_tools = if let Ok(count) = tokio::time::timeout(
         std::time::Duration::from_secs(3),
@@ -992,6 +1077,7 @@ pub async fn run_http_server(
         .merge(mcp_route)
         .merge(health_route)
         .merge(metrics_route)
+        .layer(axum::middleware::from_fn(metrics::metrics_middleware))
         .layer(axum::middleware::from_fn(request_id_middleware));
 
     let app = apply_public_base_path(app, &base_path);
@@ -1499,9 +1585,117 @@ mod tests {
     }
 
     #[test]
+    fn transport_cache_does_not_evict_an_active_tenant() {
+        let handler = IntervalsMcpHandler::new_multi_tenant().unwrap();
+        let base = "http://example.test";
+        {
+            let mut cache = handler.transports.lock().unwrap();
+            for index in 0..128 {
+                cache.insert(
+                    (base.to_owned(), format!("i{index}")),
+                    intervals_icu_client::http_client::IntervalsTransport::new().unwrap(),
+                );
+            }
+        }
+        let victim = handler
+            .transports
+            .lock()
+            .unwrap()
+            .keys()
+            .next()
+            .unwrap()
+            .clone();
+        let make_extensions = |athlete: &str| {
+            let (mut parts, _) = axum::http::Request::builder()
+                .body(())
+                .unwrap()
+                .into_parts();
+            parts.extensions.insert(DecryptedCredentials {
+                athlete_id: athlete.to_owned(),
+                api_key: SecretString::new("test-key".into()),
+            });
+            parts.extensions.insert(HttpBaseUrl(base.to_owned()));
+            let mut extensions = rmcp::model::Extensions::default();
+            extensions.insert(parts);
+            extensions
+        };
+        let active = handler
+            .client_for_extensions(&make_extensions(&victim.1))
+            .unwrap();
+        let _other = handler
+            .client_for_extensions(&make_extensions("new-tenant"))
+            .unwrap();
+        assert!(
+            handler.transports.lock().unwrap().contains_key(&victim),
+            "active tenant transport was evicted"
+        );
+        drop(active);
+    }
+
+    #[test]
+    fn transport_cache_isolates_base_urls_for_the_same_athlete() {
+        let handler = IntervalsMcpHandler::new_multi_tenant().unwrap();
+        let mut active = Vec::new();
+        for base in ["http://first.test", "http://second.test"] {
+            let (mut parts, _) = axum::http::Request::builder()
+                .body(())
+                .unwrap()
+                .into_parts();
+            parts.extensions.insert(DecryptedCredentials {
+                athlete_id: "same-athlete".to_owned(),
+                api_key: SecretString::new("test-key".into()),
+            });
+            parts.extensions.insert(HttpBaseUrl(base.to_owned()));
+            let mut extensions = rmcp::model::Extensions::default();
+            extensions.insert(parts);
+            active.push(handler.client_for_extensions(&extensions).unwrap());
+        }
+        let cache = handler.transports.lock().unwrap();
+        assert_eq!(cache.len(), 2);
+        assert!(cache.contains_key(&("http://first.test".to_owned(), "same-athlete".to_owned())));
+        assert!(cache.contains_key(&("http://second.test".to_owned(), "same-athlete".to_owned())));
+        drop(active);
+    }
+
+    #[test]
+    fn full_transport_cache_rejects_new_tenant_when_all_entries_are_active() {
+        let handler = IntervalsMcpHandler::new_multi_tenant().unwrap();
+        let mut active = Vec::new();
+        {
+            let mut cache = handler.transports.lock().unwrap();
+            for index in 0..128 {
+                let transport =
+                    intervals_icu_client::http_client::IntervalsTransport::new().unwrap();
+                active.push(transport.clone());
+                cache.insert(
+                    ("http://example.test".to_owned(), format!("i{index}")),
+                    transport,
+                );
+            }
+        }
+        let (mut parts, _) = axum::http::Request::builder()
+            .body(())
+            .unwrap()
+            .into_parts();
+        parts.extensions.insert(DecryptedCredentials {
+            athlete_id: "new-tenant".to_owned(),
+            api_key: SecretString::new("test-key".into()),
+        });
+        parts
+            .extensions
+            .insert(HttpBaseUrl("http://example.test".to_owned()));
+        let mut extensions = rmcp::model::Extensions::default();
+        extensions.insert(parts);
+        assert!(handler.client_for_extensions(&extensions).is_none());
+        assert_eq!(handler.transports.lock().unwrap().len(), 128);
+        drop(active);
+    }
+
+    #[test]
     fn client_for_extensions_returns_none_without_credentials() {
         let extensions = rmcp::model::Extensions::default();
-        let result = IntervalsMcpHandler::client_for_extensions(&extensions);
+        let handler = IntervalsMcpHandler::new_multi_tenant().unwrap();
+        let result = handler.client_for_extensions(&extensions);
         assert!(result.is_none());
     }
 
@@ -1523,7 +1717,8 @@ mod tests {
             .insert(HttpBaseUrl("http://test.local".to_string()));
         extensions.insert(parts);
 
-        let result = IntervalsMcpHandler::client_for_extensions(&extensions);
+        let handler = IntervalsMcpHandler::new_multi_tenant().unwrap();
+        let result = handler.client_for_extensions(&extensions);
         assert!(result.is_some());
     }
 
@@ -1543,7 +1738,8 @@ mod tests {
         // No HttpBaseUrl inserted
         extensions.insert(parts);
 
-        let result = IntervalsMcpHandler::client_for_extensions(&extensions);
+        let handler = IntervalsMcpHandler::new_multi_tenant().unwrap();
+        let result = handler.client_for_extensions(&extensions);
         assert!(result.is_some());
     }
 

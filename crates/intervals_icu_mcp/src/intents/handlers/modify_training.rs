@@ -26,6 +26,32 @@ impl ModifyTrainingHandler {
         Self
     }
 
+    pub(crate) fn validate_before_write(input: &Value) -> Result<(), IntentError> {
+        let action = input
+            .get("action")
+            .and_then(Value::as_str)
+            .ok_or_else(|| IntentError::validation("Missing required field: action"))?;
+        match action {
+            "modify" => {
+                Self::resolve_target_scope(input)?;
+                Self::build_update_fields(input)?;
+            }
+            "delete" => {
+                Self::resolve_target_scope(input)?;
+            }
+            "create" => {
+                Self::prepare_create_event(input)?;
+            }
+            _ => {
+                return Err(IntentError::validation(format!(
+                    "Invalid action: {}. Must be 'modify', 'create', or 'delete'",
+                    action
+                )));
+            }
+        }
+        Ok(())
+    }
+
     async fn fetch_events_between(
         &self,
         client: &dyn IntervalsClient,

@@ -28,6 +28,10 @@ impl PlanTrainingHandler {
         Self
     }
 
+    pub(crate) fn validate_before_write(input: &Value) -> Result<(), IntentError> {
+        Self::parse_plan_inputs(input).map(|_| ())
+    }
+
     /// Parse and validate the JSON input for the plan_training intent.
     ///
     /// Extracts the required `period_start` / `period_end` strings, parses
@@ -36,6 +40,11 @@ impl PlanTrainingHandler {
     /// `PlanInputs` value or an `IntentError::validation` describing the
     /// first problem found.
     fn parse_plan_inputs(input: &Value) -> Result<PlanInputs, IntentError> {
+        if input.get("dry_run").is_some_and(|value| value != false) {
+            return Err(IntentError::validation(
+                "dry_run is not supported by plan_training; no events were created",
+            ));
+        }
         let period_start = input
             .get("period_start")
             .and_then(Value::as_str)
@@ -609,7 +618,13 @@ impl IntentHandler for PlanTrainingHandler {
         )));
 
         // --- Task 5: Generate and create events ---
-        let events_to_create = generate_events(&phases, start_date, focus, weeks);
+        let events_to_create: Vec<_> = generate_events(&phases, start_date, focus, weeks)
+            .into_iter()
+            .filter(|event| {
+                parse_activity_date(&event.start_date_local)
+                    .is_some_and(|date| date >= start_date && date <= end_date)
+            })
+            .collect();
         let events_count = u32::try_from(events_to_create.len()).unwrap_or(0);
 
         let validated_events: Result<Vec<_>, _> = events_to_create
@@ -620,15 +635,21 @@ impl IntentHandler for PlanTrainingHandler {
         let validated_events = validated_events
             .map_err(|e| IntentError::api(format!("Failed to validate events: {}", e)))?;
 
-        let created_events = client
-            .bulk_create_events(validated_events)
-            .await
-            .map_err(|e| IntentError::api(format!("Failed to create events: {}", e)))?;
+        if validated_events.is_empty() {
+            content.push(ContentBlock::markdown(
+                "No workouts generated for the selected period; no events were created.",
+            ));
+        } else {
+            let created_events = client
+                .bulk_create_events(validated_events)
+                .await
+                .map_err(|e| IntentError::api(format!("Failed to create events: {}", e)))?;
 
-        content.push(ContentBlock::markdown(format!(
-            "Created Events: {} workouts\nEvents successfully created in Intervals.icu.",
-            created_events.len()
-        )));
+            content.push(ContentBlock::markdown(format!(
+                "Created Events: {} workouts\nEvents successfully created in Intervals.icu.",
+                created_events.len()
+            )));
+        }
 
         // --- Suggestions ---
         let mut suggestions = vec![
@@ -693,11 +714,15 @@ impl IntentHandler for PlanTrainingHandler {
                 ));
         }
 
-        let next_actions = vec![
-            "To view details after creation: analyze_training with target_type: period".into(),
-            "After period: assess_recovery for state evaluation".into(),
-            "To modify plan: modify_training with action: modify".into(),
-        ];
+        let next_actions = if events_count == 0 {
+            vec!["To generate workouts, choose a longer or different period.".into()]
+        } else {
+            vec![
+                "To view details after creation: analyze_training with target_type: period".into(),
+                "After period: assess_recovery for state evaluation".into(),
+                "To modify plan: modify_training with action: modify".into(),
+            ]
+        };
 
         Ok(IntentOutput::new(content)
             .with_suggestions(suggestions)

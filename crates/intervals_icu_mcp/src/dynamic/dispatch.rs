@@ -14,6 +14,27 @@ pub async fn dispatch_operation(
     operation: &DynamicOperation,
     arguments: Option<&JsonObject>,
 ) -> Result<CallToolResult, ErrorData> {
+    dispatch_with_client(
+        http_client,
+        None,
+        base_url,
+        athlete_id,
+        api_key,
+        operation,
+        arguments,
+    )
+    .await
+}
+
+pub(crate) async fn dispatch_with_client(
+    http_client: &reqwest::Client,
+    typed_client: Option<&intervals_icu_client::http_client::ReqwestIntervalsClient>,
+    base_url: &str,
+    athlete_id: &str,
+    api_key: &str,
+    operation: &DynamicOperation,
+    arguments: Option<&JsonObject>,
+) -> Result<CallToolResult, ErrorData> {
     if api_key.is_empty() {
         return Err(ErrorData::invalid_request(
             "INTERVALS_ICU_API_KEY is required for dynamic OpenAPI tool calls",
@@ -48,10 +69,13 @@ pub async fn dispatch_operation(
     let query = collect_query_pairs(&args, &operation.params);
 
     let url = format!("{}{}", base_url.trim_end_matches('/'), path);
-    let mut req = http_client
-        .request(operation.method.clone(), &url)
-        .basic_auth("API_KEY", Some(api_key.to_string()))
-        .query(&query);
+    let mut req = match typed_client {
+        Some(client) => client.request(operation.method.clone(), &url),
+        None => http_client
+            .request(operation.method.clone(), &url)
+            .basic_auth("API_KEY", Some(api_key)),
+    }
+    .query(&query);
 
     if operation.has_json_body {
         let body = args
@@ -61,7 +85,11 @@ pub async fn dispatch_operation(
         req = req.json(&body);
     }
 
-    let resp = req.send().await.map_err(|e| {
+    let resp = match typed_client {
+        Some(client) => client.execute_raw(req).await.map_err(|e| e.to_string()),
+        None => req.send().await.map_err(|e| e.to_string()),
+    }
+    .map_err(|e| {
         ErrorData::internal_error(
             format!("HTTP request failed for {}: {e}", operation.name),
             None,

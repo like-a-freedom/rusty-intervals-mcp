@@ -29,9 +29,8 @@ fn resolve_relative_day_alias(date_str: &str) -> Option<NaiveDate> {
 /// Extract and parse `{prefix}_start` / `{prefix}_end` date fields from JSON
 /// input and validate the resulting range.
 ///
-/// Shared by the `compare_periods` intent handler (validation) and the
-/// `analyze_training` compare engine (extraction), so both layers produce
-/// identical `Missing: …` errors from one source.
+/// Used by the `analyze_training` compare engine to validate and extract
+/// period dates before fetching data.
 ///
 /// # Errors
 /// Returns [`IntentError`] if a field is missing/invalid or the range is

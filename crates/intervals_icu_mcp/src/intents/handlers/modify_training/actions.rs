@@ -246,12 +246,9 @@ impl super::ModifyTrainingHandler {
             }))
     }
 
-    pub(super) async fn create_training(
-        &self,
+    pub(super) fn prepare_create_event(
         input: &Value,
-        client: &dyn IntervalsClient,
-        dry_run: bool,
-    ) -> Result<IntentOutput, IntentError> {
+    ) -> Result<intervals_icu_client::Event, IntentError> {
         let new_date = input
             .get("new_date")
             .or_else(|| input.get("target_date"))
@@ -263,11 +260,6 @@ impl super::ModifyTrainingHandler {
             .get("new_name")
             .and_then(Value::as_str)
             .unwrap_or("New Workout");
-        let new_duration = input
-            .get("new_duration")
-            .and_then(Value::as_str)
-            .unwrap_or("1:00");
-
         let category = input
             .get("new_category")
             .or_else(|| input.get("category"))
@@ -294,7 +286,7 @@ impl super::ModifyTrainingHandler {
             _ => intervals_icu_client::EventCategory::Workout,
         };
 
-        let new_event = validate_and_prepare_event(intervals_icu_client::Event {
+        validate_and_prepare_event(intervals_icu_client::Event {
             id: None,
             start_date_local: new_date.to_string(),
             name: new_name.to_string(),
@@ -302,7 +294,29 @@ impl super::ModifyTrainingHandler {
             description: new_description,
             r#type: new_type,
         })
-        .map_err(|e| IntentError::validation(validation_error_to_string(e)))?;
+        .map_err(|e| IntentError::validation(validation_error_to_string(e)))
+    }
+
+    pub(super) async fn create_training(
+        &self,
+        input: &Value,
+        client: &dyn IntervalsClient,
+        dry_run: bool,
+    ) -> Result<IntentOutput, IntentError> {
+        let new_event = Self::prepare_create_event(input)?;
+        let new_date = input
+            .get("new_date")
+            .or_else(|| input.get("target_date"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let new_name = input
+            .get("new_name")
+            .and_then(Value::as_str)
+            .unwrap_or("New Workout");
+        let new_duration = input
+            .get("new_duration")
+            .and_then(Value::as_str)
+            .unwrap_or("1:00");
 
         if !dry_run {
             let _created = client
