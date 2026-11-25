@@ -3,7 +3,6 @@ use intervals_icu_client::IntervalsClient;
 use serde_json::{Value, json};
 use std::sync::Arc;
 
-use crate::content::date::parse_period_range;
 use crate::engines::analyze_training::compare_periods;
 use crate::intents::{IdempotencyCache, IntentError, IntentHandler, IntentOutput};
 
@@ -12,12 +11,6 @@ pub struct ComparePeriodsHandler;
 impl ComparePeriodsHandler {
     pub fn new() -> Self {
         Self
-    }
-
-    fn validate(input: &Value) -> Result<(), IntentError> {
-        let _ = parse_period_range(input, "period_a")?;
-        let _ = parse_period_range(input, "period_b")?;
-        Ok(())
     }
 }
 
@@ -89,10 +82,9 @@ impl IntentHandler for ComparePeriodsHandler {
         client: Arc<dyn IntervalsClient>,
         _cache: Option<&IdempotencyCache>,
     ) -> Result<IntentOutput, IntentError> {
-        Self::validate(&input)?;
         compare_periods(&input, client.as_ref())
             .await
-            .map(|r| r.into_intent_output())
+            .map(super::render::analyze_report)
     }
 
     fn requires_idempotency_token(&self) -> bool {

@@ -89,20 +89,6 @@ pub fn load_management_block(
     ContentBlock::markdown(build_load_management_text(metrics))
 }
 
-pub fn requested_metrics(input: &Value) -> Vec<String> {
-    input
-        .get("metrics")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::to_lowercase)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default()
-}
-
 pub fn format_duration_hhmm(seconds: i64) -> String {
     let hours = seconds / 3600;
     let minutes = (seconds % 3600) / 60;

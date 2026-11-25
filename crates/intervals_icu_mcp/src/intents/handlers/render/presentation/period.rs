@@ -311,12 +311,6 @@ pub(crate) fn build_load_data_quality_section(series: &ComparableLoadSeries) -> 
     ContentBlock::markdown(lines.join("\n"))
 }
 
-pub(crate) fn weekly_hours(volume: Option<&VolumeMetrics>) -> f64 {
-    volume
-        .map(|volume| volume.weekly_avg_hours)
-        .unwrap_or_default()
-}
-
 pub(crate) fn planned_workout_date_cell(activity: &ActivitySummary) -> String {
     activity
         .start_date_local

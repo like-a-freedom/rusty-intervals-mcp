@@ -36,7 +36,7 @@ async fn compare_periods_handler_missing_required_field() {
 }
 
 /// Handler must reject input where a period's start is after its end
-/// before any engine work runs.
+/// before any data is fetched.
 #[tokio::test]
 async fn compare_periods_handler_validates_date_range() {
     let handler = ComparePeriodsHandler::new();
@@ -52,7 +52,7 @@ async fn compare_periods_handler_validates_date_range() {
 }
 
 /// Handler must reject input missing multiple required fields (only the
-/// first period start present) before any engine work runs.
+/// first period start present) before any data is fetched.
 #[tokio::test]
 async fn compare_periods_handler_missing_several_required_fields() {
     let handler = ComparePeriodsHandler::new();

@@ -147,10 +147,10 @@ impl IntentHandler for AnalyzeTrainingHandler {
         match target_type {
             "single" => analyze_single(&input, client.as_ref())
                 .await
-                .map(|r| r.into_intent_output()),
+                .map(super::render::analyze_report),
             "period" => analyze_period(&input, client.as_ref())
                 .await
-                .map(|r| r.into_intent_output()),
+                .map(super::render::analyze_report),
             _ => Err(IntentError::validation(format!(
                 "Invalid target_type: {}. Must be 'single' or 'period'",
                 target_type

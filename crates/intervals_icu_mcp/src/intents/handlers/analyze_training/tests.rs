@@ -2,9 +2,8 @@ use super::*;
 use crate::domains::coach::{AcwrMetrics, LoadManagementMetrics};
 use crate::domains::interval_segment::SportPresentation;
 use crate::engines::analysis_fetch::FetchedAnalysisData;
-use crate::engines::analyze_training::render::*;
 use crate::engines::analyze_training::shared::{
-    SingleAnalysisMode, build_local_raw_stream, sport_presentation,
+    SingleAnalysisMode, build_local_raw_stream, requested_metrics, sport_presentation,
 };
 use crate::engines::interval_analysis::{
     IntervalOutputKind, IntervalOutputValue, calculate_median, count_work_intervals,
@@ -13,6 +12,7 @@ use crate::engines::interval_analysis::{
 use crate::engines::metric_streams::parse_metric_streams;
 use crate::engines::shared::parse_activity_date;
 use crate::intents::ContentBlock;
+use crate::intents::handlers::render::presentation::*;
 use chrono::NaiveDate;
 use intervals_icu_client::EventCategory;
 use serde_json::json;

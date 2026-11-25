@@ -1,5 +1,4 @@
 use crate::content::date::NA;
-use crate::content::{ContentBlock, OutputMetadata};
 use crate::domains::coach::EtvsMetrics;
 use crate::domains::interval_detection::RawStream;
 use crate::domains::interval_segment::SportPresentation;
@@ -9,48 +8,73 @@ use intervals_icu_client::ActivitySummary;
 use serde_json::Value;
 use std::collections::HashMap;
 
-/// Report produced by the analysis engine.
-pub struct AnalyzeReport {
-    pub content: Vec<ContentBlock>,
-    pub suggestions: Vec<String>,
-    pub next_actions: Vec<String>,
-    pub metadata: Option<OutputMetadata>,
+/// Transport-independent result of a training analysis.
+pub enum AnalyzeReport {
+    SingleEmpty {
+        date: String,
+        filter: Option<String>,
+    },
+    SingleMultiple {
+        date: String,
+        filter: Option<String>,
+        activities: Vec<ActivitySummary>,
+    },
+    Single(SingleReport),
+    PeriodEmpty {
+        start: String,
+        end: String,
+        events: Vec<intervals_icu_client::Event>,
+    },
+    Period(PeriodReport),
+    Comparison(ComparisonReport),
 }
 
-impl AnalyzeReport {
-    pub fn new(content: Vec<ContentBlock>) -> Self {
-        Self {
-            content,
-            suggestions: Vec::new(),
-            next_actions: Vec::new(),
-            metadata: None,
-        }
-    }
+/// Data needed to present a single-workout analysis.
+pub struct SingleReport {
+    pub date: String,
+    pub activity_id: String,
+    pub activity_name: String,
+    pub mode: SingleAnalysisMode,
+    pub requested: Vec<String>,
+    pub include_hist: bool,
+    pub fetched: crate::engines::analysis_fetch::FetchedAnalysisData,
+    pub context: crate::domains::coach::CoachContext,
+    pub metrics: crate::engines::analysis::WorkoutMetrics,
+    pub grade: crate::engines::analysis::WorkoutGrade,
+}
 
-    pub fn with_suggestions(mut self, suggestions: Vec<String>) -> Self {
-        self.suggestions = suggestions;
-        self
-    }
+/// Data needed to present a period analysis.
+pub struct PeriodReport {
+    pub start: String,
+    pub end: String,
+    pub analysis_type: String,
+    pub filter: Option<String>,
+    pub requested: Vec<String>,
+    pub fetched: crate::engines::analysis_fetch::FetchedAnalysisData,
+    pub period: Vec<ActivitySummary>,
+    pub previous_period: Vec<ActivitySummary>,
+    pub events: Vec<intervals_icu_client::Event>,
+    pub context: crate::domains::coach::CoachContext,
+    pub snapshot: crate::engines::coach_metrics::TrendSnapshot,
+    pub window: crate::domains::coach::AnalysisWindow,
+    pub period_ids: Vec<String>,
+    pub weekly_hrs: f64,
+}
 
-    pub fn with_next_actions(mut self, next_actions: Vec<String>) -> Self {
-        self.next_actions = next_actions;
-        self
-    }
-
-    pub fn with_metadata(mut self, metadata: OutputMetadata) -> Self {
-        self.metadata = Some(metadata);
-        self
-    }
-
-    pub fn into_intent_output(self) -> crate::intents::IntentOutput {
-        let mut out = crate::intents::IntentOutput::new(self.content);
-        out = out.with_suggestions(self.suggestions);
-        out = out.with_next_actions(self.next_actions);
-        if let Some(meta) = self.metadata {
-            out = out.with_metadata(meta);
-        }
-        out
-    }
+/// Data needed to present a like-for-like comparison.
+pub struct ComparisonReport {
+    pub later_label: String,
+    pub earlier_label: String,
+    pub later_stats: PeriodStats,
+    pub earlier_stats: PeriodStats,
+    pub comparison: crate::engines::analysis::LikeForLikeComparison,
+    pub trend: crate::domains::coach::TrendMetrics,
+    pub later_volume: crate::domains::coach::VolumeMetrics,
+    pub later_consistency: crate::domains::coach::ConsistencyMetrics,
+    pub earlier_consistency: crate::domains::coach::ConsistencyMetrics,
+    pub fitness_metrics: Option<crate::domains::coach::FitnessMetrics>,
+    pub guidance: crate::domains::coach::CoachGuidance,
+    pub requested: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -160,7 +184,8 @@ pub(crate) fn sport_presentation(workout_detail: Option<&Value>) -> SportPresent
     }
 }
 
-pub(crate) struct PeriodStats {
+/// Aggregated data for one side of a comparison.
+pub struct PeriodStats {
     pub snapshot: crate::engines::coach_metrics::TrendSnapshot,
     pub window_days: i64,
     pub activities: Vec<ActivitySummary>,
@@ -344,4 +369,18 @@ pub(crate) fn requested_metric_label(metric: &str) -> String {
         "etvs" => "ETVS".to_string(),
         other => other.replace('_', " ").to_uppercase(),
     }
+}
+
+pub fn requested_metrics(input: &Value) -> Vec<String> {
+    input
+        .get("metrics")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_lowercase)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
 }
