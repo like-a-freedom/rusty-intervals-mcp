@@ -97,16 +97,16 @@
 
 **Files:** approved journal module, `crates/intervals_icu_mcp/src/metrics.rs`, server setup, tests and `README.md`.
 
-- [ ] Write failing concurrent tests where tenant A exhausts its own quota while tenant B can still reserve within the global limit. Assert that rejection happens before a side effect and existing completed replay remains available.
-- [ ] Separate quotas for active work, unresolved outcomes and completed-result storage. Keep a global safety limit; never delete unknown outcomes to free capacity.
-- [ ] Add bounded waiting and metrics for journal errors, quota rejection, unknown counts and age. Do not place user, token or operation identifiers in metric labels.
-- [ ] Test restart with unresolved records and document how an authorized operator diagnoses and resolves them without clearing the entire journal.
+- [x] Write failing concurrent tests where tenant A exhausts its own quota while tenant B can still reserve within the global limit. Assert that rejection happens before a side effect and existing completed replay remains available.
+- [x] Separate quotas for active work, unresolved outcomes and completed-result storage. Keep a global safety limit; never delete unknown outcomes to free capacity.
+- [x] Add bounded waiting and metrics for journal errors, quota rejection, unknown counts and age. Do not place user, token or operation identifiers in metric labels.
+- [x] Test restart with unresolved records. Document out-of-band diagnosis using upstream records; do not expose an in-server inspection/resolution API or clear unknown records, per ADR-0012.
 
 
 ## Final verification
 
-- [ ] `cargo fmt --all -- --check`
-- [ ] `cargo clippy --all-targets --all-features -- -D warnings`
-- [ ] `cargo test --all-targets --all-features`
-- [ ] `cargo test --all --all-features --no-fail-fast`
+- [x] `cargo fmt --all -- --check`
+- [x] `cargo clippy --all-targets --all-features -- -D warnings`
+- [x] `cargo test --all-targets --all-features`
+- [x] `cargo test --all --all-features --no-fail-fast`
 - [ ] Review failure-injection coverage, legacy-journal cutover, confidentiality and operational documentation. Report unverified upstream guarantees and remaining limitations explicitly.

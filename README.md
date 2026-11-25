@@ -138,9 +138,11 @@ When a mutation is cancelled, panics, loses its response, or returns an error af
 
 The standard HTTP and STDIO server modes use a local SQLite journal. The operation key includes the normalized upstream base URL, athlete ID, and idempotency token. The journal commits a reservation before invoking the mutation handler. It stores hashes rather than raw operation tokens, fingerprints, or owners. An uncertain operation remains in the database indefinitely; process restarts do not make it retryable. A confirmed result is encrypted and retained for 24 hours, then the same token can be treated as a new operation. Do not reuse tokens for separate user actions.
 
+The journal currently enforces fixed capacity limits: 16 active operations and 128 unknown outcomes per tenant, up to 2,048 active or unexpired completed records per tenant, and 1,024 active or unknown records globally. When a limit is reached, a new operation is rejected before its handler runs; replay of an existing completed result remains available. Unknown records are never evicted to free space.
+
 In authenticated HTTP mode, only the JWT owner recorded with the operation can replay its saved result. The owner is the JWT `jti`, or a digest of the exact JWT for legacy tokens without a `jti`. Reissuing a JWT creates a different owner: it cannot replay the previous result, and the same operation key remains blocked if its outcome is uncertain. Rotating an upstream API key without changing the JWT owner does not change operation ownership. A saved result is not an authorization grant to a different JWT.
 
-This guarantee applies to the standard single-process server using one persistent local database. It does not provide cross-process or multi-host coordination. Handlers or runtimes assembled by library users without the standard startup wiring may use non-durable idempotency protection. The database, SQLite WAL/SHM sidecars, and backups contain unencrypted metadata and encrypted saved results; the token registry's upstream API keys retain their existing AES-GCM encryption. Keep the database and backups private, and preserve `MCP_STATE_ENCRYPTION_KEY` across restarts so saved results remain readable. Unknown outcomes cannot be cleared automatically. There is currently no supported operator tool to resolve them; inspect Intervals.icu before taking any separate action, and do not delete journal records to make a retry pass.
+This guarantee applies to the standard single-process server using one persistent local database. It does not provide cross-process or multi-host coordination. Handlers or runtimes assembled by library users without the standard startup wiring may use non-durable idempotency protection. The database, SQLite WAL/SHM sidecars, and backups contain unencrypted metadata and encrypted saved results; the token registry's upstream API keys retain their existing AES-GCM encryption. Keep the database and backups private, and preserve `MCP_STATE_ENCRYPTION_KEY` across restarts so saved results remain readable. Unknown outcomes cannot be cleared automatically. There is currently no supported operator tool to resolve them; investigate Intervals.icu out of band before taking any separate action, and do not delete journal records to make a retry pass.
 
 ### 6. Rust-first operational profile
 
@@ -571,6 +573,9 @@ Optional authentication via `PROMETHEUS_METRICS_TOKEN` env var:
 | **HTTP Transport** | `http_requests_total{path}`, `http_request_duration_seconds`, `active_requests` |
 | **Auth & Security** | `tokens_issued_total`, `token_verifications_total{status}`, `auth_failures_total{reason}` |
 | **Active Usage** | `active_athletes` (gauge, no high-cardinality labels) |
+| **Mutation Journal** | `intervals_icu_mcp_operation_journal_errors_total`, `intervals_icu_mcp_operation_journal_quota_rejections_total{quota}`, `intervals_icu_mcp_operation_journal_unknown_operations`, `intervals_icu_mcp_operation_journal_oldest_unknown_age_seconds` |
+
+The journal metrics count storage errors and rejected reservations, and expose the total number and oldest age of unresolved unknown outcomes. The `quota` label uses only fixed values (`active_per_tenant`, `unknown_per_tenant`, `unresolved_global`, `completed_per_tenant`); tenant, token and operation identifiers are never metric labels. The unknown snapshot is refreshed from SQLite at startup and after an operation becomes unknown.
 
 ### Example Prometheus queries
 
